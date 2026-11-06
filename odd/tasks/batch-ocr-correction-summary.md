@@ -36,9 +36,9 @@ Branch `feat/batch-ocr-correction-summary`.
   tests — route: done — commit: 28c69149
 - [x] T2 — S1, S7, S8 (frontend) — worker: Lotes tab checkboxes, ops array, flows, i18n, counts, OpenRouter gate,
   tests — route: done — commit: 885ef8c8
-- [x] T3 — S9, S10 — worker: MCP/assistant operations and docs, manual — route: done — commit: pending
-- [ ] T4 — S1-S10 — gentle-ai-verify (Risk: item 1 correction rewrites stored OCR text in a batch; item 3 new task
-  kinds in a synced schema) — commit: none
+- [x] T3 — S9, S10 — worker: MCP/assistant operations and docs, manual — route: done — commit: 51994d09
+- [x] T4 — S1-S10 — gentle-ai-verify (Risk: item 1 correction rewrites stored OCR text in a batch; item 3 new task
+  kinds in a synced schema) — commit: none (fixes in the T4 follow-up commit)
 
 ## Log
 
@@ -121,3 +121,36 @@ Branch `feat/batch-ocr-correction-summary`.
   read the corrected text) and «Resúmenes» (one per page, in the «Resumen» section of «Texto extraído», once per page,
   waits for the same batch's correction); both paid per page and needing the OpenRouter key. Later sections renumbered
   14.2/14.3 (anchors unchanged, no numeric cross-references existed); §18.4 `:1272` stops denying batch summaries.
+- L9 — T4 independent verification returned two should-fix findings; both fixed here, no other behaviour changed.
+  **Finding 1 (S6): correction planned without the OpenRouter key in Pro.** Correction is always remote
+  (`llm/mod.rs:1658-1662` `force_remote_ocr_correction`; `correct_ocr_for_asset_blocking` calls
+  `require_openrouter_key` before any request), but the UI gate skipped every check under Pro
+  (`missingOpenrouterKey` began with `!LOCAL_ML`) and so did the MCP gate (`!cfg!(feature = "local-ml")`), so Pro
+  without a key planned correction tasks that could only park as blocked. Fix: `BatchProcessingTab.svelte:82-94`
+  gates `runOcrCorrection` in both variants and only the other ops under `!LOCAL_ML`; `:718-726` now reads the key
+  on mount in Pro too (an unread key is still "not blocked"). `automation/jobs.rs:198-218` splits the old
+  `needs_openrouter` into `is_always_remote` (correction), `runs_on_openrouter_in_lite` (embeddings, ner, triples,
+  summary, `schema:`) and `needs_openrouter_key(operations, local_ml)`, a pure helper taking the variant explicitly so
+  the Lite test build can assert the Pro branch; `:308` calls it with `cfg!(feature = "local-ml")`. Message and refusal
+  code unchanged. **Summary in Pro verified read-only and left as is:** `llm::summarize_for_asset_blocking` goes
+  through `run_asset_job_blocking` (`llm/mod.rs:1441-1481`), which reads `llm_mode` (default `local`) and tries the
+  local engine first, falling back to OpenRouter only for `auto` with a key — exactly what the per-page summary button
+  and the queue worker do. So a Pro summary needs no key (it can fail for lack of a local model, a real error, not a
+  missing key), Pro keeps skipping the gate for it, and only correction became variant-independent.
+  **Finding 2 (migration 0060 store test gap):** `packages/store/src/runner.test.ts:3079` adds a 0060 block modeled on
+  0058 — a `.sql` mirror check, and a rebuild test that reaches the 0059 shape with `upTo0059()` (a shim that reports
+  0060 as already recorded so the applier skips it, then verifies its `_migrations` row is absent), seeds
+  `processing_batches`/`processing_tasks`/`processing_batch_tasks`/`processing_attempts`/`processing_checkpoints`, runs
+  the real 0060, and asserts every row survived unchanged, `ocr_correction` and `summary` insert in both tables, an
+  unknown kind is still rejected on both, a batch-task with a ghost batch is refused (FK survived), the restored
+  `processing_tasks_settle_dependents` trigger still promotes a blocked dependent to pending and
+  `idx_processing_tasks_state_id` exists, and 0060 is recorded once. The fake future migration at `:2919` is renamed
+  `0060_from_the_future` → `9999_from_the_future` so it cannot collide with a real 0060. Tests: `BatchProcessingTab
+  .test.ts:1307` (Pro) asserts correction alone disables «Analizar selección» with the key tooltip and never calls
+  `processing_prepare`, that unchecking frees it, and that summaries alone do not block in Pro;
+  `jobs.rs:540` covers the helper for both variants (correction yes, ocr never, the rest only in Lite);
+  `mcp_tests.rs:1268` asserts `processing_prepare` with `ocr_correction` and no key answers `provider_not_configured`
+  and creates no batch (runs in both variants). RED first: the Pro tab test failed with the button still enabled, and
+  the Rust tests failed to compile (`needs_openrouter_key` missing). GREEN: desktop tab 43 passed / 2 skipped (Pro),
+  44 / 1 skipped (Lite); `cargo test --lib automation::` 148 passed (146 before); store 459 passed (457 before);
+  clippy `--lib --tests` and `cargo fmt --check` clean, lint and Pro typecheck clean, `pnpm format:check` clean.

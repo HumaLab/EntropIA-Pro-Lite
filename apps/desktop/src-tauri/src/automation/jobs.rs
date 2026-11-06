@@ -195,16 +195,26 @@ fn resolve_limit(limit: Option<u32>) -> Result<usize, JobsError> {
     Ok(limit)
 }
 
+/// Operations that always run through OpenRouter, in every variant: OCR
+/// correction has no local vision path (`force_remote_ocr_correction`).
+fn is_always_remote(op: &str) -> bool {
+    op == "ocr_correction"
+}
+
 /// Operations Lite runs through OpenRouter: the Procesamiento tab refuses them
-/// without the key, and so does the endpoint. OCR correction is always remote,
-/// also in Pro, so it belongs here too.
-fn needs_openrouter(operations: &[String]) -> bool {
-    operations.iter().any(|op| {
-        matches!(
-            op.as_str(),
-            "embeddings" | "ner" | "triples" | "ocr_correction" | "summary"
-        ) || op.starts_with("schema:")
-    })
+/// without the key, and so does the endpoint. In Pro the local engine covers
+/// them, summaries included, so they are not pre-flighted there.
+fn runs_on_openrouter_in_lite(op: &str) -> bool {
+    matches!(op, "embeddings" | "ner" | "triples" | "summary") || op.starts_with("schema:")
+}
+
+/// Whether the request needs the OpenRouter key before planning. Correction is
+/// always remote, so Pro refuses it without the key exactly as Lite does
+/// instead of planning tasks that could only park as blocked.
+fn needs_openrouter_key(operations: &[String], local_ml: bool) -> bool {
+    operations
+        .iter()
+        .any(|op| is_always_remote(op) || (!local_ml && runs_on_openrouter_in_lite(op)))
 }
 
 /// Whether the OpenRouter key is configured. Reads the stored value (a keyring
@@ -295,8 +305,7 @@ impl JobsArchive {
             ));
         }
         let conn = self.write_connection()?;
-        if !cfg!(feature = "local-ml")
-            && needs_openrouter(operations)
+        if needs_openrouter_key(operations, cfg!(feature = "local-ml"))
             && !openrouter_configured(&conn)
         {
             return Err(JobsError::new(
@@ -525,6 +534,29 @@ mod tests {
         ];
         for (service, code) in cases {
             assert_eq!(from_service(service.to_string()).code, code, "{service}");
+        }
+    }
+
+    #[test]
+    fn correction_needs_the_key_before_planning_in_pro_as_well() {
+        let ops = |list: &[&str]| list.iter().map(|op| op.to_string()).collect::<Vec<_>>();
+        // OCR correction has no local vision path, so Pro pre-flights it exactly
+        // as Lite does instead of planning tasks that could only park as blocked.
+        for local_ml in [false, true] {
+            assert!(
+                needs_openrouter_key(&ops(&["ocr_correction"]), local_ml),
+                "correction needs the key (local_ml={local_ml})"
+            );
+            assert!(
+                !needs_openrouter_key(&ops(&["ocr"]), local_ml),
+                "ocr never needs it (local_ml={local_ml})"
+            );
+        }
+        // Everything else keeps its variant behaviour: Pro runs those on the
+        // local engine, summaries included, so it never pre-flights them.
+        for op in ["embeddings", "ner", "triples", "summary", "schema:custom"] {
+            assert!(needs_openrouter_key(&ops(&[op]), false), "{op} in Lite");
+            assert!(!needs_openrouter_key(&ops(&[op]), true), "{op} in Pro");
         }
     }
 

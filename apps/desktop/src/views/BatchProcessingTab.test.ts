@@ -1302,6 +1302,39 @@ describe('batch OCR correction and page summaries', () => {
     }
   )
 
+  // S6, T4 finding 1: correction has no local path (`force_remote_ocr_correction`),
+  // so Pro pre-flights it too. Summaries stay local in Pro, as the per-page button is.
+  it.runIf(LOCAL_ML)('in Pro, correction alone needs the key while summaries do not', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'settings_get') return null
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
+    // In Pro embeddings run on the local engine, so the batch is not blocked yet.
+    const analyze = await screen.findByRole('button', { name: 'Analizar selección' })
+    await waitFor(() => expect(analyze).toBeEnabled())
+
+    const correction = screen.getByRole('checkbox', { name: 'Corrección OCR' })
+    await fireEvent.click(correction)
+    await waitFor(() => expect(analyze).toBeDisabled())
+    expect(analyze.closest('[data-tooltip]')).toHaveAttribute(
+      'data-tooltip',
+      expect.stringContaining(OPENROUTER_TOOLTIP)
+    )
+    expect(mockInvoke).not.toHaveBeenCalledWith('processing_prepare', expect.anything())
+
+    await fireEvent.click(correction)
+    await waitFor(() => expect(analyze).toBeEnabled())
+
+    // A summary runs on the local engine in Pro, like the per-page button does.
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Resúmenes' }))
+    await waitFor(() => expect(analyze).toBeEnabled())
+  })
+
   it('saves a flow with both toggles and restores them', async () => {
     let stored: string | null = null
     mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {

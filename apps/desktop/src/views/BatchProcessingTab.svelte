@@ -79,15 +79,17 @@
   let runSummary = $state(false)
   // A user-defined schema (T-51) the batch also runs; '' runs none.
   let schemaId = $state('')
-  // Under Lite, embeddings, entities, triples and schemas are OpenRouter calls:
-  // without the key «Analizar selección» could only fail later, out of sight.
-  // Correction and summaries are remote calls in both variants.
+  // Under Lite, embeddings, entities, triples, summaries and schemas are
+  // OpenRouter calls: without the key «Analizar selección» could only fail
+  // later, out of sight. Correction is always remote, also in Pro
+  // (`force_remote_ocr_correction`), so it is gated in both variants; a Pro
+  // summary runs on the local engine like the per-page button.
   // Unknown until read (and when the read answers nothing) means not blocked.
   let hasOpenrouterKey = $state(true)
   const missingOpenrouterKey = $derived(
-    !LOCAL_ML &&
-      !hasOpenrouterKey &&
-      (runEmbeddings || runNer || runTriples || runOcrCorrection || runSummary || Boolean(schemaId))
+    !hasOpenrouterKey &&
+      (runOcrCorrection ||
+        (!LOCAL_ML && (runEmbeddings || runNer || runTriples || runSummary || Boolean(schemaId))))
   )
   // A saved flow (T-52) is these choices under a name.
   const flowSteps = $derived<BatchFlowSteps>({
@@ -715,13 +717,13 @@
   onMount(() => {
     void loadCollections()
     void loadLists()
-    if (!LOCAL_ML) {
-      settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY)
-        .then((key) => {
-          if (key !== undefined) hasOpenrouterKey = Boolean(key?.trim())
-        })
-        .catch(() => {})
-    }
+    // Read in Pro too: correction needs the key in both variants, and an
+    // unread key must never be mistaken for a missing one.
+    settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY)
+      .then((key) => {
+        if (key !== undefined) hasOpenrouterKey = Boolean(key?.trim())
+      })
+      .catch(() => {})
     const unsubscribeStore = batchStore.subscribe((summary) => {
       const init = summary.init
       if (init?.recovered && !recoveryDismissed) {

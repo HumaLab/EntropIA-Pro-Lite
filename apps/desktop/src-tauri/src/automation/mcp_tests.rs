@@ -1157,8 +1157,9 @@ async fn processing_prepare_takes_correction_and_summaries_and_documents_them() 
     let harness = harness().await;
     let (id, token) = harness.pair("Claude Code");
     harness.grant(&id, true, false);
-    // The key is what a Lite gate asks for; in Pro the same call simply runs.
-    // `app_settings` lives outside the migrated schema, as the app creates it.
+    // The key is what the prepare gate asks for in every variant: correction is
+    // always remote (`force_remote_ocr_correction`). `app_settings` lives outside
+    // the migrated schema, as the app creates it.
     let conn = crate::db::open::open_archive_connection(&harness.db_path()).unwrap();
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
@@ -1260,6 +1261,30 @@ async fn lite_refuses_correction_and_summaries_without_the_openrouter_key() {
     assert!(
         records(&jobs).is_empty(),
         "no refused request created a batch"
+    );
+}
+
+#[tokio::test]
+async fn prepare_refuses_correction_without_the_openrouter_key_in_every_variant() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    // Correction has no local path, so Pro must not plan it without the key
+    // either (T4 finding 1). Pro coverage of the gate lives in
+    // `jobs::tests::correction_needs_the_key_before_planning_in_pro_as_well`,
+    // which runs in this Lite test build; the endpoint check runs in both.
+    let refusal = harness
+        .refusal(
+            &token,
+            "processing_prepare",
+            json!({ "requestId": "r-correction", "collectionIds": [ALFA], "operations": ["ocr_correction"] }),
+        )
+        .await;
+    assert_eq!(refusal["error"], "provider_not_configured");
+    let jobs = harness.payload(&token, "jobs_list", json!({})).await;
+    assert!(
+        records(&jobs).is_empty(),
+        "the refused request created no batch"
     );
 }
 
