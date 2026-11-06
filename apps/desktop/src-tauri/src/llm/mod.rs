@@ -2722,14 +2722,9 @@ mod tests {
         )
         .expect("key");
         assert_eq!(require_openrouter_key(&conn).expect("key"), "sk-or-test");
-        // A stored key reference (the real app's secret_ref) is not empty
-        // either: the request path resolves it, the gate only refuses "none".
-        conn.execute(
-            "UPDATE app_settings SET value = 'secret_ref:openrouter_api_key' WHERE key = 'openrouter_api_key'",
-            [],
-        )
-        .expect("reference");
-        assert!(require_openrouter_key(&conn).is_ok());
+        // No `secret_ref:` case here: the gate returns the resolved key the
+        // client sends, and resolving a reference reads the machine's OS
+        // keyring, so such an assertion would pass or fail with the host.
     }
 
     #[test]
