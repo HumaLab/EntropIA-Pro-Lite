@@ -1489,3 +1489,236 @@ describe('InvestigationView modelo congelado', () => {
     expect(screen.queryByText('meta/llama-3.3-70b')).not.toBeInTheDocument()
   })
 })
+
+// ==========================================================================
+// La investigación pausada por un error.
+//
+// Cuando un lote del archivo no entra ni partido, el motor deja de correr y
+// deja el motivo en el evento `research_error`. Un «Continuar» pelado no dice
+// qué pasó —y el motivo que trae el motor nombra el lote, los documentos y los
+// intentos—: el bloque lo muestra tal cual y ofrece el reintento, como el
+// «Reintentar» de los procesamientos por lotes.
+// ==========================================================================
+describe('InvestigationView pausada por un error', () => {
+  const MENSAJE_PAUSA =
+    'El lote de archivo 2 (documentos 43–84 de 177) no se pudo procesar después de 3 intentos con lotes más chicos: el modelo devolvió una respuesta vacía. La investigación quedó en pausa; reanudala para reintentar ese lote.'
+
+  beforeEach(() => {
+    locale.set('es')
+    invokeMock.mockReset()
+    navigateMock.mockClear()
+    storeRef.current = createStore({})
+  })
+
+  /** Un job pausado con el motivo que escribe el motor en `research_error`. */
+  function pausadaPor(message = MENSAJE_PAUSA) {
+    const base = detailPayload()
+    return {
+      ...base,
+      events: [{ id: 'ev-error', kind: 'research_error', payload: { message }, timestamp: 2 }],
+    }
+  }
+
+  it('muestra el título, el motivo del motor tal cual y un solo botón de reintento', async () => {
+    invokeMock.mockResolvedValue(pausadaPor())
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    await waitFor(() => {
+      expect(screen.getByText('La investigación se detuvo por un error')).toBeInTheDocument()
+    })
+
+    // El mensaje del motor se pinta verbatim: ya viene en castellano y nombra
+    // el lote, los documentos y los intentos.
+    expect(screen.getByText(MENSAJE_PAUSA)).toBeInTheDocument()
+
+    const bloque = screen.getByText('La investigación se detuvo por un error').closest('article')
+    expect(bloque).not.toBeNull()
+    expect(
+      within(bloque as HTMLElement).getByRole('button', { name: 'Reintentar' })
+    ).toBeInTheDocument()
+    // Reintentar es reanudar: dos botones en el mismo bloque pedirían lo mismo
+    // dos veces.
+    expect(within(bloque as HTMLElement).getAllByRole('button')).toHaveLength(1)
+
+    // La barra conserva su «Continuar»: el reintento se suma, no reemplaza.
+    expect(screen.getByRole('button', { name: 'Continuar' })).toBeInTheDocument()
+  })
+
+  it('«Reintentar» reanuda el trabajo una sola vez', async () => {
+    invokeMock.mockResolvedValue(pausadaPor())
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Reintentar' })).toBeInTheDocument()
+    })
+
+    invokeMock.mockClear()
+    await fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('research_request', {
+        request: { op: 'resume', job_id: 'job-65972-0' },
+      })
+    })
+
+    const reanudaciones = invokeMock.mock.calls.filter(
+      ([command, args]) =>
+        command === 'research_request' &&
+        (args as { request?: { op?: string } } | undefined)?.request?.op === 'resume'
+    )
+    expect(reanudaciones).toHaveLength(1)
+  })
+
+  it('un error crudo del proveedor se muestra sin tocarlo', async () => {
+    const crudo =
+      'OpenRouter devolvió el estado 502 Bad Gateway: upstream request failed (request id req-9)'
+    invokeMock.mockResolvedValue(pausadaPor(crudo))
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    await waitFor(() => {
+      expect(screen.getByText('La investigación se detuvo por un error')).toBeInTheDocument()
+    })
+    // Sin parsear: lo que el motor consideró el motivo se lee entero.
+    expect(screen.getByText(crudo)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reintentar' })).toBeInTheDocument()
+  })
+
+  it('un trabajo corriendo sin errores no muestra el bloque de error', async () => {
+    const base = detailPayload()
+    invokeMock.mockResolvedValue({
+      ...base,
+      job: { ...base.job, status: 'running', phase: 'execution' },
+    })
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Pausar' })).toBeInTheDocument()
+    })
+    expect(screen.queryByText('La investigación se detuvo por un error')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument()
+  })
+
+  it('una pausa sin error registrado sigue mostrando la pista de siempre', async () => {
+    invokeMock.mockResolvedValue(detailPayload())
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Se detuvo. Continuá para que termine el informe.')
+      ).toBeInTheDocument()
+    })
+    expect(screen.queryByText('La investigación se detuvo por un error')).not.toBeInTheDocument()
+    // El único botón que reanuda es el de la barra, sin título ni bloque.
+    expect(screen.getAllByRole('button', { name: 'Continuar' })).toHaveLength(1)
+  })
+})
+
+// ==========================================================================
+// Los reintentos de lote del archivo.
+//
+// Antes de pausar, el motor parte el pedido y avisa cada intento con
+// `archive_retry`. Sin pintarlos, un lote que necesitó tres intentos se lee
+// igual que uno que salió a la primera mientras la investigación corre.
+// ==========================================================================
+describe('InvestigationView reintentos de lote del archivo', () => {
+  beforeEach(() => {
+    locale.set('es')
+    invokeMock.mockReset()
+    navigateMock.mockClear()
+    storeRef.current = createStore({})
+  })
+
+  /** Los dos reintentos del lote 2: 48 KB y después 24 KB. */
+  const reintentos = [
+    {
+      id: 'ev-retry-1',
+      kind: 'archive_retry',
+      payload: {
+        batch: 2,
+        budget: 48000,
+        items: 84,
+        error: 'el modelo devolvió una respuesta vacía',
+      },
+      timestamp: 1,
+    },
+    {
+      id: 'ev-retry-2',
+      kind: 'archive_retry',
+      payload: {
+        batch: 2,
+        budget: 24000,
+        items: 42,
+        error: 'el modelo devolvió una respuesta vacía',
+      },
+      timestamp: 2,
+    },
+  ]
+
+  function corriendoCon(eventos: unknown[]) {
+    const base = detailPayload()
+    return { ...base, job: { ...base.job, status: 'running', phase: 'execution' }, events: eventos }
+  }
+
+  it('pinta una línea por reintento con el lote más chico en KB', async () => {
+    invokeMock.mockResolvedValue(corriendoCon(reintentos))
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Pausar' })).toBeInTheDocument()
+    })
+
+    const actividad = screen.getByRole('list', { name: 'Actividad de la investigación' })
+    const lineas = within(actividad).getAllByRole('listitem')
+    expect(lineas).toHaveLength(2)
+    expect(lineas[0]).toHaveTextContent(
+      'Lote 2: reintento con un lote más chico (48 KB, 84 documentos) — el modelo devolvió una respuesta vacía'
+    )
+    expect(lineas[1]).toHaveTextContent(
+      'Lote 2: reintento con un lote más chico (24 KB, 42 documentos) — el modelo devolvió una respuesta vacía'
+    )
+  })
+
+  it('no los cuenta como fallas en las limitaciones del informe', async () => {
+    const base = detailPayload()
+    invokeMock.mockResolvedValue({
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      events: reintentos,
+      artifacts: [
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            markdown: '# Organización del conflicto\n\nEl plenario dispuso un paro.',
+            report: {
+              title: 'Organización del conflicto',
+              references: [],
+              sections: [{ title: 'Hechos', text: 'El plenario dispuso un paro.', quotes: [] }],
+            },
+            coverage: { collections: [] },
+            coverage_warning: { sufficient: true },
+            archive_limitations: [],
+            role_warnings: [],
+          },
+        },
+      ],
+    })
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    await waitFor(() => {
+      expect(screen.getByText('Organización del conflicto')).toBeInTheDocument()
+    })
+    // Un lote que se recuperó partiéndolo no perdió evidencia: no es una falla.
+    expect(screen.queryByText('Limitaciones')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Degradación del pipeline/)).not.toBeInTheDocument()
+  })
+})

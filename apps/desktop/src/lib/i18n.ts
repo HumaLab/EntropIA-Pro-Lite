@@ -1631,6 +1631,11 @@ const es = {
     'Tus respuestas no cambiaron el plan: las búsquedas son las mismas que antes de la ronda.',
   'investigation.planGate.error': 'No se pudo aplicar la decisión sobre el plan.',
   'investigation.working.report': 'Estoy escribiendo el informe…',
+  'investigation.error.title': 'La investigación se detuvo por un error',
+  'investigation.error.retry': 'Reintentar',
+  'investigation.activity.label': 'Actividad de la investigación',
+  'investigation.archiveRetry.line':
+    'Lote {batch}: reintento con un lote más chico ({budget} KB, {items} documentos) — {error}',
   'investigation.pausedHint': 'Se detuvo. Continuá para que termine el informe.',
   'investigation.reportPending': 'Todavía no hay informe.',
   'investigation.loadError': 'No se pudo cargar el detalle.',
@@ -1763,6 +1768,58 @@ const es = {
   'settings.ragParams.rerankDepthRange':
     'rerankDepth debe estar entre topK y fusionCandidateLimit.',
   'settings.ragParams.restoreDefaults': 'Restaurar defaults',
+  'settings.agentParamsTab': 'Agente',
+  'settings.agentParams.title': 'Parámetros del Agente de Investigación',
+  'settings.agentParams.description':
+    'Todos los parámetros del agente. Se congelan al crear la investigación: cambiarlos acá no altera las que ya existen.',
+  'settings.agentParams.loadError': 'No se pudieron leer los parámetros del motor: {error}',
+  'settings.agentParams.default': 'Por defecto: {value}',
+  'settings.agentParams.restoreDefaults': 'Restaurar valores por defecto',
+  'settings.agentParams.section.model': 'Modelo y salida',
+  'settings.agentParams.section.network': 'Red y reintentos',
+  'settings.agentParams.section.archive': 'Archivo',
+  'settings.agentParams.section.retrieval': 'Recuperación',
+  'settings.agentParams.section.questions': 'Aclaración y consultas',
+  'settings.agentParams.label.max_tokens_salida': 'Tope de salida — max_tokens_salida',
+  'settings.agentParams.label.temperatura': 'Temperatura — temperatura',
+  'settings.agentParams.label.timeout_s': 'Timeout por intento — timeout_s',
+  'settings.agentParams.label.esperas_reintento_s':
+    'Esperas entre reintentos — esperas_reintento_s',
+  'settings.agentParams.label.lotes_archivo_bytes':
+    'Escalera de lotes de archivo — lotes_archivo_bytes',
+  'settings.agentParams.label.fragmento_archivo_bytes':
+    'Tamaño del fragmento — fragmento_archivo_bytes',
+  'settings.agentParams.label.ventana_cita': 'Ventana de cita — ventana_cita',
+  'settings.agentParams.label.preguntas_minimas': 'Preguntas mínimas — preguntas_minimas',
+  'settings.agentParams.label.rerank_depth': 'Profundidad del rerank — rerank_depth',
+  'settings.agentParams.label.leg_k': 'Candidatos por pierna — leg_k',
+  'settings.agentParams.label.rrf_k': 'Suavizado de la fusión — rrf_k',
+  'settings.agentParams.label.snippet_max': 'Caracteres por fragmento — snippet_max',
+  'settings.agentParams.label.max_consultas': 'Consultas por modalidad — max_consultas',
+  'settings.agentParams.hint.max_tokens_salida':
+    'Tokens que el modelo puede escribir en un turno; el razonamiento también cuenta. Un tope corto corta las respuestas largas del archivo.',
+  'settings.agentParams.hint.temperatura':
+    'Cuánto azar admite el modelo: más alto, más variación; más bajo, respuestas más literales.',
+  'settings.agentParams.hint.timeout_s': 'Segundos máximos de espera por intento antes de abortar.',
+  'settings.agentParams.hint.esperas_reintento_s':
+    'Segundos de espera antes de cada reintento de red, separados por comas. Vacío deja un solo intento.',
+  'settings.agentParams.hint.lotes_archivo_bytes':
+    'Bytes máximos del insumo de un lote de archivo, de mayor a menor: cada reintento usa el tope siguiente.',
+  'settings.agentParams.hint.fragmento_archivo_bytes':
+    'Bytes con que se parte una evidencia que no entra en un fragmento.',
+  'settings.agentParams.hint.ventana_cita':
+    'Caracteres de fuente que el informe reproduce por cita.',
+  'settings.agentParams.hint.preguntas_minimas':
+    'Preguntas de la ronda de encuadre; si el modelo trae menos, se completan con los ejes de la modalidad.',
+  'settings.agentParams.hint.rerank_depth': 'Candidatos de la fusión que entran al rerank.',
+  'settings.agentParams.hint.leg_k':
+    'Candidatos que trae cada pierna de recuperación antes de fusionar.',
+  'settings.agentParams.hint.rrf_k':
+    'Cuánto pesa estar primero en una pierna frente a estar en las dos.',
+  'settings.agentParams.hint.snippet_max':
+    'Caracteres por fragmento que ven el reranker y la búsqueda léxica.',
+  'settings.agentParams.hint.max_consultas':
+    'Consultas que el plan puede proponer en cada modalidad.',
   'collections.eyebrow': 'Corpus',
   'collections.title': 'Colecciones',
   'collections.subtitle': 'Gestioná tus espacios de trabajo y organizá el archivo por tema.',
@@ -4509,6 +4566,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Your answers did not change the plan: the searches are the same as before the round.',
   'investigation.planGate.error': 'The decision on the plan could not be applied.',
   'investigation.working.report': 'Writing the report…',
+  'investigation.error.title': 'The research stopped because of an error',
+  'investigation.error.retry': 'Retry',
+  'investigation.activity.label': 'Research activity',
+  'investigation.archiveRetry.line':
+    'Batch {batch}: retried with a smaller batch ({budget} KB, {items} documents) — {error}',
   'investigation.pausedHint': 'It stopped. Continue so the report can finish.',
   'investigation.reportPending': 'No report yet.',
   'investigation.loadError': 'The detail could not be loaded.',
@@ -4634,6 +4696,51 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.ragParams.rerankDepthRange':
     'rerankDepth must be between topK and fusionCandidateLimit.',
   'settings.ragParams.restoreDefaults': 'Restore defaults',
+  'settings.agentParamsTab': 'Agent',
+  'settings.agentParams.title': 'Research Agent parameters',
+  'settings.agentParams.description':
+    'Every agent parameter. They are frozen when the investigation is created: changing them here does not affect existing ones.',
+  'settings.agentParams.loadError': 'Could not read the engine parameters: {error}',
+  'settings.agentParams.default': 'Default: {value}',
+  'settings.agentParams.restoreDefaults': 'Restore defaults',
+  'settings.agentParams.section.model': 'Model and output',
+  'settings.agentParams.section.network': 'Network and retries',
+  'settings.agentParams.section.archive': 'Archive',
+  'settings.agentParams.section.retrieval': 'Retrieval',
+  'settings.agentParams.section.questions': 'Clarification and queries',
+  'settings.agentParams.label.max_tokens_salida': 'Output cap — max_tokens_salida',
+  'settings.agentParams.label.temperatura': 'Temperature — temperatura',
+  'settings.agentParams.label.timeout_s': 'Timeout per attempt — timeout_s',
+  'settings.agentParams.label.esperas_reintento_s': 'Waits between retries — esperas_reintento_s',
+  'settings.agentParams.label.lotes_archivo_bytes': 'Archive batch ladder — lotes_archivo_bytes',
+  'settings.agentParams.label.fragmento_archivo_bytes': 'Fragment size — fragmento_archivo_bytes',
+  'settings.agentParams.label.ventana_cita': 'Quote window — ventana_cita',
+  'settings.agentParams.label.preguntas_minimas': 'Minimum questions — preguntas_minimas',
+  'settings.agentParams.label.rerank_depth': 'Rerank depth — rerank_depth',
+  'settings.agentParams.label.leg_k': 'Candidates per leg — leg_k',
+  'settings.agentParams.label.rrf_k': 'Fusion smoothing — rrf_k',
+  'settings.agentParams.label.snippet_max': 'Snippet size — snippet_max',
+  'settings.agentParams.label.max_consultas': 'Queries per modality — max_consultas',
+  'settings.agentParams.hint.max_tokens_salida':
+    'Tokens the model may write per turn; reasoning counts too. A short cap cuts the long archive answers.',
+  'settings.agentParams.hint.temperatura':
+    'How much randomness the model accepts: higher is more varied, lower is more literal.',
+  'settings.agentParams.hint.timeout_s': 'Maximum seconds to wait per attempt before aborting.',
+  'settings.agentParams.hint.esperas_reintento_s':
+    'Seconds to wait before each network retry, comma-separated. Empty leaves a single attempt.',
+  'settings.agentParams.hint.lotes_archivo_bytes':
+    'Maximum archive batch input in bytes, largest first: each retry uses the next cap.',
+  'settings.agentParams.hint.fragmento_archivo_bytes':
+    'Bytes used to split a piece of evidence that does not fit in a fragment.',
+  'settings.agentParams.hint.ventana_cita': 'Source characters the report reproduces per citation.',
+  'settings.agentParams.hint.preguntas_minimas':
+    'Questions in the framing round; if the model returns fewer, the modality axes fill in.',
+  'settings.agentParams.hint.rerank_depth': 'Fused candidates that enter the rerank.',
+  'settings.agentParams.hint.leg_k': 'Candidates each retrieval leg brings before fusion.',
+  'settings.agentParams.hint.rrf_k': 'How much leading one leg weighs against appearing in both.',
+  'settings.agentParams.hint.snippet_max':
+    'Characters per fragment seen by the reranker and the lexical search.',
+  'settings.agentParams.hint.max_consultas': 'Queries the plan may propose per modality.',
   'collections.eyebrow': 'Corpus',
   'collections.title': 'Collections',
   'collections.subtitle': 'Manage your workspaces and organize the archive by topic.',

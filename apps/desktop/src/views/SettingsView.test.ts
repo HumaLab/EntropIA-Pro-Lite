@@ -1706,6 +1706,7 @@ describe('settings dirty detection helpers', () => {
     ragModel: 'anthropic/claude-3.7-sonnet',
     ragRerankerModel: 'cohere/rerank-4-fast',
     ragParams: { topK: '6', temperature: '0.2' },
+    agentParams: { values: { max_tokens_salida: '16384' }, maxConsultas: { general: '20' } },
   }
 
   it('is clean when the current snapshot matches the saved baseline', () => {

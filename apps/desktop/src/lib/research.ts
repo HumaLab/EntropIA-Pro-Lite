@@ -535,6 +535,132 @@ export function researchAdvance(jobId: string): Promise<unknown> {
   return researchRequest({ op: 'advance', job_id: jobId })
 }
 
+// ---------------------------------------------------------------------------
+// Parámetros del agente (solapa Agente)
+// ---------------------------------------------------------------------------
+
+/**
+ * Los valores por defecto del motor (`ParametrosAgente::default()`).
+ *
+ * El contrato —qué campos hay, con qué valor y entre qué rangos— vive en el
+ * motor: acá no se repite ninguno. La solapa se arma con esta respuesta.
+ */
+export function researchParametersDefaults(): Promise<Record<string, unknown>> {
+  return invoke<Record<string, unknown>>('research_parameters_defaults')
+}
+
+/**
+ * La validación del motor. Rechaza con su mensaje exacto, que es el que la
+ * solapa muestra al lado del formulario.
+ */
+export function researchParametersValidate(parameters: Record<string, unknown>): Promise<void> {
+  return invoke<void>('research_parameters_validate', { parameters })
+}
+
+/**
+ * Lo que la solapa edita: todo es texto en pantalla. Un número suelto, una
+ * lista separada por comas o, en `maxConsultas`, un tope por perfil.
+ */
+export type AgentParametersForm = {
+  /** Un valor por campo del contrato; las listas van separadas por comas. */
+  values: Record<string, string>
+  /** `max_consultas`: un tope por perfil de informe. */
+  maxConsultas: Record<string, string>
+}
+
+/** Los campos del contrato que el formulario edita como lista de números. */
+const AGENT_LIST_PARAMETERS = new Set(['esperas_reintento_s', 'lotes_archivo_bytes'])
+
+/** El campo del contrato que se edita como un tope por perfil de informe. */
+const AGENT_QUOTA_PARAMETER = 'max_consultas'
+
+/** El formulario vacío: lo completa la respuesta de defaults del motor. */
+export function emptyAgentParametersForm(): AgentParametersForm {
+  return { values: {}, maxConsultas: {} }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+/** Cómo se lee un valor del contrato en un campo de texto. */
+export function agentParameterText(value: unknown): string {
+  if (Array.isArray(value)) return value.map(agentParameterText).join(', ')
+  if (typeof value === 'number' || typeof value === 'string') return String(value)
+  return ''
+}
+
+/**
+ * El formulario de la solapa: cada campo del contrato con su valor vigente.
+ *
+ * Los campos y su orden salen de `defaults` —la respuesta del motor—, así que
+ * agregar un parámetro al motor lo hace aparecer en la solapa sin tocar
+ * TypeScript. Lo guardado gana cuando está; lo que falta (una clave ausente,
+ * un perfil sin tope) queda en el default. Una clave ilegible no rompe la
+ * solapa: se muestran los defaults y el próximo guardado la reemplaza.
+ */
+export function agentParametersForm(
+  defaults: Record<string, unknown>,
+  saved: string | null = null
+): AgentParametersForm {
+  let stored: Record<string, unknown> = {}
+  if (saved) {
+    try {
+      stored = asRecord(JSON.parse(saved))
+    } catch {
+      stored = {}
+    }
+  }
+  const form = emptyAgentParametersForm()
+  const quotas = asRecord(stored[AGENT_QUOTA_PARAMETER])
+  for (const [key, fallback] of Object.entries(defaults)) {
+    if (key === AGENT_QUOTA_PARAMETER) {
+      for (const [profile, cap] of Object.entries(asRecord(fallback))) {
+        form.maxConsultas[profile] = agentParameterText(profile in quotas ? quotas[profile] : cap)
+      }
+      continue
+    }
+    form.values[key] = agentParameterText(stored[key] ?? fallback)
+  }
+  return form
+}
+
+/**
+ * Texto editable → número del contrato. Vacío o no numérico viaja como nulo:
+ * la regla de qué es válido es del motor, que responde con su mensaje.
+ */
+function numberFromText(text: string): number | null {
+  if (!text.trim()) return null
+  const value = Number(text)
+  return Number.isFinite(value) ? value : null
+}
+
+function numbersFromList(text: string): Array<number | null> {
+  return text
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map(numberFromText)
+}
+
+/**
+ * El `parameters` que viaja al motor: el mismo JSON que se guarda y que
+ * `research_parameters_validate` valida. Acá no hay reglas —rangos, escalera
+ * decreciente, perfiles conocidos— porque esas son del motor.
+ */
+export function agentParametersJson(form: AgentParametersForm): Record<string, unknown> {
+  const parameters: Record<string, unknown> = {}
+  for (const [key, text] of Object.entries(form.values)) {
+    parameters[key] = AGENT_LIST_PARAMETERS.has(key) ? numbersFromList(text) : numberFromText(text)
+  }
+  parameters[AGENT_QUOTA_PARAMETER] = Object.fromEntries(
+    Object.entries(form.maxConsultas).map(([profile, text]) => [profile, numberFromText(text)])
+  )
+  return parameters
+}
+
 /**
  * Tauri `invoke` rechaza con el string del backend, no con `Error`;
  * ese mensaje es el que hay que mostrar.

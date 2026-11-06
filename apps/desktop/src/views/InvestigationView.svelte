@@ -819,6 +819,44 @@
       return null
     })()
   )
+  /**
+   * Un `archive_retry` por cada intento con un lote más chico, en el orden en
+   * que el motor los escribió. Antes de pausar, el motor parte el pedido;
+   * estas líneas cuentan esa parte del trabajo en vez de dejarla invisible.
+   */
+  const archiveRetries = $derived(
+    events
+      .filter((event) => event.kind === 'archive_retry')
+      .map((event) => ({ id: event.id, text: archiveRetryText(event.payload) }))
+  )
+
+  /** El `budget` del motor son bytes en múltiplos decimales (48 000 es su
+   *  «lote de 48 KB»); se lee en KB con la misma cuenta que el motor. */
+  function formatBatchBudget(bytes: number): string {
+    const kb = bytes / 1000
+    return Number.isInteger(kb) ? String(kb) : kb.toFixed(1)
+  }
+
+  /**
+   * La línea de un reintento. Un payload incompleto no rompe la vista —los
+   * eventos llegan de un motor que puede no conocer todavía este campo—:
+   * lo que falta se lee como «—» y el motivo queda vacío.
+   */
+  function archiveRetryText(payload: unknown): string {
+    const fields = (payload ?? {}) as {
+      batch?: unknown
+      budget?: unknown
+      items?: unknown
+      error?: unknown
+    }
+    return translate('investigation.archiveRetry.line', {
+      batch: typeof fields.batch === 'number' ? String(fields.batch) : '—',
+      budget: typeof fields.budget === 'number' ? formatBatchBudget(fields.budget) : '—',
+      items: typeof fields.items === 'number' ? String(fields.items) : '—',
+      error: typeof fields.error === 'string' ? fields.error.trim() : '',
+    })
+  }
+
   // El editor del presupuesto existe solo con el trabajo pausado: es el
   // estado en que el motor deja una investigación que agotó su techo, y el
   // único en que acepta cambiarlo. Con el trabajo corriendo, ofrecerlo sería
@@ -1083,14 +1121,49 @@
       {/if}
 
       {#if job?.status === 'paused'}
-        <article class="investigation-chat__message investigation-chat__message--assistant">
-          <p>{lastBackendError ?? translate('investigation.pausedHint')}</p>
-        </article>
+        {#if lastBackendError}
+          <!-- El motivo lo escribe el motor —nombra el lote, los documentos y
+               los intentos— y se pinta tal cual: la vista no lo interpreta. -->
+          <article
+            class="investigation-chat__message investigation-chat__message--assistant investigation-error"
+          >
+            <h3 class="investigation-error__title">
+              {$currentLocale && t('investigation.error.title')}
+            </h3>
+            <p class="investigation-error__message">{lastBackendError}</p>
+            <div class="investigation-error__actions">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={jobActionInFlight !== null}
+                loading={jobActionInFlight === 'resume'}
+                onclick={() => void runJobAction('resume')}
+              >
+                <span>{$currentLocale && t('investigation.error.retry')}</span>
+              </Button>
+            </div>
+          </article>
+        {:else}
+          <article class="investigation-chat__message investigation-chat__message--assistant">
+            <p>{translate('investigation.pausedHint')}</p>
+          </article>
+        {/if}
       {:else if !reportHtml && !planGate}
         <!-- Con el gate del plan pendiente nada corre: el panel dice qué espera. -->
         <article class="investigation-chat__message investigation-chat__message--assistant">
           <p>{workingCopy}</p>
         </article>
+      {/if}
+
+      {#if archiveRetries.length > 0}
+        <ul
+          class="investigation-activity"
+          aria-label={$currentLocale && t('investigation.activity.label')}
+        >
+          {#each archiveRetries as retry (retry.id)}
+            <li class="investigation-activity__line">{retry.text}</li>
+          {/each}
+        </ul>
       {/if}
 
       {#if openRound}
@@ -2219,6 +2292,42 @@
 
   .investigation-chat__report :global(p:last-child) {
     margin-bottom: 0;
+  }
+
+  /* El bloque de una investigación detenida por un error: mismo gesto que el
+     detalle de una tarea fallida en Lotes, con el motivo y el reintento. */
+  .investigation-error {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
+    background: var(--color-danger-soft);
+  }
+
+  .investigation-error__title {
+    margin: 0;
+    color: var(--color-danger);
+  }
+
+  /* El motivo se lee entero, con sus saltos de línea: es el texto del motor. */
+  .investigation-error__message {
+    margin: 0;
+    color: var(--color-text-primary);
+    white-space: pre-wrap;
+  }
+
+  .investigation-error__actions {
+    display: flex;
+  }
+
+  /* La actividad del archivo, una línea por reintento: progreso, no fallas. */
+  .investigation-activity {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: 0;
+    padding: var(--space-2) var(--space-4) var(--space-2) var(--space-6);
+    color: var(--color-text-secondary);
   }
 
   @media (max-width: 820px) {

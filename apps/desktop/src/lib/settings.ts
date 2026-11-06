@@ -211,6 +211,12 @@ export const SETTINGS_KEYS = {
    * build local siempre rerankea con el cross-encoder ONNX del equipo.
    */
   RAG_RERANKER_MODEL: 'rag_reranker_model',
+  /**
+   * Parámetros del Agente de Investigación, como JSON de `ParametrosAgente`
+   * (`src-tauri/src/research.rs` los manda en el `create`). Clave ausente =
+   * defaults del motor. Ver `docs/parametros-agente.md` en el motor.
+   */
+  RESEARCH_AGENT_PARAMETERS: 'research_agent_parameters',
 } as const
 
 export type LlmMode = 'local' | 'openrouter' | 'auto'

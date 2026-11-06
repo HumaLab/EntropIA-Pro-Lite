@@ -4,6 +4,7 @@ use entropia_agent::{
     embeddings::ClienteEmbeddings,
     estado::EstadoDb,
     fuente_bibliografica::{FuenteBibliografica, PasajeBibliografico, TipoUbicacion, Ubicacion},
+    parametros::ParametrosAgente,
     recuperacion::Recuperador,
     repositorio::RepositorioSqlite,
     rerank::ClienteRerank,
@@ -219,6 +220,99 @@ fn bibliotecas_del_trabajo(
     Ok(Some(bibliotecas))
 }
 
+/// Clave de la solapa Agente: el JSON de `ParametrosAgente` tal como se manda
+/// al motor al crear una investigación. Espeja
+/// `SETTINGS_KEYS.RESEARCH_AGENT_PARAMETERS` en `src/lib/settings.ts`.
+pub const RESEARCH_AGENT_PARAMETERS: &str = "research_agent_parameters";
+
+/// Los parámetros congelados del job, tal como el motor los guarda en el
+/// artefacto `parameters`.
+///
+/// Un job anterior a los parámetros no tiene artefacto (`None`): ese job corre
+/// con los defaults y su cliente se arma como siempre.
+fn parametros_json_del_job(state: &Path, job_id: &str) -> Option<String> {
+    let conn =
+        rusqlite::Connection::open_with_flags(state, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()?;
+    conn.query_row(
+        "SELECT content_json FROM artifacts WHERE job_id=?1 AND tipo='parameters' AND obsolete=0 \
+         ORDER BY version DESC LIMIT 1",
+        [job_id],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+/// Suma al pedido de `create` los parámetros guardados por la solapa Agente.
+///
+/// Ausente la clave —o con un valor que no es un objeto JSON— el pedido viaja
+/// exactamente como siempre y el motor usa sus defaults. Un `parameters`
+/// explícito en el pedido manda: la solapa no pisa lo que ya eligió otro
+/// llamador.
+fn aplicar_parametros_guardados(request: &mut Value, guardado: Option<&str>) {
+    if request
+        .get("parameters")
+        .is_some_and(|valor| !valor.is_null())
+    {
+        return;
+    }
+    let Some(texto) = guardado else { return };
+    let Ok(valor) = serde_json::from_str::<Value>(texto) else {
+        return;
+    };
+    if valor.is_object() {
+        request["parameters"] = valor;
+    }
+}
+
+/// El pedido que va al motor con los parámetros guardados por la solapa
+/// Agente.
+///
+/// Solo un `create` los lleva: es el único que los congela. Un job en curso
+/// corre con los suyos, así que cambiar la solapa no lo toca.
+fn pedido_del_motor(request: Value, guardado: Option<&str>) -> Value {
+    let mut request = request;
+    if request["op"].as_str() != Some("create") {
+        return request;
+    }
+    aplicar_parametros_guardados(&mut request, guardado);
+    request
+}
+
+/// Los parámetros del agente que gobiernan el cliente de este pedido.
+///
+/// En `create` son los que viajan en el pedido: los mismos que el motor valida
+/// y congela. En los pasos siguientes, el artefacto que el job congeló —cambiar
+/// la solapa Agente no cambia una investigación en curso—. `None` en un job sin
+/// artefacto: el cliente se arma con `new`, igual que siempre.
+fn parametros_del_trabajo(
+    op: &str,
+    request: &Value,
+    congelados: Option<&str>,
+) -> Option<ParametrosAgente> {
+    let valor = if op == "create" {
+        request.get("parameters").cloned().unwrap_or(Value::Null)
+    } else {
+        serde_json::from_str::<Value>(congelados?).ok()?
+    };
+    if valor.is_null() {
+        return None;
+    }
+    ParametrosAgente::desde_valor(&valor).ok()
+}
+
+/// Los defaults del motor, para que la solapa Agente los muestre sin
+/// duplicarlos en TypeScript.
+fn parametros_defaults() -> Result<Value, String> {
+    serde_json::to_value(ParametrosAgente::default()).map_err(|e| e.to_string())
+}
+
+/// La validación del motor con su mensaje exacto: quien lo lee no tiene que
+/// adivinar qué corregir en la solapa.
+fn validar_parametros(parameters: Value) -> Result<(), String> {
+    ParametrosAgente::desde_valor(&parameters).map(|_| ())
+}
+
 /// El workflow congelado del job, tal como lo guarda el motor en `plan_json`.
 fn plan_json_del_job(state: &Path, job_id: &str) -> Option<String> {
     let conn =
@@ -317,6 +411,22 @@ impl ResearchState {
         tauri::async_runtime::spawn_blocking(move || {
             let db = EstadoDb::abrir(inner.state.to_str().ok_or("Ruta no UTF-8")?)?;
             let repo = RepositorioSqlite::abrir(inner.corpus.to_str().ok_or("Ruta no UTF-8")?)?;
+            // Un `create` viaja con los parámetros de la solapa Agente: son los
+            // que el motor valida y congela con el job. Ningún otro pedido los
+            // lleva (un job en curso usa los suyos, ya congelados).
+            let request = if request["op"].as_str() == Some("create") {
+                let conn = rusqlite::Connection::open_with_flags(
+                    &inner.corpus,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )
+                .map_err(|e| e.to_string())?;
+                pedido_del_motor(
+                    request,
+                    crate::settings::get_setting(&conn, RESEARCH_AGENT_PARAMETERS).as_deref(),
+                )
+            } else {
+                request
+            };
             // La pierna bibliográfica, solo cuando el alcance del trabajo la
             // incluye. El motor la consulta únicamente en ese caso.
             let fuente = fuente_del_trabajo(&request, &inner.corpus, &inner.state)?;
@@ -327,13 +437,13 @@ impl ResearchState {
                     rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
                 )
                 .map_err(|e| e.to_string())?;
+                let op = request["op"].as_str().unwrap_or("");
                 let key = crate::settings::get_setting(&conn, crate::settings::OPENROUTER_API_KEY)
                     .filter(|s| !s.trim().is_empty())
                     .ok_or("Configura la credencial OpenRouter en Configuración")?;
                 let model = {
                     // El modelo de este pedido: el que el trabajo congeló, el
                     // que el create eligió, o el ajuste de siempre.
-                    let op = request["op"].as_str().unwrap_or("");
                     let plan = if op == "create" {
                         None
                     } else {
@@ -347,7 +457,17 @@ impl ResearchState {
                         crate::settings::get_setting(&conn, "openrouter_model"),
                     )
                 };
-                let llm = ClienteLlmOpenRouter::new(key.clone(), model);
+                // El cliente habla con el tope de salida y la temperatura de este
+                // trabajo: en create los del pedido, después los congelados en su
+                // artefacto `parameters`.
+                let congelados =
+                    parametros_json_del_job(&inner.state, request["job_id"].as_str().unwrap_or(""));
+                let llm = match parametros_del_trabajo(op, &request, congelados.as_deref()) {
+                    Some(parametros) => {
+                        ClienteLlmOpenRouter::con_parametros(key.clone(), model, &parametros)
+                    }
+                    None => ClienteLlmOpenRouter::new(key.clone(), model),
+                };
                 // Same credential drives embeddings and rerank. Without it the
                 // engine falls back to lexical search and says so in the report.
                 let recuperador = {
@@ -607,11 +727,30 @@ pub async fn research_request(
     state.request(request, &app_handle).await
 }
 
+/// Los valores por defecto del motor para la solapa Agente.
+///
+/// La solapa no repite números ni rangos: los pide acá, que es
+/// `ParametrosAgente::default()`.
+#[tauri::command]
+pub fn research_parameters_defaults() -> Result<Value, String> {
+    parametros_defaults()
+}
+
+/// Valida un `parameters` con las mismas reglas del motor.
+///
+/// Devuelve el mensaje exacto del motor cuando hay error: la solapa lo muestra
+/// tal cual y no persiste nada.
+#[tauri::command]
+pub fn research_parameters_validate(parameters: Value) -> Result<(), String> {
+    validar_parametros(parameters)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        bibliotecas_del_trabajo, capture_terminal_job, modelo_del_trabajo, pasaje_del_hallazgo,
-        plan_json_del_job, ref_de_biblioteca, terminal_job_id, uses_model,
+        bibliotecas_del_trabajo, capture_terminal_job, modelo_del_trabajo, parametros_defaults,
+        parametros_del_trabajo, parametros_json_del_job, pasaje_del_hallazgo, pedido_del_motor,
+        plan_json_del_job, ref_de_biblioteca, terminal_job_id, uses_model, validar_parametros,
     };
     use crate::rag::scope::PassageResult;
     use crate::rag::RagBibliographyLocation;
@@ -911,6 +1050,132 @@ mod tests {
             ),
             entropia_agent::cliente_llm::ClienteLlmOpenRouter::MODELO_DEFAULT
         );
+    }
+
+    #[test]
+    fn el_create_manda_los_parametros_de_la_solapa_agente() {
+        let guardado = r#"{"max_tokens_salida":8192,"temperatura":0.9}"#;
+        let request = pedido_del_motor(
+            json!({"op":"create","question":"¿Qué pasó?"}),
+            Some(guardado),
+        );
+        assert_eq!(
+            request["parameters"],
+            json!({"max_tokens_salida": 8192, "temperatura": 0.9})
+        );
+        // Un `parameters` que ya venía con el pedido manda: la solapa no lo pisa.
+        let explicito = pedido_del_motor(
+            json!({"op":"create","parameters":{"max_tokens_salida":4096}}),
+            Some(guardado),
+        );
+        assert_eq!(explicito["parameters"], json!({"max_tokens_salida": 4096}));
+        // Ningún otro pedido lleva parámetros: un job en curso usa los suyos.
+        for op in ["advance", "resume", "pause", "rewrite_section"] {
+            let pedido = pedido_del_motor(json!({"op": op, "job_id": "job-1"}), Some(guardado));
+            assert!(pedido.get("parameters").is_none(), "{op}");
+        }
+    }
+
+    #[test]
+    fn sin_parametros_guardados_el_create_viaja_como_siempre() {
+        let como_hoy = json!({"op":"create","question":"¿Qué pasó?"});
+        let sin_clave = pedido_del_motor(como_hoy.clone(), None);
+        assert_eq!(sin_clave, como_hoy);
+        assert!(sin_clave.get("parameters").is_none());
+        // Un valor corrupto no viaja a medias: el motor usa sus defaults.
+        assert_eq!(
+            pedido_del_motor(como_hoy.clone(), Some("no es json")),
+            como_hoy
+        );
+    }
+
+    #[test]
+    fn los_parametros_congelados_por_el_job_gobiernan_el_cliente() {
+        // El artefacto `parameters` es lo que el motor congeló al crear: el
+        // cliente de cada paso usa ese tope de salida y esa temperatura, aunque
+        // la solapa Agente diga otra cosa.
+        let congelados = r#"{"max_tokens_salida":8192,"temperatura":0.9,"timeout_s":90}"#;
+        let parametros = parametros_del_trabajo(
+            "advance",
+            &json!({"op":"advance","job_id":"job-1"}),
+            Some(congelados),
+        )
+        .expect("parámetros congelados del job");
+        assert_eq!(parametros.max_tokens_salida, 8192);
+        assert_eq!(parametros.temperatura, 0.9);
+        assert_eq!(parametros.timeout_s, 90);
+        // Un job anterior a los parámetros no tiene artefacto: cliente de siempre.
+        assert_eq!(
+            parametros_del_trabajo("advance", &json!({"op":"advance","job_id":"viejo"}), None),
+            None
+        );
+        // En create son los del pedido, que es lo que el motor congela.
+        assert_eq!(
+            parametros_del_trabajo(
+                "create",
+                &json!({"op":"create","parameters":{"max_tokens_salida":8192}}),
+                None
+            )
+            .map(|p| p.max_tokens_salida),
+            Some(8192)
+        );
+        assert_eq!(
+            parametros_del_trabajo("create", &json!({"op":"create"}), None),
+            None
+        );
+    }
+
+    #[test]
+    fn el_artefacto_de_parametros_se_lee_del_estado_del_job() {
+        let root = temp_workspace("parameters-artifact");
+        let state = root.path().join("estado.sqlite");
+        entropia_agent::estado::EstadoDb::abrir(state.to_str().expect("utf-8 path"))
+            .expect("estado schema");
+        let conn = rusqlite::Connection::open(&state).expect("state connection");
+        conn.execute(
+            "INSERT INTO jobs (id, modo, pregunta, status, close_reason, config_snapshot,
+                              corpus_snapshot_id, project, corpus, created_at, updated_at)
+             VALUES ('job-1', 'research', '¿Pregunta?', 'running', NULL, '{}',
+                     'snap-1', 'demo', 'desktop', 100, 200)",
+            [],
+        )
+        .expect("insert job");
+        conn.execute(
+            "INSERT INTO artifacts (id, job_id, tipo, path, version, created_at, content_json, obsolete)
+             VALUES ('art-1', 'job-1', 'parameters', '', 1, 150, ?1, 0)",
+            [r#"{"max_tokens_salida":2048,"temperatura":1.1}"#],
+        )
+        .expect("insert parameters artifact");
+        drop(conn);
+
+        let congelados = parametros_json_del_job(&state, "job-1").expect("artefacto del job");
+        let parametros = parametros_del_trabajo(
+            "advance",
+            &json!({"op":"advance","job_id":"job-1"}),
+            Some(&congelados),
+        )
+        .expect("parámetros del job");
+        assert_eq!(parametros.max_tokens_salida, 2048);
+        assert_eq!(parametros.temperatura, 1.1);
+        assert_eq!(parametros_json_del_job(&state, "job-2"), None);
+        assert_eq!(parametros_json_del_job(&state, "job-inexistente"), None);
+    }
+
+    #[test]
+    fn los_defaults_y_la_validacion_son_los_del_motor() {
+        let defaults = parametros_defaults().expect("defaults del motor");
+        assert_eq!(defaults["max_tokens_salida"], json!(16384));
+        assert_eq!(
+            defaults["lotes_archivo_bytes"],
+            json!([48_000, 24_000, 12_000])
+        );
+        assert_eq!(defaults["max_consultas"]["general"], json!(20));
+        // El mensaje es el del motor, palabra por palabra.
+        assert_eq!(
+            validar_parametros(json!({"max_tokens_salida": 10})).expect_err("fuera de rango"),
+            "max_tokens_salida debe estar entre 1024 y 131072 (recibido: 10)"
+        );
+        assert_eq!(validar_parametros(json!({})), Ok(()));
     }
 
     fn response(status: &str, id: &str) -> serde_json::Value {

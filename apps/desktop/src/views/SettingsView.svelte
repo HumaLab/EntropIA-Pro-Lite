@@ -1,4 +1,6 @@
 <script module lang="ts">
+  import type { AgentParametersForm } from '$lib/research'
+
   /**
    * Serializable snapshot of every user-editable settings value. Compared
    * against the baseline captured at load/save time to detect unsaved edits.
@@ -26,6 +28,7 @@
     ragModel: string
     ragRerankerModel: string
     ragParams: Record<string, string>
+    agentParams: AgentParametersForm
   }
 
   export function buildSettingsSnapshot(input: SettingsSnapshotInput): string {
@@ -127,6 +130,15 @@
   import VercelFallbackCard from './VercelFallbackCard.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
   import { onSettingsTabRequest } from '$lib/settings-tab-request'
+  import AgentParametersTab from '../components/settings/AgentParametersTab.svelte'
+  import {
+    agentParametersForm,
+    agentParametersJson,
+    describeBackendError,
+    emptyAgentParametersForm,
+    researchParametersDefaults,
+    researchParametersValidate,
+  } from '$lib/research'
 
   const navigation = getNavigation()
   const paneId = getPaneId()
@@ -147,6 +159,7 @@
     | 'prompts'
     | 'modelParams'
     | 'ragParams'
+    | 'agentParams'
     | 'sync'
     | 'assistants'
     | 'dependencias'
@@ -299,6 +312,15 @@
   // eso el campo se oculta bajo `LOCAL_ML` en vez de mostrarse inerte.
   let ragRerankerModel = $state(DEFAULT_RAG_RERANKER_MODEL)
   let ragParamsError = $state<string | null>(null)
+
+  // Solapa «Agente»: los parámetros del motor de investigación. El formulario
+  // arranca vacío y lo llena la respuesta de defaults del motor
+  // (`research_parameters_defaults`), que es también lo que restaura el botón.
+  // Los valores y los rangos no se repiten acá: son del motor.
+  let agentParamsDefaults = $state<Record<string, unknown>>({})
+  let agentParams = $state<AgentParametersForm>(emptyAgentParametersForm())
+  let agentParamsError = $state<string | null>(null)
+  let agentParamsLoadError = $state<string | null>(null)
 
   // Test connection state
   let testing = $state(false)
@@ -513,6 +535,7 @@
       ragModel,
       ragRerankerModel,
       ragParams,
+      agentParams,
     })
   )
   const isDirty = $derived(hasUnsavedSettingsChanges(savedSnapshot, currentSnapshot))
@@ -686,6 +709,7 @@
       ragModel = readRagModelFromSettings(settingsMap, effectiveGlobalModel)
       ragRerankerModel =
         settingsMap.get(SETTINGS_KEYS.RAG_RERANKER_MODEL)?.trim() || DEFAULT_RAG_RERANKER_MODEL
+      await loadAgentParameters(settingsMap)
       normalizeRemoteModesForCapabilities()
       savedSnapshot = currentSnapshot
     } catch (e) {
@@ -951,6 +975,52 @@
   /** Modelo general vigente en el formulario, usado como valor heredado. */
   function inheritedRagModel(): string {
     return model.trim() || DEFAULT_OPENROUTER_MODEL
+  }
+
+  /**
+   * Carga la solapa Agente desde el motor: los defaults y los valores vigentes
+   * salen de él. Los rangos y las reglas también, así que acá no hay ninguno.
+   */
+  async function loadAgentParameters(settingsMap: Map<string, string>) {
+    try {
+      agentParamsDefaults = await researchParametersDefaults()
+      agentParams = agentParametersForm(
+        agentParamsDefaults,
+        settingsMap.get(SETTINGS_KEYS.RESEARCH_AGENT_PARAMETERS) ?? null
+      )
+      agentParamsLoadError = null
+    } catch (e) {
+      agentParamsLoadError = describeBackendError(e, () => String(e))
+    }
+  }
+
+  /**
+   * Restaura los defaults del motor en el formulario y en la clave guardada:
+   * una investigación nueva no arrastra lo que había antes de restaurar.
+   */
+  async function resetAgentParameters() {
+    agentParams = agentParametersForm(agentParamsDefaults)
+    agentParamsError = null
+    try {
+      await settingsDelete(SETTINGS_KEYS.RESEARCH_AGENT_PARAMETERS)
+    } catch (e) {
+      agentParamsError = describeSettingsError(e, t)
+    }
+  }
+
+  /**
+   * Los parámetros del agente que hay que guardar, o `null` cuando el motor los
+   * rechaza. El mensaje que se muestra es el suyo, palabra por palabra.
+   */
+  async function validatedAgentParameters(): Promise<Record<string, unknown> | null> {
+    const parameters = agentParametersJson(agentParams)
+    try {
+      await researchParametersValidate(parameters)
+      return parameters
+    } catch (e) {
+      agentParamsError = describeBackendError(e, () => String(e))
+      return null
+    }
   }
 
   /** Valor RAG efectivo para chequeos cross-field: texto editado o default si quedó vacío. */
@@ -1258,6 +1328,20 @@
       activeTab = 'ragParams'
       return
     }
+    // La solapa Agente valida con el motor: si rechaza, se muestra su mensaje
+    // y no se persiste nada (ni los parámetros ni el resto de la página).
+    agentParamsError = null
+    let agentParameters: Record<string, unknown> | null = null
+    if (!agentParamsLoadError) {
+      agentParameters = await validatedAgentParameters()
+      if (!agentParameters) {
+        saving = false
+        saveFeedback = { tone: 'error', text: agentParamsError ?? '' }
+        activeTab = 'agentParams'
+        return
+      }
+    }
+
     try {
       normalizeRemoteModesForCapabilities()
       const writes: Promise<void>[] = [
@@ -1330,6 +1414,13 @@
             RAG_PARAM_KEYS[param],
             normalizedNumericText(ragParams[param]) || DEFAULT_RAG_PARAMS[param]
           )
+        )
+      }
+      // Los parámetros del agente se guardan como el JSON completo que ya
+      // validó el motor; ése es el que viaja en el `create` de la investigación.
+      if (agentParameters) {
+        writes.push(
+          settingsSet(SETTINGS_KEYS.RESEARCH_AGENT_PARAMETERS, JSON.stringify(agentParameters))
         )
       }
       if (apiKey.trim()) writes.push(settingsSet(SETTINGS_KEYS.OPENROUTER_API_KEY, apiKey.trim()))
@@ -1593,6 +1684,9 @@
         </TabButton>
         <TabButton active={activeTab === 'ragParams'} onclick={() => (activeTab = 'ragParams')}>
           {t('settings.ragParamsTab')}
+        </TabButton>
+        <TabButton active={activeTab === 'agentParams'} onclick={() => (activeTab = 'agentParams')}>
+          {t('settings.agentParamsTab')}
         </TabButton>
         <TabButton active={activeTab === 'sync'} onclick={() => (activeTab = 'sync')}>
           {t('settings.syncTab')}
@@ -2955,6 +3049,29 @@
           </div>
         </section>
       </Card>
+    {:else if activeTab === 'agentParams'}
+      {#if saveFeedback}
+        <p
+          class="surface-message"
+          class:surface-message--error={saveFeedback.tone === 'error'}
+          class:surface-message--success={saveFeedback.tone === 'success'}
+        >
+          {saveFeedback.text}
+        </p>
+      {/if}
+
+      {#if agentParamsLoadError}
+        <p class="surface-message surface-message--error" role="alert">
+          {t('settings.agentParams.loadError', { error: agentParamsLoadError })}
+        </p>
+      {:else}
+        <AgentParametersTab
+          bind:form={agentParams}
+          defaults={agentParamsDefaults}
+          error={agentParamsError}
+          onrestore={resetAgentParameters}
+        />
+      {/if}
     {:else if activeTab === 'dependencias'}
       {#if LOCAL_ML && DependenciasTab}
         <DependenciasTab />
