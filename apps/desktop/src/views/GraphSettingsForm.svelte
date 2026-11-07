@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button } from '@entropia/ui'
+  import { Button, Checkbox } from '@entropia/ui'
   import { locale, t, type I18nKey } from '$lib/i18n'
   import {
     GRAPH_SETTINGS_BOUNDS,
@@ -198,15 +198,12 @@
         {/each}
       </div>
       {#each section.toggles as control (control.field)}
-        <label class="graph-settings__toggle">
-          <input
-            type="checkbox"
-            checked={read(control.group, control.field) as boolean}
-            onchange={(event) =>
-              emit(control.group, control.field, (event.currentTarget as HTMLInputElement).checked)}
-          />
-          <span>{translate(control.label)}</span>
-        </label>
+        <Checkbox
+          class="graph-settings__toggle"
+          checked={read(control.group, control.field) as boolean}
+          onchange={(checked) => emit(control.group, control.field, checked)}
+          >{translate(control.label)}</Checkbox
+        >
       {/each}
     </fieldset>
   {/each}
@@ -267,8 +264,7 @@
     min-width: 0;
   }
 
-  .graph-settings__label,
-  .graph-settings__toggle {
+  .graph-settings__label {
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
   }
@@ -289,13 +285,6 @@
     outline: none;
     border-color: var(--border-focus);
     box-shadow: var(--focus-ring);
-  }
-
-  .graph-settings__toggle {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    cursor: pointer;
   }
 
   .graph-settings__hint {

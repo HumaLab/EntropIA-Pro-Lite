@@ -10,7 +10,7 @@
    * collection's history entry so «Volver» brings this view back as it was.
    */
   import { onDestroy } from 'svelte'
-  import { ActionIcon, IconButton } from '@entropia/ui'
+  import { ActionIcon, IconButton, tooltip } from '@entropia/ui'
   import type { Entity, Triple } from '@entropia/store'
   import { getStore } from '$lib/db'
   import { locale, t, type I18nKey } from '$lib/i18n'
@@ -457,7 +457,7 @@
                   type="button"
                   class="relation-graph__relation"
                   disabled={relationTargetsFor.length === 0}
-                  title={t('collectionAnalysis.graphOpenRelation')}
+                  use:tooltip={t('collectionAnalysis.graphOpenRelation')}
                   onclick={() => openOccurrences('relation', relationTargetsFor)}
                 >
                   <span class="relation-graph__subject">{relation.subject}</span>
@@ -490,7 +490,7 @@
                   type="button"
                   class="relation-graph__relation"
                   disabled={predicateTargets.length === 0}
-                  title={t('collectionAnalysis.graphOpenRelation')}
+                  use:tooltip={t('collectionAnalysis.graphOpenRelation')}
                   onclick={() => openOccurrences('relation', predicateTargets)}
                 >
                   <span class="relation-graph__subject">{sourceLabel}</span>
