@@ -26,6 +26,7 @@
     type RelationGraph,
   } from '$lib/relation-graph'
   import { graphStructureKey, type GraphSettings } from '$lib/analysis-settings'
+  import { layoutConfig } from '$lib/graph-layouts'
   import {
     buildNodeTargets,
     buildRelationTargets,
@@ -419,6 +420,8 @@
         .onLinkClick((l) => selectLink(l))
         .onBackgroundClick(() => (selected = null))
         .linkDirectionalArrowRelPos(1)
+        // A cycle (A → B → A) only bends the radial rings; it must not throw.
+        .onDagError(() => {})
         .linkDirectionalParticleWidth(2)
       appliedPhysics = ''
       applyRender(settings)
@@ -442,16 +445,23 @@
       .cooldownTime(render.cooldownTime)
     const controls = instance.controls() as unknown as OrbitControls
     controls.autoRotate = render.autoRotate
-    const physics = `${render.linkDistance}:${render.chargeStrength}`
+    const physics = `${render.layout}:${render.linkDistance}:${render.chargeStrength}`
     if (physics !== appliedPhysics) {
       const first = appliedPhysics === ''
       appliedPhysics = physics
+      const layout = layoutConfig(render.layout, render)
+      // null turns the DAG mode off at run time; the typings only list the modes.
+      ;(instance as unknown as { dagMode: (mode: string | null) => unknown }).dagMode(
+        layout.dagMode
+      )
+      instance.dagLevelDistance(layout.dagLevelDistance)
       ;(instance.d3Force('link') as { distance?: (d: number) => unknown } | undefined)?.distance?.(
-        render.linkDistance
+        layout.linkDistance
       )
       ;(
-        instance.d3Force('charge') as { strength?: (s: number) => unknown } | undefined
-      )?.strength?.(render.chargeStrength)
+        instance.d3Force('charge') as
+          { strength?: (s: (node: object) => number) => unknown } | undefined
+      )?.strength?.((node) => layout.charge(node as GraphNode))
       // The first application precedes the layout; a later one asks for it.
       if (!first) instance.d3ReheatSimulation()
     }

@@ -2,6 +2,7 @@
  * Per-collection persistence for the text-analysis panel settings
  * (text and relation graph), stored in localStorage.
  */
+import { GRAPH_LAYOUTS, type GraphLayout } from './graph-layouts'
 
 export interface CollectionAnalysisSettings {
   cloudTermCount: number
@@ -30,6 +31,8 @@ export interface GraphRenderSettings {
   chargeStrength: number
   cooldownTime: number
   autoRotate: boolean
+  /** How nodes are laid out; only moves them, never rebuilds the graph. */
+  layout: GraphLayout
 }
 
 export interface GraphSettings {
@@ -85,6 +88,7 @@ export const DEFAULT_GRAPH_SETTINGS: Readonly<{
     chargeStrength: -30,
     cooldownTime: 15000,
     autoRotate: false,
+    layout: 'force',
   }),
 })
 
@@ -124,6 +128,10 @@ export function normalizeGraphSettings(value: unknown): GraphSettings {
         const bound = bounds[field]
         if (typeof fallback === 'boolean') {
           return [field, typeof value === 'boolean' ? value : fallback]
+        }
+        if (typeof fallback === 'string') {
+          const known = (GRAPH_LAYOUTS as readonly unknown[]).includes(value)
+          return [field, known ? value : fallback]
         }
         return [
           field,

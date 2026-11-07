@@ -2026,6 +2026,16 @@ const es = {
   'graphSettings.repulsion': 'Fuerza de repulsión',
   'graphSettings.cooldownSeconds': 'Tiempo de acomodamiento (segundos)',
   'graphSettings.autoRotate': 'Rotación automática',
+  'graphSettings.layout': 'Algoritmo de disposición',
+  'graphSettings.layout.force': 'Fuerzas',
+  'graphSettings.layout.communities': 'Comunidades',
+  'graphSettings.layout.radial': 'Radial jerárquico',
+  'graphSettings.layoutHint.force':
+    'Los vínculos atraen y todos los nodos se repelen por igual (estilo Fruchterman-Reingold). La disposición general.',
+  'graphSettings.layoutHint.communities':
+    'Cuantas más relaciones tiene una entidad, más repele (estilo ForceAtlas2): los centros se separan y sus vecinos se agrupan alrededor. Para ver grupos.',
+  'graphSettings.layoutHint.radial':
+    'Anillos desde los sujetos que inician relaciones hacia los objetos que las reciben. Para ver quién origina y quién recibe.',
   'item.loading': 'Cargando...',
   'item.assetPanel': 'Panel de la página',
   'item.documentTab': 'Documento',
@@ -5069,6 +5079,16 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'graphSettings.repulsion': 'Repulsion strength',
   'graphSettings.cooldownSeconds': 'Settling time (seconds)',
   'graphSettings.autoRotate': 'Auto-rotate',
+  'graphSettings.layout': 'Layout algorithm',
+  'graphSettings.layout.force': 'Forces',
+  'graphSettings.layout.communities': 'Communities',
+  'graphSettings.layout.radial': 'Radial hierarchy',
+  'graphSettings.layoutHint.force':
+    'Links pull and every node repels the same (Fruchterman-Reingold style). The general layout.',
+  'graphSettings.layoutHint.communities':
+    'The more relations an entity has, the harder it repels (ForceAtlas2 style): hubs move apart and their neighbours gather around them. To see groups.',
+  'graphSettings.layoutHint.radial':
+    'Rings from the subjects that start relations to the objects that receive them. To see who originates and who receives.',
   'item.loading': 'Loading...',
   'item.assetPanel': 'Page panel',
   'item.documentTab': 'Document',

@@ -66,6 +66,19 @@ describe('GraphSettingsForm', () => {
     expect(onchange.mock.lastCall?.[0].structure.includeIsolated).toBe(false)
   })
 
+  it('chooses the layout algorithm and explains the chosen one', async () => {
+    const onchange = setup()
+    const trigger = screen.getByRole('button', { name: /Algoritmo de disposición/ })
+    expect(trigger).toHaveTextContent('Fuerzas')
+    expect(screen.getByText(/Los vínculos atraen y todos los nodos se repelen/)).toBeInTheDocument()
+    await fireEvent.click(trigger)
+    expect(
+      screen.getAllByRole('menuitemradio').map((option) => option.textContent?.trim())
+    ).toEqual(['Fuerzas', 'Comunidades', 'Radial jerárquico'])
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Radial jerárquico' }))
+    expect(onchange.mock.lastCall?.[0].render.layout).toBe('radial')
+  })
+
   it('restores only the graph defaults', async () => {
     const changed = normalizeGraphSettings({
       structure: { maxEntities: 40, includeIsolated: false },

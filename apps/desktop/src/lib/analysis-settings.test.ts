@@ -76,7 +76,14 @@ describe('graph settings', () => {
     for (const group of ['structure', 'render'] as const) {
       for (const [field, value] of Object.entries(DEFAULT_GRAPH_SETTINGS[group])) {
         const changed = normalizeGraphSettings({
-          [group]: { [field]: typeof value === 'boolean' ? !value : value + 1 },
+          [group]: {
+            [field]:
+              typeof value === 'boolean'
+                ? !value
+                : typeof value === 'string'
+                  ? 'radial'
+                  : value + 1,
+          },
         })
         expect(graphStructureKey(changed) === baseline).toBe(group === 'render')
       }
