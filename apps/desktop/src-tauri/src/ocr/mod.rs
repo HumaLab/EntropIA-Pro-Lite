@@ -1,3 +1,4 @@
+pub mod block_reocr;
 pub mod commands;
 pub mod glm_ocr;
 pub mod markup;
@@ -2030,6 +2031,7 @@ mod tests {
             image_height: layout.image_height,
             provider: "test".to_string(),
             page_count: 1,
+            page_methods: Vec::new(),
         }
     }
 

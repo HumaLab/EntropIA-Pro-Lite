@@ -1,4 +1,5 @@
 import type { AssetLayout, LayoutBlock, LayoutBoundingBox, LayoutRegion } from '@entropia/store'
+import { invoke } from '@tauri-apps/api/core'
 import { getStore } from './db'
 
 export type { AssetLayout } from '@entropia/store'
@@ -75,6 +76,8 @@ export interface LayoutRegionMatch {
 
 export interface LayoutBlockView {
   id: string
+  /** Position of the block in the stored `layouts.blocks` array. */
+  sourceIndex: number
   regionId: string
   label: string
   order: number
@@ -395,6 +398,7 @@ export function buildLayoutBlockViews(layout: AssetLayout): LayoutBlockView[] {
 
       return {
         id,
+        sourceIndex: index,
         regionId: `${id}::overlay`,
         label: block.label || 'unknown',
         order: Number.isFinite(block.order) ? block.order : index + 1,
@@ -472,4 +476,72 @@ export function countLayoutBlocksByFilter(blocks: LayoutBlockView[]): LayoutBloc
 
 export async function getLayoutByAsset(assetId: string): Promise<AssetLayout | null> {
   return getStore().layouts.findByAsset(assetId)
+}
+
+/** Id of the block view built from stored block `index` (see buildLayoutBlockViews). */
+export function layoutBlockIdForIndex(index: number) {
+  return `layout-block-${index}`
+}
+
+export type LayoutBlockEditMode = 'replace' | 'insert_after'
+
+/** A box the user is correcting, not persisted until it is recognized. */
+export interface LayoutBoxDraft {
+  blockId: string
+  mode: LayoutBlockEditMode
+  bbox: LayoutBoundingBox
+}
+
+/** Region id of the not-yet-created box drawn by an `insert_after` draft. */
+export const LAYOUT_DRAFT_BLOCK_ID = 'layout-block-draft'
+export const LAYOUT_DRAFT_REGION_ID = `${LAYOUT_DRAFT_BLOCK_ID}::overlay`
+
+/**
+ * Starting box of a draft: the block's own box to adjust it, or a box of the
+ * same width right below it (clamped to the page) for a new block.
+ */
+export function createLayoutBoxDraft(
+  block: Pick<LayoutBlockView, 'id' | 'bbox' | 'imageHeight'>,
+  mode: LayoutBlockEditMode
+): LayoutBoxDraft {
+  const bbox = normalizeLayoutBBox(block.bbox)
+  if (mode === 'replace') {
+    return {
+      blockId: block.id,
+      mode,
+      bbox: { x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height },
+    }
+  }
+
+  const pageHeight = block.imageHeight > 0 ? block.imageHeight : Number.POSITIVE_INFINITY
+  const height = Math.max(24, Math.min(bbox.height, 200))
+  const gap = 4
+  const y = Math.max(0, Math.min(bbox.bottom + gap, pageHeight - height))
+  return {
+    blockId: block.id,
+    mode,
+    bbox: { x: bbox.x, y, width: Math.max(bbox.width, 24), height },
+  }
+}
+
+export interface LayoutBlockReocrResult {
+  textContent: string
+  blockContent: string
+  blockIndex: number
+  anchored: boolean
+}
+
+/**
+ * Re-recognizes one layout block with GLM-OCR inside a corrected box. The
+ * backend persists the new layout and the spliced extraction text together.
+ */
+export async function reocrLayoutBlock(request: {
+  assetId: string
+  blockIndex: number
+  expectedBbox: LayoutBoundingBox
+  bbox: LayoutBoundingBox
+  mode: LayoutBlockEditMode
+  currentText: string
+}): Promise<LayoutBlockReocrResult> {
+  return invoke<LayoutBlockReocrResult>('reocr_layout_block', { request })
 }

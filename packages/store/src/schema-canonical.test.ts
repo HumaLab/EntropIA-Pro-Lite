@@ -37,9 +37,9 @@ describe('canonical schema fixture export', () => {
     ).toBe(norm(expected))
   })
 
-  it('records every migration name in order, ending with 0060_processing_ocr_correction_summary_tasks', () => {
-    expect(dump.migrations).toHaveLength(60)
-    expect(dump.migrations.at(-1)).toBe('0060_processing_ocr_correction_summary_tasks')
+  it('records every migration name in order, ending with 0061_asset_process_events', () => {
+    expect(dump.migrations).toHaveLength(61)
+    expect(dump.migrations.at(-1)).toBe('0061_asset_process_events')
   })
 
   it('captures base tables, the FTS virtual table and the collection activity triggers', () => {

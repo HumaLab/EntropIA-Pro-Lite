@@ -2636,6 +2636,30 @@ pub fn render_pdf_page_to_image(bytes: &[u8], page_index: usize) -> Result<Vec<u
     render_pdf_page(&page, page_index)
 }
 
+/// Renders one page at the OCR resolution WITHOUT the landscape rotation the
+/// OCR render applies, so the image keeps the page's own orientation and a
+/// layout box drawn over the viewer maps onto it by scaling alone.
+pub(crate) fn render_pdf_page_to_unrotated_image(
+    bytes: &[u8],
+    page_index: usize,
+) -> Result<DynamicImage, String> {
+    let pdfium = get_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_byte_slice(bytes, None)
+        .map_err(|e| format!("Failed to load PDF: {e}"))?;
+    let pages = document.pages();
+    let page_count = pdfium_page_count(pages.len());
+    if page_index >= page_count {
+        return Err(format!(
+            "Page index {page_index} out of bounds (PDF has {page_count} pages)"
+        ));
+    }
+    let page = pages
+        .get(pdfium_page_index(page_index)?)
+        .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
+    render_pdf_page_image(&page, page_index, false)
+}
+
 /// Visit all PDF pages from one loaded Pdfium document.
 ///
 /// Pdfium documents retain the source bytes internally, so this must complete

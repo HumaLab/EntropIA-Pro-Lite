@@ -145,6 +145,26 @@ pub fn publish_embedding_output(
         &output.contract,
         output.dimensions,
     )?;
+    crate::asset_history::record_best_effort(
+        conn,
+        &crate::asset_history::ProcessEvent::new(
+            asset_id,
+            crate::asset_history::PROCESS_EMBEDDING,
+            match output.provider.as_str() {
+                "api" | "openrouter" => "OpenRouter API (embeddings)",
+                "local" => "ONNX Runtime (embeddings locales)",
+                other => other,
+            },
+        )
+        .model(output.model.clone())
+        .model_version(output.contract.clone())
+        .params(serde_json::json!({
+            "dimensions": output.dimensions,
+            "sources": output.sources.len(),
+            "provider": output.provider,
+        }))
+        .input_sha256(Some(output.aggregate_input_hash.clone()).filter(|hash| !hash.is_empty())),
+    );
     let spec = RagChunkEmbeddingSpec {
         model: output.model.clone(),
         contract: output.contract.clone(),

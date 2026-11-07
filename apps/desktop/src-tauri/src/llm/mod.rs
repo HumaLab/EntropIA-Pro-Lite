@@ -878,12 +878,30 @@ fn persist_generated_job_output(
                     .ok_or_else(|| {
                         "OCR correction completion is missing its extraction snapshot".to_string()
                     })?;
-            ocr_correction::commit_asset_correction_if_current(
+            let corrected = ocr_correction::commit_asset_correction_if_current(
                 conn,
                 asset_id,
                 &generated.output,
                 expected_extraction,
-            )
+            )?;
+            crate::asset_history::record_best_effort(
+                conn,
+                &llm_history_event(
+                    conn,
+                    asset_id,
+                    crate::asset_history::PROCESS_OCR_CORRECTION,
+                    generation::GenerationFlow::OcrCorrection,
+                )
+                .input_sha256(Some(crate::asset_history::sha256_hex(
+                    expected_extraction.as_bytes(),
+                )))
+                .output_text(&corrected),
+            );
+            Ok(corrected)
+        }
+        LlmJob::SummarizeAsset { asset_id } => {
+            persist_asset_summary(conn, asset_id, &generated.output)?;
+            Ok(generated.output.clone())
         }
         _ => {
             persist_result(
@@ -1291,6 +1309,48 @@ fn store_triples_for_asset(
 
 /// Delete+insert of one asset's triples with no transaction of its own, for
 /// callers that already hold one (the batch queue commit).
+/// The history row of an LLM flow over one asset: the engine and model the
+/// settings select for that flow. Under `llm_mode = auto` (Pro) the engine is
+/// chosen per run, so the row names both candidates.
+pub(crate) fn llm_history_event(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    process: &str,
+    flow: generation::GenerationFlow,
+) -> crate::asset_history::ProcessEvent {
+    use crate::asset_history::ProcessEvent;
+    let remote = generation::generation_config_from_settings(conn, flow);
+    let mode = if cfg!(feature = "local-ml") {
+        settings::get_setting(conn, "llm_mode").unwrap_or_else(|| "local".to_string())
+    } else {
+        "openrouter".to_string()
+    };
+    let local_model = resolve_local_model_filename(Some(conn));
+    let event = match mode.as_str() {
+        "openrouter" => {
+            ProcessEvent::new(asset_id, process, "OpenRouter API").model(remote.model.clone())
+        }
+        "auto" => ProcessEvent::new(
+            asset_id,
+            process,
+            "LLM local (llama.cpp) u OpenRouter API (auto)",
+        )
+        .model(remote.model.clone()),
+        _ => {
+            ProcessEvent::new(asset_id, process, "LLM local (llama.cpp)").model(local_model.clone())
+        }
+    };
+    let mut params = serde_json::json!({
+        "llmMode": mode,
+        "temperature": remote.params.temperature,
+        "maxTokens": remote.params.max_tokens,
+    });
+    if mode == "auto" {
+        params["localModel"] = serde_json::json!(local_model);
+    }
+    event.params(params)
+}
+
 pub(crate) fn replace_triples_for_asset(
     conn: &rusqlite::Connection,
     item_id: &str,
@@ -1319,6 +1379,18 @@ pub(crate) fn replace_triples_for_asset(
         )
         .map_err(|e| format!("Failed to insert triple: {e}"))?;
     }
+    let event = llm_history_event(
+        conn,
+        asset_id,
+        crate::asset_history::PROCESS_TRIPLES,
+        generation::GenerationFlow::Triplets,
+    );
+    let mut params = event
+        .params
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
+    params["triples"] = serde_json::json!(triples.len());
+    crate::asset_history::record_best_effort(conn, &event.params(params));
     Ok(())
 }
 
@@ -1432,7 +1504,18 @@ pub(crate) fn persist_asset_summary(
     asset_id: &str,
     summary: &str,
 ) -> Result<(), String> {
-    persist_result(conn, LLM_TARGET_ASSET, asset_id, "summarize", summary)
+    persist_result(conn, LLM_TARGET_ASSET, asset_id, "summarize", summary)?;
+    crate::asset_history::record_best_effort(
+        conn,
+        &llm_history_event(
+            conn,
+            asset_id,
+            crate::asset_history::PROCESS_SUMMARY,
+            generation::GenerationFlow::Summary,
+        )
+        .output_text(summary),
+    );
+    Ok(())
 }
 
 /// Runs one asset job outside the LLM queue, choosing the local engine or

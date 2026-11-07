@@ -941,6 +941,15 @@ pub(crate) fn restore_original(
         [asset_id],
     )
     .map_err(|error| format!("Failed to delete restored OCR backup: {error}"))?;
+    crate::asset_history::record_best_effort(
+        &tx,
+        &crate::asset_history::ProcessEvent::new(
+            asset_id,
+            crate::asset_history::PROCESS_OCR_RESTORE,
+            "EntropIA (restaurar el OCR original)",
+        )
+        .output_text(&original),
+    );
     tx.commit()
         .map_err(|error| format!("Failed to commit OCR restore transaction: {error}"))?;
     Ok(original)

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   belongsToLayoutPage,
   buildLayoutBlockViews,
+  createLayoutBoxDraft,
   categoriesMatch,
   countLayoutBlocksByFilter,
   filterBlocksByPage,
@@ -38,6 +39,7 @@ vi.mock('./db', () => ({
 function layoutBlockView(overrides: Partial<LayoutBlockView> = {}): LayoutBlockView {
   return {
     id: 'layout-block-1',
+    sourceIndex: 1,
     regionId: 'layout-block-1::overlay',
     label: 'text',
     order: 1,
@@ -124,6 +126,7 @@ describe('buildLayoutBlockViews', () => {
     expect(blocks).toHaveLength(2)
     expect(blocks[0]).toMatchObject({
       id: 'layout-block-1',
+      sourceIndex: 1,
       regionId: 'layout-block-1::overlay',
       label: 'title',
       order: 1,
@@ -139,6 +142,7 @@ describe('buildLayoutBlockViews', () => {
 
     expect(blocks[1]).toMatchObject({
       id: 'layout-block-0',
+      sourceIndex: 0,
       regionId: 'layout-block-0::overlay',
       label: 'text',
       order: 2,
@@ -195,6 +199,7 @@ describe('filterLayoutBlocksByPage', () => {
     const blocks: LayoutBlockView[] = [
       {
         id: 'layout-block-0',
+        sourceIndex: 0,
         regionId: 'layout-block-0::overlay',
         label: 'title',
         order: 1,
@@ -210,6 +215,7 @@ describe('filterLayoutBlocksByPage', () => {
       },
       {
         id: 'layout-block-1',
+        sourceIndex: 1,
         regionId: 'layout-block-1::overlay',
         label: 'text',
         order: 2,
@@ -427,6 +433,7 @@ describe('layout type filters', () => {
   const blocks: LayoutBlockView[] = [
     {
       id: 'layout-block-0',
+      sourceIndex: 0,
       regionId: 'layout-block-0::overlay',
       label: 'title',
       order: 1,
@@ -442,6 +449,7 @@ describe('layout type filters', () => {
     },
     {
       id: 'layout-block-1',
+      sourceIndex: 1,
       regionId: 'layout-block-1::overlay',
       label: 'plain_text',
       order: 2,
@@ -457,6 +465,7 @@ describe('layout type filters', () => {
     },
     {
       id: 'layout-block-2',
+      sourceIndex: 2,
       regionId: 'layout-block-2::overlay',
       label: 'table',
       order: 3,
@@ -472,6 +481,7 @@ describe('layout type filters', () => {
     },
     {
       id: 'layout-block-3',
+      sourceIndex: 3,
       regionId: 'layout-block-3::overlay',
       label: 'image',
       order: 4,
@@ -487,6 +497,7 @@ describe('layout type filters', () => {
     },
     {
       id: 'layout-block-4',
+      sourceIndex: 4,
       regionId: 'layout-block-4::overlay',
       label: 'vision_footnote',
       order: 5,
@@ -651,5 +662,30 @@ describe('matchLayoutRegionToBlock', () => {
     ])
 
     expect(match).toBeNull()
+  })
+})
+
+describe('createLayoutBoxDraft', () => {
+  const block = {
+    id: 'layout-block-2',
+    bbox: { x: 10, y: 900, width: 300, height: 80 },
+    imageHeight: 1000,
+  }
+
+  it('starts an adjustment from the block box', () => {
+    expect(createLayoutBoxDraft(block, 'replace')).toEqual({
+      blockId: 'layout-block-2',
+      mode: 'replace',
+      bbox: { x: 10, y: 900, width: 300, height: 80 },
+    })
+  })
+
+  it('places a new box below the block, kept on the page', () => {
+    expect(createLayoutBoxDraft(block, 'insert_after').bbox).toEqual({
+      x: 10,
+      y: 920,
+      width: 300,
+      height: 80,
+    })
   })
 })

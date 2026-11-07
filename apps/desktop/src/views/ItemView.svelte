@@ -62,6 +62,7 @@
   import ItemMetadataPanel from './ItemMetadataPanel.svelte'
   import ItemNotesPanel from './ItemNotesPanel.svelte'
   import ItemLayoutPanel from './ItemLayoutPanel.svelte'
+  import AssetProcessHistory from './AssetProcessHistory.svelte'
   import ItemTextPanel from './ItemTextPanel.svelte'
   import ItemAnalysisPanel from './ItemAnalysisPanel.svelte'
   import ItemMapViewer from './ItemMapViewer.svelte'
@@ -69,6 +70,7 @@
   import {
     buildLayoutBlockViews,
     countLayoutBlocksByFilter,
+    createLayoutBoxDraft,
     filterBlocksByPage,
     filterRegionsByPage,
     filterLayoutBlocksByType,
@@ -79,10 +81,17 @@
     getLayoutByAsset,
     getPagesFromLayout,
     LAYOUT_BLOCK_FILTERS,
+    LAYOUT_DRAFT_BLOCK_ID,
+    LAYOUT_DRAFT_REGION_ID,
+    layoutBlockIdForIndex,
     pruneLayoutInteractionSelectionState,
+    reocrLayoutBlock,
+    type LayoutBlockEditMode,
     type LayoutBlockFilterId,
+    type LayoutBoxDraft,
   } from '$lib/layouts'
   import { runPendingAssetJob } from '$lib/item-view-media-jobs'
+  import { recordAssetProcess, type RendererProcess } from '$lib/asset-history'
   import { OcrStore, extractText, type OcrMode } from '$lib/ocr'
   import { TranscriptionStore, transcribeAudio, transcribeDictation } from '$lib/transcription'
   import {
@@ -263,6 +272,13 @@
   let layoutSelectedBlockId = $state<string | null>(null)
   let layoutHoveredRegionId = $state<string | null>(null)
   let layoutSelectedRegionId = $state<string | null>(null)
+  // Manual layout correction: the box being adjusted (or drawn after a block)
+  // before GLM-OCR recognizes it. Nothing is persisted until "Reconocer".
+  let layoutBoxDraft = $state<LayoutBoxDraft | null>(null)
+  let layoutBoxBusy = $state(false)
+  let layoutBoxMessage = $state<{ tone: 'success' | 'warning' | 'error'; text: string } | null>(
+    null
+  )
   const itemLoadGuard = new LatestRequestGuard()
   const layoutLoadGuard = new LatestRequestGuard()
   const notesLoadGuard = new LatestRequestGuard()
@@ -593,6 +609,12 @@
         path: duplicate.path,
         type: sourceAsset.type,
         size: sourceAsset.size,
+      })
+      void recordAssetProcess({
+        assetId: createdAsset.id,
+        process: 'duplicate',
+        params: { sourceAssetId: sourceAsset.id },
+        previousPath: sourceAsset.path,
       })
       const currentSourceIndex =
         itemId === sourceAsset.itemId
@@ -1110,17 +1132,41 @@
   let selectedLayoutBlock = $derived(
     findLayoutBlockById(visibleLayoutBlocks, layoutSelectedBlockId)
   )
-  let layoutRegions = $derived<ViewerLayoutRegion[]>(
-    visibleLayoutBlocks.map((block) => ({
-      id: block.regionId,
-      blockId: block.id,
-      label: block.label,
-      x: block.overlayBbox.x,
-      y: block.overlayBbox.y,
-      width: block.overlayBbox.width,
-      height: block.overlayBbox.height,
-      matchSource: block.overlaySource,
-    }))
+  let layoutRegions = $derived.by<ViewerLayoutRegion[]>(() => {
+    const draft = layoutBoxDraft
+    const regions: ViewerLayoutRegion[] = visibleLayoutBlocks.map((block) => {
+      const box =
+        draft && draft.mode === 'replace' && draft.blockId === block.id
+          ? draft.bbox
+          : block.overlayBbox
+      return {
+        id: block.regionId,
+        blockId: block.id,
+        label: block.label,
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        matchSource: block.overlaySource,
+      }
+    })
+    if (draft?.mode === 'insert_after' && visibleLayoutBlocks.some((b) => b.id === draft.blockId)) {
+      regions.push({
+        id: LAYOUT_DRAFT_REGION_ID,
+        blockId: LAYOUT_DRAFT_BLOCK_ID,
+        label: translate('item.layoutBoxEditNewLabel'),
+        ...draft.bbox,
+        matchSource: 'block',
+      })
+    }
+    return regions
+  })
+  let editableLayoutRegionId = $derived(
+    layoutBoxDraft && !layoutBoxBusy
+      ? layoutBoxDraft.mode === 'insert_after'
+        ? LAYOUT_DRAFT_REGION_ID
+        : `${layoutBoxDraft.blockId}::overlay`
+      : null
   )
   let layoutReferenceWidth = $derived(
     layoutPageBlocks[0]?.imageWidth ??
@@ -1199,6 +1245,7 @@
 
   function setSelectedLayoutBlock(blockId: string | null) {
     const nextState = getLayoutInteractionStateFromBlockId(visibleLayoutBlocks, blockId)
+    discardLayoutBoxDraftUnlessFor(nextState.blockId)
     layoutSelectedBlockId = nextState.blockId
     layoutSelectedRegionId = nextState.regionId
     if (nextState.hasMatch) {
@@ -1207,11 +1254,110 @@
   }
 
   function setSelectedLayoutRegion(regionId: string | null) {
+    // The box drawn for a new block is not a block yet: clicking it keeps the
+    // block it was drawn after selected.
+    if (regionId === LAYOUT_DRAFT_REGION_ID) return
     const nextState = getLayoutInteractionStateFromRegionId(visibleLayoutBlocks, regionId)
+    discardLayoutBoxDraftUnlessFor(nextState.blockId)
     layoutSelectedBlockId = nextState.blockId
     layoutSelectedRegionId = nextState.regionId
     if (nextState.hasMatch) {
       showLayout = true
+    }
+  }
+
+  function discardLayoutBoxDraftUnlessFor(blockId: string | null) {
+    if (layoutBoxBusy) return
+    if (layoutBoxDraft && layoutBoxDraft.blockId !== blockId) {
+      layoutBoxDraft = null
+    }
+    if (blockId !== layoutSelectedBlockId) layoutBoxMessage = null
+  }
+
+  function startLayoutBoxEdit(blockId: string, mode: LayoutBlockEditMode) {
+    if (layoutBoxBusy) return
+    const block = findLayoutBlockById(layoutBlocks, blockId)
+    if (!block) return
+    layoutBoxMessage = null
+    layoutBoxDraft = createLayoutBoxDraft(block, mode)
+    showLayout = true
+  }
+
+  function cancelLayoutBoxEdit() {
+    if (layoutBoxBusy) return
+    layoutBoxDraft = null
+  }
+
+  function handleLayoutRegionGeometryChange(
+    regionId: string,
+    box: { x: number; y: number; width: number; height: number }
+  ) {
+    const draft = layoutBoxDraft
+    if (!draft || layoutBoxBusy || regionId !== editableLayoutRegionId) return
+    layoutBoxDraft = { ...draft, bbox: box }
+  }
+
+  /**
+   * Sends the corrected box to GLM-OCR. The backend splices the recognized
+   * text into the text shown here (manual edits included) at the block's
+   * place in the reading order, and stores layout and text together.
+   */
+  async function applyLayoutBoxEdit() {
+    const asset = selectedAsset
+    const draft = layoutBoxDraft
+    if (!asset || asset.type === 'audio' || !draft || layoutBoxBusy) return
+    const block = findLayoutBlockById(layoutBlocks, draft.blockId)
+    if (!block) {
+      layoutBoxDraft = null
+      return
+    }
+
+    layoutBoxBusy = true
+    layoutBoxMessage = null
+    try {
+      // The text sent already carries any pending manual edit; a debounced
+      // write landing after the splice would undo it.
+      await ocrTextPersistor.cancelAndWait(asset.id)
+      const currentText = ocrEditedText.get(asset.id) ?? getOcrState(asset.id).textContent ?? ''
+      const result = await reocrLayoutBlock({
+        assetId: asset.id,
+        blockIndex: block.sourceIndex,
+        expectedBbox: block.bbox,
+        bbox: draft.bbox,
+        mode: draft.mode,
+        currentText,
+      })
+      if (selectedAsset?.id !== asset.id) return
+
+      const nextEditedText = new Map(ocrEditedText)
+      nextEditedText.set(asset.id, result.textContent)
+      ocrEditedText = nextEditedText
+      ocrStore.setTextContent(asset.id, result.textContent)
+      ocrTick++
+      layoutBoxDraft = null
+      scheduleAssetReanalysis(asset.id)
+
+      await reloadLayoutForAsset(asset)
+      const editedBlockId = layoutBlockIdForIndex(result.blockIndex)
+      setSelectedLayoutBlock(editedBlockId)
+      const editedBlock = findLayoutBlockById(layoutBlocks, editedBlockId)
+      layoutBoxMessage = result.anchored
+        ? {
+            tone: 'success',
+            text: translate('item.layoutBoxEditDone', {
+              order: editedBlock?.order ?? block.order,
+            }),
+          }
+        : { tone: 'warning', text: translate('item.layoutBoxEditAppended') }
+    } catch (error) {
+      layoutBoxMessage = {
+        tone: 'error',
+        text: translate('item.layoutBoxEditError', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      }
+    } finally {
+      layoutBoxBusy = false
     }
   }
 
@@ -1358,6 +1504,7 @@
 
   async function runEditOperation(
     operation: (asset: Asset, previous: ImageEditUndoEntry) => Promise<ImageEditUndoEntry>,
+    history: { process: RendererProcess; params: Record<string, unknown> },
     clearPdfExtraction = false
   ) {
     if (annotationsLoading || editInProgress || undoInProgress || duplicateAssetInProgress) return
@@ -1372,6 +1519,12 @@
       const next = await operation(asset, previous)
       if (!(await commitViewerState(asset, previous, next, previous.page))) return
       recordViewerEdit(asset.id, previous)
+      void recordAssetProcess({
+        assetId: asset.id,
+        process: history.process,
+        params: { page: previous.page, ...history.params },
+        previousPath: previous.path,
+      })
       if (clearPdfExtraction) {
         const store = getStore()
         const results = await Promise.allSettled([
@@ -1421,47 +1574,52 @@
     rotationDegrees: number
   }) {
     if (selectedAsset?.type !== 'pdf') return
-    await runEditOperation(async (asset, previous) => {
-      const existingCrop = previous.annotations.find((annotation) => annotation.kind === 'crop')
-      const result = await invoke<PdfCropResult>('edit_pdf', {
-        path: previous.path,
-        page: previous.page,
-        operation,
-        rotationDegrees,
-        region,
-        existingCrop: existingCrop
-          ? {
-              x: existingCrop.x,
-              y: existingCrop.y,
-              width: existingCrop.width,
-              height: existingCrop.height,
-            }
-          : null,
-        existingErasures: previous.annotations
-          .filter((annotation) => annotation.kind === 'erase')
-          .map(({ x, y, width, height }) => ({ x, y, width, height })),
-      })
-      let nextAnnotations = previous.annotations.filter(
-        (annotation) => annotation.kind === 'rectangle' || annotation.kind === 'underline'
-      )
-      if (existingCrop) nextAnnotations = cropAnnotations(nextAnnotations, existingCrop)
-      nextAnnotations = rotateAnnotationsByQuarterTurns(
-        nextAnnotations,
-        Math.round(rotationDegrees / 90)
-      )
-      if (operation === 'crop' && region) nextAnnotations = cropAnnotations(nextAnnotations, region)
-      return createImageEditUndoEntry({
-        ...previous,
-        path: result.path,
-        annotations: normalizeAnnotationsForAsset({
-          annotations: nextAnnotations,
-          assetId: asset.id,
+    await runEditOperation(
+      async (asset, previous) => {
+        const existingCrop = previous.annotations.find((annotation) => annotation.kind === 'crop')
+        const result = await invoke<PdfCropResult>('edit_pdf', {
+          path: previous.path,
           page: previous.page,
-          now: Date.now(),
-          createId: () => crypto.randomUUID(),
-        }),
-      })
-    }, operation === 'crop')
+          operation,
+          rotationDegrees,
+          region,
+          existingCrop: existingCrop
+            ? {
+                x: existingCrop.x,
+                y: existingCrop.y,
+                width: existingCrop.width,
+                height: existingCrop.height,
+              }
+            : null,
+          existingErasures: previous.annotations
+            .filter((annotation) => annotation.kind === 'erase')
+            .map(({ x, y, width, height }) => ({ x, y, width, height })),
+        })
+        let nextAnnotations = previous.annotations.filter(
+          (annotation) => annotation.kind === 'rectangle' || annotation.kind === 'underline'
+        )
+        if (existingCrop) nextAnnotations = cropAnnotations(nextAnnotations, existingCrop)
+        nextAnnotations = rotateAnnotationsByQuarterTurns(
+          nextAnnotations,
+          Math.round(rotationDegrees / 90)
+        )
+        if (operation === 'crop' && region)
+          nextAnnotations = cropAnnotations(nextAnnotations, region)
+        return createImageEditUndoEntry({
+          ...previous,
+          path: result.path,
+          annotations: normalizeAnnotationsForAsset({
+            annotations: nextAnnotations,
+            assetId: asset.id,
+            page: previous.page,
+            now: Date.now(),
+            createId: () => crypto.randomUUID(),
+          }),
+        })
+      },
+      { process: `pdf_${operation}`, params: { region, rotationDegrees } },
+      operation === 'crop'
+    )
   }
 
   async function handleEditSelect(region: { x: number; y: number; width: number; height: number }) {
@@ -1477,25 +1635,36 @@
       })
     } else {
       if (imageNaturalW === 0 || imageNaturalH === 0) return
-      await runEditOperation(async (_asset, previous) => {
-        const pixels = normalizedToPixels(region, previous.width, previous.height)
-        const result = await invoke<ImageEditResult>(
-          tool === 'crop' ? 'crop_image' : 'erase_region',
-          {
-            path: previous.path,
-            ...pixels,
+      await runEditOperation(
+        async (_asset, previous) => {
+          const pixels = normalizedToPixels(region, previous.width, previous.height)
+          const result = await invoke<ImageEditResult>(
+            tool === 'crop' ? 'crop_image' : 'erase_region',
+            {
+              path: previous.path,
+              ...pixels,
+              ...(tool === 'erase' ? { fill: 'white' } : {}),
+            }
+          )
+          return createImageEditUndoEntry({
+            ...previous,
+            path: result.path,
+            width: result.width,
+            height: result.height,
+            annotations:
+              tool === 'crop'
+                ? cropAnnotations(previous.annotations, region)
+                : previous.annotations,
+          })
+        },
+        {
+          process: tool === 'crop' ? 'image_crop' : 'image_erase',
+          params: {
+            region: normalizedToPixels(region, imageNaturalW, imageNaturalH),
             ...(tool === 'erase' ? { fill: 'white' } : {}),
-          }
-        )
-        return createImageEditUndoEntry({
-          ...previous,
-          path: result.path,
-          width: result.width,
-          height: result.height,
-          annotations:
-            tool === 'crop' ? cropAnnotations(previous.annotations, region) : previous.annotations,
-        })
-      })
+          },
+        }
+      )
     }
     editTool = 'none'
   }
@@ -1513,19 +1682,22 @@
       })
       return
     }
-    await runEditOperation(async (_asset, previous) => {
-      const result = await invoke<ImageEditResult>('rotate_image', {
-        path: previous.path,
-        direction,
-      })
-      return createImageEditUndoEntry({
-        ...previous,
-        path: result.path,
-        width: result.width,
-        height: result.height,
-        annotations: rotateAnnotations(previous.annotations, direction),
-      })
-    })
+    await runEditOperation(
+      async (_asset, previous) => {
+        const result = await invoke<ImageEditResult>('rotate_image', {
+          path: previous.path,
+          direction,
+        })
+        return createImageEditUndoEntry({
+          ...previous,
+          path: result.path,
+          width: result.width,
+          height: result.height,
+          annotations: rotateAnnotations(previous.annotations, direction),
+        })
+      },
+      { process: 'image_rotate', params: { direction } }
+    )
   }
 
   async function handleRotateLeft() {
@@ -1546,19 +1718,22 @@
       return
     }
     if (degrees === 0) return
-    await runEditOperation(async (_asset, previous) => {
-      const result = await invoke<ImageEditResult>('rotate_image_degrees', {
-        path: previous.path,
-        degrees,
-      })
-      // Free-angle rotation keeps the existing normalized rectangular annotation model.
-      return createImageEditUndoEntry({
-        ...previous,
-        path: result.path,
-        width: result.width,
-        height: result.height,
-      })
-    })
+    await runEditOperation(
+      async (_asset, previous) => {
+        const result = await invoke<ImageEditResult>('rotate_image_degrees', {
+          path: previous.path,
+          degrees,
+        })
+        // Free-angle rotation keeps the existing normalized rectangular annotation model.
+        return createImageEditUndoEntry({
+          ...previous,
+          path: result.path,
+          width: result.width,
+          height: result.height,
+        })
+      },
+      { process: 'image_rotate_fine', params: { degrees } }
+    )
   }
 
   async function restoreViewerHistory(direction: 'undo' | 'redo') {
@@ -1580,6 +1755,14 @@
       if (!current) return
       const previous = createImageEditUndoEntry({ ...current, path: asset.path })
       if (!(await commitViewerState(asset, previous, entry, sourcePage))) return
+      if (previous.path !== entry.path) {
+        void recordAssetProcess({
+          assetId: asset.id,
+          process: direction === 'undo' ? 'image_undo' : 'image_redo',
+          params: { page: entry.page },
+          previousPath: previous.path,
+        })
+      }
       const destination = direction === 'undo' ? 'redo' : 'undo'
       editHistories[asset.id] = {
         ...history,
@@ -2375,6 +2558,7 @@
       }
 
       assetLayout = layout
+      if (!layoutBoxBusy) layoutBoxDraft = null
       if (!layout || layout.blocks.length === 0) {
         showLayout = false
       }
@@ -2418,6 +2602,10 @@
       layoutSelectedBlockId = null
       layoutHoveredRegionId = null
       layoutSelectedRegionId = null
+      if (!layoutBoxBusy) {
+        layoutBoxDraft = null
+        layoutBoxMessage = null
+      }
     }
 
     const pendingAnnotationAssetId = annotationPersistor.getPendingAssetId()
@@ -2856,6 +3044,7 @@
         showLayoutOverlay={showLayout && layoutRegions.length > 0}
         hoveredLayoutRegionId={layoutHoveredRegionId}
         selectedLayoutRegionId={layoutSelectedRegionId}
+        {editableLayoutRegionId}
         {layoutReferenceWidth}
         {layoutReferenceHeight}
         {selectedAnnotationId}
@@ -2886,6 +3075,7 @@
         onAnnotationColorChange={handleAnnotationColorChange}
         onLayoutRegionHoverChange={syncLayoutHoverFromRegion}
         onLayoutRegionSelect={setSelectedLayoutRegion}
+        onLayoutRegionGeometryChange={handleLayoutRegionGeometryChange}
         onEditSelect={handleEditSelect}
         onEditToolChange={(tool: EditTool) => {
           editTool = tool
@@ -3076,6 +3266,11 @@
               {translate}
               onMetadataChange={handleMetadataChange}
             />
+            <AssetProcessHistory
+              asset={selectedAsset}
+              refreshKey={`${rightPanelTab === 'metadata'}:${ocrTick}:${imageVersion}:${transcriptionTick}:${nlpTick}:${llmTick}:${summaryTick}:${assetLayout?.createdAt ?? 0}:${layoutBoxBusy}`}
+              {translate}
+            />
           </div>
 
           <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'layout'}>
@@ -3113,6 +3308,12 @@
               }}
               onHoverBlock={syncLayoutHoverFromBlock}
               onSelectBlock={setSelectedLayoutBlock}
+              {layoutBoxDraft}
+              {layoutBoxBusy}
+              {layoutBoxMessage}
+              onStartBoxEdit={startLayoutBoxEdit}
+              onCancelBoxEdit={cancelLayoutBoxEdit}
+              onApplyBoxEdit={applyLayoutBoxEdit}
             />
           </div>
 

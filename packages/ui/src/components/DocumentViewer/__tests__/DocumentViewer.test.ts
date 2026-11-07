@@ -717,6 +717,85 @@ describe('DocumentViewer', () => {
       expect(onLayoutRegionHoverChange).toHaveBeenLastCalledWith(null)
     })
 
+    it('lets the editable layout region be resized and reports the new box', async () => {
+      const onLayoutRegionGeometryChange = vi.fn()
+      const region = {
+        id: 'layout-block-1::overlay',
+        blockId: 'layout-block-1',
+        label: 'text',
+        x: 20,
+        y: 10,
+        width: 80,
+        height: 30,
+      }
+
+      const { rerender } = render(DocumentViewer, {
+        props: {
+          path: '/path/to/image.jpg',
+          type: 'image',
+          assetUrl: 'asset://localhost/path/to/image.jpg',
+          annotations: [],
+          layoutRegions: [region],
+          showLayoutOverlay: true,
+          selectedLayoutRegionId: region.id,
+          editableLayoutRegionId: null,
+          annotationTool: 'select',
+          onLayoutRegionGeometryChange,
+        },
+      })
+
+      const img = screen.getByRole('img') as HTMLImageElement
+      setupImage(img, 200, 100, 200, 100)
+      await fireEvent.load(img)
+      await triggerResizeObservers(img)
+      await screen.findByTestId(`layout-overlay-${region.id}`)
+      expect(screen.queryByTestId('layout-edit-handle-s')).toBeNull()
+
+      await rerender({ editableLayoutRegionId: region.id })
+      const overlay = await screen.findByTestId('annotation-overlay')
+      overlay.getBoundingClientRect = vi.fn(() => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 200,
+        bottom: 100,
+        width: 200,
+        height: 100,
+        toJSON: () => ({}),
+      }))
+
+      // Stretch the bottom edge from y=40 down to y=70.
+      const bottomHandle = await screen.findByTestId('layout-edit-handle-s')
+      await fireEvent.pointerDown(bottomHandle, { clientX: 60, clientY: 40, button: 0 })
+      await fireEvent.pointerMove(overlay, { clientX: 60, clientY: 70, button: 0 })
+      expect(screen.getByTestId(`layout-overlay-${region.id}`)).toHaveAttribute('height', '60')
+      await fireEvent.pointerUp(overlay, { clientX: 60, clientY: 70, button: 0 })
+
+      expect(onLayoutRegionGeometryChange).toHaveBeenCalledTimes(1)
+      expect(onLayoutRegionGeometryChange).toHaveBeenCalledWith(region.id, {
+        x: 20,
+        y: 10,
+        width: 80,
+        height: 60,
+      })
+
+      // Dragging the inside moves the box without resizing it.
+      await fireEvent.pointerDown(screen.getByTestId(`layout-overlay-${region.id}`), {
+        clientX: 50,
+        clientY: 20,
+        button: 0,
+      })
+      await fireEvent.pointerMove(overlay, { clientX: 60, clientY: 25, button: 0 })
+      await fireEvent.pointerUp(overlay, { clientX: 60, clientY: 25, button: 0 })
+      expect(onLayoutRegionGeometryChange).toHaveBeenLastCalledWith(region.id, {
+        x: 30,
+        y: 15,
+        width: 80,
+        height: 30,
+      })
+    })
+
     it('keeps selected and hovered layout regions visually separate', async () => {
       render(DocumentViewer, {
         props: {

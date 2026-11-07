@@ -52,13 +52,26 @@ pub fn publish_correction_output(
     if output.corrected.trim().is_empty() || output.expected_extraction.trim().is_empty() {
         return Ok(());
     }
-    crate::llm::ocr_correction::commit_asset_correction_in_owner_transaction(
+    let corrected = crate::llm::ocr_correction::commit_asset_correction_in_owner_transaction(
         conn,
         asset_id,
         &output.corrected,
         &output.expected_extraction,
-    )
-    .map(|_| ())
+    )?;
+    crate::asset_history::record_best_effort(
+        conn,
+        &crate::llm::llm_history_event(
+            conn,
+            asset_id,
+            crate::asset_history::PROCESS_OCR_CORRECTION,
+            crate::llm::generation::GenerationFlow::OcrCorrection,
+        )
+        .input_sha256(Some(crate::asset_history::sha256_hex(
+            output.expected_extraction.as_bytes(),
+        )))
+        .output_text(&corrected),
+    );
+    Ok(())
 }
 
 pub struct OcrCorrectionExecutor {

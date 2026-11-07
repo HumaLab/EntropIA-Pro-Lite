@@ -377,7 +377,14 @@ pub async fn update_extraction_text_cmd(
             .ui_conn
             .lock()
             .map_err(|e| format!("DB lock poisoned: {e}"))?;
-        update_extraction_text(&conn, &asset_id, &text_content)
+        update_extraction_text(&conn, &asset_id, &text_content)?;
+        crate::asset_history::record_text_edit(
+            &conn,
+            &asset_id,
+            crate::asset_history::PROCESS_TEXT_EDIT,
+            &text_content,
+        );
+        Ok(())
     })
     .await
 }

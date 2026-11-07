@@ -45,6 +45,7 @@
     showLayoutOverlay,
     hoveredLayoutRegionId,
     selectedLayoutRegionId,
+    editableLayoutRegionId = null,
     layoutReferenceWidth,
     layoutReferenceHeight,
     selectedAnnotationId,
@@ -72,6 +73,7 @@
     onAnnotationColorChange,
     onLayoutRegionHoverChange,
     onLayoutRegionSelect,
+    onLayoutRegionGeometryChange = () => {},
     onEditSelect,
     onEditToolChange,
     onRotateLeft,
@@ -95,6 +97,7 @@
     showLayoutOverlay: boolean
     hoveredLayoutRegionId: string | null
     selectedLayoutRegionId: string | null
+    editableLayoutRegionId?: string | null
     layoutReferenceWidth: number
     layoutReferenceHeight: number
     selectedAnnotationId: string | null
@@ -124,6 +127,10 @@
     onAnnotationColorChange: (color: string) => void
     onLayoutRegionHoverChange: (regionId: string | null) => void
     onLayoutRegionSelect: (regionId: string) => void
+    onLayoutRegionGeometryChange?: (
+      regionId: string,
+      box: { x: number; y: number; width: number; height: number }
+    ) => void
     onEditSelect: (region: {
       x: number
       y: number
@@ -412,6 +419,7 @@
         {showLayoutOverlay}
         {hoveredLayoutRegionId}
         {selectedLayoutRegionId}
+        {editableLayoutRegionId}
         {layoutReferenceWidth}
         {layoutReferenceHeight}
         {selectedAnnotationId}
@@ -427,6 +435,7 @@
         {onAnnotationColorChange}
         {onLayoutRegionHoverChange}
         {onLayoutRegionSelect}
+        {onLayoutRegionGeometryChange}
         {onEditSelect}
         {onEditToolChange}
         {onRotateLeft}

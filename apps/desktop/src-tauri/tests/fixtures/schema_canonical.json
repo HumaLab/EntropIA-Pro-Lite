@@ -14,6 +14,12 @@
     },
     {
       "type": "index",
+      "name": "idx_asset_process_events_asset",
+      "tbl_name": "asset_process_events",
+      "sql": "CREATE INDEX idx_asset_process_events_asset\n  ON asset_process_events (asset_id, created_at)"
+    },
+    {
+      "type": "index",
       "name": "idx_assets_item",
       "tbl_name": "assets",
       "sql": "CREATE INDEX idx_assets_item ON assets(item_id)"
@@ -551,6 +557,12 @@
       "name": "annotations",
       "tbl_name": "annotations",
       "sql": "CREATE TABLE \"annotations\" (\n  id TEXT PRIMARY KEY NOT NULL,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  page INTEGER NOT NULL DEFAULT 1,\n  kind TEXT NOT NULL CHECK(kind IN ('rectangle', 'underline', 'crop', 'erase', 'rotation')),\n  color TEXT NOT NULL,\n  x REAL NOT NULL,\n  y REAL NOT NULL,\n  width REAL NOT NULL,\n  height REAL NOT NULL,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL\n)"
+    },
+    {
+      "type": "table",
+      "name": "asset_process_events",
+      "tbl_name": "asset_process_events",
+      "sql": "CREATE TABLE asset_process_events (\n  id            TEXT    PRIMARY KEY,\n  asset_id      TEXT    NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  process       TEXT    NOT NULL,\n  tool          TEXT    NOT NULL,\n  tool_version  TEXT,\n  model         TEXT,\n  model_version TEXT,\n  app_version   TEXT    NOT NULL,\n  params_json   TEXT    CHECK (params_json IS NULL OR json_valid(params_json)),\n  input_sha256  TEXT,\n  output_sha256 TEXT,\n  created_at    INTEGER NOT NULL\n)"
     },
     {
       "type": "table",
@@ -1447,6 +1459,133 @@
         {
           "cid": 10,
           "name": "updated_at",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "assets",
+          "from": "asset_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE",
+          "match": "NONE"
+        }
+      ],
+      "columns_error": null,
+      "foreign_keys_error": null
+    },
+    {
+      "name": "asset_process_events",
+      "columns": [
+        {
+          "cid": 0,
+          "name": "id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1,
+          "hidden": 0
+        },
+        {
+          "cid": 1,
+          "name": "asset_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 2,
+          "name": "process",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 3,
+          "name": "tool",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 4,
+          "name": "tool_version",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 5,
+          "name": "model",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 6,
+          "name": "model_version",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 7,
+          "name": "app_version",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 8,
+          "name": "params_json",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 9,
+          "name": "input_sha256",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 10,
+          "name": "output_sha256",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 11,
+          "name": "created_at",
           "type": "INTEGER",
           "notnull": 1,
           "dflt_value": null,
@@ -8764,6 +8903,36 @@
       "columns_error": null
     },
     {
+      "name": "idx_asset_process_events_asset",
+      "columns": [
+        {
+          "seqno": 0,
+          "cid": 1,
+          "name": "asset_id",
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 1
+        },
+        {
+          "seqno": 1,
+          "cid": 11,
+          "name": "created_at",
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 1
+        },
+        {
+          "seqno": 2,
+          "cid": -1,
+          "name": null,
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 0
+        }
+      ],
+      "columns_error": null
+    },
+    {
       "name": "idx_assets_item",
       "columns": [
         {
@@ -11280,6 +11449,7 @@
     "0057_web_captures",
     "0058_processing_ner_tasks",
     "0059_zotero_annotations",
-    "0060_processing_ocr_correction_summary_tasks"
+    "0060_processing_ocr_correction_summary_tasks",
+    "0061_asset_process_events"
   ]
 }

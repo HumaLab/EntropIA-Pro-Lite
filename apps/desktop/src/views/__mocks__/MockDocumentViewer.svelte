@@ -9,6 +9,8 @@
     layoutRegions = [],
     hoveredLayoutRegionId = null,
     selectedLayoutRegionId = null,
+    editableLayoutRegionId = null,
+    onLayoutRegionGeometryChange = () => {},
     selectedAnnotationId = null,
     annotationTool = 'select',
     annotationColor = 'var(--color-accent)',
@@ -65,6 +67,8 @@
   <p data-testid="viewer-current-page">{currentPage}</p>
   <p data-testid="viewer-hovered-layout-region">{hoveredLayoutRegionId ?? 'none'}</p>
   <p data-testid="viewer-selected-layout-region">{selectedLayoutRegionId ?? 'none'}</p>
+  <p data-testid="viewer-editable-layout-region">{editableLayoutRegionId ?? 'none'}</p>
+  <p data-testid="viewer-layout-regions">{JSON.stringify(layoutRegions)}</p>
   <p data-testid="viewer-selected-annotation">{selectedAnnotationId ?? 'none'}</p>
   <p data-testid="viewer-annotation-tool">{annotationTool}</p>
   <p data-testid="viewer-annotation-color">{annotationColor}</p>
@@ -100,6 +104,23 @@
       onLayoutRegionSelect(layoutRegions[1]?.id ?? layoutRegions[0]?.id ?? 'missing-layout-region')}
   >
     Select second layout region
+  </button>
+  <button
+    type="button"
+    onclick={() => {
+      const region = layoutRegions.find(
+        (candidate: { id: string }) => candidate.id === editableLayoutRegionId
+      )
+      if (!region) return
+      onLayoutRegionGeometryChange(region.id, {
+        x: region.x,
+        y: region.y,
+        width: region.width,
+        height: region.height + 40,
+      })
+    }}
+  >
+    Stretch editable layout region
   </button>
   <button type="button" aria-label="Go to page 2" onclick={() => onPageChange(2, 2)}>
     Go to page 2

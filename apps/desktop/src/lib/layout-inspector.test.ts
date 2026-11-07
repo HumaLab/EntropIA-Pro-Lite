@@ -27,6 +27,7 @@ describe('layout inspector helpers', () => {
   it('serializes the selected block with the rich inspector fields', () => {
     const json = serializeLayoutBlock({
       id: 'layout-block-3',
+      sourceIndex: 3,
       regionId: 'layout-block-3::overlay',
       label: 'figure',
       order: 4,
