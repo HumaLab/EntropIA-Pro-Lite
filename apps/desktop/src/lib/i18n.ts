@@ -2042,7 +2042,8 @@ const es = {
   'occurrence.literalParts': 'Literal en el texto: {parts}.',
   'occurrence.inferredParts': 'Inferido (subrayado punteado): {parts}.',
   'occurrence.elsewhereParts': 'En otra parte del documento (también resaltado): {parts}.',
-  'occurrence.missingParts': 'No aparece en el documento: {parts}.',
+  'occurrence.missingParts':
+    'Inferido por el modelo a partir del contexto, sin palabras que lo expresen en el documento: {parts}.',
   'occurrence.legendReconstructed': 'Punteado: reconstruido',
   'occurrence.none': 'No se encontró el pasaje en el texto disponible.',
   'occurrence.loading': 'Localizando apariciones…',
@@ -5083,7 +5084,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'occurrence.literalParts': 'Literal in the text: {parts}.',
   'occurrence.inferredParts': 'Inferred (dotted underline): {parts}.',
   'occurrence.elsewhereParts': 'Elsewhere in the document (also highlighted): {parts}.',
-  'occurrence.missingParts': 'Not in the document: {parts}.',
+  'occurrence.missingParts':
+    'Inferred by the model from the context, with no words for it in the document: {parts}.',
   'occurrence.legendReconstructed': 'Dotted: rebuilt',
   'occurrence.none': 'The passage was not found in the available text.',
   'occurrence.loading': 'Locating occurrences…',
