@@ -51,6 +51,8 @@ export interface HighlightRange {
   start: number
   end: number
   role: 'passage' | 'subject' | 'predicate' | 'object'
+  /** False marks a part the model rebuilt from context (styled apart). */
+  literal?: boolean
 }
 
 /** Maps all raw ranges once and partitions overlaps without nested marks. */
@@ -64,7 +66,7 @@ export function highlightLabeledRanges(
   const mapping = mapRenderedText(container.textContent ?? '', rawText)
   const visible = ranges.flatMap((range) => {
     const mapped = mapping.toVisible(range.start, range.end)
-    return mapped ? [{ ...mapped, role: range.role }] : []
+    return mapped ? [{ ...mapped, role: range.role, literal: range.literal }] : []
   })
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
   const segments: Array<{ node: Text; start: number; end: number; classes: string }> = []
@@ -84,9 +86,9 @@ export function highlightLabeledRanges(
     for (let i = 1; i < boundaries.length; i++) {
       const start = boundaries[i - 1]!
       const end = boundaries[i]!
-      const roles = overlapping
-        .filter((range) => range.start < end && range.end > start)
-        .map((range) => `occurrence-${range.role}`)
+      const covering = overlapping.filter((range) => range.start < end && range.end > start)
+      const roles = covering.map((range) => `occurrence-${range.role}`)
+      if (covering.some((range) => range.literal === false)) roles.push('occurrence-reconstructed')
       if (roles.length) {
         segments.push({
           node,
@@ -99,11 +101,14 @@ export function highlightLabeledRanges(
     offset = nodeEnd
   }
   let first: HTMLElement | null = null
+  let passage: HTMLElement | null = null
   for (let i = segments.length - 1; i >= 0; i--) {
     const segment = segments[i]!
     first = wrap(segment.node, segment.start, segment.end, segment.classes)
+    if (segment.classes.includes('occurrence-passage')) passage = first
   }
-  first?.scrollIntoView({ block: 'center' })
+  // Parts found elsewhere may be marked above the passage: center the passage.
+  ;(passage ?? first)?.scrollIntoView({ block: 'center' })
   return first !== null
 }
 

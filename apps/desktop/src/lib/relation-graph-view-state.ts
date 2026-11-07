@@ -24,11 +24,13 @@ export interface GraphCamera {
 }
 
 export interface GraphViewSnapshot {
-  /** `graphStructureKey` of the settings the layout was computed under. */
+  /** Identity of the graph the layout was computed for (settings and expanded entities). */
   structureKey: string
   positions: Record<string, Vec3>
   camera: GraphCamera | null
   selection: GraphSelection | null
+  /** Entities the user had expanded past the caps. */
+  expanded?: string[]
 }
 
 export type AnalysisTab = 'viz' | 'graph' | 'settings'
@@ -85,4 +87,21 @@ export function resolveSelection(
     ({ source, target }) => source === selection.source && target === selection.target
   )
   return link ? { kind: 'link', link } : null
+}
+
+/** An endpoint id, whether the renderer still holds the id or has swapped in the node. */
+const endpointId = (end: unknown): string =>
+  typeof end === 'object' && end !== null ? String((end as { id: unknown }).id) : String(end)
+
+/** Whether a link belongs to the selection: any link of a selected node, or the selected link. */
+export function linkTouchesSelection(
+  link: { source: unknown; target: unknown },
+  selection: GraphSelection | null
+): boolean {
+  if (!selection) return false
+  const source = endpointId(link.source)
+  const target = endpointId(link.target)
+  return selection.kind === 'node'
+    ? source === selection.id || target === selection.id
+    : source === selection.source && target === selection.target
 }

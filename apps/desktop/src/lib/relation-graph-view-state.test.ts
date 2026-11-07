@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  linkTouchesSelection,
   resolveSelection,
   seedNodePositions,
   type GraphViewSnapshot,
@@ -11,7 +12,7 @@ const graph: RelationGraph = {
     { id: 'a', label: 'A', degree: 1 },
     { id: 'b', label: 'B', degree: 1 },
   ],
-  links: [{ source: 'a', target: 'b', predicates: ['ve'] }],
+  links: [{ source: 'a', target: 'b', predicates: ['ve'], counts: [1] }],
   hiddenNodes: 0,
 } as RelationGraph
 
@@ -45,6 +46,20 @@ describe('seedNodePositions', () => {
     const partial = { ...snapshot, positions: { a: [1, 2, 3] as [number, number, number] } }
     expect(seedNodePositions(graph, partial, 'k1').restored).toBe(false)
     expect(seedNodePositions(graph, null, 'k1').restored).toBe(false)
+  })
+})
+
+describe('linkTouchesSelection', () => {
+  it('lights the links of a selected node, or the selected link alone', () => {
+    const ab = { source: 'a', target: 'b' }
+    const bc = { source: { id: 'b' }, target: { id: 'c' } }
+    expect(linkTouchesSelection(ab, { kind: 'node', id: 'a' })).toBe(true)
+    expect(linkTouchesSelection(bc, { kind: 'node', id: 'a' })).toBe(false)
+    // The renderer swaps endpoint ids for node objects once laid out.
+    expect(linkTouchesSelection(bc, { kind: 'node', id: 'c' })).toBe(true)
+    expect(linkTouchesSelection(ab, { kind: 'link', source: 'a', target: 'b' })).toBe(true)
+    expect(linkTouchesSelection(ab, { kind: 'link', source: 'b', target: 'a' })).toBe(false)
+    expect(linkTouchesSelection(ab, null)).toBe(false)
   })
 })
 

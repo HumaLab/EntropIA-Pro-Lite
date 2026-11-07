@@ -3214,6 +3214,7 @@
               : occurrencePassage.approximate
                 ? 'approximate'
                 : 'exact'}
+          evidence={occurrencePassage?.evidence ?? null}
           {translate}
           onchange={navigateOccurrence}
         />

@@ -943,10 +943,15 @@
     border-bottom: 3px solid var(--color-accent);
   }
   :global(.left-text-panel-body mark.occurrence-predicate) {
-    border-bottom: 3px dashed var(--color-warning);
+    border-bottom: 3px solid var(--color-warning);
   }
   :global(.left-text-panel-body mark.occurrence-object) {
-    border-bottom: 3px double var(--color-success);
+    border-bottom: 3px solid var(--color-success);
+  }
+  /* Colour says the part, the line says how literal it is: a dotted line is a
+     part the model rebuilt from this sentence rather than read as written. */
+  :global(.left-text-panel-body mark.occurrence-reconstructed) {
+    border-bottom-style: dotted;
   }
 
   .ocr-meta {

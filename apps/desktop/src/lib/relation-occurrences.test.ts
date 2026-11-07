@@ -98,30 +98,127 @@ describe('locateOccurrences', () => {
     expect(spaced[0]).toMatchObject({ start: 0, end: 12 })
     expect(locateOccurrences('Josef', entity)).toEqual([])
   })
-  it('locates a bounded relation passage and labeled subject, predicate and object', () => {
-    const text = 'José visita Lima. José vive en Lima.'
-    const found = locateOccurrences(text, relation)
-    expect(found).toHaveLength(2)
+  it('locates the sentence holding a literal relation and marks its three parts as literal', () => {
+    const found = locateOccurrences('José visita Lima. José vive en Lima.', relation)
+    // The second sentence only names both ends; the first also holds the link.
+    expect(found).toHaveLength(1)
     expect(found[0]).toMatchObject({
       start: 0,
-      end: 16,
+      end: 17,
       approximate: false,
+      evidence: { subject: 'literal', predicate: 'literal', object: 'literal' },
       ranges: [
-        { role: 'subject', start: 0, end: 4 },
-        { role: 'predicate', start: 5, end: 11 },
-        { role: 'object', start: 12, end: 16 },
+        { role: 'subject', start: 0, end: 4, literal: true },
+        { role: 'predicate', start: 5, end: 11, literal: true },
+        { role: 'object', start: 12, end: 16, literal: true },
       ],
     })
-    expect(found[1]?.ranges.map(({ role }) => role)).toEqual(['subject', 'object'])
-    expect(found.every(({ start, end }) => end - start <= 400)).toBe(true)
   })
-  it('flags entity-only fallback as approximate, and returns none when neither exists', () => {
-    expect(locateOccurrences('Solo Lima.', relation)[0]).toMatchObject({
+
+  it('finds a triple the model rebuilt from context and marks the inferred part', () => {
+    const text =
+      'Que se tenga en cuenta al personal de la Federación de Obreros en Construcciones Navales.\n\n' +
+      'Sin local, sin asambleas, la Federación mantuvo su actividad, continuó editando su ' +
+      'periódico y mantuvo cierto control sobre el trabajo de los talleres navales. Producida la ' +
+      'revolución, el gremio se reorganizó.'
+    const target = {
+      ...relation,
+      subject: 'la Federación de Obreros en Construcciones Navales',
+      predicate: 'mantuvo cierto control sobre',
+      object: 'el trabajo de los talleres navales',
+    }
+    const found = locateOccurrences(text, target)
+    expect(found).toHaveLength(1)
+    const sentence = found[0]!
+    expect(text.slice(sentence.start, sentence.end)).toMatch(/^Sin local.*talleres navales\.$/)
+    expect(sentence).toMatchObject({
       approximate: true,
-      ranges: [{ role: 'object', start: 5, end: 9 }],
+      evidence: { subject: 'partial', predicate: 'literal', object: 'literal' },
+    })
+    const marked = sentence.ranges.map((range) => [
+      range.role,
+      text.slice(range.start, range.end),
+      range.literal,
+    ])
+    expect(marked).toContainEqual(['subject', 'Federación', false])
+    expect(marked).toContainEqual(['predicate', 'mantuvo cierto control sobre', true])
+    expect(marked).toContainEqual(['object', 'el trabajo de los talleres navales', true])
+    // A word already inside a literal part is not marked again for another part.
+    expect(marked.filter(([, words]) => words === 'navales')).toEqual([])
+  })
+
+  it('never steps to a sentence that only names one end of the relation', () => {
+    const found = locateOccurrences(
+      'José nació en Cusco. Lima es grande. José visita Lima.',
+      relation
+    )
+    expect(found.map(({ start }) => start)).toEqual([37])
+  })
+
+  it('falls back to one approximate passage when a single part is found, and none when nothing is', () => {
+    const found = locateOccurrences('Lima es grande. Solo Lima.', relation)
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatchObject({
+      approximate: true,
+      evidence: { subject: 'missing', predicate: 'missing', object: 'literal' },
+      ranges: [{ role: 'object', start: 0, end: 4, literal: true }],
     })
     expect(locateOccurrences('Nada aquí.', relation)).toEqual([])
-    const distant = locateOccurrences(`José ${'x'.repeat(401)} Lima`, relation)
-    expect(distant.every((hit) => hit.approximate)).toBe(true)
+  })
+
+  it('finds the parts the model took from elsewhere in the document', () => {
+    const text =
+      'Presentación dirigida al Interventor de la Confederación General de Trabajadores.\n\n' +
+      'Señor Interventor: los gremios abajo firmantes exponen su queja.\n\n' +
+      'firmados por:\n\n' +
+      'FEDERACION DE EMPLEADOS DE COMERCIO\n\n' +
+      'FEDERACION DE OBREOS DE LA INDUSTRIA DEL VESTIDO\n\n' +
+      '(es copia)'
+    const target = {
+      ...relation,
+      subject: 'FEDERACION DE OBREOS DE LA INDUSTRIA DEL VESTIDO',
+      predicate: 'firma',
+      object: 'la presentación dirigida al Interventor de la Confederación General de Trabajadores',
+    }
+    const found = locateOccurrences(text, target)
+    expect(found).toHaveLength(1)
+    const [hit] = found
+    expect(text.slice(hit!.start, hit!.end)).toBe(
+      'FEDERACION DE OBREOS DE LA INDUSTRIA DEL VESTIDO'
+    )
+    expect(hit!.evidence).toEqual({
+      subject: 'literal',
+      predicate: 'elsewhere',
+      object: 'elsewhere',
+    })
+    const marked = hit!.ranges.map((range) => [range.role, text.slice(range.start, range.end)])
+    expect(marked).toContainEqual(['predicate', 'firmados'])
+    expect(marked).toContainEqual(['object', 'Presentación'])
+    expect(marked).toContainEqual(['object', 'Trabajadores'])
+  })
+
+  it('tolerates OCR misspellings when a part is not literal', () => {
+    const text = 'La Federación de Obreos Navales firmó el acta.'
+    const target = {
+      ...relation,
+      subject: 'Federación de Obreros Navales',
+      predicate: 'firmó',
+      object: 'el acta',
+    }
+    const [hit] = locateOccurrences(text, target)
+    const marked = hit!.ranges.map((range) => [
+      range.role,
+      text.slice(range.start, range.end),
+      range.literal,
+    ])
+    expect(marked).toContainEqual(['subject', 'Obreos', false])
+    expect(hit!.evidence).toEqual({ subject: 'partial', predicate: 'literal', object: 'literal' })
+  })
+
+  it('splits sentences too long to read as one passage', () => {
+    const text = `José ${'palabra '.repeat(80)}Lima`
+    const found = locateOccurrences(text, relation)
+    expect(found.every(({ start, end }) => end - start <= 400)).toBe(true)
+    expect(found.every((hit) => hit.approximate)).toBe(true)
   })
 })

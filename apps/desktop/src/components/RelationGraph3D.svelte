@@ -18,13 +18,17 @@
   import {
     buildRelationGraph,
     describeNode,
+    linkLabelText,
+    splitRelations,
     key as nameKey,
     type NodeDetails,
+    type NodeRelation,
     type GraphLink,
     type GraphNode,
     type RelationGraph,
   } from '$lib/relation-graph'
   import { graphStructureKey, type GraphSettings } from '$lib/analysis-settings'
+  import { layoutConfig } from '$lib/graph-layouts'
   import {
     buildNodeTargets,
     buildRelationTargets,
@@ -32,6 +36,7 @@
     type OccurrenceTarget,
   } from '$lib/relation-occurrences'
   import {
+    linkTouchesSelection,
     resolveSelection,
     seedNodePositions,
     type GraphCamera,
@@ -79,6 +84,19 @@
   let titles = new Map<string, string>()
   let types = $state.raw(new Map<string, string>())
   let selected = $state<ResolvedSelection | null>(null)
+  /** Entities the user asked to see whole, past the caps (view state). */
+  let expanded = $state<string[]>([])
+  /** The detail panel starts at half the view and can take all of it. */
+  let panelWide = $state(false)
+
+  /** The graph's identity: structure settings plus the expanded entities. */
+  function viewKey(): string {
+    return `${graphStructureKey(settings)}|${[...expanded].sort().join(',')}`
+  }
+
+  function toggleExpanded(id: string) {
+    expanded = expanded.includes(id) ? expanded.filter((other) => other !== id) : [...expanded, id]
+  }
   const nodeDetails = $derived<NodeDetails | null>(
     selected?.kind === 'node' ? describeNode(selected.node.id, tripleRows) : null
   )
@@ -182,6 +200,7 @@
         zoom: camera.zoom,
       },
       selection: selection(),
+      expanded: [...expanded],
     }
   }
 
@@ -253,9 +272,109 @@
   }
 
   // ── Building and drawing ─────────────────────────────────────────────────
+  // ── Highlighting the selection ─────────────────────────────────────────
+  /** The renderer's sphere for a node: a three.js mesh, typed by what is used. */
+  interface NodeMesh {
+    geometry: unknown
+    material: { constructor: new (params: Record<string, unknown>) => unknown }
+    constructor: new (geometry: unknown, material: unknown) => OutlineMesh
+    add: (child: OutlineMesh) => void
+    remove: (child: OutlineMesh) => void
+  }
+  interface OutlineMesh {
+    scale: { setScalar: (value: number) => void }
+  }
+  let outline: { parent: NodeMesh; mesh: OutlineMesh } | null = null
+
+  function removeOutline() {
+    outline?.parent.remove(outline.mesh)
+    outline = null
+  }
+
+  /**
+   * A contrasting rim around the selected node: a slightly larger copy of its
+   * sphere drawn from the back faces only. Built from the sphere's own
+   * constructors, so the view needs no direct three.js dependency.
+   */
+  /**
+   * Keeps the rim on the selected node's current sphere. The renderer builds
+   * node objects a few frames after the data arrives (and may rebuild them),
+   * notably when a restored graph comes back, so a single attempt on the next
+   * frame is not enough: this rechecks every frame for about two seconds.
+   */
+  let outlineWatch = 0
+  function watchOutline(color: string) {
+    cancelAnimationFrame(outlineWatch)
+    let frames = 0
+    const step = () => {
+      if (!instance) return
+      ensureOutline(color)
+      if (++frames < 120) outlineWatch = requestAnimationFrame(step)
+    }
+    outlineWatch = requestAnimationFrame(step)
+  }
+
+  function ensureOutline(color: string) {
+    if (!instance || selected?.kind !== 'node') {
+      removeOutline()
+      return
+    }
+    const id = selected.node.id
+    const node = instance.graphData().nodes.find((n) => (n as GraphNode).id === id) as
+      { __threeObj?: NodeMesh } | undefined
+    const sphere = node?.__threeObj
+    if (outline && outline.parent === sphere) return
+    outlineSelected(sphere, color)
+  }
+
+  function outlineSelected(sphere: NodeMesh | undefined, color: string) {
+    removeOutline()
+    if (!sphere?.geometry || !sphere.material) return
+    const Material = sphere.material.constructor
+    const Mesh = sphere.constructor
+    // side 1 = THREE.BackSide: only the rim around the sphere shows.
+    const rim = new Mesh(
+      sphere.geometry,
+      new Material({ color, side: 1, transparent: true, opacity: 0.95 })
+    )
+    rim.scale.setScalar(1.35)
+    sphere.add(rim)
+    outline = { parent: sphere, mesh: rim }
+  }
+
+  /**
+   * The selected node turns bright with a contrasting rim, and its links (or
+   * the selected link) take the contrasting colour, a little width and moving
+   * particles, which stay visible whatever the global link opacity is.
+   */
+  function applyHighlight() {
+    if (!instance) return
+    const accent = token('--color-accent', '#4f7cff')
+    const bright = token('--color-text-primary', '#ffffff')
+    const contrast = token('--color-warning', '#f5a524')
+    const muted = token('--color-text-secondary', '#888')
+    const partial = token('--color-info', '#38bdf8')
+    const current = selection()
+    const nodeId = current?.kind === 'node' ? current.id : null
+    const lit = (link: object) =>
+      linkTouchesSelection(link as { source: unknown; target: unknown }, current)
+    instance
+      .nodeColor((n) => {
+        const node = n as GraphNode
+        if (node.id === nodeId) return bright
+        // A node with relations left undrawn wears its own colour (+N on hover).
+        return node.hiddenRelations > 0 ? partial : accent
+      })
+      .linkColor((l) => (lit(l) ? contrast : muted))
+      .linkWidth((l) => (lit(l) ? 1.2 : 0))
+      .linkDirectionalParticles((l) => (lit(l) ? 2 : 0))
+      .linkDirectionalParticleColor(() => contrast)
+    watchOutline(contrast)
+  }
+
   function draw() {
     if (!instance || !graph) return
-    const structureKey = graphStructureKey(settings)
+    const structureKey = viewKey()
     const restore = pendingSnapshot
     pendingSnapshot = null
     const seeded = seedNodePositions(graph, restore, structureKey)
@@ -263,24 +382,53 @@
     // A restored layout must not move: no ticks until the pins are released.
     instance.cooldownTicks(seeded.restored ? 0 : Infinity)
     let released = !seeded.restored
+    // A freshly laid out graph starts framed whole; a restored one keeps the
+    // camera the user left.
+    fitOwed = !seeded.restored
+    fitTicks = 0
     instance.onEngineStop(() => {
-      if (released || !instance) return
-      released = true
-      for (const node of instance.graphData().nodes as Array<Record<string, unknown>>) {
-        delete node.fx
-        delete node.fy
-        delete node.fz
+      if (!instance) return
+      if (fitOwed) {
+        frameWholeGraph(400)
+        fitOwed = false
       }
-      instance.cooldownTicks(Infinity)
+      if (!released) {
+        released = true
+        for (const node of instance.graphData().nodes as Array<Record<string, unknown>>) {
+          delete node.fx
+          delete node.fy
+          delete node.fz
+        }
+        instance.cooldownTicks(Infinity)
+      }
+      // Node objects are settled now: make sure the selection is still styled.
+      applyHighlight()
     })
     // The library rewrites source/target into node objects: hand it copies.
     instance.graphData({ nodes: seeded.nodes, links: graph.links.map((l) => ({ ...l })) })
     selected = resolveSelection(graph, restore?.selection ?? selection())
     if (seeded.restored && restore?.camera) restoreCamera(restore.camera)
+    applyHighlight()
+  }
+
+  // ── Framing ──────────────────────────────────────────────────────────────────
+  /** Margin in pixels between the framed graph and the edge of the view. */
+  const FIT_PADDING = 12
+  /**
+   * True from a fresh layout until it settles or the user moves the camera:
+   * while owed, the camera keeps the whole graph in view as nodes spread, so
+   * the starting view is always every node and link filling the box. Zoom or
+   * rotation by the user ends it.
+   */
+  let fitOwed = false
+  let fitTicks = 0
+
+  function frameWholeGraph(duration: number) {
+    if (instance && graph?.nodes.length) instance.zoomToFit(duration, FIT_PADDING)
   }
 
   function rebuild() {
-    graph = buildRelationGraph(tripleRows, settings.structure)
+    graph = buildRelationGraph(tripleRows, settings.structure, expanded)
     draw()
   }
 
@@ -293,7 +441,9 @@
       const [{ default: ForceGraph3D }] = await Promise.all([import('3d-force-graph'), loadRows()])
       if (loadedFor !== loadKey || !container) return
       selected = null
-      graph = buildRelationGraph(tripleRows, settings.structure)
+      // A restored view brings back the entities the user had expanded.
+      expanded = pendingSnapshot?.expanded ?? []
+      graph = buildRelationGraph(tripleRows, settings.structure, expanded)
       status = 'ready'
       if (!instance) {
         instance = new ForceGraph3D(container, { controlType: 'orbit' })
@@ -303,15 +453,32 @@
           }
         })
         observer.observe(container)
+        // Any zoom or turn by the user ends the automatic framing.
+        ;(
+          instance.controls() as unknown as {
+            addEventListener: (type: string, listener: () => void) => void
+          }
+        ).addEventListener('start', () => (fitOwed = false))
+        instance.onEngineTick(() => {
+          if (fitOwed && ++fitTicks % 20 === 0) frameWholeGraph(0)
+        })
       }
-      const accent = token('--color-accent', '#4f7cff')
       instance
         .width(container.clientWidth)
         .height(container.clientHeight)
         .backgroundColor(token('--color-surface', '#111'))
         .showNavInfo(false)
-        .nodeLabel((n) => label((n as GraphNode).label))
-        .nodeColor(() => accent)
+        .nodeLabel((n) => {
+          const node = n as GraphNode
+          return label(
+            node.hiddenRelations > 0
+              ? t('collectionAnalysis.graphNodeHiddenLabel', {
+                  label: node.label,
+                  count: node.hiddenRelations,
+                })
+              : node.label
+          )
+        })
         .onNodeClick((n) => {
           selected = graph
             ? resolveSelection(graph, { kind: 'node', id: (n as GraphNode).id })
@@ -319,8 +486,10 @@
         })
         .onLinkClick((l) => selectLink(l))
         .onBackgroundClick(() => (selected = null))
-        .linkColor(() => token('--color-text-secondary', '#888'))
         .linkDirectionalArrowRelPos(1)
+        // A cycle (A → B → A) only bends the radial rings; it must not throw.
+        .onDagError(() => {})
+        .linkDirectionalParticleWidth(2)
       appliedPhysics = ''
       applyRender(settings)
       draw()
@@ -339,22 +508,27 @@
       .nodeVal((n) => render.nodeSizeScale * (1 + (n as GraphNode).degree))
       .linkOpacity(render.linkOpacity)
       .linkDirectionalArrowLength(render.showArrows ? 3 : 0)
-      .linkLabel((l) =>
-        render.showLinkLabels ? label((l as GraphLink).predicates.join(' · ')) : ''
-      )
+      .linkLabel((l) => (render.showLinkLabels ? label(linkLabelText(l as GraphLink)) : ''))
       .cooldownTime(render.cooldownTime)
     const controls = instance.controls() as unknown as OrbitControls
     controls.autoRotate = render.autoRotate
-    const physics = `${render.linkDistance}:${render.chargeStrength}`
+    const physics = `${render.layout}:${render.linkDistance}:${render.chargeStrength}`
     if (physics !== appliedPhysics) {
       const first = appliedPhysics === ''
       appliedPhysics = physics
+      const layout = layoutConfig(render.layout, render)
+      // null turns the DAG mode off at run time; the typings only list the modes.
+      ;(instance as unknown as { dagMode: (mode: string | null) => unknown }).dagMode(
+        layout.dagMode
+      )
+      instance.dagLevelDistance(layout.dagLevelDistance)
       ;(instance.d3Force('link') as { distance?: (d: number) => unknown } | undefined)?.distance?.(
-        render.linkDistance
+        layout.linkDistance
       )
       ;(
-        instance.d3Force('charge') as { strength?: (s: number) => unknown } | undefined
-      )?.strength?.(render.chargeStrength)
+        instance.d3Force('charge') as
+          { strength?: (s: (node: object) => number) => unknown } | undefined
+      )?.strength?.((node) => layout.charge(node as GraphNode))
       // The first application precedes the layout; a later one asks for it.
       if (!first) instance.d3ReheatSimulation()
     }
@@ -369,7 +543,7 @@
 
   // Structure settings: rebuild from the loaded rows, never re-query.
   $effect(() => {
-    const structureKey = graphStructureKey(settings)
+    const structureKey = viewKey()
     if (status === 'ready' && instance && structureKey !== builtStructureKey) rebuild()
   })
 
@@ -380,7 +554,15 @@
     if (status === 'ready') applyRender(current)
   })
 
+  // Selection changes (clicks, closing the panel) restyle the live graph.
+  $effect(() => {
+    void selected
+    if (status === 'ready') applyHighlight()
+  })
+
   onDestroy(() => {
+    cancelAnimationFrame(outlineWatch)
+    removeOutline()
     observer?.disconnect()
     instance?._destructor()
     instance = null
@@ -401,8 +583,14 @@
           nodes: graph.nodes.length,
           links: graph.links.length,
         })}
-      {#if graph.hiddenNodes > 0}
-        {t('collectionAnalysis.graphHidden', { count: graph.hiddenNodes })}
+      {#if graph.hiddenBy.caps > 0}
+        {t('collectionAnalysis.graphHiddenByCaps', {
+          count: graph.hiddenBy.caps,
+          max: settings.structure.maxEntities,
+        })}
+      {/if}
+      {#if graph.hiddenBy.thresholds > 0}
+        {t('collectionAnalysis.graphHiddenByThresholds', { count: graph.hiddenBy.thresholds })}
       {/if}
     </p>
   {/if}
@@ -414,7 +602,32 @@
     ></div>
     {#if selected}
       {@const heading = selectionHeading(selected)}
-      <section class="relation-graph__details" aria-label={heading}>
+      {#snippet relationRow(relation: NodeRelation)}
+        {@const relationTargetsFor = relationTargets(
+          relation.subject,
+          relation.object,
+          relation.predicate
+        )}
+        <li>
+          <button
+            type="button"
+            class="relation-graph__relation"
+            disabled={relationTargetsFor.length === 0}
+            use:tooltip={t('collectionAnalysis.graphOpenRelation')}
+            onclick={() => openOccurrences('relation', relationTargetsFor)}
+          >
+            <span class="relation-graph__subject">{relation.subject}</span>
+            <em>{relation.predicate}</em>
+            <span class="relation-graph__object">{relation.object}</span>
+            {#if relation.count > 1}
+              <span class="relation-graph__count"
+                >{t('collectionAnalysis.graphRelationCount', { count: relation.count })}</span
+              >
+            {/if}
+          </button>
+        </li>
+      {/snippet}
+      <section class="relation-graph__details" class:is-wide={panelWide} aria-label={heading}>
         <header class="relation-graph__details-head">
           <div class="relation-graph__details-title">
             <h3>{heading}</h3>
@@ -422,14 +635,26 @@
               <span class="relation-graph__type">{typeLabel(types.get(selected.node.id)!)}</span>
             {/if}
           </div>
-          <IconButton
-            size="sm"
-            variant="ghost"
-            label={t('collectionAnalysis.graphClose')}
-            onclick={() => (selected = null)}
-          >
-            <ActionIcon name="close" size={14} />
-          </IconButton>
+          <div class="relation-graph__details-actions">
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label={panelWide
+                ? t('collectionAnalysis.graphPanelNarrow')
+                : t('collectionAnalysis.graphPanelWide')}
+              onclick={() => (panelWide = !panelWide)}
+            >
+              <ActionIcon name="expand" size={14} />
+            </IconButton>
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label={t('collectionAnalysis.graphClose')}
+              onclick={() => (selected = null)}
+            >
+              <ActionIcon name="close" size={14} />
+            </IconButton>
+          </div>
         </header>
 
         {#if selected.kind === 'node'}
@@ -444,29 +669,34 @@
             <ActionIcon name="external-link" size={12} />
             {t('collectionAnalysis.graphOpenEntity', { count: targets.length })}
           </button>
-          <h4>{t('collectionAnalysis.graphRelations')}</h4>
+          {@const split = splitRelations(nodeDetails?.relations ?? [], graph ?? { links: [] })}
+          <h4>{t('collectionAnalysis.graphRelationsShown', { count: split.shown.length })}</h4>
           <ul>
-            {#each nodeDetails?.relations ?? [] as relation, index (index)}
-              {@const relationTargetsFor = relationTargets(
-                relation.subject,
-                relation.object,
-                relation.predicate
-              )}
-              <li>
-                <button
-                  type="button"
-                  class="relation-graph__relation"
-                  disabled={relationTargetsFor.length === 0}
-                  use:tooltip={t('collectionAnalysis.graphOpenRelation')}
-                  onclick={() => openOccurrences('relation', relationTargetsFor)}
-                >
-                  <span class="relation-graph__subject">{relation.subject}</span>
-                  <em>{relation.predicate}</em>
-                  <span class="relation-graph__object">{relation.object}</span>
-                </button>
-              </li>
+            {#each split.shown as relation, index (index)}
+              {@render relationRow(relation)}
             {/each}
           </ul>
+          {#if split.hidden.length || expanded.includes(node.id)}
+            <h4>{t('collectionAnalysis.graphRelationsHidden', { count: split.hidden.length })}</h4>
+            {#if split.hidden.length}
+              <p class="relation-graph__hint">{t('collectionAnalysis.graphRelationsHiddenHint')}</p>
+            {/if}
+            <button
+              type="button"
+              class="relation-graph__open"
+              onclick={() => toggleExpanded(node.id)}
+            >
+              <ActionIcon name="expand" size={12} />
+              {expanded.includes(node.id)
+                ? t('collectionAnalysis.graphCollapseNode')
+                : t('collectionAnalysis.graphExpandNode')}
+            </button>
+            <ul class="relation-graph__hidden">
+              {#each split.hidden as relation, index (index)}
+                {@render relationRow(relation)}
+              {/each}
+            </ul>
+          {/if}
         {:else}
           {@const link = selected.link}
           {@const sourceLabel = nodeLabel(link.source)}
@@ -483,8 +713,9 @@
           </button>
           <h4>{t('collectionAnalysis.graphRelations')}</h4>
           <ul>
-            {#each link.predicates as predicate (predicate)}
+            {#each link.predicates as predicate, index (predicate)}
               {@const predicateTargets = relationTargets(sourceLabel, targetLabel, predicate)}
+              {@const count = link.counts[index] ?? 1}
               <li>
                 <button
                   type="button"
@@ -496,6 +727,11 @@
                   <span class="relation-graph__subject">{sourceLabel}</span>
                   <em>{predicate}</em>
                   <span class="relation-graph__object">{targetLabel}</span>
+                  {#if count > 1}
+                    <span class="relation-graph__count"
+                      >{t('collectionAnalysis.graphRelationCount', { count })}</span
+                    >
+                  {/if}
                 </button>
               </li>
             {/each}
@@ -515,7 +751,7 @@
     flex-direction: column;
     gap: var(--space-2);
     height: 100%;
-    min-height: 420px;
+    min-height: 0;
     min-width: 20rem;
   }
 
@@ -531,6 +767,7 @@
     flex: 1;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
   }
 
   /* Half the visualization, on a half-transparent background so the graph
@@ -561,6 +798,28 @@
       width: auto;
       max-height: 50%;
     }
+  }
+
+  .relation-graph__details.is-wide {
+    right: var(--space-2);
+    width: auto;
+  }
+
+  .relation-graph__details-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: var(--space-1);
+  }
+
+  .relation-graph__hint {
+    margin: var(--space-1) 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+  }
+
+  /* Relations the graph does not draw read dimmer, still clickable. */
+  .relation-graph__hidden .relation-graph__relation {
+    opacity: 0.75;
   }
 
   .relation-graph__details-head {
@@ -638,14 +897,28 @@
     opacity: 0.6;
   }
 
+  /* How often the relation is stated: read, never drawn as a thicker link. */
+  .relation-graph__count {
+    margin-left: var(--space-1);
+    padding: 0 var(--space-1);
+    border-radius: var(--radius-xs);
+    background: color-mix(in srgb, var(--color-text-secondary) 20%, transparent);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
   .relation-graph__subject,
   .relation-graph__object {
     font-weight: var(--font-weight-semibold);
   }
 
+  /* Takes whatever height is left under the summary; 15rem is the least that
+     still reads as a graph, the only case where the pane may scroll. */
   .relation-graph__canvas {
     flex: 1;
-    min-height: 380px;
+    min-height: 15rem;
     border-radius: var(--radius-surface);
     overflow: hidden;
   }

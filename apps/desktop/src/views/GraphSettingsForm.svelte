@@ -8,6 +8,8 @@
     type GraphSettings,
     type GraphStructureSettings,
   } from '$lib/analysis-settings'
+  import { GRAPH_LAYOUTS } from '$lib/graph-layouts'
+  import { ActionIcon, ToolbarMenu, type ToolbarMenuItem } from '@entropia/ui'
 
   let { graph, onchange }: { graph: GraphSettings; onchange: (graph: GraphSettings) => void } =
     $props()
@@ -40,6 +42,8 @@
   interface Section {
     title: I18nKey
     hint: I18nKey
+    /** Shows the layout algorithm choice at the top of the section. */
+    layout?: true
     numbers: NumberControl[]
     toggles: ToggleControl[]
   }
@@ -59,8 +63,14 @@
         { group: 'structure', field: 'minDegree', label: 'graphSettings.minDegree', step: 1 },
         {
           group: 'structure',
-          field: 'minFrequency',
-          label: 'graphSettings.minFrequency',
+          field: 'minSubjectFrequency',
+          label: 'graphSettings.minSubjectFrequency',
+          step: 1,
+        },
+        {
+          group: 'structure',
+          field: 'minObjectFrequency',
+          label: 'graphSettings.minObjectFrequency',
           step: 1,
         },
         {
@@ -97,6 +107,7 @@
     },
     {
       title: 'graphSettings.sectionExplore',
+      layout: true,
       hint: 'graphSettings.sectionExploreHint',
       numbers: [
         { group: 'render', field: 'linkDistance', label: 'graphSettings.linkDistance', step: 5 },
@@ -133,7 +144,18 @@
     return { min: Math.min(...ends), max: Math.max(...ends) }
   }
 
-  function emit(group: Group, field: Field, value: number | boolean) {
+  let layoutMenuOpen = $state(false)
+  const layoutItems = $derived<ToolbarMenuItem[]>(
+    GRAPH_LAYOUTS.map((layout) => ({
+      kind: 'radio' as const,
+      id: layout,
+      label: translate(`graphSettings.layout.${layout}`),
+      checked: graph.render.layout === layout,
+      onselect: () => emit('render', 'layout', layout),
+    }))
+  )
+
+  function emit(group: Group, field: Field, value: number | boolean | string) {
     const next = normalizeGraphSettings({
       ...graph,
       [group]: { ...graph[group], [field]: value },
@@ -178,6 +200,36 @@
     <fieldset class="graph-settings__section">
       <legend class="graph-settings__legend">{translate(section.title)}</legend>
       <p class="graph-settings__hint">{translate(section.hint)}</p>
+      {#if section.layout}
+        <div class="graph-settings__field">
+          <span class="graph-settings__label" id="graph-setting-layout-label">
+            {translate('graphSettings.layout')}
+          </span>
+          <ToolbarMenu
+            label={translate('graphSettings.layout')}
+            items={layoutItems}
+            bind:open={layoutMenuOpen}
+          >
+            {#snippet trigger(props, { open })}
+              <button
+                type="button"
+                class="graph-settings__input graph-settings__menu"
+                class:is-open={open}
+                aria-labelledby="graph-setting-layout-label graph-setting-layout-value"
+                {...props}
+              >
+                <span id="graph-setting-layout-value">
+                  {translate(`graphSettings.layout.${graph.render.layout}`)}
+                </span>
+                <ActionIcon name="chevron-down" size={12} />
+              </button>
+            {/snippet}
+          </ToolbarMenu>
+        </div>
+        <p class="graph-settings__hint">
+          {translate(`graphSettings.layoutHint.${graph.render.layout}`)}
+        </p>
+      {/if}
       <div class="graph-settings__grid">
         {#each section.numbers as control (control.field)}
           {@const id = `graph-setting-${control.field}`}
@@ -267,6 +319,16 @@
   .graph-settings__label {
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
+  }
+
+  .graph-settings__menu {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    max-width: 16rem;
+    cursor: pointer;
+    text-align: left;
   }
 
   .graph-settings__input {

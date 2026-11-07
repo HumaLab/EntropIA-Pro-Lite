@@ -6,7 +6,13 @@ export interface TextRange {
 }
 export interface LabeledRange extends TextRange {
   role: 'subject' | 'predicate' | 'object'
+  /** False when only some of the part's words are in the text (rebuilt by the model). */
+  literal?: boolean
 }
+type Role = LabeledRange['role']
+/** How a relation part shows up in the passage: as written, only some words, or not at all. */
+/** `elsewhere`: not in the passage's sentence but found in the same document. */
+export type PartEvidence = 'literal' | 'partial' | 'elsewhere' | 'missing'
 export interface OccurrenceContext {
   collectionId: string
   collectionName: string
@@ -31,6 +37,8 @@ export interface OccurrenceSession {
 export interface OccurrencePassage extends TextRange {
   ranges: LabeledRange[]
   approximate: boolean
+  /** Relations only: which parts the passage holds literally. */
+  evidence?: Record<Role, PartEvidence>
 }
 export interface EntityRow {
   itemId: string
@@ -230,39 +238,248 @@ export function locateOccurrences(raw: string, target: OccurrenceTarget): Occurr
       .sort((a, b) => a.start - b.start || a.end - b.end)
       .map((range) => ({ ...range, ranges: [], approximate: false }))
   }
-  const subjects = matches(raw, target.subject)
-  const objects = matches(raw, target.object)
-  const predicates = matches(raw, target.predicate)
-  const passages: OccurrencePassage[] = []
-  for (const subject of subjects) {
-    const object = objects
-      .filter(
-        (candidate) =>
-          Math.max(subject.end, candidate.end) - Math.min(subject.start, candidate.start) <= 400
-      )
-      .sort((a, b) => Math.abs(a.start - subject.start) - Math.abs(b.start - subject.start))[0]
-    if (!object) continue
-    const start = Math.min(subject.start, object.start)
-    const end = Math.max(subject.end, object.end)
-    const ranges: LabeledRange[] = [
-      { ...subject, role: 'subject' },
-      ...predicates
-        .filter((range) => range.start >= start && range.end <= end)
-        .map((range): LabeledRange => ({ ...range, role: 'predicate' })),
-      { ...object, role: 'object' },
-    ]
-    passages.push({ start, end, ranges, approximate: false })
+  return locateRelation(raw, target)
+}
+
+const ROLES: readonly Role[] = ['subject', 'predicate', 'object']
+/** Longest passage shown as one occurrence; longer sentences are split at whitespace. */
+const MAX_PASSAGE = 400
+/** Words too common to count as evidence that a part was rebuilt from a sentence. */
+const STOPWORDS = new Set(
+  (
+    'el la los las lo un una unos unas de del al a en y e o u que con por para sobre su sus se ' +
+    'le les es son fue fueron era como mas muy sin entre hacia hasta desde este esta estos estas ' +
+    'ese esa esos esas the of and to in on for with by at from as is was were an'
+  ).split(' ')
+)
+
+/** Sentence ranges in raw coordinates: end punctuation or a blank line closes one. */
+function sentences(raw: string): TextRange[] {
+  const result: TextRange[] = []
+  const push = (start: number, end: number) => {
+    while (start < end && /\s/u.test(raw[start]!)) start++
+    while (end > start && /\s/u.test(raw[end - 1]!)) end--
+    while (end - start > MAX_PASSAGE) {
+      const cut = raw.lastIndexOf(' ', start + MAX_PASSAGE)
+      const at = cut > start ? cut : start + MAX_PASSAGE
+      push(start, at)
+      start = at
+      while (start < end && /\s/u.test(raw[start]!)) start++
+    }
+    if (end > start) result.push({ start, end })
   }
-  if (passages.length) return passages.sort((a, b) => a.start - b.start || a.end - b.end)
-  return [
-    ...subjects.map((range) => ({ ...range, role: 'subject' as const })),
-    ...objects.map((range) => ({ ...range, role: 'object' as const })),
-  ]
-    .sort((a, b) => a.start - b.start)
-    .map((range) => ({
-      start: range.start,
-      end: range.end,
-      ranges: [range],
-      approximate: true,
-    }))
+  const boundary = /([.!?…]+["'»”)\]]*)(?=\s)|\n[ \t]*\n/gu
+  let start = 0
+  for (const match of raw.matchAll(boundary)) {
+    const end = match.index + (match[1]?.length ?? 0)
+    push(start, end)
+    start = match.index + match[0].length
+  }
+  push(start, raw.length)
+  return result
+}
+
+/** A content word of a part: its six-letter stem and the whole folded word. */
+interface Token {
+  stem: string
+  full: string
+}
+
+/** Content words of a part, folded like the text, without repeats. */
+function contentTokens(part: string): Token[] {
+  const words = searchable(part).text.split(/[^\p{L}\p{N}]+/u)
+  const tokens = new Map<string, Token>()
+  for (const word of words) {
+    if (!word || STOPWORDS.has(word) || (word.length < 4 && !/\p{N}/u.test(word))) continue
+    const stem = word.slice(0, 6)
+    if (!tokens.has(stem)) tokens.set(stem, { stem, full: word })
+  }
+  return [...tokens.values()]
+}
+
+/** Edit distance, stopping early once it exceeds `limit`. */
+function withinEdits(a: string, b: string, limit: number): boolean {
+  if (Math.abs(a.length - b.length) > limit) return false
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index)
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i]
+    let best = i
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      current[j] = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + cost)
+      best = Math.min(best, current[j]!)
+    }
+    if (best > limit) return false
+    previous = current
+  }
+  return previous[b.length]! <= limit
+}
+
+/**
+ * Whether a text word stands for a token: same stem (inflections), or the
+ * whole word within one or two letters of it, the usual OCR misreading.
+ */
+function wordMatches(word: string, token: Token): boolean {
+  if (word.startsWith(token.stem)) return true
+  if (token.full.length < 5) return false
+  return withinEdits(word, token.full, token.full.length >= 9 ? 2 : 1)
+}
+
+/** Folded words of one sentence with their raw spans. */
+function sentenceWords(raw: string, sentence: TextRange) {
+  const folded = searchable(raw.slice(sentence.start, sentence.end))
+  return [...folded.text.matchAll(/[\p{L}\p{N}]+/gu)].map((match) => ({
+    word: match[0],
+    start: sentence.start + folded.starts[match.index]!,
+    end: sentence.start + folded.ends[match.index + match[0].length - 1]!,
+  }))
+}
+
+type SentenceWord = ReturnType<typeof sentenceWords>[number]
+
+/** The tokens a sentence holds and the words that hold them. */
+function tokenHits(words: readonly SentenceWord[], tokens: readonly Token[]) {
+  const hits = tokens.filter((token) => words.some(({ word }) => wordMatches(word, token)))
+  const marked = words.filter(({ word }) => hits.some((token) => wordMatches(word, token)))
+  return { hits, marked }
+}
+
+const overlaps = (a: TextRange, b: TextRange) => a.start < b.end && b.start < a.end
+const inside = (range: TextRange, sentence: TextRange) =>
+  range.start >= sentence.start && range.end <= sentence.end
+const distance = (a: TextRange, b: TextRange) =>
+  a.end <= b.start ? b.start - a.end : b.end <= a.start ? a.start - b.end : 0
+
+interface ScoredSentence extends OccurrencePassage {
+  score: number
+  parts: number
+  evidence: Record<Role, PartEvidence>
+}
+
+/**
+ * The model often rewrites a triple (the full name for «la Federación», a
+ * paraphrased link) and sometimes joins pieces read far apart (a signatory
+ * line, «firmados por:» above it, the document's title). A relation is
+ * located by the sentence that best supports it: each part counts as literal
+ * (the whole phrase is there) or partial (some of its content words, OCR
+ * misreadings tolerated), and a sentence needs two parts to count. Any part
+ * that sentence lacks is then looked for in the rest of the document, so
+ * every part the triple names is shown where it is, with what is literal
+ * and what was rebuilt kept apart.
+ */
+function locateRelation(
+  raw: string,
+  target: Extract<OccurrenceTarget, { kind: 'relation' }>
+): OccurrencePassage[] {
+  const literalMatches = Object.fromEntries(
+    ROLES.map((role) => [role, matches(raw, target[role])])
+  ) as Record<Role, TextRange[]>
+  const tokens = Object.fromEntries(
+    ROLES.map((role) => [role, contentTokens(target[role])])
+  ) as Record<Role, Token[]>
+  const all = sentences(raw)
+  const scored: ScoredSentence[] = []
+  for (const sentence of all) {
+    const ranges: LabeledRange[] = []
+    const evidence = {} as Record<Role, PartEvidence>
+    let score = 0
+    let parts = 0
+    for (const role of ROLES) {
+      const found = literalMatches[role].filter((range) => inside(range, sentence))
+      ranges.push(...found.map((range) => ({ ...range, role, literal: true })))
+      evidence[role] = found.length ? 'literal' : 'missing'
+      if (found.length) {
+        score += 1
+        parts++
+      }
+    }
+    const literalRanges = [...ranges]
+    const words = sentenceWords(raw, sentence).filter(
+      (word) => !literalRanges.some((range) => overlaps(range, word))
+    )
+    for (const role of ROLES) {
+      if (evidence[role] === 'literal' || !tokens[role].length) continue
+      const { hits, marked } = tokenHits(words, tokens[role])
+      if (!hits.length) continue
+      evidence[role] = 'partial'
+      score += (0.8 * hits.length) / tokens[role].length
+      parts++
+      ranges.push(...marked.map(({ start, end }) => ({ start, end, role, literal: false })))
+    }
+    if (!parts) continue
+    scored.push({
+      ...sentence,
+      ranges,
+      approximate: ROLES.some((role) => evidence[role] !== 'literal'),
+      evidence,
+      score,
+      parts,
+    })
+  }
+  const supported = scored.filter((sentence) => sentence.parts >= 2 && sentence.score >= 1.5)
+  let chosen: ScoredSentence[]
+  if (supported.length) {
+    const best = Math.max(...supported.map((sentence) => sentence.score))
+    chosen = supported.filter((sentence) => sentence.score >= 0.75 * best)
+  } else {
+    // Nothing holds two parts: show the one sentence that best holds a part,
+    // flagged, rather than every place a name happens to appear.
+    const fallback = scored
+      .filter((sentence) => sentence.score >= 0.5)
+      .sort((a, b) => b.score - a.score || a.start - b.start)[0]
+    chosen = fallback ? [{ ...fallback, approximate: true }] : []
+  }
+  return chosen.map((sentence) => completeElsewhere(raw, all, sentence, literalMatches, tokens))
+}
+
+/**
+ * Adds the parts a passage lacks from the rest of the document: the nearest
+ * literal occurrence, else the sentence holding most of the part's words
+ * (at least half of them, nearest first). Found parts are `elsewhere`.
+ */
+function completeElsewhere(
+  raw: string,
+  all: readonly TextRange[],
+  passage: ScoredSentence,
+  literalMatches: Record<Role, TextRange[]>,
+  tokens: Record<Role, Token[]>
+): OccurrencePassage {
+  const ranges = [...passage.ranges]
+  const evidence = { ...passage.evidence }
+  for (const role of ROLES) {
+    if (evidence[role] !== 'missing') continue
+    const literal = [...literalMatches[role]].sort(
+      (a, b) => distance(a, passage) - distance(b, passage)
+    )[0]
+    if (literal) {
+      ranges.push({ ...literal, role, literal: true })
+      evidence[role] = 'elsewhere'
+      continue
+    }
+    if (!tokens[role].length) continue
+    let best: { fraction: number; gap: number; marked: SentenceWord[] } | null = null
+    for (const sentence of all) {
+      if (overlaps(sentence, passage)) continue
+      const words = sentenceWords(raw, sentence).filter(
+        (word) => !ranges.some((range) => overlaps(range, word))
+      )
+      const { hits, marked } = tokenHits(words, tokens[role])
+      const fraction = hits.length / tokens[role].length
+      const gap = distance(sentence, passage)
+      if (fraction < 0.5) continue
+      if (!best || fraction > best.fraction || (fraction === best.fraction && gap < best.gap)) {
+        best = { fraction, gap, marked }
+      }
+    }
+    if (!best) continue
+    ranges.push(...best.marked.map(({ start, end }) => ({ start, end, role, literal: false })))
+    evidence[role] = 'elsewhere'
+  }
+  return {
+    start: passage.start,
+    end: passage.end,
+    ranges: ranges.sort((a, b) => a.start - b.start || a.end - b.end),
+    approximate: passage.approximate || ROLES.some((role) => evidence[role] !== 'literal'),
+    evidence,
+  }
 }

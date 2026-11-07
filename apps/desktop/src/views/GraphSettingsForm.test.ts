@@ -19,7 +19,8 @@ describe('GraphSettingsForm', () => {
     expect(screen.getByLabelText('Máximo de entidades visibles')).toHaveValue(300)
     expect(screen.getByLabelText('Máximo de relaciones visibles')).toHaveValue(1000)
     expect(screen.getByLabelText('Mínimo de conexiones por entidad')).toHaveValue(0)
-    expect(screen.getByLabelText('Mínimo de menciones por entidad')).toHaveValue(1)
+    expect(screen.getByLabelText('Mínimo de apariciones como sujeto')).toHaveValue(1)
+    expect(screen.getByLabelText('Mínimo de apariciones como objeto')).toHaveValue(1)
     expect(screen.getByLabelText('Mínimo de repeticiones por relación')).toHaveValue(1)
     expect(screen.getByLabelText('Incluir nodos aislados')).toBeChecked()
     expect(screen.getByLabelText('Tamaño de los nodos')).toHaveValue(1)
@@ -63,6 +64,19 @@ describe('GraphSettingsForm', () => {
     expect(onchange.mock.lastCall?.[0].render.cooldownTime).toBe(4000)
     await fireEvent.click(screen.getByLabelText('Incluir nodos aislados'))
     expect(onchange.mock.lastCall?.[0].structure.includeIsolated).toBe(false)
+  })
+
+  it('chooses the layout algorithm and explains the chosen one', async () => {
+    const onchange = setup()
+    const trigger = screen.getByRole('button', { name: /Algoritmo de disposición/ })
+    expect(trigger).toHaveTextContent('Fuerzas')
+    expect(screen.getByText(/Los vínculos atraen y todos los nodos se repelen/)).toBeInTheDocument()
+    await fireEvent.click(trigger)
+    expect(
+      screen.getAllByRole('menuitemradio').map((option) => option.textContent?.trim())
+    ).toEqual(['Fuerzas', 'Comunidades', 'Radial jerárquico'])
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Radial jerárquico' }))
+    expect(onchange.mock.lastCall?.[0].render.layout).toBe('radial')
   })
 
   it('restores only the graph defaults', async () => {

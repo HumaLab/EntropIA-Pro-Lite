@@ -2,6 +2,7 @@
  * Per-collection persistence for the text-analysis panel settings
  * (text and relation graph), stored in localStorage.
  */
+import { GRAPH_LAYOUTS, type GraphLayout } from './graph-layouts'
 
 export interface CollectionAnalysisSettings {
   cloudTermCount: number
@@ -13,7 +14,10 @@ export interface GraphStructureSettings {
   maxEntities: number
   maxRelations: number
   minDegree: number
-  minFrequency: number
+  /** Times an entity must be the subject of a triple to enter the graph on its own. */
+  minSubjectFrequency: number
+  /** Times an entity must be the object of a triple to enter the graph on its own. */
+  minObjectFrequency: number
   minRelationWeight: number
   includeIsolated: boolean
 }
@@ -27,6 +31,8 @@ export interface GraphRenderSettings {
   chargeStrength: number
   cooldownTime: number
   autoRotate: boolean
+  /** How nodes are laid out; only moves them, never rebuilds the graph. */
+  layout: GraphLayout
 }
 
 export interface GraphSettings {
@@ -40,7 +46,8 @@ export const GRAPH_SETTINGS_BOUNDS = {
     maxEntities: { min: 1, max: 3000, integer: true },
     maxRelations: { min: 1, max: 10000, integer: true },
     minDegree: { min: 0, max: 3000, integer: true },
-    minFrequency: { min: 1, max: 100000, integer: true },
+    minSubjectFrequency: { min: 1, max: 100000, integer: true },
+    minObjectFrequency: { min: 1, max: 100000, integer: true },
     minRelationWeight: { min: 1, max: 100000, integer: true },
   },
   render: {
@@ -67,7 +74,8 @@ export const DEFAULT_GRAPH_SETTINGS: Readonly<{
     maxEntities: 300,
     maxRelations: 1000,
     minDegree: 0,
-    minFrequency: 1,
+    minSubjectFrequency: 1,
+    minObjectFrequency: 1,
     minRelationWeight: 1,
     includeIsolated: true,
   }),
@@ -80,6 +88,7 @@ export const DEFAULT_GRAPH_SETTINGS: Readonly<{
     chargeStrength: -30,
     cooldownTime: 15000,
     autoRotate: false,
+    layout: 'force',
   }),
 })
 
@@ -87,6 +96,21 @@ function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {}
+}
+
+/**
+ * Settings saved before the per-role thresholds held one `minFrequency`: it
+ * becomes both, unless a role already has its own value.
+ */
+function legacyStructure(raw: unknown): Record<string, unknown> {
+  const values = record(raw)
+  const { minFrequency, ...rest } = values
+  if (minFrequency === undefined) return values
+  return {
+    minSubjectFrequency: minFrequency,
+    minObjectFrequency: minFrequency,
+    ...rest,
+  }
 }
 
 /** Strict types: corrupt fields fall back independently, not via truthiness/coercion. */
@@ -105,6 +129,10 @@ export function normalizeGraphSettings(value: unknown): GraphSettings {
         if (typeof fallback === 'boolean') {
           return [field, typeof value === 'boolean' ? value : fallback]
         }
+        if (typeof fallback === 'string') {
+          const known = (GRAPH_LAYOUTS as readonly unknown[]).includes(value)
+          return [field, known ? value : fallback]
+        }
         return [
           field,
           bound && typeof value === 'number' && Number.isFinite(value)
@@ -117,7 +145,7 @@ export function normalizeGraphSettings(value: unknown): GraphSettings {
   return {
     structure: group(
       DEFAULT_GRAPH_SETTINGS.structure,
-      input.structure,
+      legacyStructure(input.structure),
       GRAPH_SETTINGS_BOUNDS.structure
     ),
     render: group(DEFAULT_GRAPH_SETTINGS.render, input.render, GRAPH_SETTINGS_BOUNDS.render),

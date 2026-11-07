@@ -20,6 +20,16 @@ beforeEach(() => {
 })
 
 describe('graph settings', () => {
+  it('turns a saved single mention threshold into both per-role thresholds', () => {
+    const legacy = normalizeGraphSettings({ structure: { minFrequency: 4 } }).structure
+    expect(legacy).toMatchObject({ minSubjectFrequency: 4, minObjectFrequency: 4 })
+    expect(legacy).not.toHaveProperty('minFrequency')
+    const mixed = normalizeGraphSettings({
+      structure: { minFrequency: 4, minObjectFrequency: 9 },
+    }).structure
+    expect(mixed).toMatchObject({ minSubjectFrequency: 4, minObjectFrequency: 9 })
+  })
+
   it('loads legacy settings with graph defaults and persists normalized graph values', () => {
     saveAnalysisSettings('old', { cloudTermCount: 80, customStopwords: ['mar'] })
     expect(loadAnalysisSettings('old').graph).toEqual(DEFAULT_GRAPH_SETTINGS)
@@ -66,7 +76,14 @@ describe('graph settings', () => {
     for (const group of ['structure', 'render'] as const) {
       for (const [field, value] of Object.entries(DEFAULT_GRAPH_SETTINGS[group])) {
         const changed = normalizeGraphSettings({
-          [group]: { [field]: typeof value === 'boolean' ? !value : value + 1 },
+          [group]: {
+            [field]:
+              typeof value === 'boolean'
+                ? !value
+                : typeof value === 'string'
+                  ? 'radial'
+                  : value + 1,
+          },
         })
         expect(graphStructureKey(changed) === baseline).toBe(group === 'render')
       }

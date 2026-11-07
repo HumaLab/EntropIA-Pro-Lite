@@ -1971,12 +1971,24 @@ const es = {
     'Todavía no hay relaciones. Se extraen en Configuración → Lotes, con el paso de relaciones.',
   'collectionAnalysis.graphSummary':
     '{nodes} nombres y {links} relaciones. Arrastrá para girar, rueda para acercar; pasá el mouse por un punto o una línea para leerla; tocá un punto o una línea para ver dónde aparece en el texto.',
-  'collectionAnalysis.graphHidden':
-    'Se ocultan {count} nombres por los filtros de Parámetros → Relaciones 3D.',
+  'collectionAnalysis.graphHiddenByCaps':
+    'Se ocultan {count} nombres por el máximo de {max} entidades visibles (Parámetros → Relaciones 3D).',
+  'collectionAnalysis.graphHiddenByThresholds':
+    'Se ocultan {count} nombres por los umbrales mínimos (Parámetros → Relaciones 3D).',
   'collectionAnalysis.graphRelations': 'Relaciones',
+  'collectionAnalysis.graphRelationsShown': 'En la red ({count})',
+  'collectionAnalysis.graphRelationsHidden': 'No dibujadas en la red ({count})',
+  'collectionAnalysis.graphRelationsHiddenHint':
+    'Quedan fuera por el máximo de entidades o los filtros de Parámetros. Se pueden abrir en el texto igual.',
+  'collectionAnalysis.graphExpandNode': 'Agregar todas sus relaciones a la red',
+  'collectionAnalysis.graphCollapseNode': 'Volver a la red filtrada',
+  'collectionAnalysis.graphNodeHiddenLabel': '{label} · +{count} relaciones sin dibujar',
+  'collectionAnalysis.graphPanelWide': 'Ampliar el panel al ancho completo',
+  'collectionAnalysis.graphPanelNarrow': 'Volver el panel a la mitad',
   'collectionAnalysis.graphOpenEntity': 'Ver dónde aparece en el texto (documentos: {count})',
   'collectionAnalysis.graphOpenLink': 'Ver esta relación en el texto (documentos: {count})',
   'collectionAnalysis.graphOpenRelation': 'Ver el pasaje con esta relación resaltada',
+  'collectionAnalysis.graphRelationCount': '×{count}',
   'collectionAnalysis.graphClose': 'Cerrar el detalle',
   'collectionAnalysis.loading': 'Analizando el texto de la colección...',
   'collectionAnalysis.empty':
@@ -2004,11 +2016,12 @@ const es = {
   'graphSettings.restoreDefaults': 'Restaurar predeterminados',
   'graphSettings.sectionShown': 'Qué se muestra',
   'graphSettings.sectionShownHint':
-    'Filtros sobre las relaciones ya extraídas. Las entidades con más conexiones tienen prioridad cuando hay que recortar.',
+    'Los umbrales deciden qué entidades entran a la red; cada una entra con todas sus relaciones y las entidades del otro extremo, aunque no alcancen el umbral. Cuando hay que recortar, entran primero las más conectadas, siempre con sus relaciones completas.',
   'graphSettings.maxEntities': 'Máximo de entidades visibles',
   'graphSettings.maxRelations': 'Máximo de relaciones visibles',
   'graphSettings.minDegree': 'Mínimo de conexiones por entidad',
-  'graphSettings.minFrequency': 'Mínimo de menciones por entidad',
+  'graphSettings.minSubjectFrequency': 'Mínimo de apariciones como sujeto',
+  'graphSettings.minObjectFrequency': 'Mínimo de apariciones como objeto',
   'graphSettings.minRelationWeight': 'Mínimo de repeticiones por relación',
   'graphSettings.includeIsolated': 'Incluir nodos aislados',
   'graphSettings.sectionLook': 'Representación',
@@ -2024,6 +2037,16 @@ const es = {
   'graphSettings.repulsion': 'Fuerza de repulsión',
   'graphSettings.cooldownSeconds': 'Tiempo de acomodamiento (segundos)',
   'graphSettings.autoRotate': 'Rotación automática',
+  'graphSettings.layout': 'Algoritmo de disposición',
+  'graphSettings.layout.force': 'Fuerzas',
+  'graphSettings.layout.communities': 'Comunidades',
+  'graphSettings.layout.radial': 'Radial jerárquico',
+  'graphSettings.layoutHint.force':
+    'Los vínculos atraen y todos los nodos se repelen por igual (estilo Fruchterman-Reingold). La disposición general.',
+  'graphSettings.layoutHint.communities':
+    'Cuantas más relaciones tiene una entidad, más repele (estilo ForceAtlas2): los centros se separan y sus vecinos se agrupan alrededor. Para ver grupos.',
+  'graphSettings.layoutHint.radial':
+    'Anillos desde los sujetos que inician relaciones hacia los objetos que las reciben. Para ver quién origina y quién recibe.',
   'item.loading': 'Cargando...',
   'item.assetPanel': 'Panel de la página',
   'item.documentTab': 'Documento',
@@ -2037,6 +2060,13 @@ const es = {
   'occurrence.predicate': 'Vínculo',
   'occurrence.object': 'Objeto',
   'occurrence.approximate': 'Referencia aproximada: solo se encontró una entidad, no el vínculo.',
+  'occurrence.reconstructed': 'Relación reconstruida por el modelo a partir de esta oración.',
+  'occurrence.literalParts': 'Literal en el texto: {parts}.',
+  'occurrence.inferredParts': 'Inferido (subrayado punteado): {parts}.',
+  'occurrence.elsewhereParts': 'En otra parte del documento (también resaltado): {parts}.',
+  'occurrence.missingParts':
+    'Inferido por el modelo a partir del contexto, sin palabras que lo expresen en el documento: {parts}.',
+  'occurrence.legendReconstructed': 'Punteado: reconstruido',
   'occurrence.none': 'No se encontró el pasaje en el texto disponible.',
   'occurrence.loading': 'Localizando apariciones…',
   'item.previousPage': 'Página anterior',
@@ -5005,12 +5035,24 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'No relations yet. They are extracted in Settings → Batch, with the relations step.',
   'collectionAnalysis.graphSummary':
     '{nodes} names and {links} relations. Drag to rotate, scroll to zoom; hover a point or a line to read it; click a point or a line to see where it appears in the text.',
-  'collectionAnalysis.graphHidden':
-    '{count} names are hidden by the filters in Parameters → 3D relations.',
+  'collectionAnalysis.graphHiddenByCaps':
+    '{count} names are hidden by the maximum of {max} visible entities (Parameters → 3D relations).',
+  'collectionAnalysis.graphHiddenByThresholds':
+    '{count} names are hidden by the minimum thresholds (Parameters → 3D relations).',
   'collectionAnalysis.graphRelations': 'Relations',
+  'collectionAnalysis.graphRelationsShown': 'In the graph ({count})',
+  'collectionAnalysis.graphRelationsHidden': 'Not drawn in the graph ({count})',
+  'collectionAnalysis.graphRelationsHiddenHint':
+    'Left out by the maximum of entities or the filters in Parameters. They still open in the text.',
+  'collectionAnalysis.graphExpandNode': 'Add all its relations to the graph',
+  'collectionAnalysis.graphCollapseNode': 'Back to the filtered graph',
+  'collectionAnalysis.graphNodeHiddenLabel': '{label} · +{count} relations not drawn',
+  'collectionAnalysis.graphPanelWide': 'Widen the panel to the full width',
+  'collectionAnalysis.graphPanelNarrow': 'Back to half width',
   'collectionAnalysis.graphOpenEntity': 'See where it appears in the text (documents: {count})',
   'collectionAnalysis.graphOpenLink': 'See this relation in the text (documents: {count})',
   'collectionAnalysis.graphOpenRelation': 'Open the passage with this relation highlighted',
+  'collectionAnalysis.graphRelationCount': '×{count}',
   'collectionAnalysis.graphClose': 'Close the details',
   'collectionAnalysis.loading': 'Analyzing collection text...',
   'collectionAnalysis.empty':
@@ -5038,11 +5080,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'graphSettings.restoreDefaults': 'Restore defaults',
   'graphSettings.sectionShown': 'What is shown',
   'graphSettings.sectionShownHint':
-    'Filters over the relations already extracted. Entities with more connections win when the graph has to be trimmed.',
+    'Thresholds decide which entities enter the graph; each one enters with all its relations and the entities at their other end, even below the threshold. When the graph has to be trimmed, the best-connected enter first, always with their whole relations.',
   'graphSettings.maxEntities': 'Maximum visible entities',
   'graphSettings.maxRelations': 'Maximum visible relations',
   'graphSettings.minDegree': 'Minimum connections per entity',
-  'graphSettings.minFrequency': 'Minimum mentions per entity',
+  'graphSettings.minSubjectFrequency': 'Minimum appearances as subject',
+  'graphSettings.minObjectFrequency': 'Minimum appearances as object',
   'graphSettings.minRelationWeight': 'Minimum repetitions per relation',
   'graphSettings.includeIsolated': 'Include isolated nodes',
   'graphSettings.sectionLook': 'Appearance',
@@ -5058,6 +5101,16 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'graphSettings.repulsion': 'Repulsion strength',
   'graphSettings.cooldownSeconds': 'Settling time (seconds)',
   'graphSettings.autoRotate': 'Auto-rotate',
+  'graphSettings.layout': 'Layout algorithm',
+  'graphSettings.layout.force': 'Forces',
+  'graphSettings.layout.communities': 'Communities',
+  'graphSettings.layout.radial': 'Radial hierarchy',
+  'graphSettings.layoutHint.force':
+    'Links pull and every node repels the same (Fruchterman-Reingold style). The general layout.',
+  'graphSettings.layoutHint.communities':
+    'The more relations an entity has, the harder it repels (ForceAtlas2 style): hubs move apart and their neighbours gather around them. To see groups.',
+  'graphSettings.layoutHint.radial':
+    'Rings from the subjects that start relations to the objects that receive them. To see who originates and who receives.',
   'item.loading': 'Loading...',
   'item.assetPanel': 'Page panel',
   'item.documentTab': 'Document',
@@ -5071,6 +5124,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'occurrence.predicate': 'Relation',
   'occurrence.object': 'Object',
   'occurrence.approximate': 'Approximate reference: only an entity was found, not the relation.',
+  'occurrence.reconstructed': 'Relation rebuilt by the model from this sentence.',
+  'occurrence.literalParts': 'Literal in the text: {parts}.',
+  'occurrence.inferredParts': 'Inferred (dotted underline): {parts}.',
+  'occurrence.elsewhereParts': 'Elsewhere in the document (also highlighted): {parts}.',
+  'occurrence.missingParts':
+    'Inferred by the model from the context, with no words for it in the document: {parts}.',
+  'occurrence.legendReconstructed': 'Dotted: rebuilt',
   'occurrence.none': 'The passage was not found in the available text.',
   'occurrence.loading': 'Locating occurrences…',
   'item.previousPage': 'Previous page',
