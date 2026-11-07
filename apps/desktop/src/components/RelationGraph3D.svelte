@@ -19,8 +19,10 @@
     buildRelationGraph,
     describeNode,
     linkLabelText,
+    splitRelations,
     key as nameKey,
     type NodeDetails,
+    type NodeRelation,
     type GraphLink,
     type GraphNode,
     type RelationGraph,
@@ -82,6 +84,19 @@
   let titles = new Map<string, string>()
   let types = $state.raw(new Map<string, string>())
   let selected = $state<ResolvedSelection | null>(null)
+  /** Entities the user asked to see whole, past the caps (view state). */
+  let expanded = $state<string[]>([])
+  /** The detail panel starts at half the view and can take all of it. */
+  let panelWide = $state(false)
+
+  /** The graph's identity: structure settings plus the expanded entities. */
+  function viewKey(): string {
+    return `${graphStructureKey(settings)}|${[...expanded].sort().join(',')}`
+  }
+
+  function toggleExpanded(id: string) {
+    expanded = expanded.includes(id) ? expanded.filter((other) => other !== id) : [...expanded, id]
+  }
   const nodeDetails = $derived<NodeDetails | null>(
     selected?.kind === 'node' ? describeNode(selected.node.id, tripleRows) : null
   )
@@ -185,6 +200,7 @@
         zoom: camera.zoom,
       },
       selection: selection(),
+      expanded: [...expanded],
     }
   }
 
@@ -337,12 +353,18 @@
     const bright = token('--color-text-primary', '#ffffff')
     const contrast = token('--color-warning', '#f5a524')
     const muted = token('--color-text-secondary', '#888')
+    const partial = token('--color-info', '#38bdf8')
     const current = selection()
     const nodeId = current?.kind === 'node' ? current.id : null
     const lit = (link: object) =>
       linkTouchesSelection(link as { source: unknown; target: unknown }, current)
     instance
-      .nodeColor((n) => ((n as GraphNode).id === nodeId ? bright : accent))
+      .nodeColor((n) => {
+        const node = n as GraphNode
+        if (node.id === nodeId) return bright
+        // A node with relations left undrawn wears its own colour (+N on hover).
+        return node.hiddenRelations > 0 ? partial : accent
+      })
       .linkColor((l) => (lit(l) ? contrast : muted))
       .linkWidth((l) => (lit(l) ? 1.2 : 0))
       .linkDirectionalParticles((l) => (lit(l) ? 2 : 0))
@@ -352,7 +374,7 @@
 
   function draw() {
     if (!instance || !graph) return
-    const structureKey = graphStructureKey(settings)
+    const structureKey = viewKey()
     const restore = pendingSnapshot
     pendingSnapshot = null
     const seeded = seedNodePositions(graph, restore, structureKey)
@@ -406,7 +428,7 @@
   }
 
   function rebuild() {
-    graph = buildRelationGraph(tripleRows, settings.structure)
+    graph = buildRelationGraph(tripleRows, settings.structure, expanded)
     draw()
   }
 
@@ -419,7 +441,9 @@
       const [{ default: ForceGraph3D }] = await Promise.all([import('3d-force-graph'), loadRows()])
       if (loadedFor !== loadKey || !container) return
       selected = null
-      graph = buildRelationGraph(tripleRows, settings.structure)
+      // A restored view brings back the entities the user had expanded.
+      expanded = pendingSnapshot?.expanded ?? []
+      graph = buildRelationGraph(tripleRows, settings.structure, expanded)
       status = 'ready'
       if (!instance) {
         instance = new ForceGraph3D(container, { controlType: 'orbit' })
@@ -444,7 +468,17 @@
         .height(container.clientHeight)
         .backgroundColor(token('--color-surface', '#111'))
         .showNavInfo(false)
-        .nodeLabel((n) => label((n as GraphNode).label))
+        .nodeLabel((n) => {
+          const node = n as GraphNode
+          return label(
+            node.hiddenRelations > 0
+              ? t('collectionAnalysis.graphNodeHiddenLabel', {
+                  label: node.label,
+                  count: node.hiddenRelations,
+                })
+              : node.label
+          )
+        })
         .onNodeClick((n) => {
           selected = graph
             ? resolveSelection(graph, { kind: 'node', id: (n as GraphNode).id })
@@ -509,7 +543,7 @@
 
   // Structure settings: rebuild from the loaded rows, never re-query.
   $effect(() => {
-    const structureKey = graphStructureKey(settings)
+    const structureKey = viewKey()
     if (status === 'ready' && instance && structureKey !== builtStructureKey) rebuild()
   })
 
@@ -562,7 +596,32 @@
     ></div>
     {#if selected}
       {@const heading = selectionHeading(selected)}
-      <section class="relation-graph__details" aria-label={heading}>
+      {#snippet relationRow(relation: NodeRelation)}
+        {@const relationTargetsFor = relationTargets(
+          relation.subject,
+          relation.object,
+          relation.predicate
+        )}
+        <li>
+          <button
+            type="button"
+            class="relation-graph__relation"
+            disabled={relationTargetsFor.length === 0}
+            use:tooltip={t('collectionAnalysis.graphOpenRelation')}
+            onclick={() => openOccurrences('relation', relationTargetsFor)}
+          >
+            <span class="relation-graph__subject">{relation.subject}</span>
+            <em>{relation.predicate}</em>
+            <span class="relation-graph__object">{relation.object}</span>
+            {#if relation.count > 1}
+              <span class="relation-graph__count"
+                >{t('collectionAnalysis.graphRelationCount', { count: relation.count })}</span
+              >
+            {/if}
+          </button>
+        </li>
+      {/snippet}
+      <section class="relation-graph__details" class:is-wide={panelWide} aria-label={heading}>
         <header class="relation-graph__details-head">
           <div class="relation-graph__details-title">
             <h3>{heading}</h3>
@@ -570,14 +629,26 @@
               <span class="relation-graph__type">{typeLabel(types.get(selected.node.id)!)}</span>
             {/if}
           </div>
-          <IconButton
-            size="sm"
-            variant="ghost"
-            label={t('collectionAnalysis.graphClose')}
-            onclick={() => (selected = null)}
-          >
-            <ActionIcon name="close" size={14} />
-          </IconButton>
+          <div class="relation-graph__details-actions">
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label={panelWide
+                ? t('collectionAnalysis.graphPanelNarrow')
+                : t('collectionAnalysis.graphPanelWide')}
+              onclick={() => (panelWide = !panelWide)}
+            >
+              <ActionIcon name="expand" size={14} />
+            </IconButton>
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label={t('collectionAnalysis.graphClose')}
+              onclick={() => (selected = null)}
+            >
+              <ActionIcon name="close" size={14} />
+            </IconButton>
+          </div>
         </header>
 
         {#if selected.kind === 'node'}
@@ -592,34 +663,34 @@
             <ActionIcon name="external-link" size={12} />
             {t('collectionAnalysis.graphOpenEntity', { count: targets.length })}
           </button>
-          <h4>{t('collectionAnalysis.graphRelations')}</h4>
+          {@const split = splitRelations(nodeDetails?.relations ?? [], graph ?? { links: [] })}
+          <h4>{t('collectionAnalysis.graphRelationsShown', { count: split.shown.length })}</h4>
           <ul>
-            {#each nodeDetails?.relations ?? [] as relation, index (index)}
-              {@const relationTargetsFor = relationTargets(
-                relation.subject,
-                relation.object,
-                relation.predicate
-              )}
-              <li>
-                <button
-                  type="button"
-                  class="relation-graph__relation"
-                  disabled={relationTargetsFor.length === 0}
-                  use:tooltip={t('collectionAnalysis.graphOpenRelation')}
-                  onclick={() => openOccurrences('relation', relationTargetsFor)}
-                >
-                  <span class="relation-graph__subject">{relation.subject}</span>
-                  <em>{relation.predicate}</em>
-                  <span class="relation-graph__object">{relation.object}</span>
-                  {#if relation.count > 1}
-                    <span class="relation-graph__count"
-                      >{t('collectionAnalysis.graphRelationCount', { count: relation.count })}</span
-                    >
-                  {/if}
-                </button>
-              </li>
+            {#each split.shown as relation, index (index)}
+              {@render relationRow(relation)}
             {/each}
           </ul>
+          {#if split.hidden.length || expanded.includes(node.id)}
+            <h4>{t('collectionAnalysis.graphRelationsHidden', { count: split.hidden.length })}</h4>
+            {#if split.hidden.length}
+              <p class="relation-graph__hint">{t('collectionAnalysis.graphRelationsHiddenHint')}</p>
+            {/if}
+            <button
+              type="button"
+              class="relation-graph__open"
+              onclick={() => toggleExpanded(node.id)}
+            >
+              <ActionIcon name="expand" size={12} />
+              {expanded.includes(node.id)
+                ? t('collectionAnalysis.graphCollapseNode')
+                : t('collectionAnalysis.graphExpandNode')}
+            </button>
+            <ul class="relation-graph__hidden">
+              {#each split.hidden as relation, index (index)}
+                {@render relationRow(relation)}
+              {/each}
+            </ul>
+          {/if}
         {:else}
           {@const link = selected.link}
           {@const sourceLabel = nodeLabel(link.source)}
@@ -720,6 +791,28 @@
       width: auto;
       max-height: 50%;
     }
+  }
+
+  .relation-graph__details.is-wide {
+    right: var(--space-2);
+    width: auto;
+  }
+
+  .relation-graph__details-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: var(--space-1);
+  }
+
+  .relation-graph__hint {
+    margin: var(--space-1) 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+  }
+
+  /* Relations the graph does not draw read dimmer, still clickable. */
+  .relation-graph__hidden .relation-graph__relation {
+    opacity: 0.75;
   }
 
   .relation-graph__details-head {

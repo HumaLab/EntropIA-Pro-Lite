@@ -1974,6 +1974,15 @@ const es = {
   'collectionAnalysis.graphHidden':
     'Se ocultan {count} nombres por los filtros de Parámetros → Relaciones 3D.',
   'collectionAnalysis.graphRelations': 'Relaciones',
+  'collectionAnalysis.graphRelationsShown': 'En la red ({count})',
+  'collectionAnalysis.graphRelationsHidden': 'No dibujadas en la red ({count})',
+  'collectionAnalysis.graphRelationsHiddenHint':
+    'Quedan fuera por el máximo de entidades o los filtros de Parámetros. Se pueden abrir en el texto igual.',
+  'collectionAnalysis.graphExpandNode': 'Agregar todas sus relaciones a la red',
+  'collectionAnalysis.graphCollapseNode': 'Volver a la red filtrada',
+  'collectionAnalysis.graphNodeHiddenLabel': '{label} · +{count} relaciones sin dibujar',
+  'collectionAnalysis.graphPanelWide': 'Ampliar el panel al ancho completo',
+  'collectionAnalysis.graphPanelNarrow': 'Volver el panel a la mitad',
   'collectionAnalysis.graphOpenEntity': 'Ver dónde aparece en el texto (documentos: {count})',
   'collectionAnalysis.graphOpenLink': 'Ver esta relación en el texto (documentos: {count})',
   'collectionAnalysis.graphOpenRelation': 'Ver el pasaje con esta relación resaltada',
@@ -5027,6 +5036,15 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collectionAnalysis.graphHidden':
     '{count} names are hidden by the filters in Parameters → 3D relations.',
   'collectionAnalysis.graphRelations': 'Relations',
+  'collectionAnalysis.graphRelationsShown': 'In the graph ({count})',
+  'collectionAnalysis.graphRelationsHidden': 'Not drawn in the graph ({count})',
+  'collectionAnalysis.graphRelationsHiddenHint':
+    'Left out by the maximum of entities or the filters in Parameters. They still open in the text.',
+  'collectionAnalysis.graphExpandNode': 'Add all its relations to the graph',
+  'collectionAnalysis.graphCollapseNode': 'Back to the filtered graph',
+  'collectionAnalysis.graphNodeHiddenLabel': '{label} · +{count} relations not drawn',
+  'collectionAnalysis.graphPanelWide': 'Widen the panel to the full width',
+  'collectionAnalysis.graphPanelNarrow': 'Back to half width',
   'collectionAnalysis.graphOpenEntity': 'See where it appears in the text (documents: {count})',
   'collectionAnalysis.graphOpenLink': 'See this relation in the text (documents: {count})',
   'collectionAnalysis.graphOpenRelation': 'Open the passage with this relation highlighted',

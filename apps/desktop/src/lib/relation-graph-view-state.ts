@@ -24,11 +24,13 @@ export interface GraphCamera {
 }
 
 export interface GraphViewSnapshot {
-  /** `graphStructureKey` of the settings the layout was computed under. */
+  /** Identity of the graph the layout was computed for (settings and expanded entities). */
   structureKey: string
   positions: Record<string, Vec3>
   camera: GraphCamera | null
   selection: GraphSelection | null
+  /** Entities the user had expanded past the caps. */
+  expanded?: string[]
 }
 
 export type AnalysisTab = 'viz' | 'graph' | 'settings'

@@ -19,6 +19,11 @@ export interface GraphNode {
   label: string
   /** Links touching this node; the 3D view sizes nodes by it. */
   degree: number
+  /**
+   * Distinct relations (subject, predicate, object) of this node the graph
+   * does not draw (caps or filters): the relation list says the same.
+   */
+  hiddenRelations: number
 }
 
 export interface GraphLink {
@@ -42,9 +47,18 @@ export const MAX_GRAPH_NODES = 300
 
 export const key = (name: string) => name.trim().replace(/\s+/g, ' ').toLocaleLowerCase()
 
+/** One relation's identity, shared by the graph's counts and the relation list. */
+const relationKeyOf = (source: string, predicate: string, target: string) =>
+  `${source}\u0000${key(predicate)}\u0000${target}`
+
+/**
+ * `expanded`: entities the user asked to see whole; their stars are drawn
+ * first and past the caps.
+ */
 export function buildRelationGraph(
   triples: readonly RelationTriple[],
-  options: number | Partial<GraphStructureSettings> = MAX_GRAPH_NODES
+  options: number | Partial<GraphStructureSettings> = MAX_GRAPH_NODES,
+  expanded: readonly string[] = []
 ): RelationGraph {
   const settings = normalizeGraphSettings({
     structure: typeof options === 'number' ? { maxEntities: options } : options,
@@ -55,6 +69,8 @@ export function buildRelationGraph(
   const labels = new Map<string, string>()
   const pairs = new Map<string, GraphLink>()
   const degree = new Map<string, number>()
+  const relationPair = new Map<string, GraphLink>()
+  const nodeRelations = new Map<string, string[]>()
 
   for (const triple of triples) {
     const source = key(triple.subject)
@@ -76,6 +92,16 @@ export function buildRelationGraph(
       degree.set(target, (degree.get(target) ?? 0) + 1)
     }
     weight.set(link, (weight.get(link) ?? 0) + 1)
+    // Distinct relations per node, keyed like the relation list (describeNode).
+    const relationKey = relationKeyOf(source, triple.predicate, target)
+    if (!relationPair.has(relationKey)) {
+      relationPair.set(relationKey, link)
+      for (const id of [source, target]) {
+        const known = nodeRelations.get(id)
+        if (known) known.push(relationKey)
+        else nodeRelations.set(id, [relationKey])
+      }
+    }
     const predicate = triple.predicate.trim()
     if (predicate) {
       const at = link.predicates.indexOf(predicate)
@@ -125,6 +151,16 @@ export function buildRelationGraph(
     )
   const admitted = new Set<string>()
   const shown = new Set<GraphLink>()
+  // Asked-for entities come whole, whatever the caps say.
+  for (const id of expanded) {
+    if (!labels.has(id)) continue
+    admitted.add(id)
+    for (const link of star.get(id) ?? []) {
+      shown.add(link)
+      admitted.add(link.source)
+      admitted.add(link.target)
+    }
+  }
   for (const seed of seeds) {
     const links = (star.get(seed) ?? []).filter((link) => !shown.has(link))
     if (!links.length) continue
@@ -153,7 +189,14 @@ export function buildRelationGraph(
   const visible = order.filter((id) => admitted.has(id))
 
   return {
-    nodes: visible.map((id) => ({ id, label: labels.get(id)!, degree: degree.get(id) ?? 0 })),
+    nodes: visible.map((id) => ({
+      id,
+      label: labels.get(id)!,
+      degree: degree.get(id) ?? 0,
+      hiddenRelations: (nodeRelations.get(id) ?? []).filter(
+        (relation) => !shown.has(relationPair.get(relation)!)
+      ).length,
+    })),
     links: eligible.filter((link) => shown.has(link)),
     hiddenNodes: labels.size - visible.length,
   }
@@ -179,7 +222,7 @@ export function describeNode(id: string, triples: readonly RelationTriple[]): No
     const source = key(triple.subject)
     const target = key(triple.object)
     if (source === target || (source !== id && target !== id)) continue
-    const relationKey = `${source}\u0000${key(triple.predicate)}\u0000${target}`
+    const relationKey = relationKeyOf(source, triple.predicate, target)
     const known = seen.get(relationKey)
     if (known) {
       known.count++
@@ -206,4 +249,22 @@ export function linkLabelText(link: GraphLink): string {
       return count > 1 ? `${predicate} ×${count}` : predicate
     })
     .join(' · ')
+}
+
+/**
+ * A node's relations split by whether the graph draws them, with the same
+ * identity the graph counts `hiddenRelations` with, so both always agree.
+ */
+export function splitRelations(
+  relations: readonly NodeRelation[],
+  graph: Pick<RelationGraph, 'links'>
+): { shown: NodeRelation[]; hidden: NodeRelation[] } {
+  const drawn = new Set(graph.links.map((link) => `${link.source}\u0000${link.target}`))
+  const shown: NodeRelation[] = []
+  const hidden: NodeRelation[] = []
+  for (const relation of relations) {
+    const pair = `${key(relation.subject)}\u0000${key(relation.object)}`
+    ;(drawn.has(pair) ? shown : hidden).push(relation)
+  }
+  return { shown, hidden }
 }

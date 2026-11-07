@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRelationGraph, describeNode, linkLabelText } from './relation-graph'
+import { buildRelationGraph, describeNode, linkLabelText, splitRelations } from './relation-graph'
 
 describe('linkLabelText', () => {
   it('names each predicate with how often it is stated when more than once', () => {
@@ -90,6 +90,35 @@ describe('graph structure options', () => {
     )
     expect(pairs(graph)).toEqual(['b>c', 'hub>b', 'hub>c', 'hub>d'])
   })
+  describe('graph and relation list agree', () => {
+    // F links two hubs: drawn as their counterpart, its own star of five
+    // relations does not fit in five visible entities.
+    const hubs = [
+      { subject: 'A', predicate: 'p', object: 'A1' },
+      { subject: 'A', predicate: 'p', object: 'F' },
+      { subject: 'F', predicate: 'q', object: 'F1' },
+      { subject: 'F', predicate: 'q', object: 'F2' },
+      { subject: 'F', predicate: 'q', object: 'F3' },
+      { subject: 'F', predicate: 'r', object: 'F3' },
+    ]
+    it('counts, per node, the relations a cap left undrawn', () => {
+      const graph = buildRelationGraph(hubs, { maxEntities: 3 })
+      const f = graph.nodes.find((n) => n.id === 'f')!
+      expect(f.hiddenRelations).toBe(4)
+      expect(graph.nodes.find((n) => n.id === 'a')!.hiddenRelations).toBe(0)
+      const details = describeNode('f', hubs)
+      const { shown, hidden } = splitRelations(details.relations, graph)
+      expect(shown.length + hidden.length).toBe(details.relations.length)
+      expect(hidden).toHaveLength(f.hiddenRelations)
+    })
+    it("draws an expanded entity's whole star, past the caps", () => {
+      const graph = buildRelationGraph(hubs, { maxEntities: 3 }, ['f'])
+      expect(graph.nodes.find((n) => n.id === 'f')!.hiddenRelations).toBe(0)
+      expect(pairs(graph)).toEqual(expect.arrayContaining(['f>f1', 'f>f2', 'f>f3', 'a>f']))
+      expect(splitRelations(describeNode('f', hubs).relations, graph).hidden).toEqual([])
+    })
+  })
+
   it('shows truly isolated entities only when asked, never ones a filter isolated', () => {
     const input = [...triples, { subject: 'Solo', predicate: 'se nombra', object: 'solo' }]
     expect(ids(buildRelationGraph(input))).toContain('solo')
