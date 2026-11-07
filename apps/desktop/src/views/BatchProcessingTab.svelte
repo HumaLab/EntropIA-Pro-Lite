@@ -6,6 +6,8 @@
   import { onDestroy, onMount } from 'svelte'
   import { locale, t } from '$lib/i18n'
   import { getStore } from '$lib/db'
+  import { getNavigation } from '$lib/pane-context'
+  import { getAssetPathLabel } from '$lib/item-metadata'
   import { LOCAL_ML } from '$lib/capabilities'
   import { settingsGet, SETTINGS_KEYS } from '$lib/settings'
   import {
@@ -65,11 +67,15 @@
     'skipped',
   ] as const
 
+  const navigation = getNavigation()
+
   // Collections
   let collections = $state<CollectionOption[]>([])
   let collectionsLoading = $state(true)
   let selected = $state<Record<string, true>>({})
   let runOcr = $state(true)
+  // Off by default: OCR over a page with native PDF text replaces that text.
+  let ocrIncludeNative = $state(false)
   let runEmbeddings = $state(true)
   // Off by default: under Lite every document is a paid OpenRouter call.
   let runNer = $state(false)
@@ -94,6 +100,7 @@
   // A saved flow (T-52) is these choices under a name.
   const flowSteps = $derived<BatchFlowSteps>({
     ocr: runOcr,
+    ocrIncludeNative,
     embeddings: runEmbeddings,
     ner: runNer,
     triples: runTriples,
@@ -103,6 +110,7 @@
   })
   function applyFlow(steps: BatchFlowSteps) {
     runOcr = steps.ocr
+    ocrIncludeNative = steps.ocrIncludeNative
     runEmbeddings = steps.embeddings
     runNer = steps.ner
     runTriples = steps.triples
@@ -415,6 +423,7 @@
     try {
       const operations = [
         ...(runOcr ? ['ocr'] : []),
+        ...(runOcr && ocrIncludeNative ? ['ocr_include_native'] : []),
         ...(runEmbeddings ? ['embeddings'] : []),
         ...(runNer ? ['ner'] : []),
         ...(runTriples ? ['triples'] : []),
@@ -1018,6 +1027,9 @@
                   <span class="batch-table__cell batch-table__cell--num" role="columnheader">
                     {t('batch.colAttempts')}
                   </span>
+                  <span class="batch-table__cell batch-table__cell--text" role="columnheader">
+                    {t('batch.colDocument')}
+                  </span>
                 </div>
                 {#each table as task (task.taskId)}
                   <div class="batch-table__row" role="row">
@@ -1077,6 +1089,31 @@
                     </span>
                     <span class="batch-table__cell batch-table__cell--num" role="cell">
                       {task.attemptCount}
+                    </span>
+                    <span class="batch-table__cell batch-table__cell--text" role="cell">
+                      {#if task.document}
+                        {@const document = task.document}
+                        {@const label =
+                          getAssetPathLabel(document.assetPath).trim() +
+                          (document.pageNumber !== null ? ` · p. ${document.pageNumber}` : '')}
+                        <button
+                          type="button"
+                          class="batch-tasks__link"
+                          use:tooltip={`${document.itemTitle} · ${label}`}
+                          onclick={() =>
+                            navigation.navigate({
+                              name: 'item',
+                              collectionId: document.collectionId,
+                              collectionName: document.collectionName,
+                              itemId: document.itemId,
+                              itemTitle: document.itemTitle,
+                              assetId: task.assetId,
+                              assetLabel: label,
+                            })}>{label}</button
+                        >
+                      {:else}
+                        <span class="batch-tasks__missing">—</span>
+                      {/if}
                     </span>
                   </div>
                   {#if expandedTaskId === task.taskId && expandedTask}
@@ -1251,6 +1288,11 @@
         <div class="batch-ops" role="group" aria-labelledby="batch-ops-label">
           <span class="batch-field__legend" id="batch-ops-label">{t('batch.operations')}</span>
           <Checkbox class="batch-ops__toggle" bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
+          <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrIncludeNativeHint')}>
+            <Checkbox class="batch-ops__toggle" bind:checked={ocrIncludeNative} disabled={!runOcr}
+              >{t('batch.opOcrIncludeNative')}</Checkbox
+            >
+          </span>
           <!-- The hint used to be a paragraph under the row, which is the one
                place a single-line control strip cannot afford. The tooltip
                action also wires `aria-describedby`, so the sentence still
@@ -1883,16 +1925,33 @@
     grid-template-columns: minmax(0, 1fr) 8.5rem 6.5rem 2.75rem 2.75rem 3.5rem 3.5rem;
   }
 
-  /* Four short values per unit, so the table is narrow on purpose: that is
-     what lets two or three of them stand side by side instead of one spending
-     its width on an empty band. Below this floor its own wrapper scrolls
-     rather than the columns collapsing into each other. */
+  /* Keep the document readable; narrow tables scroll in their own wrapper. */
   .batch-table--tasks {
-    min-width: 19rem;
+    min-width: 27rem;
   }
 
   .batch-table--tasks .batch-table__row {
-    grid-template-columns: minmax(4.5rem, 1fr) minmax(5rem, 1.2fr) 4.5rem 4rem;
+    grid-template-columns: minmax(4.5rem, 1fr) minmax(5rem, 1.2fr) 4.5rem 4rem minmax(6rem, 1.5fr);
+  }
+
+  .batch-tasks__link {
+    display: block;
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-text-primary);
+    font: inherit;
+    text-align: left;
+    text-decoration: underline;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .batch-tasks__missing {
+    color: var(--color-text-muted);
   }
 
   /* One track per table, from the same count that chunked the rows. */

@@ -16,11 +16,11 @@ export const TASKS_PER_PAGE = 48
 
 /**
  * How wide the list has to be before another table fits beside the first. One
- * table's four columns come to about 22.5rem, and below that they start
- * colliding, so these are two and three of those plus the gaps between them.
+ * table's five columns come to about 27rem (its `min-width`), and below that
+ * it scrolls, so these are two and three of those plus the gaps between them.
  */
-export const TWO_TABLES_FROM = 740
-export const THREE_TABLES_FROM = 1120
+export const TWO_TABLES_FROM = 890
+export const THREE_TABLES_FROM = 1340
 
 /** How many pages a result set of this size needs. Always at least one. */
 export function pageCountFor(total: number): number {

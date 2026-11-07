@@ -3,6 +3,7 @@ import { parseFlows, upsertFlow, type BatchFlow } from './batch-flows'
 
 const steps = {
   ocr: true,
+  ocrIncludeNative: false,
   embeddings: false,
   ner: true,
   triples: false,
@@ -25,7 +26,7 @@ describe('batch flows', () => {
   })
 
   it('stores and restores the correction and summary toggles', () => {
-    const saved = { ...steps, ocrCorrection: true, summary: true }
+    const saved = { ...steps, ocrIncludeNative: true, ocrCorrection: true, summary: true }
     const stored = JSON.stringify(upsertFlow([], { name: 'Corregir y resumir', steps: saved }))
 
     expect(parseFlows(stored)[0]!.steps).toEqual(saved)
@@ -42,6 +43,7 @@ describe('batch flows', () => {
 
     expect(parseFlows(legacy)[0]!.steps).toEqual({
       ocr: true,
+      ocrIncludeNative: false,
       embeddings: true,
       ner: true,
       triples: true,

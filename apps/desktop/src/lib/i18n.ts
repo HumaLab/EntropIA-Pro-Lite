@@ -206,6 +206,9 @@ const es = {
   'batch.operations': 'Operaciones',
   'batch.opOcr': 'OCR',
   'batch.opEmbeddings': 'Embeddings',
+  'batch.opOcrIncludeNative': 'Incluir texto nativo',
+  'batch.opOcrIncludeNativeHint':
+    'Pasa por OCR también las páginas que solo tienen el texto nativo del PDF y reemplaza ese texto. Las páginas que ya pasaron por OCR se saltean igual.',
   'batch.opEmbeddingsHint': 'Genera embeddings cuando el OCR produzca texto.',
   'batch.opNer': 'Entidades',
   'batch.opNerHint':
@@ -486,6 +489,7 @@ const es = {
   'batch.colOperation': 'Operación',
   'batch.colProgress': 'Progreso',
   'batch.colAttempts': 'Intentos',
+  'batch.colDocument': 'Documento',
   'batch.colMessage': 'Mensaje',
   'batch.colActions': 'Acciones',
   'batch.filterState': 'Estado',
@@ -3736,6 +3740,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.operations': 'Operations',
   'batch.opOcr': 'OCR',
   'batch.opEmbeddings': 'Embeddings',
+  'batch.opOcrIncludeNative': 'Include native text',
+  'batch.opOcrIncludeNativeHint':
+    'Also runs OCR on pages that only have the native PDF text, replacing that text. Pages that already went through OCR are still skipped.',
   'batch.opEmbeddingsHint': 'Generate embeddings once OCR produces text.',
   'batch.opNer': 'Entities',
   'batch.opNerHint':
@@ -4011,6 +4018,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.colOperation': 'Operation',
   'batch.colProgress': 'Progress',
   'batch.colAttempts': 'Attempts',
+  'batch.colDocument': 'Document',
   'batch.colMessage': 'Message',
   'batch.colActions': 'Actions',
   'batch.filterState': 'State',
