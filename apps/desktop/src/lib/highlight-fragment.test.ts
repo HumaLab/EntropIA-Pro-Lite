@@ -126,6 +126,19 @@ describe('highlightCitationRange', () => {
 })
 
 describe('highlightLabeledRanges', () => {
+  it('scrolls to the passage even when a part is marked earlier in the text', () => {
+    const container = render(
+      '<p>Presentación al Interventor</p><p>firmados por:</p><p>FEDERACION</p>'
+    )
+    const scroll = vi.mocked(Element.prototype.scrollIntoView)
+    highlightLabeledRanges(container, container.textContent!, [
+      { start: 0, end: 12, role: 'object', literal: false },
+      { start: 40, end: 50, role: 'passage' },
+      { start: 40, end: 50, role: 'subject', literal: true },
+    ])
+    expect(scroll.mock.contexts.at(-1)).toHaveProperty('textContent', 'FEDERACION')
+  })
+
   it('tells a rebuilt part from a literal one', () => {
     const container = render('<p>la Federación mantuvo el control</p>')
     const text = 'la Federación mantuvo el control'

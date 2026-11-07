@@ -101,11 +101,14 @@ export function highlightLabeledRanges(
     offset = nodeEnd
   }
   let first: HTMLElement | null = null
+  let passage: HTMLElement | null = null
   for (let i = segments.length - 1; i >= 0; i--) {
     const segment = segments[i]!
     first = wrap(segment.node, segment.start, segment.end, segment.classes)
+    if (segment.classes.includes('occurrence-passage')) passage = first
   }
-  first?.scrollIntoView({ block: 'center' })
+  // Parts found elsewhere may be marked above the passage: center the passage.
+  ;(passage ?? first)?.scrollIntoView({ block: 'center' })
   return first !== null
 }
 

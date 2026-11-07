@@ -37,9 +37,11 @@
     const lines = [translate('occurrence.reconstructed')]
     const literal = partsIn('literal')
     const partial = partsIn('partial')
+    const elsewhere = partsIn('elsewhere')
     const missing = partsIn('missing')
     if (literal) lines.push(translate('occurrence.literalParts', { parts: literal }))
     if (partial) lines.push(translate('occurrence.inferredParts', { parts: partial }))
+    if (elsewhere) lines.push(translate('occurrence.elsewhereParts', { parts: elsewhere }))
     if (missing) lines.push(translate('occurrence.missingParts', { parts: missing }))
     return lines.join(' ')
   })

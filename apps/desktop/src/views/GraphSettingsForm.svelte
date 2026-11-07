@@ -59,8 +59,14 @@
         { group: 'structure', field: 'minDegree', label: 'graphSettings.minDegree', step: 1 },
         {
           group: 'structure',
-          field: 'minFrequency',
-          label: 'graphSettings.minFrequency',
+          field: 'minSubjectFrequency',
+          label: 'graphSettings.minSubjectFrequency',
+          step: 1,
+        },
+        {
+          group: 'structure',
+          field: 'minObjectFrequency',
+          label: 'graphSettings.minObjectFrequency',
           step: 1,
         },
         {

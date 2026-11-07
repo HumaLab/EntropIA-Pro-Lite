@@ -47,7 +47,7 @@ describe('OccurrenceStepper', () => {
       total: 1,
       kind: 'relation' as const,
       status: 'approximate' as const,
-      evidence: { subject: 'partial', predicate: 'literal', object: 'missing' } as const,
+      evidence: { subject: 'partial', predicate: 'literal', object: 'elsewhere' } as const,
       translate: t,
       onchange: vi.fn(),
     })
@@ -55,7 +55,7 @@ describe('OccurrenceStepper', () => {
     expect(note).toHaveTextContent('Relación reconstruida por el modelo a partir de esta oración.')
     expect(note).toHaveTextContent('Literal en el texto: vínculo.')
     expect(note).toHaveTextContent('Inferido (subrayado punteado): sujeto.')
-    expect(note).toHaveTextContent('No aparece en la oración: objeto.')
+    expect(note).toHaveTextContent('En otra parte del documento (también resaltado): objeto.')
     expect(screen.getByText('Punteado: reconstruido')).toBeInTheDocument()
   })
 })

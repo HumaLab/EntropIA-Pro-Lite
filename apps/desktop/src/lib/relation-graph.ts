@@ -47,7 +47,8 @@ export function buildRelationGraph(
   const settings = normalizeGraphSettings({
     structure: typeof options === 'number' ? { maxEntities: options } : options,
   }).structure
-  const frequency = new Map<string, number>()
+  const asSubject = new Map<string, number>()
+  const asObject = new Map<string, number>()
   const weight = new Map<GraphLink, number>()
   const labels = new Map<string, string>()
   const pairs = new Map<string, GraphLink>()
@@ -56,14 +57,13 @@ export function buildRelationGraph(
   for (const triple of triples) {
     const source = key(triple.subject)
     const target = key(triple.object)
-    // Count mentions once per input occurrence, even for a self-reference.
-    // Invalid/self pairs still do not create nodes or links (legacy behavior).
-    for (const id of new Set([source, target])) {
-      if (id) frequency.set(id, (frequency.get(id) ?? 0) + 1)
-    }
+    // Count mentions per role and input occurrence, even for a self-reference.
+    if (source) asSubject.set(source, (asSubject.get(source) ?? 0) + 1)
+    if (target) asObject.set(target, (asObject.get(target) ?? 0) + 1)
+    if (source && !labels.has(source)) labels.set(source, triple.subject.trim())
+    if (target && !labels.has(target)) labels.set(target, triple.object.trim())
+    // Empty and self pairs name an entity but never make a link.
     if (!source || !target || source === target) continue
-    if (!labels.has(source)) labels.set(source, triple.subject.trim())
-    if (!labels.has(target)) labels.set(target, triple.object.trim())
 
     const pairKey = `${source}\u0000${target}`
     let link = pairs.get(pairKey)
@@ -78,36 +78,73 @@ export function buildRelationGraph(
     if (predicate && !link.predicates.includes(predicate)) link.predicates.push(predicate)
   }
 
-  // Order: aggregate original frequency/degree/weight; filter nodes by original
-  // metrics (not an iterative k-core); rank by degree and cap entities; filter
-  // pairs by endpoints/weight; cap heaviest links; finally optionally drop
-  // isolates. Stable ties use first appearance. Return links in original order
-  // and retain original degree for node sizing, preserving the previous view.
-  const kept = [...labels.keys()]
+  // Thresholds admit entities; an admitted entity brings every relation that
+  // survives the weight filter and the entities on the other end, however
+  // rare. A cap admits whole stars only, so no filter can leave a node without
+  // the links that put it there. Order: aggregate; keep relations by weight;
+  // admit seeds (degree, then role frequency) ranked by degree, mentions and
+  // first appearance while their star fits both caps; add the relations among
+  // admitted entities that still fit; then entities with no relation at all
+  // in the data (only self-references), when asked. Links keep input order;
+  // nodes keep original degree for sizing.
+  const eligible = [...pairs.values()].filter(
+    (link) => weight.get(link)! >= settings.minRelationWeight
+  )
+  const star = new Map<string, GraphLink[]>()
+  for (const link of eligible) {
+    for (const id of [link.source, link.target]) {
+      const links = star.get(id)
+      if (links) links.push(link)
+      else star.set(id, [link])
+    }
+  }
+  const order = [...labels.keys()]
+  const mentions = (id: string) => (asSubject.get(id) ?? 0) + (asObject.get(id) ?? 0)
+  const seeds = order
     .filter(
       (id) =>
         (degree.get(id) ?? 0) >= settings.minDegree &&
-        (frequency.get(id) ?? 0) >= settings.minFrequency
+        ((asSubject.get(id) ?? 0) >= settings.minSubjectFrequency ||
+          (asObject.get(id) ?? 0) >= settings.minObjectFrequency)
     )
-    .sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0))
-    .slice(0, settings.maxEntities)
-  const keptSet = new Set(kept)
-  const eligible = [...pairs.values()].filter(
-    (link) =>
-      keptSet.has(link.source) &&
-      keptSet.has(link.target) &&
-      weight.get(link)! >= settings.minRelationWeight
-  )
-  const strongest = new Set(
-    [...eligible].sort((a, b) => weight.get(b)! - weight.get(a)!).slice(0, settings.maxRelations)
-  )
-  const links = eligible.filter((link) => strongest.has(link))
-  const connected = new Set(links.flatMap((link) => [link.source, link.target]))
-  const visible = settings.includeIsolated ? kept : kept.filter((id) => connected.has(id))
+    .sort(
+      (a, b) =>
+        (degree.get(b) ?? 0) - (degree.get(a) ?? 0) ||
+        mentions(b) - mentions(a) ||
+        order.indexOf(a) - order.indexOf(b)
+    )
+  const admitted = new Set<string>()
+  const shown = new Set<GraphLink>()
+  for (const seed of seeds) {
+    const links = (star.get(seed) ?? []).filter((link) => !shown.has(link))
+    if (!links.length) continue
+    const newcomers = new Set(
+      [seed, ...links.flatMap((link) => [link.source, link.target])].filter(
+        (id) => !admitted.has(id)
+      )
+    )
+    if (admitted.size + newcomers.size > settings.maxEntities) continue
+    if (shown.size + links.length > settings.maxRelations) continue
+    for (const id of newcomers) admitted.add(id)
+    for (const link of links) shown.add(link)
+  }
+  for (const link of eligible) {
+    if (shown.size >= settings.maxRelations) break
+    if (admitted.has(link.source) && admitted.has(link.target)) shown.add(link)
+  }
+  // Truly isolated: named in the data but never in a link (self-references).
+  const isolated = settings.includeIsolated
+    ? seeds.filter((id) => (degree.get(id) ?? 0) === 0 && !admitted.has(id))
+    : []
+  for (const id of isolated) {
+    if (admitted.size >= settings.maxEntities) break
+    admitted.add(id)
+  }
+  const visible = order.filter((id) => admitted.has(id))
 
   return {
     nodes: visible.map((id) => ({ id, label: labels.get(id)!, degree: degree.get(id) ?? 0 })),
-    links,
+    links: eligible.filter((link) => shown.has(link)),
     hiddenNodes: labels.size - visible.length,
   }
 }

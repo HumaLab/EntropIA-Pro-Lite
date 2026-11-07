@@ -166,6 +166,55 @@ describe('locateOccurrences', () => {
     expect(locateOccurrences('Nada aquí.', relation)).toEqual([])
   })
 
+  it('finds the parts the model took from elsewhere in the document', () => {
+    const text =
+      'Presentación dirigida al Interventor de la Confederación General de Trabajadores.\n\n' +
+      'Señor Interventor: los gremios abajo firmantes exponen su queja.\n\n' +
+      'firmados por:\n\n' +
+      'FEDERACION DE EMPLEADOS DE COMERCIO\n\n' +
+      'FEDERACION DE OBREOS DE LA INDUSTRIA DEL VESTIDO\n\n' +
+      '(es copia)'
+    const target = {
+      ...relation,
+      subject: 'FEDERACION DE OBREOS DE LA INDUSTRIA DEL VESTIDO',
+      predicate: 'firma',
+      object: 'la presentación dirigida al Interventor de la Confederación General de Trabajadores',
+    }
+    const found = locateOccurrences(text, target)
+    expect(found).toHaveLength(1)
+    const [hit] = found
+    expect(text.slice(hit!.start, hit!.end)).toBe(
+      'FEDERACION DE OBREOS DE LA INDUSTRIA DEL VESTIDO'
+    )
+    expect(hit!.evidence).toEqual({
+      subject: 'literal',
+      predicate: 'elsewhere',
+      object: 'elsewhere',
+    })
+    const marked = hit!.ranges.map((range) => [range.role, text.slice(range.start, range.end)])
+    expect(marked).toContainEqual(['predicate', 'firmados'])
+    expect(marked).toContainEqual(['object', 'Presentación'])
+    expect(marked).toContainEqual(['object', 'Trabajadores'])
+  })
+
+  it('tolerates OCR misspellings when a part is not literal', () => {
+    const text = 'La Federación de Obreos Navales firmó el acta.'
+    const target = {
+      ...relation,
+      subject: 'Federación de Obreros Navales',
+      predicate: 'firmó',
+      object: 'el acta',
+    }
+    const [hit] = locateOccurrences(text, target)
+    const marked = hit!.ranges.map((range) => [
+      range.role,
+      text.slice(range.start, range.end),
+      range.literal,
+    ])
+    expect(marked).toContainEqual(['subject', 'Obreos', false])
+    expect(hit!.evidence).toEqual({ subject: 'partial', predicate: 'literal', object: 'literal' })
+  })
+
   it('splits sentences too long to read as one passage', () => {
     const text = `José ${'palabra '.repeat(80)}Lima`
     const found = locateOccurrences(text, relation)

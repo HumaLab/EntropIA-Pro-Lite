@@ -278,13 +278,39 @@
    * sphere drawn from the back faces only. Built from the sphere's own
    * constructors, so the view needs no direct three.js dependency.
    */
-  function outlineSelected(color: string) {
-    removeOutline()
-    if (!instance || selected?.kind !== 'node') return
+  /**
+   * Keeps the rim on the selected node's current sphere. The renderer builds
+   * node objects a few frames after the data arrives (and may rebuild them),
+   * notably when a restored graph comes back, so a single attempt on the next
+   * frame is not enough: this rechecks every frame for about two seconds.
+   */
+  let outlineWatch = 0
+  function watchOutline(color: string) {
+    cancelAnimationFrame(outlineWatch)
+    let frames = 0
+    const step = () => {
+      if (!instance) return
+      ensureOutline(color)
+      if (++frames < 120) outlineWatch = requestAnimationFrame(step)
+    }
+    outlineWatch = requestAnimationFrame(step)
+  }
+
+  function ensureOutline(color: string) {
+    if (!instance || selected?.kind !== 'node') {
+      removeOutline()
+      return
+    }
     const id = selected.node.id
     const node = instance.graphData().nodes.find((n) => (n as GraphNode).id === id) as
       { __threeObj?: NodeMesh } | undefined
     const sphere = node?.__threeObj
+    if (outline && outline.parent === sphere) return
+    outlineSelected(sphere, color)
+  }
+
+  function outlineSelected(sphere: NodeMesh | undefined, color: string) {
+    removeOutline()
     if (!sphere?.geometry || !sphere.material) return
     const Material = sphere.material.constructor
     const Mesh = sphere.constructor
@@ -319,8 +345,7 @@
       .linkWidth((l) => (lit(l) ? 1.2 : 0))
       .linkDirectionalParticles((l) => (lit(l) ? 2 : 0))
       .linkDirectionalParticleColor(() => contrast)
-    // The renderer refreshes node objects on its next frame; outline after it.
-    requestAnimationFrame(() => outlineSelected(contrast))
+    watchOutline(contrast)
   }
 
   function draw() {
@@ -334,14 +359,18 @@
     instance.cooldownTicks(seeded.restored ? 0 : Infinity)
     let released = !seeded.restored
     instance.onEngineStop(() => {
-      if (released || !instance) return
-      released = true
-      for (const node of instance.graphData().nodes as Array<Record<string, unknown>>) {
-        delete node.fx
-        delete node.fy
-        delete node.fz
+      if (!instance) return
+      if (!released) {
+        released = true
+        for (const node of instance.graphData().nodes as Array<Record<string, unknown>>) {
+          delete node.fx
+          delete node.fy
+          delete node.fz
+        }
+        instance.cooldownTicks(Infinity)
       }
-      instance.cooldownTicks(Infinity)
+      // Node objects are settled now: make sure the selection is still styled.
+      applyHighlight()
     })
     // The library rewrites source/target into node objects: hand it copies.
     instance.graphData({ nodes: seeded.nodes, links: graph.links.map((l) => ({ ...l })) })
@@ -456,6 +485,7 @@
   })
 
   onDestroy(() => {
+    cancelAnimationFrame(outlineWatch)
     removeOutline()
     observer?.disconnect()
     instance?._destructor()
