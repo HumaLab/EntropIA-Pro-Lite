@@ -126,6 +126,21 @@ describe('highlightCitationRange', () => {
 })
 
 describe('highlightLabeledRanges', () => {
+  it('tells a rebuilt part from a literal one', () => {
+    const container = render('<p>la Federación mantuvo el control</p>')
+    const text = 'la Federación mantuvo el control'
+    highlightLabeledRanges(container, text, [
+      { start: 3, end: 13, role: 'subject', literal: false },
+      { start: 14, end: 21, role: 'predicate', literal: true },
+    ])
+    expect(
+      container.querySelector('mark.occurrence-subject.occurrence-reconstructed')?.textContent
+    ).toBe('Federación')
+    const predicate = container.querySelector('mark.occurrence-predicate')
+    expect(predicate?.textContent).toBe('mantuvo')
+    expect(predicate?.classList.contains('occurrence-reconstructed')).toBe(false)
+  })
+
   it('marks a passage and overlapping roles in one pass without losing formatting', () => {
     const container = render('<p><strong>José</strong> visita Lima</p>')
     const text = 'José visita Lima'

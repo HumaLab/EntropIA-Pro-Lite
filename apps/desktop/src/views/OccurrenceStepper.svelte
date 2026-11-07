@@ -1,11 +1,15 @@
 <script lang="ts">
   import type { I18nKey, I18nParams } from '$lib/i18n'
+  import type { PartEvidence } from '$lib/relation-occurrences'
+
+  type Role = 'subject' | 'predicate' | 'object'
 
   let {
     index,
     total,
     kind,
     status,
+    evidence = null,
     translate,
     onchange,
   }: {
@@ -13,9 +17,32 @@
     total: number
     kind: 'entity' | 'relation'
     status: 'exact' | 'approximate' | 'none' | 'loading'
+    /** How the current passage holds each part of the relation. */
+    evidence?: Record<Role, PartEvidence> | null
     translate: (key: I18nKey, params?: I18nParams) => string
     onchange: (index: number) => void
   } = $props()
+
+  const ROLES: Role[] = ['subject', 'predicate', 'object']
+
+  /** The parts in one evidence state, as lower-case role names. */
+  function partsIn(state: PartEvidence): string {
+    return ROLES.filter((role) => evidence?.[role] === state)
+      .map((role) => translate(`occurrence.${role}`).toLocaleLowerCase())
+      .join(', ')
+  }
+
+  const evidenceNote = $derived.by(() => {
+    if (kind !== 'relation' || status !== 'approximate' || !evidence) return null
+    const lines = [translate('occurrence.reconstructed')]
+    const literal = partsIn('literal')
+    const partial = partsIn('partial')
+    const missing = partsIn('missing')
+    if (literal) lines.push(translate('occurrence.literalParts', { parts: literal }))
+    if (partial) lines.push(translate('occurrence.inferredParts', { parts: partial }))
+    if (missing) lines.push(translate('occurrence.missingParts', { parts: missing }))
+    return lines.join(' ')
+  })
 </script>
 
 <div class="occurrence-stepper">
@@ -39,9 +66,12 @@
       <span class="subject">{translate('occurrence.subject')}</span>
       <span class="predicate">{translate('occurrence.predicate')}</span>
       <span class="object">{translate('occurrence.object')}</span>
+      <span class="reconstructed">{translate('occurrence.legendReconstructed')}</span>
     </div>
   {/if}
-  {#if status !== 'exact'}
+  {#if evidenceNote}
+    <p role="status">{evidenceNote}</p>
+  {:else if status !== 'exact'}
     <p role="status">
       {translate(
         status === 'loading'
@@ -91,10 +121,13 @@
     border-bottom: 3px solid var(--color-accent);
   }
   .predicate {
-    border-bottom: 3px dashed var(--color-warning);
+    border-bottom: 3px solid var(--color-warning);
   }
   .object {
-    border-bottom: 3px double var(--color-success);
+    border-bottom: 3px solid var(--color-success);
+  }
+  .reconstructed {
+    border-bottom: 3px dotted var(--color-text-secondary);
   }
   p {
     margin: var(--space-2) 0 0;

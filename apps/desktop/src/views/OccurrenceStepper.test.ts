@@ -41,4 +41,21 @@ describe('OccurrenceStepper', () => {
     await rerender({ ...props, status: 'none' })
     expect(screen.getByRole('status')).toHaveTextContent('No se encontró')
   })
+  it('explains which parts of a rebuilt relation are literal, inferred or absent', () => {
+    render(OccurrenceStepper, {
+      index: 0,
+      total: 1,
+      kind: 'relation' as const,
+      status: 'approximate' as const,
+      evidence: { subject: 'partial', predicate: 'literal', object: 'missing' } as const,
+      translate: t,
+      onchange: vi.fn(),
+    })
+    const note = screen.getByRole('status')
+    expect(note).toHaveTextContent('Relación reconstruida por el modelo a partir de esta oración.')
+    expect(note).toHaveTextContent('Literal en el texto: vínculo.')
+    expect(note).toHaveTextContent('Inferido (subrayado punteado): sujeto.')
+    expect(note).toHaveTextContent('No aparece en la oración: objeto.')
+    expect(screen.getByText('Punteado: reconstruido')).toBeInTheDocument()
+  })
 })
