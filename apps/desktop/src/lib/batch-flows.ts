@@ -10,6 +10,8 @@ export const BATCH_FLOWS_SETTING = 'batch_flows'
 
 export interface BatchFlowSteps {
   ocr: boolean
+  /** OCR also replaces native PDF text; flows stored before it load it off. */
+  ocrIncludeNative: boolean
   embeddings: boolean
   ner: boolean
   triples: boolean
@@ -41,6 +43,7 @@ export function parseFlows(raw: string | null | undefined): BatchFlow[] {
           name,
           steps: {
             ocr: steps.ocr === true,
+            ocrIncludeNative: steps.ocrIncludeNative === true,
             embeddings: steps.embeddings === true,
             ner: steps.ner === true,
             triples: steps.triples === true,

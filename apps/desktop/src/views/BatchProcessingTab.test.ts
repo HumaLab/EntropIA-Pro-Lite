@@ -8,6 +8,8 @@ import { batchStore } from '$lib/batch-processing'
 import { LOCAL_ML } from '$lib/capabilities'
 
 const mockInvoke = vi.mocked(invoke)
+const navigate = vi.hoisted(() => vi.fn())
+vi.mock('$lib/pane-context', () => ({ getNavigation: () => ({ navigate }) }))
 
 const { storeRef } = vi.hoisted(() => ({
   storeRef: {
@@ -244,6 +246,37 @@ describe('BatchProcessingTab batch controls', () => {
     expect(
       await screen.findByText(/3 documentos pasan por la búsqueda de entidades\./)
     ).toBeInTheDocument()
+  })
+
+  it('excludes native-text pages by default and sends them only when asked', async () => {
+    const sent: unknown[] = []
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as Record<string, unknown> | undefined
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'processing_prepare') {
+        sent.push(args?.['operations'])
+        return { batchId: 'b-draft', created: true, members: 4 }
+      }
+      if (command === 'processing_get_batch')
+        return { ...draftSnapshot(), operations: ['embeddings', 'ocr', 'ocr_include_native'] }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
+    const native = screen.getByRole('checkbox', { name: 'Incluir texto nativo' })
+    expect(native).not.toBeChecked()
+    // The option only refines OCR: without OCR it cannot be chosen.
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'OCR' }))
+    expect(native).toBeDisabled()
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'OCR' }))
+    expect(native).toBeEnabled()
+    await fireEvent.click(native)
+    await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]).toEqual(['ocr', 'ocr_include_native', 'embeddings'])
   })
 
   it('sends triples when asked and says how many documents will go through it', async () => {
@@ -718,6 +751,14 @@ describe('the batch detail is compact and dark all the way down', () => {
       ...failedTask(),
       taskId: 'ocr-a1',
       assetId: 'a1',
+      document: {
+        assetPath: 'folder/a1.png',
+        pageNumber: 2,
+        itemId: 'i1',
+        itemTitle: 'doc',
+        collectionId: 'c1',
+        collectionName: 'legajo',
+      },
       state: 'succeeded',
       progressDone: 1,
       attemptCount: 1,
@@ -811,7 +852,26 @@ describe('the batch detail is compact and dark all the way down', () => {
     // No Mensaje column: it is empty on every row that succeeded, which is
     // nearly all of them, and a permanently blank column is exactly the width
     // that stops a second table fitting beside this one.
-    expect(headers).toEqual(['Operación', 'Estado', 'Progreso', 'Intentos'])
+    expect(headers).toEqual(['Operación', 'Estado', 'Progreso', 'Intentos', 'Documento'])
+  })
+
+  it('links the document asset and leaves unavailable documents muted', async () => {
+    await openDetail()
+    const link = screen.getByRole('button', { name: 'a1.png · p. 2' })
+    expect(link).toHaveAttribute('data-tooltip', 'doc · a1.png · p. 2')
+    await fireEvent.click(link)
+    expect(navigate).toHaveBeenCalledWith({
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'legajo',
+      itemId: 'i1',
+      itemTitle: 'doc',
+      assetId: 'a1',
+      assetLabel: 'a1.png · p. 2',
+    })
+    const failed = screen.getAllByRole('row').find((row) => within(row).queryByText('Fallidos'))!
+    expect(within(failed).getAllByRole('cell').at(-1)).toHaveTextContent('—')
+    expect(within(failed).queryByRole('button', { name: /a1.png/ })).not.toBeInTheDocument()
   })
 
   it('sums the batch into one row of stats', async () => {
@@ -1227,6 +1287,7 @@ describe('batch OCR correction and page summaries', () => {
       .map((box) => box.closest('label')?.textContent?.trim())
     expect(labels).toEqual([
       'OCR',
+      'Incluir texto nativo',
       'Embeddings',
       'Entidades',
       'Tripletes',
@@ -1400,6 +1461,7 @@ describe('batch OCR correction and page summaries', () => {
     await waitFor(() => expect(screen.getByRole('checkbox', { name: 'OCR' })).toBeChecked())
     expect(correction).not.toBeChecked()
     expect(screen.getByRole('checkbox', { name: 'Resúmenes' })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Incluir texto nativo' })).not.toBeChecked()
   })
 
   it('names the two new kinds in the task list like the other units', async () => {

@@ -89,6 +89,14 @@ export interface BatchCursor {
 }
 
 export interface BatchTaskSummary {
+  document?: {
+    assetPath: string
+    pageNumber: number | null
+    itemId: string
+    itemTitle: string
+    collectionId: string
+    collectionName: string
+  } | null
   taskId: string
   kind: string
   assetId: string
