@@ -663,9 +663,14 @@
     text-anchor: end;
   }
 
-  /* Relaciones 3D keeps a 20rem minimum; a narrower panel scrolls it. */
+  /* Relaciones 3D fills exactly the height the panel has, so the starting
+     view needs no vertical scrollbar; zoom acts inside the canvas. It keeps a
+     20rem minimum width, below which the pane scrolls sideways. */
   .graph-pane {
+    height: 100%;
+    min-height: 0;
     overflow-x: auto;
+    overflow-y: hidden;
   }
 
   .settings-section-title {

@@ -751,7 +751,7 @@
     flex-direction: column;
     gap: var(--space-2);
     height: 100%;
-    min-height: 420px;
+    min-height: 0;
     min-width: 20rem;
   }
 
@@ -767,6 +767,7 @@
     flex: 1;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
   }
 
   /* Half the visualization, on a half-transparent background so the graph
@@ -913,9 +914,11 @@
     font-weight: var(--font-weight-semibold);
   }
 
+  /* Takes whatever height is left under the summary; 15rem is the least that
+     still reads as a graph, the only case where the pane may scroll. */
   .relation-graph__canvas {
     flex: 1;
-    min-height: 380px;
+    min-height: 15rem;
     border-radius: var(--radius-surface);
     overflow: hidden;
   }
