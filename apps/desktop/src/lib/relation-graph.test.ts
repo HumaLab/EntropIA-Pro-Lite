@@ -119,6 +119,19 @@ describe('graph structure options', () => {
     })
   })
 
+  it('says which setting hid each name: the thresholds or the caps', () => {
+    // With the default thresholds every name may enter: only the cap hides.
+    expect(buildRelationGraph(triples, { maxEntities: 2 }).hiddenBy).toEqual({
+      thresholds: 0,
+      caps: 3,
+    })
+    // a (degree 2) enters with b and c; d and e never reach the threshold.
+    expect(buildRelationGraph(triples, { minDegree: 2 }).hiddenBy).toEqual({
+      thresholds: 2,
+      caps: 0,
+    })
+  })
+
   it('shows truly isolated entities only when asked, never ones a filter isolated', () => {
     const input = [...triples, { subject: 'Solo', predicate: 'se nombra', object: 'solo' }]
     expect(ids(buildRelationGraph(input))).toContain('solo')

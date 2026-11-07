@@ -583,8 +583,14 @@
           nodes: graph.nodes.length,
           links: graph.links.length,
         })}
-      {#if graph.hiddenNodes > 0}
-        {t('collectionAnalysis.graphHidden', { count: graph.hiddenNodes })}
+      {#if graph.hiddenBy.caps > 0}
+        {t('collectionAnalysis.graphHiddenByCaps', {
+          count: graph.hiddenBy.caps,
+          max: settings.structure.maxEntities,
+        })}
+      {/if}
+      {#if graph.hiddenBy.thresholds > 0}
+        {t('collectionAnalysis.graphHiddenByThresholds', { count: graph.hiddenBy.thresholds })}
       {/if}
     </p>
   {/if}

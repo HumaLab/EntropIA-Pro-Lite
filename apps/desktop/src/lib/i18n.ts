@@ -1971,8 +1971,10 @@ const es = {
     'Todavía no hay relaciones. Se extraen en Configuración → Lotes, con el paso de relaciones.',
   'collectionAnalysis.graphSummary':
     '{nodes} nombres y {links} relaciones. Arrastrá para girar, rueda para acercar; pasá el mouse por un punto o una línea para leerla; tocá un punto o una línea para ver dónde aparece en el texto.',
-  'collectionAnalysis.graphHidden':
-    'Se ocultan {count} nombres por los filtros de Parámetros → Relaciones 3D.',
+  'collectionAnalysis.graphHiddenByCaps':
+    'Se ocultan {count} nombres por el máximo de {max} entidades visibles (Parámetros → Relaciones 3D).',
+  'collectionAnalysis.graphHiddenByThresholds':
+    'Se ocultan {count} nombres por los umbrales mínimos (Parámetros → Relaciones 3D).',
   'collectionAnalysis.graphRelations': 'Relaciones',
   'collectionAnalysis.graphRelationsShown': 'En la red ({count})',
   'collectionAnalysis.graphRelationsHidden': 'No dibujadas en la red ({count})',
@@ -5033,8 +5035,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'No relations yet. They are extracted in Settings → Batch, with the relations step.',
   'collectionAnalysis.graphSummary':
     '{nodes} names and {links} relations. Drag to rotate, scroll to zoom; hover a point or a line to read it; click a point or a line to see where it appears in the text.',
-  'collectionAnalysis.graphHidden':
-    '{count} names are hidden by the filters in Parameters → 3D relations.',
+  'collectionAnalysis.graphHiddenByCaps':
+    '{count} names are hidden by the maximum of {max} visible entities (Parameters → 3D relations).',
+  'collectionAnalysis.graphHiddenByThresholds':
+    '{count} names are hidden by the minimum thresholds (Parameters → 3D relations).',
   'collectionAnalysis.graphRelations': 'Relations',
   'collectionAnalysis.graphRelationsShown': 'In the graph ({count})',
   'collectionAnalysis.graphRelationsHidden': 'Not drawn in the graph ({count})',

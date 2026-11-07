@@ -40,6 +40,11 @@ export interface RelationGraph {
   links: GraphLink[]
   /** Nodes left out by filters or caps, so the view can say so. */
   hiddenNodes: number
+  /**
+   * Why: `thresholds` never qualified (minimums and relation weight);
+   * `caps` qualified but did not fit in the maximums.
+   */
+  hiddenBy: { thresholds: number; caps: number }
 }
 
 /** More nodes than this turn a 3D graph into a hairball and slow the WebView. */
@@ -149,6 +154,7 @@ export function buildRelationGraph(
         mentions(b) - mentions(a) ||
         order.indexOf(a) - order.indexOf(b)
     )
+  const seedSet = new Set(seeds)
   const admitted = new Set<string>()
   const shown = new Set<GraphLink>()
   // Asked-for entities come whole, whatever the caps say.
@@ -199,6 +205,11 @@ export function buildRelationGraph(
     })),
     links: eligible.filter((link) => shown.has(link)),
     hiddenNodes: labels.size - visible.length,
+    hiddenBy: {
+      thresholds: order.filter((id) => !admitted.has(id) && !(seedSet.has(id) && star.has(id)))
+        .length,
+      caps: order.filter((id) => !admitted.has(id) && seedSet.has(id) && star.has(id)).length,
+    },
   }
 }
 
