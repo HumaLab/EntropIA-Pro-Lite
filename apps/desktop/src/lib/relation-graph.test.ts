@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { buildRelationGraph, describeNode } from './relation-graph'
+import { buildRelationGraph, describeNode, linkLabelText } from './relation-graph'
+
+describe('linkLabelText', () => {
+  it('names each predicate with how often it is stated when more than once', () => {
+    expect(
+      linkLabelText({ source: 'a', target: 'b', predicates: ['firma', 'convoca'], counts: [7, 1] })
+    ).toBe('firma ×7 · convoca')
+  })
+})
 
 describe('graph structure options', () => {
   const triples = [
@@ -50,7 +58,9 @@ describe('graph structure options', () => {
   })
   it('drops weak relations, and with them nodes that have no other relation, not as isolates', () => {
     const graph = buildRelationGraph(triples, { minRelationWeight: 2 })
-    expect(graph.links).toEqual([{ source: 'a', target: 'b', predicates: ['p', 'q'] }])
+    expect(graph.links).toEqual([
+      { source: 'a', target: 'b', predicates: ['p', 'q'], counts: [1, 1] },
+    ])
     expect(ids(graph)).toEqual(['a', 'b'])
     noFilterMadeIsolates(graph)
   })
@@ -115,8 +125,14 @@ describe('buildRelationGraph', () => {
       ['Nadie', 0],
     ])
     expect(graph.links).toEqual([
-      { source: 'perón', target: 'partido justicialista', predicates: ['fundó', 'presidió'] },
-      { source: 'evita', target: 'perón', predicates: ['acompañó'] },
+      // «fundó» is read twice: the link shows how often, not a thicker line.
+      {
+        source: 'perón',
+        target: 'partido justicialista',
+        predicates: ['fundó', 'presidió'],
+        counts: [2, 1],
+      },
+      { source: 'evita', target: 'perón', predicates: ['acompañó'], counts: [1] },
     ])
     expect(graph.hiddenNodes).toBe(0)
   })
@@ -132,7 +148,7 @@ describe('buildRelationGraph', () => {
     )
 
     expect(graph.nodes.map((n) => n.id)).toEqual(['a', 'b'])
-    expect(graph.links).toEqual([{ source: 'a', target: 'b', predicates: ['p'] }])
+    expect(graph.links).toEqual([{ source: 'a', target: 'b', predicates: ['p'], counts: [1] }])
     expect(graph.hiddenNodes).toBe(3)
   })
 
@@ -146,8 +162,8 @@ describe('buildRelationGraph', () => {
 
     expect(describeNode('marini', triples)).toEqual({
       relations: [
-        { subject: 'Marini', predicate: 'visita', object: 'Mar del Plata' },
-        { subject: 'Verón', predicate: 'reclamó a', object: 'Marini' },
+        { subject: 'Marini', predicate: 'visita', object: 'Mar del Plata', count: 2 },
+        { subject: 'Verón', predicate: 'reclamó a', object: 'Marini', count: 1 },
       ],
       itemIds: ['d1', 'd2'],
     })

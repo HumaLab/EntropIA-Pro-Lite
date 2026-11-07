@@ -1977,6 +1977,7 @@ const es = {
   'collectionAnalysis.graphOpenEntity': 'Ver dónde aparece en el texto (documentos: {count})',
   'collectionAnalysis.graphOpenLink': 'Ver esta relación en el texto (documentos: {count})',
   'collectionAnalysis.graphOpenRelation': 'Ver el pasaje con esta relación resaltada',
+  'collectionAnalysis.graphRelationCount': '×{count}',
   'collectionAnalysis.graphClose': 'Cerrar el detalle',
   'collectionAnalysis.loading': 'Analizando el texto de la colección...',
   'collectionAnalysis.empty':
@@ -5019,6 +5020,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collectionAnalysis.graphOpenEntity': 'See where it appears in the text (documents: {count})',
   'collectionAnalysis.graphOpenLink': 'See this relation in the text (documents: {count})',
   'collectionAnalysis.graphOpenRelation': 'Open the passage with this relation highlighted',
+  'collectionAnalysis.graphRelationCount': '×{count}',
   'collectionAnalysis.graphClose': 'Close the details',
   'collectionAnalysis.loading': 'Analyzing collection text...',
   'collectionAnalysis.empty':

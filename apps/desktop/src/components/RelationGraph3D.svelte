@@ -18,6 +18,7 @@
   import {
     buildRelationGraph,
     describeNode,
+    linkLabelText,
     key as nameKey,
     type NodeDetails,
     type GraphLink,
@@ -437,9 +438,7 @@
       .nodeVal((n) => render.nodeSizeScale * (1 + (n as GraphNode).degree))
       .linkOpacity(render.linkOpacity)
       .linkDirectionalArrowLength(render.showArrows ? 3 : 0)
-      .linkLabel((l) =>
-        render.showLinkLabels ? label((l as GraphLink).predicates.join(' · ')) : ''
-      )
+      .linkLabel((l) => (render.showLinkLabels ? label(linkLabelText(l as GraphLink)) : ''))
       .cooldownTime(render.cooldownTime)
     const controls = instance.controls() as unknown as OrbitControls
     controls.autoRotate = render.autoRotate
@@ -569,6 +568,11 @@
                   <span class="relation-graph__subject">{relation.subject}</span>
                   <em>{relation.predicate}</em>
                   <span class="relation-graph__object">{relation.object}</span>
+                  {#if relation.count > 1}
+                    <span class="relation-graph__count"
+                      >{t('collectionAnalysis.graphRelationCount', { count: relation.count })}</span
+                    >
+                  {/if}
                 </button>
               </li>
             {/each}
@@ -589,8 +593,9 @@
           </button>
           <h4>{t('collectionAnalysis.graphRelations')}</h4>
           <ul>
-            {#each link.predicates as predicate (predicate)}
+            {#each link.predicates as predicate, index (predicate)}
               {@const predicateTargets = relationTargets(sourceLabel, targetLabel, predicate)}
+              {@const count = link.counts[index] ?? 1}
               <li>
                 <button
                   type="button"
@@ -602,6 +607,11 @@
                   <span class="relation-graph__subject">{sourceLabel}</span>
                   <em>{predicate}</em>
                   <span class="relation-graph__object">{targetLabel}</span>
+                  {#if count > 1}
+                    <span class="relation-graph__count"
+                      >{t('collectionAnalysis.graphRelationCount', { count })}</span
+                    >
+                  {/if}
                 </button>
               </li>
             {/each}
@@ -742,6 +752,18 @@
   .relation-graph__relation:disabled {
     cursor: default;
     opacity: 0.6;
+  }
+
+  /* How often the relation is stated: read, never drawn as a thicker link. */
+  .relation-graph__count {
+    margin-left: var(--space-1);
+    padding: 0 var(--space-1);
+    border-radius: var(--radius-xs);
+    background: color-mix(in srgb, var(--color-text-secondary) 20%, transparent);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   .relation-graph__subject,

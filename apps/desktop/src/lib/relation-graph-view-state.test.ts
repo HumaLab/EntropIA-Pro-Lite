@@ -12,7 +12,7 @@ const graph: RelationGraph = {
     { id: 'a', label: 'A', degree: 1 },
     { id: 'b', label: 'B', degree: 1 },
   ],
-  links: [{ source: 'a', target: 'b', predicates: ['ve'] }],
+  links: [{ source: 'a', target: 'b', predicates: ['ve'], counts: [1] }],
   hiddenNodes: 0,
 } as RelationGraph
 

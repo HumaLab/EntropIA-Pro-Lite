@@ -26,6 +26,8 @@ export interface GraphLink {
   target: string
   /** Distinct predicates between the pair, in first-seen order. */
   predicates: string[]
+  /** How many triples state each predicate, aligned with `predicates`. Shown, never drawn. */
+  counts: number[]
 }
 
 export interface RelationGraph {
@@ -68,14 +70,22 @@ export function buildRelationGraph(
     const pairKey = `${source}\u0000${target}`
     let link = pairs.get(pairKey)
     if (!link) {
-      link = { source, target, predicates: [] }
+      link = { source, target, predicates: [], counts: [] }
       pairs.set(pairKey, link)
       degree.set(source, (degree.get(source) ?? 0) + 1)
       degree.set(target, (degree.get(target) ?? 0) + 1)
     }
     weight.set(link, (weight.get(link) ?? 0) + 1)
     const predicate = triple.predicate.trim()
-    if (predicate && !link.predicates.includes(predicate)) link.predicates.push(predicate)
+    if (predicate) {
+      const at = link.predicates.indexOf(predicate)
+      if (at < 0) {
+        link.predicates.push(predicate)
+        link.counts.push(1)
+      } else {
+        link.counts[at]!++
+      }
+    }
   }
 
   // Thresholds admit entities; an admitted entity brings every relation that
@@ -149,9 +159,12 @@ export function buildRelationGraph(
   }
 }
 
+/** A relation as first written, with how many triples state it. */
+export type NodeRelation = RelationTriple & { count: number }
+
 export interface NodeDetails {
   /** The node's triples as written, deduplicated, in first-seen order. */
-  relations: RelationTriple[]
+  relations: NodeRelation[]
   /** Documents those triples come from, in first-seen order. */
   itemIds: string[]
 }
@@ -159,24 +172,38 @@ export interface NodeDetails {
 /** What the 3D view shows when a node is clicked: its relations and the
  *  documents they were read from. */
 export function describeNode(id: string, triples: readonly RelationTriple[]): NodeDetails {
-  const relations: RelationTriple[] = []
-  const seen = new Set<string>()
+  const relations: NodeRelation[] = []
+  const seen = new Map<string, NodeRelation>()
   const itemIds: string[] = []
   for (const triple of triples) {
     const source = key(triple.subject)
     const target = key(triple.object)
     if (source === target || (source !== id && target !== id)) continue
-    const relation = {
-      subject: triple.subject.trim(),
-      predicate: triple.predicate.trim(),
-      object: triple.object.trim(),
-    }
-    const relationKey = `${source}\u0000${key(relation.predicate)}\u0000${target}`
-    if (!seen.has(relationKey)) {
-      seen.add(relationKey)
+    const relationKey = `${source}\u0000${key(triple.predicate)}\u0000${target}`
+    const known = seen.get(relationKey)
+    if (known) {
+      known.count++
+    } else {
+      const relation = {
+        subject: triple.subject.trim(),
+        predicate: triple.predicate.trim(),
+        object: triple.object.trim(),
+        count: 1,
+      }
+      seen.set(relationKey, relation)
       relations.push(relation)
     }
     if (triple.itemId && !itemIds.includes(triple.itemId)) itemIds.push(triple.itemId)
   }
   return { relations, itemIds }
+}
+
+/** A link's hover text: its predicates, each with ×N when stated more than once. */
+export function linkLabelText(link: GraphLink): string {
+  return link.predicates
+    .map((predicate, index) => {
+      const count = link.counts[index] ?? 1
+      return count > 1 ? `${predicate} ×${count}` : predicate
+    })
+    .join(' · ')
 }
