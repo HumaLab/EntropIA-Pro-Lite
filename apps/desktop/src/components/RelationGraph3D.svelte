@@ -360,8 +360,16 @@
     // A restored layout must not move: no ticks until the pins are released.
     instance.cooldownTicks(seeded.restored ? 0 : Infinity)
     let released = !seeded.restored
+    // A freshly laid out graph starts framed whole; a restored one keeps the
+    // camera the user left.
+    fitOwed = !seeded.restored
+    fitTicks = 0
     instance.onEngineStop(() => {
       if (!instance) return
+      if (fitOwed) {
+        frameWholeGraph(400)
+        fitOwed = false
+      }
       if (!released) {
         released = true
         for (const node of instance.graphData().nodes as Array<Record<string, unknown>>) {
@@ -379,6 +387,22 @@
     selected = resolveSelection(graph, restore?.selection ?? selection())
     if (seeded.restored && restore?.camera) restoreCamera(restore.camera)
     applyHighlight()
+  }
+
+  // ── Framing ──────────────────────────────────────────────────────────────────
+  /** Margin in pixels between the framed graph and the edge of the view. */
+  const FIT_PADDING = 12
+  /**
+   * True from a fresh layout until it settles or the user moves the camera:
+   * while owed, the camera keeps the whole graph in view as nodes spread, so
+   * the starting view is always every node and link filling the box. Zoom or
+   * rotation by the user ends it.
+   */
+  let fitOwed = false
+  let fitTicks = 0
+
+  function frameWholeGraph(duration: number) {
+    if (instance && graph?.nodes.length) instance.zoomToFit(duration, FIT_PADDING)
   }
 
   function rebuild() {
@@ -405,6 +429,15 @@
           }
         })
         observer.observe(container)
+        // Any zoom or turn by the user ends the automatic framing.
+        ;(
+          instance.controls() as unknown as {
+            addEventListener: (type: string, listener: () => void) => void
+          }
+        ).addEventListener('start', () => (fitOwed = false))
+        instance.onEngineTick(() => {
+          if (fitOwed && ++fitTicks % 20 === 0) frameWholeGraph(0)
+        })
       }
       instance
         .width(container.clientWidth)
