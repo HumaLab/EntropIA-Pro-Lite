@@ -3864,7 +3864,18 @@ fn read_bibliography_progress(
 /// snapshot (documentary `subject_id` mirrors it); old readers ignore the
 /// new columns.
 #[derive(Debug, Clone)]
+pub struct TaskDocument {
+    pub asset_path: String,
+    pub page_number: Option<i64>,
+    pub item_id: String,
+    pub item_title: String,
+    pub collection_id: String,
+    pub collection_name: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct TaskSummary {
+    pub document: Option<TaskDocument>,
     pub task_id: String,
     pub kind: String,
     pub asset_id: String,
@@ -3944,8 +3955,12 @@ pub fn list_tasks(
         "SELECT t.id, t.kind, t.asset_id_snapshot, t.domain, t.subject_kind, t.subject_id,
                 t.state, t.stage, t.progress_done, t.progress_total,
                 t.outcome, t.attempt_count, t.retry_cycle, t.next_retry_at, t.last_error_code,
-                t.last_error_message, t.updated_at, l.request_state, l.dependency_task_id
+                t.last_error_message, t.updated_at, l.request_state, l.dependency_task_id,
+                a.path, a.page_number, i.id, i.title, c.id, c.name
          FROM processing_batch_tasks l JOIN processing_tasks t ON t.id = l.task_id
+         LEFT JOIN assets a ON t.subject_kind = 'asset' AND a.id = t.subject_id
+         LEFT JOIN items i ON i.id = a.item_id
+         LEFT JOIN collections c ON c.id = i.collection_id
          WHERE l.batch_id = ?1",
     );
     if state_filter.is_some() {
@@ -3972,7 +3987,23 @@ pub fn list_tasks(
                 offset
             ],
             |row| {
+                let document = match (
+                    row.get::<_, Option<String>>(19)?,
+                    row.get::<_, Option<String>>(21)?,
+                    row.get::<_, Option<String>>(23)?,
+                ) {
+                    (Some(asset_path), Some(item_id), Some(collection_id)) => Some(TaskDocument {
+                        asset_path,
+                        page_number: row.get(20)?,
+                        item_id,
+                        item_title: row.get(22)?,
+                        collection_id,
+                        collection_name: row.get(24)?,
+                    }),
+                    _ => None,
+                };
                 Ok(TaskSummary {
+                    document,
                     task_id: row.get(0)?,
                     kind: row.get(1)?,
                     asset_id: row.get(2)?,
@@ -9283,6 +9314,37 @@ mod tests {
             "a moved contract must fail configuration_changed, got: {err}"
         );
         assert!(!published2.get(), "a refused commit publishes nothing");
+    }
+
+    #[test]
+    fn task_documents_resolve_and_preserve_missing_asset_tasks() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let (tasks, _) = list_tasks(&conn, "b1", None, None, None, 50, 0).expect("tasks");
+        let task = tasks.iter().find(|t| t.asset_id == "a1").expect("a1");
+        let document = task.document.as_ref().expect("document");
+        assert_eq!(document.asset_path, "a1.png");
+        assert_eq!(document.page_number, None);
+        assert_eq!(document.item_id, "i1");
+        assert_eq!(document.item_title, "doc");
+        assert_eq!(document.collection_id, "c1");
+        assert_eq!(document.collection_name, "legajo");
+        conn.execute(
+            "UPDATE processing_tasks SET subject_id = 'missing' WHERE id = ?1",
+            [&task.task_id],
+        )
+        .expect("unresolvable asset");
+        let (after, _) = list_tasks(&conn, "b1", None, None, None, 50, 0).expect("tasks");
+        assert_eq!(after.len(), tasks.len());
+        assert!(after
+            .iter()
+            .find(|t| t.task_id == task.task_id)
+            .unwrap()
+            .document
+            .is_none());
     }
 
     #[test]

@@ -128,7 +128,19 @@ pub struct ListBatchesResponse {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct TaskDocumentDto {
+    pub asset_path: String,
+    pub page_number: Option<i64>,
+    pub item_id: String,
+    pub item_title: String,
+    pub collection_id: String,
+    pub collection_name: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskSummaryDto {
+    pub document: Option<TaskDocumentDto>,
     pub task_id: String,
     pub kind: String,
     pub asset_id: String,
@@ -896,6 +908,14 @@ pub fn list_batch_tasks(
         tasks: tasks
             .into_iter()
             .map(|t| TaskSummaryDto {
+                document: t.document.map(|d| TaskDocumentDto {
+                    asset_path: d.asset_path,
+                    page_number: d.page_number,
+                    item_id: d.item_id,
+                    item_title: d.item_title,
+                    collection_id: d.collection_id,
+                    collection_name: d.collection_name,
+                }),
                 task_id: t.task_id,
                 kind: t.kind,
                 asset_id: t.asset_id,

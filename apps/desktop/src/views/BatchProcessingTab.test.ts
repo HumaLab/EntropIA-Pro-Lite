@@ -8,6 +8,8 @@ import { batchStore } from '$lib/batch-processing'
 import { LOCAL_ML } from '$lib/capabilities'
 
 const mockInvoke = vi.mocked(invoke)
+const navigate = vi.hoisted(() => vi.fn())
+vi.mock('$lib/pane-context', () => ({ getNavigation: () => ({ navigate }) }))
 
 const { storeRef } = vi.hoisted(() => ({
   storeRef: {
@@ -749,6 +751,14 @@ describe('the batch detail is compact and dark all the way down', () => {
       ...failedTask(),
       taskId: 'ocr-a1',
       assetId: 'a1',
+      document: {
+        assetPath: 'folder/a1.png',
+        pageNumber: 2,
+        itemId: 'i1',
+        itemTitle: 'doc',
+        collectionId: 'c1',
+        collectionName: 'legajo',
+      },
       state: 'succeeded',
       progressDone: 1,
       attemptCount: 1,
@@ -842,7 +852,21 @@ describe('the batch detail is compact and dark all the way down', () => {
     // No Mensaje column: it is empty on every row that succeeded, which is
     // nearly all of them, and a permanently blank column is exactly the width
     // that stops a second table fitting beside this one.
-    expect(headers).toEqual(['Operación', 'Estado', 'Progreso', 'Intentos'])
+    expect(headers).toEqual(['Operación', 'Estado', 'Progreso', 'Intentos', 'Documento'])
+  })
+
+  it('links the document asset and leaves unavailable documents muted', async () => {
+    await openDetail()
+    const link = screen.getByRole('button', { name: 'a1.png · p. 2' })
+    expect(link).toHaveAttribute('data-tooltip', 'doc · a1.png · p. 2')
+    await fireEvent.click(link)
+    expect(navigate).toHaveBeenCalledWith({
+      name: 'item', collectionId: 'c1', collectionName: 'legajo',
+      itemId: 'i1', itemTitle: 'doc', assetId: 'a1', assetLabel: 'a1.png · p. 2',
+    })
+    const failed = screen.getAllByRole('row').find((row) => within(row).queryByText('Fallidos'))!
+    expect(within(failed).getAllByRole('cell').at(-1)).toHaveTextContent('—')
+    expect(within(failed).queryByRole('button', { name: /a1.png/ })).not.toBeInTheDocument()
   })
 
   it('sums the batch into one row of stats', async () => {
