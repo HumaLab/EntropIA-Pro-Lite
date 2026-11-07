@@ -1093,22 +1093,24 @@
                     <span class="batch-table__cell batch-table__cell--text" role="cell">
                       {#if task.document}
                         {@const document = task.document}
-                        {@const label = getAssetPathLabel(document.assetPath).trim() +
+                        {@const label =
+                          getAssetPathLabel(document.assetPath).trim() +
                           (document.pageNumber !== null ? ` · p. ${document.pageNumber}` : '')}
                         <button
                           type="button"
                           class="batch-tasks__link"
                           use:tooltip={`${document.itemTitle} · ${label}`}
-                          onclick={() => navigation.navigate({
-                            name: 'item',
-                            collectionId: document.collectionId,
-                            collectionName: document.collectionName,
-                            itemId: document.itemId,
-                            itemTitle: document.itemTitle,
-                            assetId: task.assetId,
-                            assetLabel: label,
-                          })}
-                        >{label}</button>
+                          onclick={() =>
+                            navigation.navigate({
+                              name: 'item',
+                              collectionId: document.collectionId,
+                              collectionName: document.collectionName,
+                              itemId: document.itemId,
+                              itemTitle: document.itemTitle,
+                              assetId: task.assetId,
+                              assetLabel: label,
+                            })}>{label}</button
+                        >
                       {:else}
                         <span class="batch-tasks__missing">—</span>
                       {/if}
@@ -1287,10 +1289,8 @@
           <span class="batch-field__legend" id="batch-ops-label">{t('batch.operations')}</span>
           <Checkbox class="batch-ops__toggle" bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrIncludeNativeHint')}>
-            <Checkbox
-              class="batch-ops__toggle"
-              bind:checked={ocrIncludeNative}
-              disabled={!runOcr}>{t('batch.opOcrIncludeNative')}</Checkbox
+            <Checkbox class="batch-ops__toggle" bind:checked={ocrIncludeNative} disabled={!runOcr}
+              >{t('batch.opOcrIncludeNative')}</Checkbox
             >
           </span>
           <!-- The hint used to be a paragraph under the row, which is the one

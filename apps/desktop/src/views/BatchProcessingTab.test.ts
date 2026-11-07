@@ -861,8 +861,13 @@ describe('the batch detail is compact and dark all the way down', () => {
     expect(link).toHaveAttribute('data-tooltip', 'doc · a1.png · p. 2')
     await fireEvent.click(link)
     expect(navigate).toHaveBeenCalledWith({
-      name: 'item', collectionId: 'c1', collectionName: 'legajo',
-      itemId: 'i1', itemTitle: 'doc', assetId: 'a1', assetLabel: 'a1.png · p. 2',
+      name: 'item',
+      collectionId: 'c1',
+      collectionName: 'legajo',
+      itemId: 'i1',
+      itemTitle: 'doc',
+      assetId: 'a1',
+      assetLabel: 'a1.png · p. 2',
     })
     const failed = screen.getAllByRole('row').find((row) => within(row).queryByText('Fallidos'))!
     expect(within(failed).getAllByRole('cell').at(-1)).toHaveTextContent('—')
