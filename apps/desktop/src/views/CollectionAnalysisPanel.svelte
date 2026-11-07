@@ -24,9 +24,11 @@
     MAX_CLOUD_TERMS,
     MIN_CLOUD_TERMS,
     type CollectionAnalysisSettings,
+    type GraphSettings,
   } from '$lib/analysis-settings'
   import { Panel, Button, TabList, TabButton, IconButton, ActionIcon } from '@entropia/ui'
   import RelationGraph3D from '../components/RelationGraph3D.svelte'
+  import GraphSettingsForm from './GraphSettingsForm.svelte'
 
   let { collectionId, refreshToken }: { collectionId: string; refreshToken: number } = $props()
 
@@ -169,6 +171,12 @@
 
   function applyStopwords(value: string) {
     const next = { ...settings, customStopwords: parseStopwordsInput(value) }
+    settings = next
+    saveAnalysisSettings(collectionId, next)
+  }
+
+  function onGraphSettingsChange(graph: GraphSettings) {
+    const next = { ...settings, graph }
     settings = next
     saveAnalysisSettings(collectionId, next)
   }
@@ -450,6 +458,9 @@
     </div>
 
     <div class="analysis-pane settings-pane" class:is-hidden={activeTab !== 'settings'}>
+      <h3 class="settings-section-title">
+        {translate('collectionAnalysis.textSettingsTitle')}
+      </h3>
       <div class="settings-field">
         <label class="settings-label" for="analysis-term-count">
           {translate('collectionAnalysis.termCountLabel')}
@@ -484,6 +495,8 @@
           oninput={onStopwordsInput}></textarea>
         <p class="settings-hint">{translate('collectionAnalysis.stopwordsHelp')}</p>
       </div>
+
+      <GraphSettingsForm graph={settings.graph} onchange={onGraphSettingsChange} />
     </div>
   </div>
 </Panel>
@@ -622,6 +635,13 @@
     fill: var(--color-text-secondary);
     font-size: 9px;
     text-anchor: end;
+  }
+
+  .settings-section-title {
+    margin: 0;
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-text-primary);
   }
 
   .settings-field {
