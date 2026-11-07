@@ -1,6 +1,55 @@
 import { describe, expect, it } from 'vitest'
 import { buildRelationGraph, describeNode } from './relation-graph'
 
+describe('graph structure options', () => {
+  const triples = [
+    { subject: 'A', predicate: 'p', object: 'B' },
+    { subject: ' a ', predicate: 'q', object: 'b' },
+    { subject: 'A', predicate: 'p', object: 'C' },
+    { subject: 'D', predicate: 'p', object: 'E' },
+  ]
+  it('filters by original distinct-pair degree without recursive pruning', () => {
+    expect(buildRelationGraph(triples, { minDegree: 2 }).nodes.map((n) => n.id)).toEqual(['a'])
+  })
+  it('counts entity frequency across triple occurrences, not unique pairs', () => {
+    expect(buildRelationGraph(triples, { minFrequency: 2 }).nodes.map((n) => n.id)).toEqual([
+      'a',
+      'b',
+    ])
+  })
+  it('filters by directed pair weight while preserving merged predicates', () => {
+    expect(buildRelationGraph(triples, { minRelationWeight: 2 }).links).toEqual([
+      { source: 'a', target: 'b', predicates: ['p', 'q'] },
+    ])
+  })
+  it('caps entities by existing degree ranking and first-seen tie order', () => {
+    expect(buildRelationGraph(triples, { maxEntities: 2 })).toEqual(buildRelationGraph(triples, 2))
+  })
+  it('caps links by weight with first-seen ties, retaining original output order', () => {
+    const input = [...triples.slice(2), ...triples.slice(0, 2)]
+    expect(buildRelationGraph(input, { maxRelations: 1 }).links.map((l) => l.target)).toEqual(['b'])
+    expect(buildRelationGraph(input, { maxRelations: 2 }).links.map((l) => l.target)).toEqual([
+      'c',
+      'b',
+    ])
+  })
+  it('includes isolated nodes by default and can remove them after caps', () => {
+    expect(buildRelationGraph(triples, { maxEntities: 1 }).nodes.map((n) => n.id)).toEqual(['a'])
+    expect(buildRelationGraph(triples, { maxEntities: 1, includeIsolated: false })).toEqual({
+      nodes: [],
+      links: [],
+      hiddenNodes: 5,
+    })
+  })
+  it('does not mutate triples or options', () => {
+    const input = Object.freeze(triples.map((t) => Object.freeze({ ...t })))
+    const options = Object.freeze({ maxRelations: 1 })
+    buildRelationGraph(input, options)
+    expect(input).toEqual(triples)
+    expect(options).toEqual({ maxRelations: 1 })
+  })
+})
+
 describe('buildRelationGraph', () => {
   it('merges names that differ only in case or spacing and joins predicates per pair', () => {
     const graph = buildRelationGraph([

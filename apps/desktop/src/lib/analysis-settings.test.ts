@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
+  DEFAULT_GRAPH_SETTINGS,
+  GRAPH_SETTINGS_BOUNDS,
+  normalizeGraphSettings,
+  resetGraphSettings,
+  graphStructureKey,
   clampCloudTermCount,
   defaultAnalysisSettings,
   loadAnalysisSettings,
@@ -12,6 +17,61 @@ import {
 
 beforeEach(() => {
   localStorage.clear()
+})
+
+describe('graph settings', () => {
+  it('loads legacy settings with graph defaults and persists normalized graph values', () => {
+    saveAnalysisSettings('old', { cloudTermCount: 80, customStopwords: ['mar'] })
+    expect(loadAnalysisSettings('old').graph).toEqual(DEFAULT_GRAPH_SETTINGS)
+    const graph = normalizeGraphSettings({
+      structure: { maxEntities: 12.7 },
+      render: { autoRotate: true },
+    })
+    saveAnalysisSettings('new', { ...defaultAnalysisSettings(), graph })
+    expect(loadAnalysisSettings('new').graph).toEqual(graph)
+  })
+
+  it('clamps and rounds every numeric field and falls back per corrupt field', () => {
+    for (const group of ['structure', 'render'] as const) {
+      for (const [field, bounds] of Object.entries(GRAPH_SETTINGS_BOUNDS[group])) {
+        const get = (value: unknown) =>
+          Reflect.get(normalizeGraphSettings({ [group]: { [field]: value } })[group], field)
+        expect(get(-Infinity)).toBe(Reflect.get(DEFAULT_GRAPH_SETTINGS[group], field))
+        expect(get('12')).toBe(Reflect.get(DEFAULT_GRAPH_SETTINGS[group], field))
+        expect(get(bounds.min - 1)).toBe(bounds.min)
+        expect(get(bounds.max + 1)).toBe(bounds.max)
+        expect(get(bounds.min + 0.6)).toBe(bounds.integer ? bounds.min + 1 : bounds.min + 0.6)
+      }
+    }
+    expect(
+      normalizeGraphSettings({
+        structure: { includeIsolated: 'false' },
+        render: { showArrows: 0, showLinkLabels: null, autoRotate: 'true' },
+      })
+    ).toEqual(DEFAULT_GRAPH_SETTINGS)
+  })
+
+  it('resets only graph settings without mutating the source', () => {
+    const settings = {
+      cloudTermCount: 80,
+      customStopwords: ['mar'],
+      graph: normalizeGraphSettings({ render: { autoRotate: true } }),
+    }
+    expect(resetGraphSettings(settings)).toEqual({ ...settings, graph: DEFAULT_GRAPH_SETTINGS })
+    expect(settings.graph.render.autoRotate).toBe(true)
+  })
+
+  it('keys only structure changes, for every field', () => {
+    const baseline = graphStructureKey(DEFAULT_GRAPH_SETTINGS)
+    for (const group of ['structure', 'render'] as const) {
+      for (const [field, value] of Object.entries(DEFAULT_GRAPH_SETTINGS[group])) {
+        const changed = normalizeGraphSettings({
+          [group]: { [field]: typeof value === 'boolean' ? !value : value + 1 },
+        })
+        expect(graphStructureKey(changed) === baseline).toBe(group === 'render')
+      }
+    }
+  })
 })
 
 describe('clampCloudTermCount', () => {
@@ -59,10 +119,14 @@ describe('load/save analysis settings', () => {
     saveAnalysisSettings('col-2', { cloudTermCount: 25, customStopwords: [] })
 
     expect(loadAnalysisSettings('col-1')).toEqual({
+      ...defaultAnalysisSettings(),
       cloudTermCount: 80,
       customStopwords: ['fábrica'],
     })
-    expect(loadAnalysisSettings('col-2')).toEqual({ cloudTermCount: 25, customStopwords: [] })
+    expect(loadAnalysisSettings('col-2')).toEqual({
+      ...defaultAnalysisSettings(),
+      cloudTermCount: 25,
+    })
   })
 
   it('sanitizes stored values on load', () => {
@@ -71,6 +135,7 @@ describe('load/save analysis settings', () => {
       JSON.stringify({ cloudTermCount: 999, customStopwords: ['  FÁBRICA ', 'mar'] })
     )
     expect(loadAnalysisSettings('col-1')).toEqual({
+      ...defaultAnalysisSettings(),
       cloudTermCount: MAX_CLOUD_TERMS,
       customStopwords: ['fábrica', 'mar'],
     })
