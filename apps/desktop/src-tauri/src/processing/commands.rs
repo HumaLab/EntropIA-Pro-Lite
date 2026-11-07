@@ -517,6 +517,10 @@ pub async fn processing_sync_bibliography_library(
 /// collections, of items, or both; each file is a member once. Retried
 /// requests with the same `request_id` return the original batch; the same id
 /// with a different payload is rejected, never forked.
+/// Batch OCR modifier: pages whose only text is the native PDF layer are
+/// OCR'd too, replacing that text. Off unless the request names it.
+pub const OCR_INCLUDE_NATIVE: &str = "ocr_include_native";
+
 pub fn prepare_batch(
     conn: &Connection,
     request_id: &str,
@@ -540,6 +544,10 @@ pub fn prepare_batch(
         })
         .cloned()
         .collect();
+    // Including native-text pages only refines OCR; alone it selects nothing.
+    if ops.iter().any(|op| op == "ocr") && operations.iter().any(|op| op == OCR_INCLUDE_NATIVE) {
+        ops.push(OCR_INCLUDE_NATIVE.to_string());
+    }
     ops.sort();
     ops.dedup();
     if ops.is_empty() {
@@ -1262,6 +1270,48 @@ mod tests {
             1,
             "a replay never creates a second batch"
         );
+    }
+
+    #[test]
+    fn prepare_keeps_the_native_text_option_only_alongside_ocr() {
+        let (_dir, conn) = archive();
+        let with_ocr = prepare_batch(
+            &conn,
+            "req-1",
+            &[ALFA.to_string()],
+            &[],
+            &ops(&["ocr", "ocr_include_native"]),
+        )
+        .expect("prepare with the option");
+        assert_eq!(
+            batch_snapshot(&conn, &with_ocr.batch_id)
+                .unwrap()
+                .operations,
+            vec!["ocr".to_string(), "ocr_include_native".to_string()]
+        );
+        let without_ocr = prepare_batch(
+            &conn,
+            "req-2",
+            &[ALFA.to_string()],
+            &[],
+            &ops(&["embeddings", "ocr_include_native"]),
+        )
+        .expect("prepare without OCR");
+        assert_eq!(
+            batch_snapshot(&conn, &without_ocr.batch_id)
+                .unwrap()
+                .operations,
+            vec!["embeddings".to_string()]
+        );
+        let alone = prepare_batch(
+            &conn,
+            "req-3",
+            &[ALFA.to_string()],
+            &[],
+            &ops(&["ocr_include_native"]),
+        )
+        .expect_err("the option alone selects nothing");
+        assert!(alone.starts_with("invalid_selection"), "{alone}");
     }
 
     fn snapshot_collection_ids(conn: &Connection, batch_id: &str) -> Vec<String> {

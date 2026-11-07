@@ -70,6 +70,8 @@
   let collectionsLoading = $state(true)
   let selected = $state<Record<string, true>>({})
   let runOcr = $state(true)
+  // Off by default: OCR over a page with native PDF text replaces that text.
+  let ocrIncludeNative = $state(false)
   let runEmbeddings = $state(true)
   // Off by default: under Lite every document is a paid OpenRouter call.
   let runNer = $state(false)
@@ -94,6 +96,7 @@
   // A saved flow (T-52) is these choices under a name.
   const flowSteps = $derived<BatchFlowSteps>({
     ocr: runOcr,
+    ocrIncludeNative,
     embeddings: runEmbeddings,
     ner: runNer,
     triples: runTriples,
@@ -103,6 +106,7 @@
   })
   function applyFlow(steps: BatchFlowSteps) {
     runOcr = steps.ocr
+    ocrIncludeNative = steps.ocrIncludeNative
     runEmbeddings = steps.embeddings
     runNer = steps.ner
     runTriples = steps.triples
@@ -415,6 +419,7 @@
     try {
       const operations = [
         ...(runOcr ? ['ocr'] : []),
+        ...(runOcr && ocrIncludeNative ? ['ocr_include_native'] : []),
         ...(runEmbeddings ? ['embeddings'] : []),
         ...(runNer ? ['ner'] : []),
         ...(runTriples ? ['triples'] : []),
@@ -1251,6 +1256,13 @@
         <div class="batch-ops" role="group" aria-labelledby="batch-ops-label">
           <span class="batch-field__legend" id="batch-ops-label">{t('batch.operations')}</span>
           <Checkbox class="batch-ops__toggle" bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
+          <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrIncludeNativeHint')}>
+            <Checkbox
+              class="batch-ops__toggle"
+              bind:checked={ocrIncludeNative}
+              disabled={!runOcr}>{t('batch.opOcrIncludeNative')}</Checkbox
+            >
+          </span>
           <!-- The hint used to be a paragraph under the row, which is the one
                place a single-line control strip cannot afford. The tooltip
                action also wires `aria-describedby`, so the sentence still

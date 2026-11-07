@@ -246,6 +246,37 @@ describe('BatchProcessingTab batch controls', () => {
     ).toBeInTheDocument()
   })
 
+  it('excludes native-text pages by default and sends them only when asked', async () => {
+    const sent: unknown[] = []
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as Record<string, unknown> | undefined
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'processing_prepare') {
+        sent.push(args?.['operations'])
+        return { batchId: 'b-draft', created: true, members: 4 }
+      }
+      if (command === 'processing_get_batch')
+        return { ...draftSnapshot(), operations: ['embeddings', 'ocr', 'ocr_include_native'] }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
+    const native = screen.getByRole('checkbox', { name: 'Incluir texto nativo' })
+    expect(native).not.toBeChecked()
+    // The option only refines OCR: without OCR it cannot be chosen.
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'OCR' }))
+    expect(native).toBeDisabled()
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'OCR' }))
+    expect(native).toBeEnabled()
+    await fireEvent.click(native)
+    await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]).toEqual(['ocr', 'ocr_include_native', 'embeddings'])
+  })
+
   it('sends triples when asked and says how many documents will go through it', async () => {
     mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
       const args = rest[0] as Record<string, unknown> | undefined
@@ -1227,6 +1258,7 @@ describe('batch OCR correction and page summaries', () => {
       .map((box) => box.closest('label')?.textContent?.trim())
     expect(labels).toEqual([
       'OCR',
+      'Incluir texto nativo',
       'Embeddings',
       'Entidades',
       'Tripletes',
@@ -1400,6 +1432,7 @@ describe('batch OCR correction and page summaries', () => {
     await waitFor(() => expect(screen.getByRole('checkbox', { name: 'OCR' })).toBeChecked())
     expect(correction).not.toBeChecked()
     expect(screen.getByRole('checkbox', { name: 'Resúmenes' })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Incluir texto nativo' })).not.toBeChecked()
   })
 
   it('names the two new kinds in the task list like the other units', async () => {

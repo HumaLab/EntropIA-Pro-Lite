@@ -158,6 +158,8 @@ pub const TERMINAL_TASK_STATES: &[&str] = &["succeeded", "failed", "skipped", "c
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BatchOperations {
     pub ocr: bool,
+    /// OCR also admits pages whose only extraction is native PDF text.
+    pub ocr_include_native: bool,
     pub embeddings: bool,
     pub ner: bool,
     pub triples: bool,
@@ -181,6 +183,7 @@ pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperat
         for entry in list {
             match entry.as_str() {
                 "ocr" => ops.ocr = true,
+                super::commands::OCR_INCLUDE_NATIVE => ops.ocr_include_native = true,
                 "embeddings" => ops.embeddings = true,
                 "ner" => ops.ner = true,
                 "triples" => ops.triples = true,
@@ -4952,12 +4955,18 @@ fn validate_corpus_claim_input(
             "SELECT EXISTS(SELECT 1 FROM processing_batch_tasks l JOIN processing_batches b ON b.id=l.batch_id WHERE l.task_id=?1 AND l.request_state='active' AND b.origin='manual')",
             [task_id], |row| row.get(0),
         ).map_err(|e| format!("Failed to read OCR intent: {e}"))?;
-        if !manual
-            && matches!(
-                super::eligibility::ocr_decision(conn, asset_id)?,
-                super::eligibility::OcrDecision::AlreadyDone { .. }
-            )
-        {
+        let skip = match super::eligibility::ocr_decision(conn, asset_id)? {
+            super::eligibility::OcrDecision::AlreadyDone { method } if !manual => {
+                // A batch that asked for native-text pages still wants a page
+                // whose only text is native; any OCR'd page stays done.
+                method != "native" || !conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM processing_batch_tasks l JOIN processing_batches b ON b.id=l.batch_id, json_each(b.operations) op WHERE l.task_id=?1 AND l.request_state='active' AND op.value=?2)",
+                    rusqlite::params![task_id, super::commands::OCR_INCLUDE_NATIVE], |row| row.get::<_, bool>(0),
+                ).map_err(|e| format!("Failed to read OCR intent: {e}"))?
+            }
+            _ => false,
+        };
+        if skip {
             mark_skipped(conn, task_id, "already_satisfied")?;
             return Ok(None);
         }
@@ -6271,7 +6280,15 @@ fn plan_member(
     // OCR first: an eligible OCR task becomes the embedding dependency below.
     let mut ocr_open: Option<String> = None;
     if ops.ocr {
-        match super::eligibility::ocr_decision(conn, asset_id)? {
+        let decision = match super::eligibility::ocr_decision(conn, asset_id)? {
+            super::eligibility::OcrDecision::AlreadyDone { method }
+                if method == "native" && ops.ocr_include_native =>
+            {
+                super::eligibility::OcrDecision::Eligible
+            }
+            decision => decision,
+        };
+        match decision {
             super::eligibility::OcrDecision::Eligible => match ocr_fingerprint(conn, asset_id)? {
                 Some(fingerprint) => {
                     let contract = super::ocr::ocr_task_contract(ocr_mode);
@@ -7901,6 +7918,43 @@ mod tests {
                 reason: EmbeddingStaleReason::SourceChanged
             }
         );
+    }
+
+    #[test]
+    fn including_native_text_admits_and_claims_native_pages_only() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "ocr_include_native"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let (class_a4, reason_a4) = member_class(&conn, "b1", "a4");
+        assert_eq!(class_a4, "admitted", "{reason_a4}");
+        assert!(reason_a4.contains("ocr:admit"), "{reason_a4}");
+        // A page an OCR engine already processed stays done.
+        let (class_a2, _) = member_class(&conn, "b1", "a2");
+        assert_eq!(class_a2, "already_done");
+        let mut claimed = Vec::new();
+        while let Some(task) = claim_next(&conn, "s", &["ocr"], 1).expect("claim") {
+            claimed.push(task.asset_id);
+        }
+        claimed.sort();
+        assert_eq!(claimed, vec!["a1", "a4", "a5p1"]);
+    }
+
+    #[test]
+    fn native_pages_stay_excluded_by_default() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let (class_a4, reason_a4) = member_class(&conn, "b1", "a4");
+        assert_eq!(class_a4, "already_done");
+        assert!(
+            reason_a4.contains("ocr:already_done(native)"),
+            "{reason_a4}"
+        );
+        assert!(live_task(&conn, "corpus", "asset", "a4", "ocr")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
