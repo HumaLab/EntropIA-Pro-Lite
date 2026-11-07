@@ -55,6 +55,7 @@
   import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview'
   import { listen } from '@tauri-apps/api/event'
   import type { Item, Asset, CollectionItemCardSummary, CollectionStats } from '@entropia/store'
+  import type { CollectionAnalysisRestore } from '$lib/relation-graph-view-state'
 
   const navigation = getNavigation()
   const paneId = getPaneId()
@@ -104,7 +105,15 @@
   const MAX_PANEL_PCT = 50
   const DEFAULT_PANEL_PCT = 33
 
-  let analysisPanelOpen = $state(false)
+  // Back from a passage opened in Relaciones 3D brings the panel back as it
+  // was left. Read once at mount from this collection's own history entry.
+  const analysisRestore: CollectionAnalysisRestore | null = (() => {
+    const current = navigation.current
+    return current.name === 'collection' && current.id === collectionId
+      ? (current.analysis ?? null)
+      : null
+  })()
+  let analysisPanelOpen = $state(analysisRestore !== null)
   let analysisRefreshToken = $state(0)
   let analysisPanelWidth = $state(
     (() => {
@@ -937,6 +946,12 @@
   })
 
   onMount(() => {
+    // Consume the restore: a later Back into this entry (after leaving some
+    // other way) must not bring back a stale camera.
+    const current = navigation.current
+    if (analysisRestore && current.name === 'collection' && current.analysis) {
+      navigation.replace({ ...current, analysis: null })
+    }
     window.addEventListener(
       DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
       handleCollectionOrderChanged
@@ -1371,7 +1386,11 @@
     ></div>
 
     <div class="collection-analysis-panel-slot">
-      <CollectionAnalysisPanel {collectionId} refreshToken={analysisRefreshToken} />
+      <CollectionAnalysisPanel
+        {collectionId}
+        refreshToken={analysisRefreshToken}
+        restore={analysisRestore}
+      />
     </div>
   {/if}
 </div>

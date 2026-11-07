@@ -17,18 +17,29 @@
   import { layoutWordCloud, CLOUD_FONT_STACK, CLOUD_FONT_WEIGHT } from '$lib/cloud-layout'
   import {
     clampCloudTermCount,
-    defaultAnalysisSettings,
     loadAnalysisSettings,
     parseStopwordsInput,
     saveAnalysisSettings,
     MAX_CLOUD_TERMS,
     MIN_CLOUD_TERMS,
     type CollectionAnalysisSettings,
+    type GraphSettings,
   } from '$lib/analysis-settings'
   import { Panel, Button, TabList, TabButton, IconButton, ActionIcon } from '@entropia/ui'
   import RelationGraph3D from '../components/RelationGraph3D.svelte'
+  import GraphSettingsForm from './GraphSettingsForm.svelte'
+  import type { CollectionAnalysisRestore } from '$lib/relation-graph-view-state'
 
-  let { collectionId, refreshToken }: { collectionId: string; refreshToken: number } = $props()
+  let {
+    collectionId,
+    refreshToken,
+    restore = null,
+  }: {
+    collectionId: string
+    refreshToken: number
+    /** The panel as it was left for a passage; only read at mount. */
+    restore?: CollectionAnalysisRestore | null
+  } = $props()
 
   const currentLocale = locale
   const translate = $derived.by(() => {
@@ -39,13 +50,24 @@
   let status = $state<'loading' | 'ready' | 'error'>('loading')
   let corpus = $state<CorpusText[] | null>(null)
   let frequencies = $state<WordFrequency[]>([])
-  let settings = $state<CollectionAnalysisSettings>(defaultAnalysisSettings())
-  let stopwordsInput = $state('')
-  let activeTab = $state<'viz' | 'graph' | 'settings'>('viz')
+  // Loaded synchronously, not in the effect below: a restored graph must be
+  // built under the saved settings on its first render, or its layout (keyed
+  // by the structure settings) would be thrown away for the defaults.
+  // the collection's settings at mount; the effect follows changes
+  // svelte-ignore state_referenced_locally
+  let settings = $state<CollectionAnalysisSettings>(loadAnalysisSettings(collectionId))
+  // same settings, as the stopwords text
+  // svelte-ignore state_referenced_locally
+  let stopwordsInput = $state(settings.customStopwords.join(', '))
+  // the restore is only read at mount
+  // svelte-ignore state_referenced_locally
+  let activeTab = $state<'viz' | 'graph' | 'settings'>(restore?.tab ?? 'viz')
 
   const fetchGuard = new LatestRequestGuard()
   const computeGuard = new LatestRequestGuard()
-  let activeSettingsId: string | null = null
+  // matches the settings loaded above
+  // svelte-ignore state_referenced_locally
+  let activeSettingsId: string | null = collectionId
   let stopwordsTimer: ReturnType<typeof setTimeout> | undefined
   let wordCloudSvgEl: SVGSVGElement | undefined = $state()
   let barChartSvgEl: SVGSVGElement | undefined = $state()
@@ -169,6 +191,12 @@
 
   function applyStopwords(value: string) {
     const next = { ...settings, customStopwords: parseStopwordsInput(value) }
+    settings = next
+    saveAnalysisSettings(collectionId, next)
+  }
+
+  function onGraphSettingsChange(graph: GraphSettings) {
+    const next = { ...settings, graph }
     settings = next
     saveAnalysisSettings(collectionId, next)
   }
@@ -445,11 +473,20 @@
       {/if}
     </div>
 
-    <div class="analysis-pane" class:is-hidden={activeTab !== 'graph'}>
-      <RelationGraph3D {collectionId} {refreshToken} active={activeTab === 'graph'} />
+    <div class="analysis-pane graph-pane" class:is-hidden={activeTab !== 'graph'}>
+      <RelationGraph3D
+        {collectionId}
+        {refreshToken}
+        active={activeTab === 'graph'}
+        settings={settings.graph}
+        snapshot={restore?.graph ?? null}
+      />
     </div>
 
     <div class="analysis-pane settings-pane" class:is-hidden={activeTab !== 'settings'}>
+      <h3 class="settings-section-title">
+        {translate('collectionAnalysis.textSettingsTitle')}
+      </h3>
       <div class="settings-field">
         <label class="settings-label" for="analysis-term-count">
           {translate('collectionAnalysis.termCountLabel')}
@@ -484,6 +521,8 @@
           oninput={onStopwordsInput}></textarea>
         <p class="settings-hint">{translate('collectionAnalysis.stopwordsHelp')}</p>
       </div>
+
+      <GraphSettingsForm graph={settings.graph} onchange={onGraphSettingsChange} />
     </div>
   </div>
 </Panel>
@@ -622,6 +661,18 @@
     fill: var(--color-text-secondary);
     font-size: 9px;
     text-anchor: end;
+  }
+
+  /* Relaciones 3D keeps a 20rem minimum; a narrower panel scrolls it. */
+  .graph-pane {
+    overflow-x: auto;
+  }
+
+  .settings-section-title {
+    margin: 0;
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-text-primary);
   }
 
   .settings-field {

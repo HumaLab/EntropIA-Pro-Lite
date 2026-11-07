@@ -334,6 +334,8 @@ const { highlightCitationRangeMock } = vi.hoisted(() => ({
 }))
 vi.mock('$lib/highlight-fragment', () => ({
   highlightCitationRange: highlightCitationRangeMock,
+  highlightLabeledRanges: vi.fn(() => true),
+  clearHighlight: vi.fn(),
 }))
 
 vi.mock('$lib/db', () => ({
@@ -578,6 +580,72 @@ describe('ItemView multi-asset navigation', () => {
     llmCorrectOcrAssetMock.mockReset().mockResolvedValue(undefined)
     llmExtractTriplesAssetMock.mockReset().mockResolvedValue(undefined)
     storeRef.current = createStore({ assetsRows: multiPageAssets })
+  })
+
+  it('locates every occurrence across assets, including item-level targets, and replaces history', async () => {
+    storeRef.current = createStore({
+      assetsRows: multiPageAssets,
+      extractionsByAsset: {
+        'asset-page-1': { textContent: 'José y José' },
+        'asset-page-2': { textContent: 'José' },
+      },
+    })
+    const collection: View = { name: 'collection', id: 'col-1', collectionName: 'Colección 1' }
+    const target = {
+      kind: 'entity' as const,
+      value: 'José',
+      collectionId: 'col-1',
+      collectionName: 'Colección 1',
+      itemId: 'item-1',
+      itemTitle: 'Acta histórica',
+      assetId: null,
+    }
+    workspace.activeNavigation.resetToPath([
+      collection,
+      {
+        name: 'item',
+        ...target,
+        occurrenceSession: { kind: 'entity', targets: [target], index: 0 },
+      },
+    ])
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    expect(await screen.findByText('Aparición 1 de 3')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Anterior' })).toBeDisabled()
+    await fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
+    expect(await screen.findByText('Aparición 2 de 3')).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
+    expect(await screen.findByText('Aparición 3 de 3')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(workspace.activeNavigation.current).toMatchObject({ assetId: 'asset-page-2' })
+    )
+    expect(screen.getByRole('button', { name: 'Siguiente' })).toBeDisabled()
+    expect(screen.getByRole('tab', { name: 'Texto extraído' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    workspace.activeNavigation.back()
+    expect(workspace.activeNavigation.current).toEqual(collection)
+  })
+
+  it('keeps the missing-passage notice for an unavailable occurrence asset', async () => {
+    const target = {
+      kind: 'entity' as const,
+      value: 'José',
+      collectionId: 'col-1',
+      collectionName: 'Colección 1',
+      itemId: 'item-1',
+      itemTitle: 'Acta histórica',
+      assetId: 'deleted-asset',
+    }
+    workspace.activeNavigation.navigate({
+      name: 'item',
+      ...target,
+      occurrenceSession: { kind: 'entity', targets: [target], index: 0 },
+    })
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    const notice = await screen.findByText('No se encontró el pasaje en el texto disponible.')
+    expect(notice).toBeVisible()
+    expect(workspace.activeNavigation.current).toMatchObject({ assetId: 'deleted-asset' })
   })
 
   it('opens the asset requested by navigation instead of pinning the first sibling', async () => {

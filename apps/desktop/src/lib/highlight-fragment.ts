@@ -47,6 +47,66 @@ export function highlightCitationRange(
   return true
 }
 
+export interface HighlightRange {
+  start: number
+  end: number
+  role: 'passage' | 'subject' | 'predicate' | 'object'
+}
+
+/** Maps all raw ranges once and partitions overlaps without nested marks. */
+export function highlightLabeledRanges(
+  container: HTMLElement | null,
+  rawText: string,
+  ranges: readonly HighlightRange[]
+): boolean {
+  if (!container) return false
+  clearHighlight(container, 'occurrence-hit')
+  const mapping = mapRenderedText(container.textContent ?? '', rawText)
+  const visible = ranges.flatMap((range) => {
+    const mapped = mapping.toVisible(range.start, range.end)
+    return mapped ? [{ ...mapped, role: range.role }] : []
+  })
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+  const segments: Array<{ node: Text; start: number; end: number; classes: string }> = []
+  let offset = 0
+  for (let current = walker.nextNode(); current; current = walker.nextNode()) {
+    const node = current as Text
+    const nodeEnd = offset + node.length
+    const overlapping = visible.filter((range) => range.start < nodeEnd && range.end > offset)
+    const boundaries = [
+      ...new Set(
+        overlapping.flatMap((range) => [
+          Math.max(offset, range.start),
+          Math.min(nodeEnd, range.end),
+        ])
+      ),
+    ].sort((a, b) => a - b)
+    for (let i = 1; i < boundaries.length; i++) {
+      const start = boundaries[i - 1]!
+      const end = boundaries[i]!
+      const roles = overlapping
+        .filter((range) => range.start < end && range.end > start)
+        .map((range) => `occurrence-${range.role}`)
+      if (roles.length) {
+        segments.push({
+          node,
+          start: start - offset,
+          end: end - offset,
+          classes: `occurrence-hit ${[...new Set(roles)].join(' ')}`,
+        })
+      }
+    }
+    offset = nodeEnd
+  }
+  let first: HTMLElement | null = null
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const segment = segments[i]!
+    first = wrap(segment.node, segment.start, segment.end, segment.classes)
+  }
+  first?.scrollIntoView({ block: 'center' })
+  return first !== null
+}
+
 /** Removes any mark a previous call left, so two visits do not stack. */
 export function clearHighlight(container: HTMLElement | null, markClass = 'citation-hit'): void {
   if (!container) return
