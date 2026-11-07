@@ -2,7 +2,7 @@
 
 ## Manual de usuario
 
-**Versión de EntropIA:** 1.3.0 · **Actualizado:** 4 de noviembre de 2026
+**Versión de EntropIA:** 1.4.0 · **Actualizado:** 7 de noviembre de 2026
 
 Para comprobar qué versión tenés instalada, mirá la barra inferior.
 
@@ -12,7 +12,7 @@ Para comprobar qué versión tenés instalada, mirá la barra inferior.
 
 Este manual acompaña el recorrido completo: **preparar el espacio de trabajo → reunir fuentes → obtener y revisar texto → buscar y analizar → investigar → escribir con citas → exportar y respaldar**. No necesitás configurar todas las funciones para empezar.
 
-> **Cómo leer las imágenes.** Las capturas muestran EntropIA Lite con un corpus de ejemplo; tus títulos, recuentos y resultados serán diferentes. Los recortes están identificados como «Detalle» y conservan la interfaz original. Los diagramas explican procesos, no representan pantallas. La mayoría de las capturas corresponden a la versión 1.3.0. Las del Chat, Investigar y su informe, el Navegador y el detalle de Zotero son de la 1.1.1, porque muestran respuestas de IA, páginas web o una biblioteca de Zotero que no se pueden reproducir con el corpus de ejemplo; esas pantallas no cambiaron de forma visible. En la edición web, pulsá cualquier imagen para abrirla a tamaño completo en otra pestaña.
+> **Cómo leer las imágenes.** Las capturas muestran EntropIA Lite con un corpus de ejemplo; tus títulos, recuentos y resultados serán diferentes. Los recortes están identificados como «Detalle» y conservan la interfaz original. Los diagramas explican procesos, no representan pantallas. La mayoría de las capturas corresponden a la versión 1.3.0. Las del Chat, Investigar y su informe, el Navegador y el detalle de Zotero son de la 1.1.1, porque muestran respuestas de IA, páginas web o una biblioteca de Zotero que no se pueden reproducir con el corpus de ejemplo; esas pantallas no cambiaron de forma visible. Las novedades de la 1.4.0 (la corrección de cajas del layout, el historial de procesos y la pestaña **Agente** de Configuración) se describen sin captura. En la edición web, pulsá cualquier imagen para abrirla a tamaño completo en otra pestaña.
 
 ### Elegí tu recorrido
 
@@ -27,7 +27,9 @@ Este manual acompaña el recorrido completo: **preparar el espacio de trabajo �
 | Redactar con notas y bibliografía | [Escritura](#capitulo-11-escritura) y [Zotero y Biblioteca](#capitulo-12-zotero). |
 | Buscar dentro de mi biblioteca de Zotero | [Biblioteca](#biblioteca). |
 | Resaltar y comentar los PDF de Zotero | [Anotar los PDF de la Biblioteca](#anotaciones-zotero). |
-| Dejar que Claude Code, Codex u otro asistente consulte mi archivo | [Asistentes externos](#asistentes-externos). |
+| Recuperar un párrafo que el OCR cortó o no detectó | [Corregir una caja del layout](#corregir-cajas). |
+| Ver qué procesos sufrió un documento, con qué herramienta y modelo | [Historial de procesos](#historial-de-procesos). |
+| Dejar que Claude Code, Codex, OpenCode o Pi consulte mi archivo | [Asistentes externos](#asistentes-externos). |
 | Conservar o compartir resultados | [Exportar y descargar](#capitulo-17-exportar-y-descargar). |
 | Guardar una copia de seguridad de todo | [Copias de seguridad](#copias-de-seguridad). |
 | Resolver un problema | [¿Qué hago si…?](#capitulo-19-que-hago-si). |
@@ -222,6 +224,8 @@ Las respuestas y resúmenes automáticos son ayudas para el trabajo. Comprobá s
 | Crear colecciones, importar, consultar archivos locales, tomar notas y escribir | Sí. | Ninguno para estas tareas. |
 | Buscar palabras y contar frecuencias sobre texto ya guardado | Sí. | Primero necesitás disponer del texto. |
 | Reconocer texto de imágenes o PDF con OCRH | No. | Internet y una clave de GLM-OCR / z.ai. |
+| Corregir una caja del layout y volver a reconocer su texto | No. | Internet y la clave de GLM-OCR / z.ai: cada caja es una consulta al proveedor. |
+| Consultar y exportar el historial de procesos de un documento | Sí. | Ninguno: el historial queda en este equipo. |
 | Transcribir audios o dictar | No. | Internet y AssemblyAI; permiso de micrófono para dictado. |
 | Corregir, resumir, generar embeddings y usar Chat o agentes | No. | Internet y OpenRouter con modelos disponibles para tu cuenta. Opcionalmente, Vercel AI Gateway como respaldo de algunas tareas de texto ([16.1](#capitulo-16-configuracion-y-herramientas-generales)). |
 | Importar PDF desde Internet Archive | No necesita IA. | Internet; no hace falta cuenta ni clave. |
@@ -286,6 +290,7 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 - El explorador también permite filtrar colecciones, contraer el panel y crear una nueva. En una sola pantalla, **Ctrl+B** lo oculta o lo muestra. En vista dividida se abre encima del panel activo; el uso completo está en [pestañas y vista dividida](#pestanas-y-vista-dividida).
 - No hay controles para ordenar manualmente las colecciones.
 - Importar otro archivo crea un documento nuevo; no hay una acción para anexarlo a un documento existente.
+- Eliminar el último documento de una colección no elimina la colección: queda vacía y podés seguir importando en ella. Una colección solo se borra cuando lo pedís.
 
 > **Atención:** eliminar una colección borra sus documentos y datos asociados. Confirmá el nombre antes de aceptar. No hay una acción de deshacer: solo una [copia de seguridad](#copias-de-seguridad) anterior permite recuperarla.
 
@@ -405,8 +410,8 @@ Para escuchar un audio, usá **Reproducir/Pausar**, la barra de posición, los s
 - **Análisis:** preparar texto para búsquedas, reconocer nombres y proponer relaciones.
 - **Mapa:** lugares asociados al documento.
 - **Búsquedas:** encontrar palabras o explorar materiales parecidos.
-- **Layout:** estructura detectada en la página, como títulos, texto, tablas y figuras.
-- **Metadatos:** datos descriptivos del archivo y campos que podés completar.
+- **Layout:** estructura detectada en la página, como títulos, texto, tablas y figuras; desde aquí también se [corrige una caja](#corregir-cajas) que el OCR cortó.
+- **Metadatos:** datos descriptivos del archivo, campos que podés completar y el [historial de procesos](#historial-de-procesos) del documento.
 
 Podés ocultar el panel derecho y volver a mostrarlo con el control lateral.
 
@@ -414,11 +419,39 @@ Podés ocultar el panel derecho y volver a mostrarlo con el control lateral.
 
 **Copiar**, **Descargar** y **Restaurar OCR original** están en **Texto extraído sobre el visor**, para imágenes y PDF. El audio muestra allí su transcripción, pero no ofrece ese menú de descarga.
 
-### 5.5. Layout y metadatos
+### 5.5. Layout, metadatos e historial de procesos
 
-**Layout** muestra la estructura de una imagen o página PDF. La pestaña puede estar vacía si aún no hay secciones detectadas; la superposición se deshabilita sin datos. No hay layout de audio. Cuando hay resultados, podés filtrar **Todos**, **Títulos**, **Texto**, **Tablas**, **Figuras** o **Notas**. Seleccioná una sección para ubicarla en la página y ver sus detalles; desde el inspector podés copiar el texto, la ubicación o los datos en formato JSON. No modifica ni verifica la exactitud del OCR.
+**Layout** muestra la estructura de una imagen o página PDF. La pestaña puede estar vacía si aún no hay secciones detectadas; la superposición se deshabilita sin datos. No hay layout de audio. Cuando hay resultados, podés filtrar **Todos**, **Títulos**, **Texto**, **Tablas**, **Figuras** o **Notas**. Seleccioná una sección para ubicarla en la página y ver sus detalles; desde el inspector podés copiar el texto, la ubicación o los datos en formato JSON. Mirar el layout no modifica ni verifica la exactitud del OCR.
+
+<a id="corregir-cajas"></a>
+**Corregir una caja que el OCR cortó o no detectó.** Con **OCRH**, GLM-OCR primero divide la página en cajas y después lee cada una. A veces una caja queda corta o un párrafo se queda sin caja, y ese texto falta en **Texto extraído**. Para recuperarlo:
+
+1. En **Layout**, seleccioná el bloque afectado o, si el texto no tiene caja, el bloque que lo precede en la lectura.
+2. En el inspector, en **Corregir caja**, elegí **Ajustar caja** para cambiar la caja de ese bloque, o **Nueva caja a continuación** para dibujar una caja nueva justo después de él.
+3. Sobre el documento, la caja queda resaltada con manijas. Arrastrá un borde o una esquina para estirarla —por ejemplo, el alto hasta que entre todo el párrafo— o el interior para moverla. Podés ajustarla varias veces: todavía no se consulta al proveedor.
+4. Pulsá **Reconocer texto de la caja**. **Cancelar** descarta la caja sin cambiar nada.
+
+EntropIA recorta la página a esa caja y envía solo ese recorte a GLM-OCR. El bloque conserva su lugar en el orden de lectura, y una caja nueva va inmediatamente después del bloque elegido. El texto reconocido entra en **Texto extraído** en ese mismo lugar: reemplaza el texto anterior del bloque y respeta las correcciones que hayas hecho a mano en el resto. Si no encuentra el texto anterior (por ejemplo, porque reescribiste ese pasaje), lo coloca después del bloque anterior; si tampoco puede ubicarlo, lo agrega al final y te avisa para que lo muevas.
+
+Necesita Internet y la clave de GLM-OCR, y cada reconocimiento es una consulta al proveedor. Si el layout cambió mientras editabas —por ejemplo, porque terminó otro OCR del mismo documento—, no se guarda nada y hay que volver a intentarlo. Como con una edición manual, la búsqueda se actualiza sola; las entidades y los tripletes que ya existían no se rehacen hasta que los pidas.
 
 En **Metadatos**, consultá los datos del archivo. **Metadatos personalizados** permite agregar un campo, editar su valor o quitarlo. No cambia el archivo original.
+
+<a id="historial-de-procesos"></a>
+**Historial de procesos.** Debajo de los metadatos, **Historial de procesos** lista cada proceso que sufrió el documento, del más reciente al más antiguo, para que puedas rastrear y auditar qué se hizo con él. Cada entrada muestra:
+
+- el proceso y la fecha;
+- la **Herramienta** que lo hizo y su versión, cuando se conoce (por ejemplo, GLM-OCR con la versión de su API);
+- el **Modelo** y su versión, si intervino uno;
+- la versión de **EntropIA** que lo ejecutó;
+- los **Parámetros** (la región de un recorte, los grados de una rotación, la página, la cantidad de páginas…);
+- **Entrada** y **Salida**: la huella SHA-256 del archivo o del texto antes y después. Se muestra abreviada; pasá el cursor para verla completa. Dos huellas iguales indican que el archivo o el texto no cambió.
+
+Se registran la importación y la separación de un PDF en páginas; las ediciones del visor (recorte, borrado, rotación, rotación fina, deshacer y rehacer) y el duplicado; el OCR, con el motor de cada página; la corrección de cajas; la edición manual del texto; el texto reemplazado por un [asistente externo](#asistentes-externos); la corrección con LLM y la restauración del original; la transcripción y su edición manual; y los embeddings, las entidades, los tripletes y los resúmenes.
+
+**Recargar** vuelve a leer la lista y **Exportar JSON** guarda el historial completo, en orden cronológico, en el archivo que elijas, junto con los datos del documento.
+
+> **Para tener en cuenta.** El historial queda en este equipo: no viaja con la [sincronización](#capitulo-15-sincronizacion-y-nube), así que cada equipo muestra los procesos que hizo él. Empieza con la versión 1.4.0, de modo que los documentos anteriores solo muestran lo que se les hizo después. La edición manual se agrupa por sesión: los guardados automáticos mientras escribís cuentan en una sola entrada, que indica cuántas veces se guardó. En la corrección, los resúmenes, las entidades y los tripletes figura el modelo configurado en **Model Params** al guardar el resultado. Borrar un documento borra también su historial.
 
 ### 5.6. Eliminar un documento o una página
 
@@ -487,6 +520,7 @@ Si hay bloques de layout disponibles, consultalos en **Layout**. No es una verif
 - Para buscar contenido, comprobá si hace falta **Análisis → INDEX**.
 - Si el servicio no responde, revisá su clave y conexión en **Configuración → APIs remotas**.
 - Si una foto está oscura, inclinada o borrosa, conservá el original y probá con una copia más clara y derecha.
+- Si falta solo un párrafo o el final de un bloque, no repitas el OCR de la página: [corregí esa caja](#corregir-cajas) en **Layout**.
 
 ---
 
@@ -628,7 +662,7 @@ También podés seleccionar una frase del manuscrito y usar **Guardar la selecci
 
 1. En la barra superior, abrí **Agente de investigación**; la página se titula **Investigar**.
 2. En **Nueva investigación**, escribí una pregunta concreta y, si querés, un título.
-3. En **Modelo**, dejá el modelo general de OpenRouter o elegí otro de la lista. El trabajo conserva ese modelo en todos sus pasos y el encabezado de la investigación lo muestra. La lista necesita la clave de OpenRouter guardada; sin ella, el campo indica cómo ir a **Configuración**.
+3. En **Modelo**, dejá el modelo general de OpenRouter o escribí para buscar otro: el campo filtra todo el catálogo de OpenRouter por identificador y nombre, muestra hasta 50 coincidencias y pide seguir escribiendo si hay más. Con las flechas recorrés las opciones, **Enter** elige y **Esc** vuelve al valor anterior. También podés escribir un identificador que el catálogo no lista: se acepta tal cual y se comprueba al crear la investigación. El trabajo conserva ese modelo en todos sus pasos y el encabezado de la investigación lo muestra. El catálogo necesita la clave de OpenRouter guardada; sin ella, el campo indica cómo ir a **Configuración**.
 4. En **Buscar en**, elegí **Corpus** (tus colecciones), **Biblioteca** (las obras de Zotero sincronizadas, ver [12.4](#biblioteca)) o **Ambos**. Con Biblioteca, el menú **Bibliotecas de Zotero** permite elegir cuáles usar.
 5. Si buscás en el corpus, abrí **Alcance de colecciones**. EntropIA propone las colecciones que ya tienen fragmentos; revisá la selección, agregá o quitá colecciones y usá **Seleccionar todas** si corresponde.
 6. Pulsá **Investigar**. El trabajo se abre automáticamente para seguir el proceso. Después podés retomarlo desde **Investigar → Anteriores**, seleccionando su tarjeta.
@@ -642,6 +676,7 @@ Durante el trabajo, la vista puede pedir intervención:
 - **Preguntas antes de armar el informe:** respondé al menos una; las vacías quedan como no respondidas. **Editar diseño** permite ajustar **Hipótesis**, **Alcance** y **Criterios de cierre**. Si editás el diseño, completá los tres apartados y al menos un criterio, uno por línea. Pulsá **Responder y seguir**.
 - **Búsquedas antes de ir al corpus:** revisá por separado **Búsquedas** y **Consultas bibliográficas**. **Aprobar y buscar** acepta el plan; **Editar búsquedas** permite modificar una consulta por línea y **Guardar y buscar** inicia el plan modificado.
 - **Pausar → Ajustar presupuesto:** permite cambiar **Llamadas LLM** y **Costo máximo**. No pueden ser inferiores a lo ya consumido. El costo vacío significa **Sin límite**. Pulsá **Guardar presupuesto** y luego **Continuar**.
+- **La investigación se detuvo por un error:** si un paso falla, el trabajo queda en pausa y muestra el mensaje tal como lo dio el motor. **Reintentar** lo reanuda desde ese paso. Cuando un lote de archivo es demasiado grande, el motor lo reintenta solo con menos texto; la actividad de la investigación lo indica en una línea, y no es una limitación del informe.
 - **Cancelar** detiene el trabajo, pero no lo borra. La pausa o cancelación puede esperar a que termine el paso en curso. Al reabrir la aplicación, los trabajos que estaban ejecutándose quedan pausados y requieren **Continuar**.
 
 **Alcance del plan:** las búsquedas del corpus se limitan a las colecciones elegidas. Las **Consultas bibliográficas** pueden consultar Zotero local y **OpenAlex por Internet**; obtienen metadatos bibliográficos, no el texto completo de las obras. Si no querés ejecutarlas, vaciá ese campo antes de **Guardar y buscar**.
@@ -937,11 +972,25 @@ Además de sus propios agentes, EntropIA puede atender a un **asistente externo*
 
 ![Captura de Configuración → Asistentes: el interruptor Permitir asistentes externos activo en 127.0.0.1, un asistente emparejado con el permiso Preparar procesamiento y editar el corpus marcado, una carpeta de entrada y las líneas de conexión para Claude Code, Codex, OpenCode y Pi con la ruta del conector instalado.](images/EntropIA-Asistentes.webp)
 
+*La captura es de la versión 1.3.0. Desde la 1.4.0, la línea de Claude Code empieza con `claude mcp remove entropia …` para reemplazar un registro anterior; copiá siempre la del panel.*
+
 **Conectar un asistente.**
 
 1. Abrí **Configuración → Asistentes** y activá **Permitir asistentes externos**. El estado indica si el servicio quedó activo.
 2. En **Conectar un asistente**, escribí un nombre para reconocerlo después (por ejemplo «Claude Code») y pulsá **Conectar**.
-3. El panel muestra el **Identificador del cliente**, la ubicación del conector instalado con EntropIA y una línea lista para cada asistente. Copiá la que corresponde y pegala en la terminal o en la configuración de ese asistente. En Windows, las líneas son para PowerShell.
+3. El panel muestra el **Identificador del cliente**, la ubicación del conector instalado con EntropIA y una línea lista para cada asistente. Copiá la que corresponde y usala como indica la tabla siguiente. En Windows, las líneas de terminal son para PowerShell.
+4. Reiniciá el asistente (o abrí una sesión nueva) y comprobá que ve el servidor `entropia`.
+
+| Asistente | Qué copiás | Dónde va | Cómo comprobarlo |
+|---|---|---|---|
+| **Claude Code** | Un comando. | Pegalo en una terminal y ejecutalo. Registra `entropia` para tu usuario, así funciona desde cualquier carpeta. | `claude mcp list` muestra `entropia` como conectado; dentro de Claude Code, `/mcp` lo lista. |
+| **Codex** | Un comando. | Pegalo en una terminal y ejecutalo. | `codex mcp list` muestra `entropia`. |
+| **OpenCode** | Un fragmento de configuración (JSON). | En el archivo de configuración de OpenCode: el global (`~/.config/opencode/opencode.json`) o el `opencode.json` de la carpeta de un proyecto. Si el archivo ya tiene una sección `mcp`, agregá solo la entrada `entropia` dentro de ella. | `opencode mcp list` muestra `entropia` como conectado. |
+| **Pi** | Un fragmento de configuración (JSON). | Pi no trae MCP propio: necesita una extensión MCP (por ejemplo, `pi-mcp-adapter`). Pegá la entrada `entropia` dentro de `mcpServers` en el archivo que esa extensión lee, habitualmente `~/.pi/agent/mcp.json`. | `pi mcp list` (o el panel MCP de la extensión) muestra `entropia` conectado con sus herramientas. |
+
+Las ubicaciones de OpenCode y Pi son las que indica la documentación de cada asistente y pueden cambiar con sus versiones; si no coinciden, buscá en su ayuda dónde se declaran los servidores MCP. Las líneas ya incluyen la ruta completa del conector que corresponde a tu instalación: `entropia-agent-connector` en Lite. Copiá la del panel en lugar de escribirla, porque la ruta cambia según el sistema y el tipo de instalador.
+
+**Volver a conectar.** Si revocaste un asistente o lo conectaste de nuevo, usá la línea nueva del panel: el identificador cambia. La de **Claude Code** primero borra el registro `entropia` anterior y después agrega el nuevo, así no queda el viejo con una credencial que ya no existe. La de **Codex** reemplaza la entrada existente. En **OpenCode** y **Pi**, reemplazá la entrada `entropia` del archivo; no agregues una segunda.
 
 Las líneas no contienen ninguna contraseña: la credencial queda en el llavero del sistema o, si el equipo no tiene llavero, en un archivo que solo tu usuario puede leer. **Asistentes emparejados** indica cuál de los dos (**Llavero del sistema** o **Archivo protegido**), cuándo se creó y cuándo se usó por última vez. **Revocar** (con confirmación) deja sin efecto la credencial en el pedido siguiente, aunque alguien haya guardado una copia; para volver a usarlo hay que conectarlo de nuevo.
 
@@ -949,16 +998,27 @@ Las líneas no contienen ninguna contraseña: la credencial queda en el llavero 
 
 | Permiso | Qué agrega |
 |---|---|
-| **Preparar procesamiento y editar el corpus** | Armar, pausar y cancelar lotes; crear y renombrar colecciones; editar títulos y metadatos; proponer correcciones del texto reconocido, importaciones y borrados. No gasta. |
+| **Preparar procesamiento y editar el corpus** | Armar, pausar y cancelar lotes (OCR, embeddings, entidades, tripletes, corrección OCR, resúmenes y esquemas propios); crear y renombrar colecciones; editar títulos y metadatos; proponer correcciones del texto reconocido, importaciones y borrados. No gasta. |
 | **Pedir procesamiento pago** | Pedir que un lote empiece, se reanude o se reintente. Cada pedido se aprueba en EntropIA antes de gastar. |
 
-**Aprobaciones.** Lo que cuesta dinero, borra, importa o reemplaza texto no se hace sin vos. EntropIA pasa al frente con un cuadro que dice qué asistente lo pide y qué va a pasar: operaciones, colecciones y cantidad de archivos para un lote; la lista de archivos para una importación; el comienzo del **Texto propuesto** para una corrección; o, para un borrado, qué se pierde («Se pierden: 3 documentos, 14 páginas, 2 notas…»), que no se puede deshacer y que se borra en todos los equipos. **Rechazar** es la opción preseleccionada y Esc rechaza; solo **Aprobar** (o **Borrar**) ejecuta. Un pedido sin respuesta vence a los diez minutos, y si el lote, la página o la colección cambiaron mientras tanto, no se ejecuta nada. Una corrección aprobada se deshace con **Restaurar OCR original** en el documento. Los lotes que arma un asistente aparecen en **Configuración → Lotes** como los tuyos, y lo que ya está procesado, o compartido desde otro equipo, no se vuelve a pagar.
+**Aprobaciones.** Lo que cuesta dinero, borra, importa o reemplaza texto no se hace sin vos. EntropIA pasa al frente con un cuadro que dice qué asistente lo pide y qué va a pasar: operaciones, colecciones y cantidad de archivos para un lote; la lista de archivos para una importación; el comienzo del **Texto propuesto** para una corrección; o, para un borrado, qué se pierde («Se pierden: 3 documentos, 14 páginas, 2 notas…»), que no se puede deshacer y que se borra en todos los equipos. **Rechazar** es la opción preseleccionada y Esc rechaza; solo **Aprobar** (o **Borrar**) ejecuta. Un pedido sin respuesta vence a los diez minutos, y si el lote, la página o la colección cambiaron mientras tanto, no se ejecuta nada. Una corrección aprobada se deshace con **Restaurar OCR original** en el documento y queda en su [historial de procesos](#historial-de-procesos) como texto reemplazado por el asistente. Los lotes que arma un asistente aparecen en **Configuración → Lotes** como los tuyos, y lo que ya está procesado, o compartido desde otro equipo, no se vuelve a pagar.
 
 **Carpetas de entrada.** Un asistente con permiso para editar el corpus solo puede proponer importar archivos de las carpetas que agregues en **Carpetas de entrada** (**Agregar carpeta**), y no de sus subcarpetas. Cada importación la aprobás viendo la lista de archivos.
 
 > **Privacidad.** Lo que el asistente lee de tu archivo pasa a la conversación con ese asistente y, por lo tanto, al proveedor de IA que use (Anthropic, OpenAI u otro), con su cuenta y sus condiciones. Los textos de tus documentos son datos para el asistente: no pueden darle permisos nuevos. Conectá solo asistentes en los que confíes y revocá los que ya no uses.
 
-Si el asistente no conecta, comprobá que EntropIA esté abierta y el interruptor activado, y que el asistente no haya sido revocado. En Windows, algunos antivirus demoran el primer arranque del conector; si el asistente se rinde antes, ampliá su tiempo de espera para servidores MCP o excluí la carpeta de EntropIA en el antivirus.
+**Si el asistente no conecta.** Comprobá primero que EntropIA esté abierta y que **Permitir asistentes externos** siga activado. Cuando el conector rechaza un pedido, el asistente muestra el motivo en español y el conector lo deja también en el registro MCP del asistente (por ejemplo, en `/mcp` de Claude Code). Los casos más comunes:
+
+| El asistente dice… | Qué hacer |
+|---|---|
+| «No encuentro EntropIA corriendo en esta máquina» (código `-32001`). | Abrí EntropIA y activá **Permitir asistentes externos**. Puede quedar minimizada mientras el asistente trabaja. |
+| «No hay una credencial guardada para este cliente en este equipo» (código `-32005`). | Lo más probable es que lo hayas revocado o emparejado en otro equipo: la credencial es de cada equipo. Conectalo de nuevo en **Configuración → Asistentes** y reemplazá la entrada `entropia` del asistente con la línea nueva, sin agregar una segunda. |
+| «EntropIA rechazó la credencial de este asistente» (código `-32002`). | Conectalo de nuevo y reemplazá la entrada con la línea nueva. |
+| «No pude acceder al llavero del sistema desde este proceso» (código `-32007`). | El conector no llega al llavero. En **Windows**, el Administrador de credenciales solo responde dentro de la sesión de escritorio: no funciona desde una sesión SSH ni desde un servicio. En **macOS**, desbloqueá el llavero desde **Acceso a Llaveros**. En **Linux**, ejecutá el asistente dentro de la sesión de escritorio con el llavero desbloqueado. |
+| «La versión de este conector no coincide con la de EntropIA» (código `-32004`). | Actualizá EntropIA: el conector se instala con ella. Después copiá otra vez la línea del panel. |
+| `MCP server entropia already exists` (Claude Code). | Es un registro hecho con una versión anterior a la 1.4.0. Copiá de nuevo la línea de Claude Code del panel: ahora borra el registro viejo antes de agregar el nuevo. |
+
+En Windows, algunos antivirus demoran el primer arranque del conector; si el asistente se rinde antes, ampliá su tiempo de espera para servidores MCP o excluí la carpeta de EntropIA en el antivirus.
 
 ---
 
@@ -1008,7 +1068,7 @@ Las dos son llamadas pagas a OpenRouter por página, también en Pro, y necesita
 Las entidades y los tripletes buscan siempre lo mismo. Con un **esquema propio** decidís vos qué datos sacar de cada documento, y el lote arma una tabla con una fila por cada caso que encuentre. Por ejemplo, para partes de un puerto: **barco**, **carga** y **destino**.
 
 1. En **Configuración → Lotes**, debajo de las operaciones, buscá **Esquema propio** y pulsá **Nuevo esquema**.
-2. Poné un nombre al esquema y, si querés, elegí en **Modelo** uno de la lista de OpenRouter solo para este esquema; **El modelo general** usa el de **Model Params**. La lista se carga con la clave de OpenRouter guardada; sin ella, el campo lo indica y ofrece **Ir a Configuración**. Agregá un **Campo** por cada dato. En **Qué es** explicá con tus palabras qué tiene que buscar el modelo, por ejemplo «nombre de la embarcación».
+2. Poné un nombre al esquema y, si querés, elegí en **Modelo** uno de OpenRouter solo para este esquema: escribí parte del identificador o del nombre y el campo busca en todo el catálogo, igual que en [Nueva investigación](#capitulo-10-investigacion). **El modelo general** usa el de **Model Params**. El catálogo se carga con la clave de OpenRouter guardada; sin ella, el campo lo indica y ofrece **Ir a Configuración**. Agregá un **Campo** por cada dato. En **Qué es** explicá con tus palabras qué tiene que buscar el modelo, por ejemplo «nombre de la embarcación».
 3. Marcá **Puede repetirse** en los campos que pueden tener varios valores en un mismo caso: un barco con muchas cargas distintas.
 4. Pulsá **Guardar esquema**. Queda elegido en **Esquema propio**.
 5. Seleccioná las colecciones y pulsá **Analizar selección**. La propuesta dice cuántos documentos pasan por el esquema. Después, **Iniciar lote**.
@@ -1071,9 +1131,10 @@ Abrí **Configuración** con el botón de engranaje de la barra superior. En Lit
 | **Prompts** | Revisar las instrucciones que EntropIA sigue al corregir texto, resumir o proponer nombres y relaciones. | Conservá los valores iniciales si no necesitás cambiarlos. |
 | **Model Params** | Ajustar el modelo y la forma en que prepara cada respuesta. | Dejá los valores predeterminados. |
 | **RAG Params** | Elegir qué pasajes de tus documentos consulta el Chat, cuántos usa y cuánto de la conversación previa considera. | Dejá los valores predeterminados hasta tener una necesidad concreta. |
+| **Agente** | Ajustar los parámetros del [Agente de investigación](#capitulo-10-investigacion): salida, red y reintentos, archivo, recuperación y preguntas. | Dejá los valores por defecto; cambian solo las investigaciones que crees después. |
 | **Sincronización** | Conectar la cuenta y compartir datos entre equipos. | No la actives si no necesitás usar más de un equipo. |
 | **Asistentes** | Permitir que un asistente externo (Claude Code, Codex, OpenCode, Pi) consulte el archivo, darle permisos y elegir sus carpetas de entrada ([13.4](#asistentes-externos)). | Dejala apagada si no usás un asistente externo. |
-| **Lotes** | Procesar varias colecciones: OCR, embeddings, entidades, tripletes y esquemas propios; seguir también la sincronización de la Biblioteca. | Ejecutá primero una prueba con una colección pequeña. |
+| **Lotes** | Procesar varias colecciones: OCR, embeddings, entidades, tripletes, corrección OCR, resúmenes y esquemas propios; seguir también la sincronización de la Biblioteca. | Ejecutá primero una prueba con una colección pequeña. |
 | **Logs** | Leer mensajes de actividad y error. | Anotá el mensaje visible antes de compartirlo con soporte. |
 | **Copias** | Elegir la carpeta y la frecuencia de las copias de seguridad, y hacer una al momento. | Elegí una carpeta en otro disco y activá una copia automática. |
 | **Apariencia** | Cambiar tema, contraste, zoom de interfaz, tipografía e idioma. | Ajustá la legibilidad antes de comenzar una sesión larga. |
@@ -1111,7 +1172,7 @@ En OpenRouter, conservá un identificador válido para **Modelo generativo** y o
 
 **Probar conexión no guarda la clave.** Después de **Guardar cambios**, el campo puede quedar vacío mientras el estado indica que hay una credencial almacenada; eso no significa que se haya borrado. Con el campo vacío, la prueba puede usar la clave guardada. Una conexión correcta tampoco garantiza cuota ni disponibilidad de todos los modelos. La prueba de GLM-OCR hace una solicitud real al proveedor sobre una imagen de prueba.
 
-### 16.2. Prompts, Model Params y RAG Params
+### 16.2. Prompts, Model Params, RAG Params y Agente
 
 **Prompts** permite revisar o cambiar las instrucciones. Conservá el marcador **`{text}`**, que inserta el material a procesar. **Validar cambios** señala requisitos faltantes; **Restaurar default** recupera el texto inicial. Guardá después de restaurar. Si el guardado te lleva a otra pestaña, corregí el parámetro señalado: también se validan los ajustes de modelos y RAG.
 
@@ -1129,6 +1190,18 @@ Referencia avanzada de **Model Params**, por proceso (corrección OCR, resumen, 
 | `stopSequences` | Hasta 4 secuencias, una por línea, que detienen la salida. |
 
 En **RAG Params**, el modelo de *reranker* reordena los pasajes recuperados y no reemplaza al modelo que redacta la respuesta. Cambiá un ajuste por vez y compará con una consulta conocida; los límites del proveedor pueden ser más restrictivos que los del formulario.
+
+**Agente** reúne los **Parámetros del Agente de Investigación**, en cinco grupos:
+
+| Grupo | Qué ajusta |
+|---|---|
+| **Modelo y salida** | El tope de salida y la temperatura de cada respuesta del modelo. |
+| **Red y reintentos** | Cuánto espera cada intento antes de abortar y las esperas entre reintentos. |
+| **Archivo** | El tamaño de los lotes y fragmentos de texto que el agente lee del corpus, y la ventana de las citas. |
+| **Recuperación** | Cuántos candidatos trae cada búsqueda, cómo se fusionan y reordenan y cuántos caracteres tiene cada fragmento. |
+| **Aclaración y consultas** | Cuántas preguntas hace como mínimo antes de armar el plan y cuántas consultas prepara por modalidad. |
+
+Cada campo muestra su valor **Por defecto**, y **Restaurar valores por defecto** los recupera todos. Un valor fuera de rango muestra el motivo y no se guarda. Los parámetros **se congelan al crear la investigación**: cambiarlos acá no altera las que ya existen, solo las que crees después.
 
 ### 16.3. Apariencia, idioma y accesibilidad visual
 
@@ -1241,7 +1314,7 @@ Si usás sincronización, al volver a abrir EntropIA la copia recuperada se sinc
 1. Creá o elegí una colección y pulsá **Importar documento**.
 2. Abrí el PDF y elegí su primera página.
 3. En **Texto**, ejecutá **OCRH**. Necesitás GLM-OCR configurado y conexión.
-4. Compará el texto con la imagen; corregí nombres o cifras mal leídos.
+4. Compará el texto con la imagen; corregí nombres o cifras mal leídos. Si falta un párrafo entero o el final de uno, abrí **Layout** y [corregí esa caja](#corregir-cajas) en vez de escribirlo a mano.
 5. Buscá una palabra en **Búsquedas** o en la barra superior. Si no aparece, usá **Análisis → INDEX** y repetí la búsqueda.
 
 ### 18.2. Tengo fotografías de documentos de archivo
@@ -1350,7 +1423,10 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 | No puedo sincronizar | Revisá el estado inferior, la conexión y la sesión. En **Configuración → Sincronización** y **Logs** podés leer más detalles; no borres datos como prueba. |
 | Zotero no aparece en Escritura | Abrí Zotero y habilitá **Permitir que otras aplicaciones se comuniquen con Zotero** en **Editar → Configuración → Avanzado**. Después, volvé a **Escritura → Zotero** y usá **Actualizar** si está disponible. |
 | Las anotaciones de la Biblioteca no llegan a Zotero | Leé el aviso del panel **Anotaciones**. Hace falta una clave de la Web API con permiso de escritura en la biblioteca personal (**Configuración → APIs remotas → Zotero → Verificar clave**), de la misma cuenta que tenés abierta en Zotero; en los grupos no se puede anotar. Sin conexión quedan **Pendiente**; pulsá **Sincronizar con Zotero** cuando vuelva. Ver [12.7](#anotaciones-zotero). |
-| Un asistente externo no se conecta | EntropIA tiene que estar abierta y **Configuración → Asistentes → Permitir asistentes externos**, activado. Si lo revocaste, conectalo de nuevo y copiá la línea nueva. En Windows, un antivirus puede demorar el arranque del conector. Ver [13.4](#asistentes-externos). |
+| Un asistente externo no se conecta | EntropIA tiene que estar abierta y **Configuración → Asistentes → Permitir asistentes externos**, activado. Si lo revocaste, conectalo de nuevo y reemplazá su entrada con la línea nueva, sin agregar otra. La tabla de [13.4](#asistentes-externos) explica cada mensaje del conector. En Windows, un antivirus puede demorar el arranque del conector. |
+| Al OCR le falta un párrafo o el final de un bloque | En **Layout**, seleccioná ese bloque y usá **Corregir caja**: estirá la caja o dibujá una nueva y pulsá **Reconocer texto de la caja** ([5.5](#corregir-cajas)). No hace falta repetir el OCR de toda la página. |
+| La investigación se detuvo por un error | Leé el mensaje que muestra y pulsá **Reintentar** cuando el problema se haya resuelto, por ejemplo la clave o el crédito de OpenRouter ([10.2](#capitulo-10-investigacion)). |
+| Quiero saber qué se le hizo a un documento | Abrí **Metadatos → Historial de procesos**: muestra cada proceso con su herramienta, modelo y versiones, y se exporta en JSON ([5.5](#historial-de-procesos)). |
 | Escritura no guardó un cambio | Esperá el estado **Guardado**. Si aparece **Error de guardado**, pulsá **Reintentar** si está disponible y copiá el texto importante antes de cerrar. |
 | Quiero volver a una versión anterior de un manuscrito | Pulsá **Historial de versiones** en la barra del manuscrito, elegí la versión y **Restaurar esta versión**. Lo que tenías queda guardado como otra versión. Ver [11.3](#historial-de-versiones). |
 | No puedo abrir otra pestaña | El máximo es 4. Cerrá una con **Cerrar pestaña** y volvé a pulsar **Abrir nueva pestaña**. |
@@ -1424,7 +1500,10 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 - **Búsqueda FTS:** búsqueda léxica de términos, con posibles variantes ortográficas próximas; no busca por significado.
 - **Búsqueda aproximada:** amplía coincidencias a grafías parecidas; no demuestra que las palabras sean equivalentes.
 - **Texto nativo de PDF:** texto digital que el archivo ya contiene, distinto del reconocimiento de una imagen escaneada.
-- **Lote:** conjunto de tareas de OCR, embeddings, entidades, tripletes o un esquema propio sobre varias colecciones, con estado, avance, prioridad y recuperación.
+- **Lote:** conjunto de tareas de OCR, embeddings, entidades, tripletes, corrección OCR, resúmenes o un esquema propio sobre varias colecciones, con estado, avance, prioridad y recuperación.
+- **Caja del layout:** zona de la página que el OCR reconoce como una unidad (un título, un párrafo, una tabla). Si queda corta o falta, se corrige en **Layout → Corregir caja**.
+- **Historial de procesos:** registro, en **Metadatos**, de cada proceso que sufrió un documento, con su herramienta, modelo, versiones, parámetros y las huellas SHA-256 de entrada y salida.
+- **Huella SHA-256:** código que resume un archivo o un texto; si cambia un solo carácter, cambia la huella. Sirve para comprobar que algo es exactamente lo mismo.
 - **Asistente externo:** programa de IA instalado en tu computadora (Claude Code, Codex, OpenCode, Pi) que, si lo permitís en **Configuración → Asistentes**, consulta tu archivo a través de MCP.
 - **Anotación de Zotero:** resaltado, subrayado, nota, área o texto sobre un PDF de la Biblioteca; se guarda en Zotero y se sincroniza en los dos sentidos.
 - **Biblioteca:** sección con las obras de las bibliotecas de Zotero sincronizadas en EntropIA. Sus fichas se editan en Zotero, no en EntropIA; solo sus PDF admiten anotaciones. No viaja con la sincronización.
