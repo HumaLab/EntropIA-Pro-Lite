@@ -9,14 +9,19 @@ import MockItemAssetPanelDocumentViewer from './__mocks__/MockItemAssetPanelDocu
 import MockOcrRichText from './__mocks__/MockOcrRichText.svelte'
 import ItemAssetPanel from './ItemAssetPanel.svelte'
 import { buildExportDefaultName, getAssetPathLabel } from '$lib/item-metadata'
+import { clearHighlight } from '$lib/highlight-fragment'
 
-const { clipboardWriteTextMock, exportOcrTextMock, highlightCitationRangeMock } = vi.hoisted(
-  () => ({
-    clipboardWriteTextMock: vi.fn<(value: string) => Promise<void>>(),
-    exportOcrTextMock: vi.fn(),
-    highlightCitationRangeMock: vi.fn(),
-  })
-)
+const {
+  clipboardWriteTextMock,
+  exportOcrTextMock,
+  highlightCitationRangeMock,
+  highlightLabeledRangesMock,
+} = vi.hoisted(() => ({
+  clipboardWriteTextMock: vi.fn<(value: string) => Promise<void>>(),
+  exportOcrTextMock: vi.fn(),
+  highlightCitationRangeMock: vi.fn(),
+  highlightLabeledRangesMock: vi.fn(() => true),
+}))
 
 vi.mock('$lib/ocr-export', () => ({
   exportOcrText: exportOcrTextMock,
@@ -24,6 +29,8 @@ vi.mock('$lib/ocr-export', () => ({
 
 vi.mock('$lib/highlight-fragment', () => ({
   highlightCitationRange: highlightCitationRangeMock,
+  highlightLabeledRanges: highlightLabeledRangesMock,
+  clearHighlight: vi.fn(),
 }))
 
 vi.mock('../components/OcrRichText.svelte', () => ({
@@ -155,6 +162,82 @@ afterEach(() => {
 })
 
 describe('ItemAssetPanel', () => {
+  it('uses labeled ranges on the citation path and opens text even for an unlocated occurrence', async () => {
+    const ranges = [{ start: 0, end: 4, role: 'subject' as const }]
+    const props = {
+      ...makeProps({
+        ocrEditedText: 'José visita Lima',
+        citationRange: { start: 0, end: 16, text: 'José visita Lima' },
+      }),
+      occurrenceActive: true,
+      occurrenceRanges: ranges,
+    }
+    const { rerender } = render(ItemAssetPanel, props)
+    await waitFor(() =>
+      expect(highlightLabeledRangesMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'José visita Lima',
+        [{ start: 0, end: 16, role: 'passage' }, ...ranges]
+      )
+    )
+    expect(highlightCitationRangeMock).not.toHaveBeenCalled()
+    await rerender({
+      ...props,
+      selectedAsset: { ...props.selectedAsset!, id: 'asset-2' },
+      citationRange: null,
+    })
+    expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
+  it('opens text when an unlocated occurrence arrives on the already selected asset', async () => {
+    const props = makeProps()
+    const { rerender } = render(ItemAssetPanel, props)
+    expect(screen.getByRole('tab', { name: 'item.documentTab' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    await rerender({ ...props, occurrenceActive: true })
+    expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    await fireEvent.click(screen.getByRole('tab', { name: 'item.documentTab' }))
+    await rerender({ ...props, occurrenceActive: true })
+    expect(screen.getByRole('tab', { name: 'item.documentTab' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
+  it('clears occurrence marks before displaying a later RAG citation', async () => {
+    const props = {
+      ...makeProps({
+        ocrEditedText: 'José visita Lima',
+        citationRange: { start: 0, end: 4, text: 'José' },
+      }),
+      occurrenceActive: true,
+    }
+    const { rerender } = render(ItemAssetPanel, props)
+    await waitFor(() => expect(highlightLabeledRangesMock).toHaveBeenCalled())
+    vi.mocked(clearHighlight).mockClear()
+    await rerender({
+      ...props,
+      occurrenceActive: false,
+      citationRange: { start: 12, end: 16, text: 'Lima' },
+    })
+    await waitFor(() => {
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'José visita Lima',
+        { start: 12, end: 16 }
+      )
+      expect(clearHighlight).toHaveBeenCalledWith(expect.anything(), 'occurrence-hit')
+    })
+  })
+
   it('opens extracted text immediately for an initial citation', async () => {
     render(ItemAssetPanel, makeProps({ citationRange: { start: 0, end: 6, text: 'Fuente' } }))
 

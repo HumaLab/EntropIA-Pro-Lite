@@ -20,7 +20,12 @@
   import type { AssetOcrState } from '$lib/ocr'
   import type { AssetTranscriptionState } from '$lib/transcription'
   import OcrRichText from '../components/OcrRichText.svelte'
-  import { highlightCitationRange } from '$lib/highlight-fragment'
+  import {
+    clearHighlight,
+    highlightCitationRange,
+    highlightLabeledRanges,
+  } from '$lib/highlight-fragment'
+  import type { LabeledRange } from '$lib/relation-occurrences'
   import { onDestroy, tick } from 'svelte'
 
   let leftPanelTab = $state<'document' | 'text'>('document')
@@ -62,6 +67,8 @@
     ocrEditedText,
     citationRange = null,
     citationSeconds = null,
+    occurrenceActive = false,
+    occurrenceRanges = [],
     transcriptionState,
     transcriptionEditedText,
     documentViewerLabels,
@@ -116,6 +123,8 @@
     citationRange?: { start: number; end: number; text: string } | null
     /** Audio only: the second a chat citation of the transcript starts at. */
     citationSeconds?: number | null
+    occurrenceActive?: boolean
+    occurrenceRanges?: LabeledRange[]
     transcriptionState: AssetTranscriptionState | null
     transcriptionEditedText: string
     documentViewerLabels: DocumentViewerProps['labels']
@@ -161,14 +170,44 @@
   let citationMarkGeneration = 0
   let transcriptMarkGeneration = 0
   let transcriptEl = $state<HTMLElement | undefined>()
+  let occurrenceMarkFailed = $state(false)
+  let previousOccurrenceActive = false
+
+  function markPassage(
+    container: HTMLElement | null,
+    text: string,
+    range: { start: number; end: number }
+  ) {
+    if (!occurrenceActive) {
+      clearHighlight(container, 'occurrence-hit')
+      return highlightCitationRange(container, text, range)
+    }
+    clearHighlight(container)
+    const marked = highlightLabeledRanges(container, text, [
+      { ...range, role: 'passage' },
+      ...occurrenceRanges,
+    ])
+    occurrenceMarkFailed = !marked
+    return marked
+  }
+
+  $effect(() => {
+    if (!citationRange || !occurrenceActive) {
+      clearHighlight(renderedOcr?.container ?? null, 'occurrence-hit')
+      clearHighlight(transcriptEl ?? null, 'occurrence-hit')
+      occurrenceMarkFailed = false
+    }
+  })
 
   $effect(() => {
     const nextAssetId = selectedAsset?.id ?? null
     const citationArrived = citationRange !== null && citationRange !== currentCitationRange
+    const occurrenceArrived = occurrenceActive && !previousOccurrenceActive
+    previousOccurrenceActive = occurrenceActive
 
     if (nextAssetId !== currentAssetId) {
       currentAssetId = nextAssetId
-      leftPanelTab = citationRange ? 'text' : 'document'
+      leftPanelTab = citationRange || occurrenceActive ? 'text' : 'document'
       downloadMenuOpen = false
       copyFeedback = 'idle'
       copyGeneration += 1
@@ -176,7 +215,7 @@
         clearTimeout(feedbackTimer)
         feedbackTimer = undefined
       }
-    } else if (citationArrived) {
+    } else if (citationArrived || occurrenceArrived) {
       leftPanelTab = 'text'
     }
 
@@ -214,7 +253,7 @@
       ) {
         return
       }
-      highlightCitationRange(rendered.container, sourceText, {
+      markPassage(rendered.container, sourceText, {
         start: range.start,
         end: range.end,
       })
@@ -248,7 +287,7 @@
       ) {
         return
       }
-      highlightCitationRange(container, sourceText, { start: range.start, end: range.end })
+      markPassage(container, sourceText, { start: range.start, end: range.end })
     })
   })
 
@@ -469,6 +508,9 @@
       class:is-hidden={leftPanelTab !== 'text'}
       hidden={leftPanelTab !== 'text'}
     >
+      {#if occurrenceActive && occurrenceMarkFailed}
+        <p role="status">{translate('occurrence.none')}</p>
+      {/if}
       {#if selectedAsset.type !== 'audio'}
         <section class="left-text-panel-section">
           <div class="left-text-panel-card">
@@ -891,6 +933,20 @@
     background: var(--color-warning-soft);
     box-shadow: inset 0 -2px 0 var(--color-warning);
     color: inherit;
+  }
+
+  :global(.left-text-panel-body mark.occurrence-hit) {
+    color: inherit;
+    background: var(--color-warning-soft);
+  }
+  :global(.left-text-panel-body mark.occurrence-subject) {
+    border-bottom: 3px solid var(--color-accent);
+  }
+  :global(.left-text-panel-body mark.occurrence-predicate) {
+    border-bottom: 3px dashed var(--color-warning);
+  }
+  :global(.left-text-panel-body mark.occurrence-object) {
+    border-bottom: 3px double var(--color-success);
   }
 
   .ocr-meta {

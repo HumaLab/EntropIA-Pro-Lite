@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearHighlight, highlightCitationRange } from './highlight-fragment'
+import {
+  clearHighlight,
+  highlightCitationRange,
+  highlightLabeledRanges,
+} from './highlight-fragment'
 
 beforeEach(() => {
   document.body.innerHTML = ''
@@ -118,6 +122,30 @@ describe('highlightCitationRange', () => {
 
   it('returns false for a null container', () => {
     expect(highlightCitationRange(null, 'texto', { start: 0, end: 5 })).toBe(false)
+  })
+})
+
+describe('highlightLabeledRanges', () => {
+  it('marks a passage and overlapping roles in one pass without losing formatting', () => {
+    const container = render('<p><strong>José</strong> visita Lima</p>')
+    const text = 'José visita Lima'
+    expect(
+      highlightLabeledRanges(container, text, [
+        { start: 0, end: 16, role: 'passage' },
+        { start: 0, end: 4, role: 'subject' },
+        { start: 5, end: 11, role: 'predicate' },
+        { start: 12, end: 16, role: 'object' },
+      ])
+    ).toBe(true)
+    expect(container.querySelector('strong mark.occurrence-subject')?.textContent).toBe('José')
+    expect(container.querySelector('mark.occurrence-predicate')?.textContent).toBe('visita')
+    expect(container.querySelector('mark.occurrence-object')?.textContent).toBe('Lima')
+    expect(container.textContent).toBe(text)
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1)
+    highlightLabeledRanges(container, text, [{ start: 12, end: 16, role: 'object' }])
+    expect(container.querySelectorAll('mark')).toHaveLength(1)
+    expect(highlightLabeledRanges(container, text, [])).toBe(false)
+    expect(container.innerHTML).toBe('<p><strong>José</strong> visita Lima</p>')
   })
 })
 

@@ -240,6 +240,42 @@ describe('NavigationStore', () => {
     expect(nav.canGoBack).toBe(false)
   })
 
+  it('replaces occurrence targets without growing history and preserves citation navigation', () => {
+    const collection: View = { name: 'collection', id: 'c1', collectionName: 'Test' }
+    const target = {
+      kind: 'entity' as const,
+      value: 'José',
+      collectionId: 'c1',
+      collectionName: 'Test',
+      itemId: 'i1',
+      itemTitle: 'One',
+      assetId: 'a1',
+    }
+    const second = { ...target, itemId: 'i2', assetId: 'a2' }
+    const session = { kind: 'entity' as const, targets: [target, second], index: 0 }
+    nav.navigate(collection)
+    nav.navigate({ name: 'item', ...target, occurrenceSession: session })
+    let depth = 0
+    const unsubscribe = nav.subscribe(({ history }) => {
+      depth = history.length
+    })
+    nav.replace({ name: 'item', ...second, occurrenceSession: { ...session, index: 1 } })
+    expect(depth).toBe(3)
+    expect(nav.current).toMatchObject({ itemId: 'i2', occurrenceSession: { index: 1 } })
+    nav.back()
+    expect(nav.current).toEqual(collection)
+    const citation: View = {
+      name: 'item',
+      ...target,
+      citationRange: { start: 0, end: 4, text: 'José' },
+    }
+    nav.navigate(citation)
+    expect(nav.current).toEqual(citation)
+    nav.back()
+    expect(nav.current).toEqual(collection)
+    unsubscribe()
+  })
+
   it('replace works with settings view', () => {
     nav.navigate({ name: 'collection', id: 'c1', collectionName: 'Test' })
     nav.replace({ name: 'settings' })

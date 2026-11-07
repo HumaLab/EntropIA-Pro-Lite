@@ -67,6 +67,8 @@
   import ItemAnalysisPanel from './ItemAnalysisPanel.svelte'
   import ItemMapViewer from './ItemMapViewer.svelte'
   import ItemAssetPanel from './ItemAssetPanel.svelte'
+  import OccurrenceStepper from './OccurrenceStepper.svelte'
+  import { locateOccurrences, type OccurrencePassage } from '$lib/relation-occurrences'
   import {
     buildLayoutBlockViews,
     countLayoutBlocksByFilter,
@@ -2276,11 +2278,165 @@
    * citation. `$navigation` keeps it reactive because this view is reused while
    * moving between documents.
    */
-  const citationRange = $derived(
-    $navigation.current.name === 'item' &&
-      (!$navigation.current.assetId || $navigation.current.assetId === selectedAsset?.id)
-      ? ($navigation.current.citationRange ?? null)
+  const occurrenceSession = $derived(
+    $navigation.current.name === 'item' ? ($navigation.current.occurrenceSession ?? null) : null
+  )
+  const occurrenceTargets = $derived(occurrenceSession?.targets)
+  type OccurrenceStep = {
+    targetIndex: number
+    matchIndex: number
+    assetId: string | null
+    rawText: string
+    passage: OccurrencePassage | null
+  }
+  let occurrenceSteps = $state.raw<OccurrenceStep[]>([])
+  let occurrencesLoading = $state(false)
+
+  // Resolve item-level rows across visible pages, not an arbitrary first image.
+  // This is read-only; a session owns a snapshot and never writes extracted text.
+  $effect(() => {
+    const targets = occurrenceTargets
+    occurrenceSteps = []
+    if (!targets) {
+      occurrencesLoading = false
+      return
+    }
+    occurrencesLoading = true
+    let cancelled = false
+    const store = getStore()
+    const itemAssets = new Map<string, Promise<Asset[]>>()
+    const texts = new Map<string, Promise<string>>()
+    void (async () => {
+      const steps: OccurrenceStep[] = []
+      for (const [targetIndex, target] of targets.entries()) {
+        let pendingAssets = itemAssets.get(target.itemId)
+        if (!pendingAssets) {
+          pendingAssets = store.assets.findByItem(target.itemId).then(visibleAssets)
+          itemAssets.set(target.itemId, pendingAssets)
+        }
+        const available = await pendingAssets
+        if (cancelled) return
+        const candidates = target.assetId
+          ? available.filter((asset) => asset.id === target.assetId)
+          : available
+        const found: OccurrenceStep[] = []
+        for (const asset of candidates) {
+          let pendingText = texts.get(asset.id)
+          if (!pendingText) {
+            pendingText = (
+              asset.type === 'audio'
+                ? store.transcriptions.findByAsset(asset.id)
+                : store.extractions.findByAsset(asset.id)
+            ).then((row) => row?.textContent ?? '')
+            texts.set(asset.id, pendingText)
+          }
+          const rawText = await pendingText
+          if (cancelled) return
+          for (const passage of locateOccurrences(rawText, target)) {
+            found.push({
+              targetIndex,
+              matchIndex: found.length,
+              assetId: asset.id,
+              rawText,
+              passage,
+            })
+          }
+        }
+        if (!found.length) {
+          found.push({
+            targetIndex,
+            matchIndex: 0,
+            assetId: target.assetId ?? candidates[0]?.id ?? null,
+            rawText: '',
+            passage: null,
+          })
+        }
+        steps.push(...found)
+      }
+      if (!cancelled) occurrenceSteps = steps
+    })()
+      .catch(() => {
+        // Missing/deleted/unreadable text is evidence unavailable, never an exact match.
+        if (!cancelled) {
+          occurrenceSteps = targets.map((target, targetIndex) => ({
+            targetIndex,
+            matchIndex: 0,
+            assetId: target.assetId,
+            rawText: '',
+            passage: null,
+          }))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) occurrencesLoading = false
+      })
+    return () => {
+      cancelled = true
+    }
+  })
+
+  const occurrenceStepIndex = $derived(
+    Math.max(
+      0,
+      occurrenceSteps.findIndex(
+        (step) =>
+          step.targetIndex === occurrenceSession?.index &&
+          step.matchIndex === (occurrenceSession?.matchIndex ?? 0)
+      )
+    )
+  )
+  const occurrenceStep = $derived(occurrenceSteps[occurrenceStepIndex] ?? null)
+  const occurrenceText = $derived(
+    selectedAsset?.type === 'audio' ? textPanelTranscriptionEditedText : textPanelOcrEditedText
+  )
+  const occurrencePassage = $derived(
+    occurrenceStep?.assetId === selectedAssetId && occurrenceStep.rawText === occurrenceText
+      ? occurrenceStep.passage
       : null
+  )
+  const occurrenceCitationRange = $derived(
+    occurrencePassage
+      ? {
+          start: occurrencePassage.start,
+          end: occurrencePassage.end,
+          text: occurrenceText.slice(occurrencePassage.start, occurrencePassage.end),
+        }
+      : null
+  )
+
+  function navigateOccurrence(index: number) {
+    const session = occurrenceSession
+    const step = occurrenceSteps[index]
+    const target = step && session?.targets[step.targetIndex]
+    if (!step || !target || !session) return
+    if (target.itemId === itemId) selectAssetById(step.assetId)
+    navigation.replace({
+      name: 'item',
+      collectionId: target.collectionId,
+      collectionName: target.collectionName,
+      itemId: target.itemId,
+      itemTitle: target.itemTitle,
+      assetId: step.assetId,
+      occurrenceSession: { ...session, index: step.targetIndex, matchIndex: step.matchIndex },
+    })
+  }
+
+  $effect(() => {
+    const step = occurrenceStep
+    if (!step || occurrencesLoading || loading || !occurrenceSession) return
+    const current = $navigation.current
+    if (current.name === 'item' && current.itemId === itemId && current.assetId !== step.assetId) {
+      untrack(() => navigateOccurrence(occurrenceStepIndex))
+    }
+  })
+
+  const citationRange = $derived(
+    occurrenceSession
+      ? occurrenceCitationRange
+      : $navigation.current.name === 'item' &&
+          (!$navigation.current.assetId || $navigation.current.assetId === selectedAsset?.id)
+        ? ($navigation.current.citationRange ?? null)
+        : null
   )
 
   /** The second to seek an audio asset to, from a chat citation of a transcript. */
@@ -2686,6 +2842,17 @@
     const nextAssetId = asset?.id ?? null
     const assetLabel = asset ? getSelectedAssetBreadcrumbLabel(asset) : null
 
+    // Keep an unavailable occurrence address intact: otherwise a stale/deleted
+    // page would silently turn into the first sibling and lose its notice.
+    if (
+      occurrenceSession &&
+      navigation.current.name === 'item' &&
+      navigation.current.assetId &&
+      navigation.current.assetId !== nextAssetId
+    ) {
+      return
+    }
+
     if (
       navigation.current.name === 'item' &&
       navigation.current.itemId === itemId &&
@@ -3035,6 +3202,22 @@
       : ''}"
   >
     <Panel variant="glass" padding="none" class="left-panel">
+      {#if occurrenceSession}
+        <OccurrenceStepper
+          index={occurrenceStepIndex}
+          total={occurrenceSteps.length}
+          kind={occurrenceSession.kind}
+          status={occurrencesLoading
+            ? 'loading'
+            : !occurrencePassage
+              ? 'none'
+              : occurrencePassage.approximate
+                ? 'approximate'
+                : 'exact'}
+          {translate}
+          onchange={navigateOccurrence}
+        />
+      {/if}
       <ItemAssetPanel
         {selectedAsset}
         {viewerSrc}
@@ -3060,6 +3243,8 @@
         ocrEditedText={textPanelOcrEditedText}
         {citationRange}
         {citationSeconds}
+        occurrenceActive={occurrenceSession !== null}
+        occurrenceRanges={occurrencePassage?.ranges ?? []}
         transcriptionState={textPanelTranscriptionState}
         transcriptionEditedText={textPanelTranscriptionEditedText}
         canRestoreOriginalOcr={selectedAsset ? ocrRestorableAssets.has(selectedAsset.id) : false}
@@ -3098,7 +3283,7 @@
         }}
       />
 
-      {#if assets.length > 1}
+      {#if assets.length > 1 && !occurrenceSession}
         <div class="asset-pagination">
           <IconButton
             size="sm"

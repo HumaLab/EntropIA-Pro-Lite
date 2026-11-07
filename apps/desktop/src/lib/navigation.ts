@@ -5,6 +5,7 @@
  */
 
 import { locale, t } from './i18n'
+import type { OccurrenceSession } from './relation-occurrences'
 
 export type View =
   | { name: 'home' }
@@ -18,6 +19,8 @@ export type View =
       itemTitle: string
       assetId?: string | null
       assetLabel?: string | null
+      /** Contextual graph navigation; stepping replaces this history entry. */
+      occurrenceSession?: OccurrenceSession | null
       /**
        * A character range into the asset's extracted text, when the view was
        * opened by following a citation (§10.2 step 4).
