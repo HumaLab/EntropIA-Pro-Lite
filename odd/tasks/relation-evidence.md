@@ -17,7 +17,7 @@ Follow-up to `odd/tasks/relations-3d-navigation-params.md` (PR #254). Branch
 | ID | Specs | Route | Status | Commit |
 |---|---|---|---|---|
 | T1 | S1 | inline — sentence scoring locator in `relation-occurrences.ts`, reconstructed role + note in highlight/ItemView/OccurrenceStepper, tests | done | (T1 commit) |
-| T3 | S3 | inline — selected node brighter with a contrasting outline, its links highlighted (`RelationGraph3D.svelte`) | pending | |
+| T3 | S3 | inline — selected node brighter with a contrasting outline, its links highlighted (`RelationGraph3D.svelte`) | done | (T3 commit) |
 | T2 | S2 | needs explorer (sync contract of `triples`, `schema_tag`, migration path) then implementation + independent verify (Risk items 1, 3) | blocked: subagents unavailable (provider quota) | |
 
 ## Log

@@ -32,6 +32,7 @@
     type OccurrenceTarget,
   } from '$lib/relation-occurrences'
   import {
+    linkTouchesSelection,
     resolveSelection,
     seedNodePositions,
     type GraphCamera,
@@ -253,6 +254,75 @@
   }
 
   // ── Building and drawing ─────────────────────────────────────────────────
+  // ── Highlighting the selection ─────────────────────────────────────────
+  /** The renderer's sphere for a node: a three.js mesh, typed by what is used. */
+  interface NodeMesh {
+    geometry: unknown
+    material: { constructor: new (params: Record<string, unknown>) => unknown }
+    constructor: new (geometry: unknown, material: unknown) => OutlineMesh
+    add: (child: OutlineMesh) => void
+    remove: (child: OutlineMesh) => void
+  }
+  interface OutlineMesh {
+    scale: { setScalar: (value: number) => void }
+  }
+  let outline: { parent: NodeMesh; mesh: OutlineMesh } | null = null
+
+  function removeOutline() {
+    outline?.parent.remove(outline.mesh)
+    outline = null
+  }
+
+  /**
+   * A contrasting rim around the selected node: a slightly larger copy of its
+   * sphere drawn from the back faces only. Built from the sphere's own
+   * constructors, so the view needs no direct three.js dependency.
+   */
+  function outlineSelected(color: string) {
+    removeOutline()
+    if (!instance || selected?.kind !== 'node') return
+    const id = selected.node.id
+    const node = instance.graphData().nodes.find((n) => (n as GraphNode).id === id) as
+      { __threeObj?: NodeMesh } | undefined
+    const sphere = node?.__threeObj
+    if (!sphere?.geometry || !sphere.material) return
+    const Material = sphere.material.constructor
+    const Mesh = sphere.constructor
+    // side 1 = THREE.BackSide: only the rim around the sphere shows.
+    const rim = new Mesh(
+      sphere.geometry,
+      new Material({ color, side: 1, transparent: true, opacity: 0.95 })
+    )
+    rim.scale.setScalar(1.35)
+    sphere.add(rim)
+    outline = { parent: sphere, mesh: rim }
+  }
+
+  /**
+   * The selected node turns bright with a contrasting rim, and its links (or
+   * the selected link) take the contrasting colour, a little width and moving
+   * particles, which stay visible whatever the global link opacity is.
+   */
+  function applyHighlight() {
+    if (!instance) return
+    const accent = token('--color-accent', '#4f7cff')
+    const bright = token('--color-text-primary', '#ffffff')
+    const contrast = token('--color-warning', '#f5a524')
+    const muted = token('--color-text-secondary', '#888')
+    const current = selection()
+    const nodeId = current?.kind === 'node' ? current.id : null
+    const lit = (link: object) =>
+      linkTouchesSelection(link as { source: unknown; target: unknown }, current)
+    instance
+      .nodeColor((n) => ((n as GraphNode).id === nodeId ? bright : accent))
+      .linkColor((l) => (lit(l) ? contrast : muted))
+      .linkWidth((l) => (lit(l) ? 1.2 : 0))
+      .linkDirectionalParticles((l) => (lit(l) ? 2 : 0))
+      .linkDirectionalParticleColor(() => contrast)
+    // The renderer refreshes node objects on its next frame; outline after it.
+    requestAnimationFrame(() => outlineSelected(contrast))
+  }
+
   function draw() {
     if (!instance || !graph) return
     const structureKey = graphStructureKey(settings)
@@ -277,6 +347,7 @@
     instance.graphData({ nodes: seeded.nodes, links: graph.links.map((l) => ({ ...l })) })
     selected = resolveSelection(graph, restore?.selection ?? selection())
     if (seeded.restored && restore?.camera) restoreCamera(restore.camera)
+    applyHighlight()
   }
 
   function rebuild() {
@@ -304,14 +375,12 @@
         })
         observer.observe(container)
       }
-      const accent = token('--color-accent', '#4f7cff')
       instance
         .width(container.clientWidth)
         .height(container.clientHeight)
         .backgroundColor(token('--color-surface', '#111'))
         .showNavInfo(false)
         .nodeLabel((n) => label((n as GraphNode).label))
-        .nodeColor(() => accent)
         .onNodeClick((n) => {
           selected = graph
             ? resolveSelection(graph, { kind: 'node', id: (n as GraphNode).id })
@@ -319,8 +388,8 @@
         })
         .onLinkClick((l) => selectLink(l))
         .onBackgroundClick(() => (selected = null))
-        .linkColor(() => token('--color-text-secondary', '#888'))
         .linkDirectionalArrowRelPos(1)
+        .linkDirectionalParticleWidth(2)
       appliedPhysics = ''
       applyRender(settings)
       draw()
@@ -380,7 +449,14 @@
     if (status === 'ready') applyRender(current)
   })
 
+  // Selection changes (clicks, closing the panel) restyle the live graph.
+  $effect(() => {
+    void selected
+    if (status === 'ready') applyHighlight()
+  })
+
   onDestroy(() => {
+    removeOutline()
     observer?.disconnect()
     instance?._destructor()
     instance = null

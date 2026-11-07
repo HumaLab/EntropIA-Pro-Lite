@@ -86,3 +86,20 @@ export function resolveSelection(
   )
   return link ? { kind: 'link', link } : null
 }
+
+/** An endpoint id, whether the renderer still holds the id or has swapped in the node. */
+const endpointId = (end: unknown): string =>
+  typeof end === 'object' && end !== null ? String((end as { id: unknown }).id) : String(end)
+
+/** Whether a link belongs to the selection: any link of a selected node, or the selected link. */
+export function linkTouchesSelection(
+  link: { source: unknown; target: unknown },
+  selection: GraphSelection | null
+): boolean {
+  if (!selection) return false
+  const source = endpointId(link.source)
+  const target = endpointId(link.target)
+  return selection.kind === 'node'
+    ? source === selection.id || target === selection.id
+    : source === selection.source && target === selection.target
+}
