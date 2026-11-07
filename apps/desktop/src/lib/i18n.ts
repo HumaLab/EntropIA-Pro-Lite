@@ -1966,10 +1966,13 @@ const es = {
   'collectionAnalysis.graphEmpty':
     'Todavía no hay relaciones. Se extraen en Configuración → Lotes, con el paso de relaciones.',
   'collectionAnalysis.graphSummary':
-    '{nodes} nombres y {links} relaciones. Arrastrá para girar, rueda para acercar; pasá el mouse por un punto o una línea para leerla; tocá un punto para ver de dónde sale.',
-  'collectionAnalysis.graphHidden': 'Se ocultan {count} nombres con pocas relaciones.',
+    '{nodes} nombres y {links} relaciones. Arrastrá para girar, rueda para acercar; pasá el mouse por un punto o una línea para leerla; tocá un punto o una línea para ver dónde aparece en el texto.',
+  'collectionAnalysis.graphHidden':
+    'Se ocultan {count} nombres por los filtros de Parámetros → Relaciones 3D.',
   'collectionAnalysis.graphRelations': 'Relaciones',
-  'collectionAnalysis.graphDocuments': 'Aparece en',
+  'collectionAnalysis.graphOpenEntity': 'Ver dónde aparece en el texto (documentos: {count})',
+  'collectionAnalysis.graphOpenLink': 'Ver esta relación en el texto (documentos: {count})',
+  'collectionAnalysis.graphOpenRelation': 'Ver el pasaje con esta relación resaltada',
   'collectionAnalysis.graphClose': 'Cerrar el detalle',
   'collectionAnalysis.loading': 'Analizando el texto de la colección...',
   'collectionAnalysis.empty':
@@ -4993,10 +4996,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collectionAnalysis.graphEmpty':
     'No relations yet. They are extracted in Settings → Batch, with the relations step.',
   'collectionAnalysis.graphSummary':
-    '{nodes} names and {links} relations. Drag to rotate, scroll to zoom; hover a point or a line to read it; click a point to see where it comes from.',
-  'collectionAnalysis.graphHidden': '{count} names with few relations are hidden.',
+    '{nodes} names and {links} relations. Drag to rotate, scroll to zoom; hover a point or a line to read it; click a point or a line to see where it appears in the text.',
+  'collectionAnalysis.graphHidden':
+    '{count} names are hidden by the filters in Parameters → 3D relations.',
   'collectionAnalysis.graphRelations': 'Relations',
-  'collectionAnalysis.graphDocuments': 'Appears in',
+  'collectionAnalysis.graphOpenEntity': 'See where it appears in the text (documents: {count})',
+  'collectionAnalysis.graphOpenLink': 'See this relation in the text (documents: {count})',
+  'collectionAnalysis.graphOpenRelation': 'Open the passage with this relation highlighted',
   'collectionAnalysis.graphClose': 'Close the details',
   'collectionAnalysis.loading': 'Analyzing collection text...',
   'collectionAnalysis.empty':

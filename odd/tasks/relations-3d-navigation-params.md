@@ -23,8 +23,8 @@ Branch `feat/relations-3d-navigation-params`. Architecture map: see Log L3.
 |---|---|---|---|---|
 | T1a | S6, S7, S8 | worker (parallel with T2) — graph settings model in `analysis-settings.ts` (defaults, bounds, normalize, restore defaults, structure vs render split) and `buildRelationGraph` options; pure logic, no UI, no i18n | done | 0dcf2661 |
 | T2 | S3, S4, S8 | worker (parallel with T1a) — occurrence model + passage locator (entities: validated offsets else text search; relations: S/O proximity search), multi-mark highlight (subject/predicate/object), occurrence stepper in the item view via existing `citationRange` path | done | 4e473278 |
-| T1b | S6, S7 | worker after T2 — Parámetros «Relaciones 3D» section UI (sections, labels, restore defaults) on the T1a model | pending | |
-| T3 | S1, S2, S3, S4, S5, S7 | worker after T1b — RelationGraph3D panel (50 %, 0.5 opacity, min width, link selection, clickable entity/relation occurrences), snapshot/restore through navigation history | pending | |
+| T1b | S6, S7 | worker after T2 — Parámetros «Relaciones 3D» section UI (sections, labels, restore defaults) on the T1a model | done | eb6a5a1f |
+| T3 | S1, S2, S3, S4, S5, S7 | worker after T1b — RelationGraph3D panel (50 %, 0.5 opacity, min width, link selection, clickable entity/relation occurrences), snapshot/restore through navigation history | done | (T3 commit) |
 | T4 | S9 | verify — round trip, 3D state, responsive, transparency, every parameter | pending | |
 
 ## Log

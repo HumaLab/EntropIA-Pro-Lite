@@ -91,6 +91,39 @@ export function buildEntityTargets(
   return [...groups.values()]
 }
 
+/**
+ * A graph node's documents: its NER rows (which carry offset hints) plus every
+ * document whose relations name it. Graph nodes come from relation endpoints,
+ * which NER does not always tag, so the triples alone must still lead
+ * somewhere; those targets search the text for the label.
+ */
+export function buildNodeTargets(
+  label: string,
+  entityRows: readonly EntityRow[],
+  tripleRows: readonly TripleRow[],
+  context: ContextForItem
+): OccurrenceTarget[] {
+  const targets = buildEntityTargets(label, entityRows, context)
+  const seen = new Set(targets.map(addressKey))
+  for (const row of tripleRows) {
+    if (!key(label) || (key(row.subject) !== key(label) && key(row.object) !== key(label))) {
+      continue
+    }
+    const id = addressKey(row)
+    if (seen.has(id)) continue
+    seen.add(id)
+    targets.push({
+      ...context(row.itemId),
+      itemId: row.itemId,
+      assetId: row.assetId,
+      kind: 'entity',
+      value: label.trim(),
+      offsets: [],
+    })
+  }
+  return targets.sort((a, b) => compare(addressKey(a), addressKey(b)))
+}
+
 /** Directed subject → object pair, with a stable representative predicate per asset. */
 export function buildRelationTargets(
   subject: string,

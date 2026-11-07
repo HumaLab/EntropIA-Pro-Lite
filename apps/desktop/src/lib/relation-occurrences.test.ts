@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildEntityTargets, buildRelationTargets, locateOccurrences } from './relation-occurrences'
+import {
+  buildEntityTargets,
+  buildNodeTargets,
+  buildRelationTargets,
+  locateOccurrences,
+} from './relation-occurrences'
 
 const context = { collectionId: 'c', collectionName: 'Collection', itemTitle: 'Document' }
 const entity = { kind: 'entity' as const, value: 'José', itemId: 'i', assetId: 'a', ...context }
@@ -43,6 +48,26 @@ describe('occurrence targets', () => {
     expect(buildRelationTargets('josé', 'lima', [...triples].reverse(), () => context)).toEqual(
       buildRelationTargets('josé', 'lima', triples, () => context)
     )
+  })
+})
+
+describe('buildNodeTargets', () => {
+  it('adds the documents of the relations naming the node when NER has no entity there', () => {
+    const entities = [{ itemId: 'i', assetId: 'a', value: 'José', startOffset: 0, endOffset: 4 }]
+    const triples = [
+      { id: '1', itemId: 'i', assetId: 'a', subject: 'José', predicate: 've', object: 'Lima' },
+      { id: '2', itemId: 'k', assetId: null, subject: 'Lima', predicate: 've', object: ' JOSÉ ' },
+      { id: '3', itemId: 'm', assetId: 'b', subject: 'Ana', predicate: 've', object: 'Lima' },
+    ]
+    const targets = buildNodeTargets('josé', entities, triples, () => context)
+    expect(targets.map(({ itemId, assetId }) => [itemId, assetId])).toEqual([
+      ['i', 'a'],
+      ['k', null],
+    ])
+    // The NER row keeps its offset hint; the triple-only document searches.
+    expect(targets[0]).toMatchObject({ kind: 'entity', offsets: [{ start: 0, end: 4 }] })
+    expect(targets[1]).toMatchObject({ kind: 'entity', value: 'josé', offsets: [] })
+    expect(buildNodeTargets('nadie', entities, triples, () => context)).toEqual([])
   })
 })
 

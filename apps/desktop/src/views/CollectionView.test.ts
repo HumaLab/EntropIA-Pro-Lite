@@ -12,6 +12,7 @@ import { invoke } from '@tauri-apps/api/core'
 // Real module (not mocked): CollectionView.svelte's Task 3.5 pane-targeting
 // guard reads this same registry via `currentPaneRects()`.
 import { registerPaneRect, unregisterPaneRect } from '$lib/pane-rects'
+import { normalizeGraphSettings } from '$lib/analysis-settings'
 
 const { storeRef, navigationRef, workspaceRef, fileImportRef, dragDropRef } = vi.hoisted(() => ({
   storeRef: {
@@ -2038,7 +2039,11 @@ describe('CollectionView analysis panel', () => {
     const stored = JSON.parse(
       localStorage.getItem('entropia-collection-analysis-settings:col-1') ?? 'null'
     )
-    expect(stored).toEqual({ cloudTermCount: 20, customStopwords: ['fábrica'] })
+    expect(stored).toEqual({
+      cloudTermCount: 20,
+      customStopwords: ['fábrica'],
+      graph: normalizeGraphSettings(undefined),
+    })
 
     // Out-of-range input clamps to the configured maximum.
     await fireEvent.change(termInput, { target: { value: '999' } })

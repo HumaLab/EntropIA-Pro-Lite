@@ -6,11 +6,21 @@
 
 import { locale, t } from './i18n'
 import type { OccurrenceSession } from './relation-occurrences'
+import type { CollectionAnalysisRestore } from './relation-graph-view-state'
 
 export type View =
   | { name: 'home' }
   | { name: 'collections' }
-  | { name: 'collection'; id: string; collectionName: string }
+  | {
+      name: 'collection'
+      id: string
+      collectionName: string
+      /**
+       * The analysis panel as it was left for a passage (Relaciones 3D camera,
+       * layout, selection): Back reopens it as it was, once.
+       */
+      analysis?: CollectionAnalysisRestore | null
+    }
   | {
       name: 'item'
       collectionId: string
