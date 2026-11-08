@@ -248,6 +248,7 @@
     "allow-corpus-items-delete",
     "allow-corpus-collection-delete",
     "allow-agent-connector-location",
+    "allow-agent-assistant-install",
     "allow-navegador-open",
     "allow-navegador-navigate",
     "allow-navegador-back",

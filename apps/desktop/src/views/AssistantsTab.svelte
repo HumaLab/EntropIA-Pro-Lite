@@ -10,9 +10,11 @@
    * an assistant's configuration names.
    */
   import { onMount } from 'svelte'
+  import { t } from '$lib/i18n'
   import { open as openFolderDialog } from '@tauri-apps/plugin-dialog'
   import { ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
   import {
+    agentAssistantInstall,
     agentAccessSetEnabled,
     agentAccessStatus,
     agentClientCreate,
@@ -29,6 +31,7 @@
     type AgentClient,
     type AgentGrants,
     type ConnectorLocation,
+    type ConnectorRecipe,
     type CreatedAgentClient,
   } from '$lib/agent-access'
 
@@ -50,6 +53,8 @@
    */
   let grantRender = $state(0)
   let copiedLabel = $state<string | null>(null)
+  let connectedAssistant = $state<string | null>(null)
+  const assistants = connectorRecipes('')
   let destroyed = false
 
   /** What each grantable scope lets an assistant do, as the panel words it. */
@@ -130,6 +135,7 @@
   async function connect() {
     const trimmed = name.trim()
     if (!trimmed || busy) return
+    connectedAssistant = null
     busy = true
     errorMessage = null
     copiedLabel = null
@@ -146,6 +152,65 @@
     }
   }
 
+  function installError(error: unknown): string {
+    if (!error || typeof error !== 'object' || !('code' in error)) return String(error)
+    const failure = error as {
+      code: string
+      assistant?: string
+      detail?: string
+      exitCode?: number
+    }
+    const known = [
+      'not_found',
+      'unsafe_wrapper',
+      'timeout',
+      'invalid_config',
+      'invalid_client',
+      'command_failed',
+      'io',
+    ]
+    if (!known.includes(failure.code)) return String(error)
+    return t(`assistants.install.${failure.code}`, {
+      assistant: failure.assistant ?? '',
+      detail: failure.detail ?? '',
+      exitCode: failure.exitCode ?? '—',
+    })
+  }
+
+  /** Pair with the existing read-only defaults, then register; rollback even if
+   * this tab unmounts while the operating-system operation is in flight. */
+  async function connectAssistant(assistant: ConnectorRecipe) {
+    if (busy || !status) return
+    busy = true
+    errorMessage = null
+    connectedAssistant = null
+    copiedLabel = null
+    let pairing: CreatedAgentClient | null = null
+    try {
+      pairing = await agentClientCreate(assistant.label)
+      await agentAssistantInstall(assistant.id, pairing.client.id)
+      if (!destroyed) {
+        created = pairing
+        status = pairing.status
+        connectedAssistant = assistant.label
+      }
+    } catch (error) {
+      let message = installError(error)
+      if (pairing) {
+        try {
+          const next = await agentClientRevoke(pairing.client.id)
+          if (!destroyed) status = next
+        } catch (rollbackError) {
+          message += ` ${t('assistants.install.rollback', { detail: String(rollbackError) })}`
+          if (!destroyed) await refresh()
+        }
+      }
+      if (!destroyed) errorMessage = message
+    } finally {
+      if (!destroyed) busy = false
+    }
+  }
+
   async function confirmRevoke() {
     const client = pendingRevoke
     if (!client || busy) return
@@ -154,7 +219,10 @@
     copiedLabel = null
     try {
       status = await agentClientRevoke(client.id)
-      if (created?.client.id === client.id) created = null
+      if (created?.client.id === client.id) {
+        created = null
+        connectedAssistant = null
+      }
     } catch (error) {
       errorMessage = String(error)
       // A failed keyring delete still leaves the client revoked: re-read it.
@@ -420,6 +488,25 @@
 
     <div class="assistants-tab__field">
       <span class="assistants-tab__label">Conectar un asistente</span>
+      <p class="assistants-tab__meta">{t('assistants.install.help')}</p>
+      {#each assistants as assistant (assistant.id)}
+        <div>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={busy || !status}
+            onclick={() => connectAssistant(assistant)}
+          >
+            {t('assistants.install.connect', { assistant: assistant.label })}
+          </Button>
+        </div>
+      {/each}
+      {#if connectedAssistant}
+        <p class="assistants-tab__copied" role="status">
+          {t('assistants.install.connected', { assistant: connectedAssistant })}
+        </p>
+      {/if}
+      <p class="assistants-tab__meta">{t('assistants.install.alternative')}</p>
       <div class="assistants-tab__row">
         <div class="assistants-tab__grow">
           <Input

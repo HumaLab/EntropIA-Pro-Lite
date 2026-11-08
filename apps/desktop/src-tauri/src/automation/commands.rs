@@ -346,6 +346,41 @@ pub fn agent_connector_location() -> ConnectorLocation {
     current_location()
 }
 
+/// Register only an already paired client. The installer receives its public id,
+/// never its credential. Paths and command execution are injectable in setup.
+#[tauri::command]
+pub async fn agent_assistant_install(
+    app: tauri::AppHandle,
+    access: State<'_, Arc<AgentAccess>>,
+    assistant: String,
+    client_id: String,
+) -> Result<(), super::setup::SetupError> {
+    use super::setup::{ConfigPaths, ProcessRunner, SetupError};
+    use tauri::Manager;
+    let view = access
+        .view()
+        .map_err(|e| SetupError::new("io", &assistant, e))?;
+    if !view.clients.iter().any(|client| client.id == client_id) {
+        return Err(SetupError::new("invalid_client", &assistant, ""));
+    }
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| SetupError::new("io", &assistant, e))?;
+    let paths = ConfigPaths::from_home(&home, std::env::var_os("PI_CODING_AGENT_DIR"));
+    let program = current_location()
+        .path
+        .unwrap_or_else(|| "entropia-agent-connector".into());
+    super::setup::install(
+        &assistant,
+        &client_id,
+        &program,
+        &paths,
+        &ProcessRunner::from_environment(),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

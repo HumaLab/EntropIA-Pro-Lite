@@ -209,6 +209,14 @@ export function agentConnectorLocation(): Promise<ConnectorLocation> {
   return invoke<ConnectorLocation>('agent_connector_location')
 }
 
+/** Register an existing pairing in the assistant; no token crosses IPC. */
+export function agentAssistantInstall(
+  assistant: ConnectorRecipeId,
+  clientId: string
+): Promise<void> {
+  return invoke<void>('agent_assistant_install', { assistant, clientId })
+}
+
 /** What the panel shows for `agent_access_status`. */
 export function agentAccessStatus(): Promise<AgentAccessStatus> {
   return invoke<AgentAccessStatus>('agent_access_status')

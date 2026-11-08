@@ -137,6 +137,56 @@ describe('AssistantsTab', () => {
     })
   })
 
+  it.each([
+    ['claude', 'Claude Code'],
+    ['codex', 'Codex'],
+    ['opencode', 'OpenCode'],
+    ['pi', 'Pi'],
+  ])('connects %s with one click and keeps copy recipes available', async (id, label) => {
+    respond({ ...reconnectRoutes(), agent_assistant_install: null })
+    render(AssistantsTab)
+    const button = await screen.findByRole('button', { name: `Conectar ${label}` })
+    await waitFor(() => expect(button).toBeEnabled())
+    await fireEvent.click(button)
+    expect(await screen.findByText(`${label} conectado`)).toBeInTheDocument()
+    expect(invokeMock).toHaveBeenCalledWith('agent_client_create', { name: label })
+    expect(invokeMock).toHaveBeenCalledWith('agent_assistant_install', {
+      assistant: id,
+      clientId: 'cl_new123',
+    })
+    expect(invokeMock).not.toHaveBeenCalledWith('agent_client_revoke', expect.anything())
+    expect(
+      screen.getByRole('button', { name: 'Copiar comando para Claude Code' })
+    ).toBeInTheDocument()
+  })
+
+  it('revokes the new pairing when installation fails and shows the precise error', async () => {
+    const routes = { ...reconnectRoutes(), agent_client_revoke: ACTIVE_STATUS }
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'agent_connector_location') return Promise.resolve(MISSING_CONNECTOR)
+      if (command === 'agent_assistant_install')
+        return Promise.reject({
+          code: 'command_failed',
+          assistant: 'Claude Code',
+          exitCode: 7,
+          detail: 'permission denied',
+        })
+      return Promise.resolve(routes[command as keyof typeof routes])
+    })
+    render(AssistantsTab)
+    const button = await screen.findByRole('button', { name: 'Conectar Claude Code' })
+    await waitFor(() => expect(button).toBeEnabled())
+    await fireEvent.click(button)
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Claude Code: salida 7; permission denied'
+    )
+    expect(invokeMock).toHaveBeenCalledWith('agent_client_revoke', { clientId: 'cl_new123' })
+    expect(screen.queryByText('Claude Code conectado')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('assistants-client-id')).not.toBeInTheDocument()
+    expect(screen.getByText('o copiá el comando')).toBeInTheDocument()
+    expect(screen.getByLabelText('Nombre del asistente')).toBeInTheDocument()
+  })
+
   it('shows the endpoint state and the paired clients on open', async () => {
     respond({ agent_access_status: ACTIVE_STATUS })
     render(AssistantsTab)

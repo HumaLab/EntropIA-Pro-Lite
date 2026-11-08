@@ -27,6 +27,7 @@ mod private_acl;
 pub mod proof;
 pub mod read;
 pub mod server;
+pub mod setup;
 
 #[cfg(test)]
 pub(crate) mod mcp_tests;
