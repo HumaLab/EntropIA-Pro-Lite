@@ -123,6 +123,8 @@ keyring = { version = "3", default-features = false, features = ["sync-secret-se
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
 
 [target.'cfg(windows)'.dependencies]
+# Raw security attributes passed to Tokio's named-pipe creation API.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization"] }
 # Cloud-sync stores session tokens in the Windows credential manager.
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 # Lite asks Microsoft Store for updates of its own package (store_updates.rs).

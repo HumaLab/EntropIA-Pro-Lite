@@ -44,6 +44,10 @@ use crate::automation::corpus_tools::CorpusEvents;
 use crate::automation::mcp::AgentServer;
 use crate::automation::proof;
 
+#[cfg(windows)]
+#[path = "pipe.rs"]
+mod pipe;
+
 /// Discovery file the connector reads while the endpoint is up.
 pub const DISCOVERY_FILE: &str = "agent-endpoint.json";
 
@@ -93,6 +97,9 @@ pub struct Discovery {
     /// This start's proof key (D12). Readable only by the user: the file is
     /// `0600`, and the key is never sent over HTTP.
     pub instance_key: String,
+    /// Optional Windows transport; absent on other systems and in older apps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipe: Option<String>,
 }
 
 impl Discovery {
@@ -106,6 +113,7 @@ impl Discovery {
             variant: variant_name().to_string(),
             profile: profile_name(),
             instance_key,
+            pipe: None,
         }
     }
 }
@@ -272,12 +280,22 @@ fn start(dir: &Path, access: Arc<AgentAccess>, context: ToolContext) -> Result<R
 
     let discovery_path = dir.join(DISCOVERY_FILE);
     let instance_key = proof::mint_instance_key()?;
-    let bytes = serde_json::to_vec_pretty(&Discovery::at(port, instance_key.clone()))
+    let discovery = Discovery::at(port, instance_key.clone());
+    #[cfg(windows)]
+    let pipe = pipe::Listener::bind()?;
+    #[cfg(windows)]
+    let discovery = Discovery {
+        pipe: Some(pipe.name.clone()),
+        ..discovery
+    };
+    let bytes = serde_json::to_vec_pretty(&discovery)
         .map_err(|e| format!("could not serialize {}: {e}", discovery_path.display()))?;
     access::write_atomic(&discovery_path, &bytes)?;
 
     let cancel = CancellationToken::new();
     let service = GuardedEndpoint::new(access, port, instance_key, cancel.clone(), context);
+    #[cfg(windows)]
+    tokio::spawn(pipe.serve(service.clone(), cancel.clone()));
     tokio::spawn(serve(listener, service, cancel.clone()));
     Ok(Running {
         port,
@@ -567,6 +585,11 @@ impl Service<Request<Incoming>> for GuardedEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    mod pipe_tests {
+        include!("pipe_tests.rs");
+    }
 
     #[test]
     fn accept_backoff_grows_from_50_ms_and_caps_at_one_second() {
@@ -989,7 +1012,16 @@ mod tests {
         ] {
             assert!(keys.contains(&key), "the connector reads {key}: {keys:?}");
         }
-        assert_eq!(keys.len(), 8, "no field beyond D7's and D12's: {keys:?}");
+        let has_pipe = raw.get("pipe").is_some();
+        assert_eq!(has_pipe, cfg!(windows));
+        if has_pipe {
+            assert!(raw["pipe"].is_string());
+        }
+        assert_eq!(
+            keys.len(),
+            if has_pipe { 9 } else { 8 },
+            "exact discovery fields: {keys:?}"
+        );
         let discovery: Discovery = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(discovery.protocol, PROTOCOL);
         assert_eq!(discovery.mcp_path, MCP_PATH);
