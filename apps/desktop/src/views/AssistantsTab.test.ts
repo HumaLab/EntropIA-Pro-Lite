@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AssistantsTab from './AssistantsTab.svelte'
 import type { AgentAccessStatus, AgentClient, AgentScope } from '$lib/agent-access'
 import {
+  agentSetupInstruction,
   connectorInvocation,
   connectorRecipes,
   NO_CONNECTOR,
@@ -74,6 +75,7 @@ const MSIX_CONNECTOR: ConnectorLocation = {
 const MISSING_CONNECTOR: ConnectorLocation = NO_CONNECTOR
 
 const ACTIVE_STATUS: AgentAccessStatus = {
+  profile: null,
   enabled: true,
   running: true,
   port: 41123,
@@ -82,6 +84,7 @@ const ACTIVE_STATUS: AgentAccessStatus = {
 }
 
 const STOPPED_STATUS: AgentAccessStatus = {
+  profile: null,
   enabled: false,
   running: false,
   port: null,
@@ -135,6 +138,57 @@ describe('AssistantsTab', () => {
       value: { writeText: writeTextMock },
       configurable: true,
     })
+  })
+
+  it('creates a read-only client when copying an instruction and marks it unused', async () => {
+    const client = { ...CLAUDE, name: 'Antigravity', lastUsedAt: null, token: 'eat_secret' }
+    respond({
+      agent_access_status: ACTIVE_STATUS,
+      agent_connector_location: WINDOWS_CONNECTOR,
+      agent_client_create: {
+        client,
+        status: { ...ACTIVE_STATUS, profile: 'research', clients: [client] },
+      },
+      agent_client_revoke: { ...ACTIVE_STATUS, clients: [] },
+    })
+    render(AssistantsTab)
+    const button = screen.getByRole('button', {
+      name: 'Copiar instrucción para cualquier asistente',
+    })
+    expect(button).toBeDisabled()
+    const input = screen.getByLabelText('Nombre del asistente')
+    await fireEvent.input(input, { target: { value: '   ' } })
+    expect(button).toBeDisabled()
+    expect(invokeMock).not.toHaveBeenCalledWith('agent_client_create', expect.anything())
+    expect(writeTextMock).not.toHaveBeenCalled()
+    await fireEvent.input(input, { target: { value: '  Antigravity  ' } })
+    await waitFor(() => expect(button).toBeEnabled())
+    await fireEvent.click(button)
+    await waitFor(() =>
+      expect(writeTextMock).toHaveBeenCalledExactlyOnceWith(
+        agentSetupInstruction({
+          program: WINDOWS_CONNECTOR.path!,
+          clientId: client.id,
+          profile: 'research',
+          name: 'Antigravity',
+          lang: 'es',
+        })
+      )
+    )
+    expect(invokeMock).toHaveBeenCalledWith('agent_client_create', { name: 'Antigravity' })
+    expect(invokeMock).not.toHaveBeenCalledWith('agent_client_set_grants', expect.anything())
+    expect(writeTextMock.mock.calls[0]![0]).not.toContain('eat_secret')
+    expect(screen.getByText('Instrucción copiada para Antigravity')).toBeInTheDocument()
+    expect(screen.getByText('sin usar')).toBeInTheDocument()
+    expect(screen.getByTestId('assistants-connector-command')).toHaveTextContent(
+      '--profile research'
+    )
+    await fireEvent.click(screen.getByRole('button', { name: 'Revocar Antigravity' }))
+    await fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Revocar asistente' })
+    )
+    await waitFor(() => expect(screen.queryByText('sin usar')).not.toBeInTheDocument())
+    expect(invokeMock).toHaveBeenCalledWith('agent_client_revoke', { clientId: client.id })
   })
 
   it.each([

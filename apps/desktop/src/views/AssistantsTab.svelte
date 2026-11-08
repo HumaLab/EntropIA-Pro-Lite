@@ -10,10 +10,12 @@
    * an assistant's configuration names.
    */
   import { onMount } from 'svelte'
-  import { t } from '$lib/i18n'
+  import { locale, t } from '$lib/i18n'
   import { open as openFolderDialog } from '@tauri-apps/plugin-dialog'
   import { ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
   import {
+    agentSetupInstruction,
+    connectorProgram,
     agentAssistantConnect,
     agentAccessSetEnabled,
     agentAccessStatus,
@@ -77,8 +79,13 @@
   }
   const GRANT_KEYS: (keyof AgentGrants)[] = ['localWrite', 'remoteSpend']
 
-  const recipes = $derived(created ? connectorRecipes(created.client.id, connector) : [])
-  const invocation = $derived(created ? connectorInvocation(created.client.id, connector) : '')
+  const recipes = $derived(
+    created ? connectorRecipes(created.client.id, connector, status?.profile) : []
+  )
+  const invocation = $derived(
+    created ? connectorInvocation(created.client.id, connector, status?.profile) : ''
+  )
+  let instructionCopied = $state<string | null>(null)
 
   const endpointLabel = $derived.by(() => {
     if (!status) return 'Verificando…'
@@ -132,10 +139,11 @@
     }
   }
 
-  async function connect() {
+  async function connect(copyInstruction = false) {
     const trimmed = name.trim()
     if (!trimmed || busy) return
     connectedAssistant = null
+    instructionCopied = null
     busy = true
     errorMessage = null
     copiedLabel = null
@@ -145,6 +153,26 @@
       created = result
       status = result.status
       name = ''
+      if (copyInstruction) {
+        try {
+          await navigator.clipboard.writeText(
+            agentSetupInstruction({
+              program: connectorProgram(connector),
+              clientId: result.client.id,
+              profile: result.status.profile,
+              name: result.client.name,
+              lang: $locale,
+            })
+          )
+          if (!destroyed) instructionCopied = result.client.name
+        } catch (error) {
+          if (!destroyed)
+            errorMessage = t('assistants.instruction.failed', {
+              name: result.client.name,
+              error: String(error),
+            })
+        }
+      }
     } catch (error) {
       if (!destroyed) errorMessage = String(error)
     } finally {
@@ -216,6 +244,7 @@
       if (created?.client.id === client.id) {
         created = null
         connectedAssistant = null
+        instructionCopied = null
       }
     } catch (error) {
       errorMessage = String(error)
@@ -380,6 +409,9 @@
             <li class="assistants-tab__client">
               <div class="assistants-tab__copy">
                 <span class="assistants-tab__value">{client.name}</span>
+                {#if client.lastUsedAt === null}
+                  <span class="assistants-tab__badge">{t('assistants.unused')}</span>
+                {/if}
                 <span
                   class="assistants-tab__meta"
                   data-testid="assistants-client-created-{client.id}"
@@ -516,11 +548,31 @@
           size="sm"
           disabled={busy || !name.trim()}
           loading={busy}
-          onclick={connect}
+          onclick={() => connect()}
         >
           Conectar
         </Button>
       </div>
+    </div>
+
+    <div class="assistants-tab__field">
+      <p class="assistants-tab__meta">{t('assistants.instruction.help')}</p>
+      <div>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy || !status || !connector || !name.trim()}
+          onclick={() => connect(true)}
+        >
+          <ActionIcon name="copy" size={14} />
+          {t('assistants.instruction.copy')}
+        </Button>
+      </div>
+      {#if instructionCopied}
+        <p class="assistants-tab__copied" role="status">
+          {t('assistants.instruction.copied', { name: instructionCopied })}
+        </p>
+      {/if}
     </div>
 
     {#if created}
@@ -742,6 +794,15 @@
     padding: var(--space-2) var(--space-3);
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-md);
+  }
+
+  .assistants-tab__badge {
+    align-self: flex-start;
+    padding: 2px var(--space-2);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-full, 9999px);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
   }
 
   .assistants-tab__grants {

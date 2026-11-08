@@ -6,7 +6,35 @@ export type Locale = 'es' | 'en'
 
 export const DEFAULT_LOCALE: Locale = 'es'
 
+export const agentSetupCopy = {
+  es: {
+    intro: 'Conectá este asistente a EntropIA mediante un servidor MCP stdio llamado `entropia`.',
+    formats:
+      'Usá el formato de tu propia herramienta. Reemplazá cualquier entrada `entropia` existente en lugar de agregar una segunda. Conservá el resto de la configuración.',
+    verify:
+      'Verificá ejecutando el comando de abajo y esperá `ok: ...`. Si imprime un código de error, informá esa línea exacta al usuario y detenete, sin editar nada más ni improvisar soluciones. Puede ser necesario reiniciar o recargar tu herramienta para cargar el servidor nuevo.',
+    secrets:
+      'No se necesita ningún token ni secreto y no debés escribir ninguno en la configuración: la credencial queda en el llavero del sistema.',
+  },
+  en: {
+    intro: 'Connect this assistant to EntropIA through an MCP stdio server named `entropia`.',
+    formats:
+      'Use the format of your own tool. Replace any existing `entropia` entry instead of adding a second one. Preserve the rest of the configuration.',
+    verify:
+      'Verify by running the command below and expect `ok: ...`. If it prints an error code, report that exact line to the user and stop, without editing anything else or improvising workarounds. You may need to restart or reload your tool to load the new server.',
+    secrets:
+      'No token or secret is needed or must be written into the configuration: the credential stays in the OS keyring.',
+  },
+} as const
+
 const es = {
+  'assistants.instruction.copy': 'Copiar instrucción para cualquier asistente',
+  'assistants.instruction.help':
+    'Escribí un nombre (Antigravity, Qwen, Grok…). Al copiar se crea un cliente de solo lectura. Pegá la instrucción en tu asistente para que configure la conexión.',
+  'assistants.instruction.copied': 'Instrucción copiada para {name}',
+  'assistants.instruction.failed':
+    'No se pudo copiar la instrucción para {name}: {error}. El cliente sigue en la lista; podés revocarlo o copiar sus comandos.',
+  'assistants.unused': 'sin usar',
   'assistants.install.connect': 'Conectar {assistant}',
   'assistants.install.connected': '{assistant} conectado',
   'assistants.install.alternative': 'o copiá el comando',
@@ -3117,6 +3145,13 @@ type ExtraI18nKey =
   | 'settings.localModel.downloadError'
   | 'settings.ocrhPrivacyNotice'
 const en: Record<keyof typeof es | ExtraI18nKey, string> = {
+  'assistants.instruction.copy': 'Copy setup instruction for any assistant',
+  'assistants.instruction.help':
+    'Enter a name (Antigravity, Qwen, Grok…). Copying creates a read-only client. Paste the instruction into your assistant so it can set up the connection.',
+  'assistants.instruction.copied': 'Instruction copied for {name}',
+  'assistants.instruction.failed':
+    'Could not copy the instruction for {name}: {error}. The client remains in the list; you can revoke it or copy its commands.',
+  'assistants.unused': 'unused',
   'assistants.install.connect': 'Connect {assistant}',
   'assistants.install.connected': '{assistant} connected',
   'assistants.install.alternative': 'or copy the command',
