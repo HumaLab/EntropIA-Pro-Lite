@@ -898,7 +898,7 @@
       "type": "table",
       "name": "triples",
       "tbl_name": "triples",
-      "sql": "CREATE TABLE triples (\n  id TEXT PRIMARY KEY NOT NULL,\n  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,\n  subject TEXT NOT NULL,\n  predicate TEXT NOT NULL,\n  object TEXT NOT NULL,\n  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))\n, asset_id TEXT)"
+      "sql": "CREATE TABLE triples (\n  id TEXT PRIMARY KEY NOT NULL,\n  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,\n  subject TEXT NOT NULL,\n  predicate TEXT NOT NULL,\n  object TEXT NOT NULL,\n  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))\n, asset_id TEXT, evidence_text TEXT, evidence_start INTEGER CHECK(evidence_start IS NULL OR evidence_start >= 0), evidence_end INTEGER CHECK(evidence_end IS NULL OR (evidence_start IS NOT NULL AND evidence_end > evidence_start)))"
     },
     {
       "type": "table",
@@ -5891,6 +5891,33 @@
           "cid": 6,
           "name": "asset_id",
           "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 7,
+          "name": "evidence_text",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 8,
+          "name": "evidence_start",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 9,
+          "name": "evidence_end",
+          "type": "INTEGER",
           "notnull": 0,
           "dflt_value": null,
           "pk": 0,
@@ -11450,6 +11477,7 @@
     "0058_processing_ner_tasks",
     "0059_zotero_annotations",
     "0060_processing_ocr_correction_summary_tasks",
-    "0061_asset_process_events"
+    "0061_asset_process_events",
+    "0062_triple_evidence"
   ]
 }

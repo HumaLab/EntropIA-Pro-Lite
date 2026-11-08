@@ -203,6 +203,11 @@ export const triples = sqliteTable('triples', {
   predicate: text('predicate').notNull(),
   object: text('object').notNull(),
   createdAt: integer('created_at').notNull(),
+  /** Source sentence the model built the triple from (0062); NULL when unknown. */
+  evidenceText: text('evidence_text'),
+  /** UTF-16 span of that sentence in the extracted text; both NULL when not found verbatim. */
+  evidenceStart: integer('evidence_start'),
+  evidenceEnd: integer('evidence_end'),
 })
 
 // ---------------------------------------------------------------------------

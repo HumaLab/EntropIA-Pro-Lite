@@ -181,11 +181,15 @@ impl GenerationFlow {
 
     /// A stored template byte-identical to a default this build no longer
     /// ships is not a customization: NER's retired default asked the model for
-    /// offsets NER computes itself, so it resolves to the current default.
+    /// offsets NER computes itself, and the triples one asked for no evidence sentence,
+    /// so each resolves to its current default.
     /// Any other text is the person's and is used unchanged.
     fn resolve_retired_default(self, template: String) -> String {
         if self == Self::Ner && template.trim() == prompt::LEGACY_DEFAULT_NER_PROMPT {
             return prompt::DEFAULT_NER_PROMPT.to_string();
+        }
+        if self == Self::Triplets && template.trim() == prompt::LEGACY_DEFAULT_TRIPLETS_PROMPT {
+            return prompt::DEFAULT_TRIPLETS_PROMPT.to_string();
         }
         template
     }
@@ -532,6 +536,27 @@ Texto:
             prompt_template_from_settings(&conn, GenerationFlow::Ner),
             prompt::DEFAULT_NER_PROMPT
         );
+    }
+
+    #[test]
+    fn a_stored_retired_triplets_default_resolves_to_the_current_default() {
+        // The default before 0062 asked for three keys only. Stored byte for
+        // byte it is not a customization, and honouring it would never return
+        // the evidence sentence.
+        let conn = settings_conn();
+        settings::set_setting(
+            &conn,
+            "prompt_triplets",
+            prompt::LEGACY_DEFAULT_TRIPLETS_PROMPT,
+        )
+        .unwrap();
+
+        assert_eq!(
+            prompt_template_from_settings(&conn, GenerationFlow::Triplets),
+            prompt::DEFAULT_TRIPLETS_PROMPT
+        );
+        assert!(prompt::DEFAULT_TRIPLETS_PROMPT.contains(r#""evidence""#));
+        assert!(!prompt::LEGACY_DEFAULT_TRIPLETS_PROMPT.contains("evidence"));
     }
 
     #[test]

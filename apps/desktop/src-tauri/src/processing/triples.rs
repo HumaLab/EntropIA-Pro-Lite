@@ -141,7 +141,113 @@ mod tests {
             subject: subject.to_string(),
             predicate: "llevó".to_string(),
             object: "cueros".to_string(),
+            evidence: None,
         }
+    }
+
+    fn with_evidence(evidence: &str) -> LlmTriple {
+        LlmTriple {
+            evidence: Some(evidence.to_string()),
+            ..triple("El barco")
+        }
+    }
+
+    /// (evidence_text, evidence_start, evidence_end) of the only triple of a1.
+    fn evidence_row(conn: &Connection) -> (Option<String>, Option<i64>, Option<i64>) {
+        conn.query_row(
+            "SELECT evidence_text, evidence_start, evidence_end FROM triples WHERE asset_id = 'a1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    fn publish_with_text(text: &str, evidence: LlmTriple) -> Connection {
+        let conn = triples_db();
+        conn.execute_batch(
+            "CREATE TABLE extractions (asset_id TEXT, text_content TEXT, created_at INTEGER);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO extractions (asset_id, text_content, created_at) VALUES ('a1', ?1, 0)",
+            [text],
+        )
+        .unwrap();
+        let output = TriplesComputeOutput {
+            item_id: "i1".to_string(),
+            triples: vec![evidence],
+        };
+        publish_triples_output(&conn, "a1", &output).unwrap();
+        conn
+    }
+
+    /// UTF-16 length, the unit the stored span and the frontend use.
+    fn utf16(text: &str) -> i64 {
+        text.encode_utf16().count() as i64
+    }
+
+    #[test]
+    fn publishing_stores_the_evidence_and_its_utf16_span() {
+        let before = "𝔄cta. Señor: ";
+        let sentence = "el barco llevó cueros a Cádiz.";
+        let conn = publish_with_text(&format!("{before}{sentence} Fin."), with_evidence(sentence));
+        let start = utf16(before);
+        assert_eq!(
+            evidence_row(&conn),
+            (
+                Some(sentence.to_string()),
+                Some(start),
+                Some(start + utf16(sentence))
+            )
+        );
+    }
+
+    #[test]
+    fn the_span_tolerates_whitespace_and_covers_the_texts_own_spacing() {
+        let text = "Inicio. el barco\nllevó  cueros a Cádiz. Fin.";
+        let conn = publish_with_text(text, with_evidence("el barco llevó cueros a Cádiz."));
+        let (stored, start, end) = evidence_row(&conn);
+        assert_eq!(stored.as_deref(), Some("el barco llevó cueros a Cádiz."));
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let span =
+            String::from_utf16(&units[start.unwrap() as usize..end.unwrap() as usize]).unwrap();
+        assert_eq!(span, "el barco\nllevó  cueros a Cádiz.");
+    }
+
+    #[test]
+    fn evidence_not_found_verbatim_is_kept_without_a_span() {
+        let conn = publish_with_text(
+            "El barco llevó cueros a Cádiz.",
+            with_evidence("La fragata trajo sal de Lisboa."),
+        );
+        assert_eq!(
+            evidence_row(&conn),
+            (
+                Some("La fragata trajo sal de Lisboa.".to_string()),
+                None,
+                None
+            )
+        );
+    }
+
+    #[test]
+    fn a_triple_without_evidence_stores_nulls() {
+        let conn = publish_with_text("El barco llevó cueros.", triple("El barco"));
+        assert_eq!(evidence_row(&conn), (None, None, None));
+    }
+
+    #[test]
+    fn without_readable_text_the_evidence_is_kept_without_a_span() {
+        let conn = triples_db();
+        let output = TriplesComputeOutput {
+            item_id: "i1".to_string(),
+            triples: vec![with_evidence("el barco llevó cueros.")],
+        };
+        publish_triples_output(&conn, "a1", &output).unwrap();
+        assert_eq!(
+            evidence_row(&conn),
+            (Some("el barco llevó cueros.".to_string()), None, None)
+        );
     }
 
     fn triples_db() -> Connection {
@@ -149,7 +255,8 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE triples (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, asset_id TEXT,
                subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL,
-               created_at INTEGER NOT NULL DEFAULT 0);
+               created_at INTEGER NOT NULL DEFAULT 0, evidence_text TEXT,
+               evidence_start INTEGER, evidence_end INTEGER);
              INSERT INTO triples (id, item_id, asset_id, subject, predicate, object)
                VALUES ('old', 'i1', 'a1', 'Viejo', 'era', 'previo'),
                       ('other', 'i1', 'a2', 'Otra', 'página', 'intacta');",

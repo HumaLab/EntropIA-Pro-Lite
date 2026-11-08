@@ -88,6 +88,31 @@ pub const DEFAULT_TRIPLETS_PROMPT: &str = r#"Extraé triples semánticos (sujeto
 
 Reglas obligatorias:
 - Devolvé SOLO un array JSON válido.
+- Cada elemento DEBE ser un objeto con EXACTAMENTE estas claves: "subject", "predicate", "object", "evidence".
+- "evidence" es la oración del texto de la que sale la relación, copiada al pie de la letra: sin corregir, traducir ni resumir. Si la oración es larga, copiá solo el fragmento continuo más breve que sostenga la relación, de hasta 200 caracteres.
+- Todos los valores DEBEN ser strings JSON válidos.
+- No agregues claves extra.
+- No agregues texto antes ni después del array.
+- Si no encontrás relaciones confiables, devolvé [].
+- Preferí sujetos y objetos completos (sintagmas nominales completos), no fragmentos sueltos, pronombres ni títulos aislados si el referente explícito aparece en el texto.
+- Evitá duplicados o variantes mínimas de la misma relación.
+
+Enfocate en relaciones fácticas: quién hizo qué, quién está relacionado con quién, qué pasó dónde y cuándo. Usá los términos exactos del texto. Respondé en el mismo idioma que el texto original (por defecto, español).
+
+Ejemplo válido:
+[
+  {"subject":"Juan Pérez","predicate":"firmó","object":"el acta","evidence":"Juan Pérez firmó el acta en presencia del escribano."}
+]
+
+Texto:
+{text}"#;
+
+/// The triples default before migration 0062 (three keys, no evidence). A stored
+/// copy of it byte for byte resolves to the current default.
+pub const LEGACY_DEFAULT_TRIPLETS_PROMPT: &str = r#"Extraé triples semánticos (sujeto-predicado-objeto) de este texto de documento histórico.
+
+Reglas obligatorias:
+- Devolvé SOLO un array JSON válido.
 - Cada elemento DEBE ser un objeto con EXACTAMENTE estas claves: "subject", "predicate", "object".
 - Todos los valores DEBEN ser strings JSON válidos.
 - No agregues claves extra.

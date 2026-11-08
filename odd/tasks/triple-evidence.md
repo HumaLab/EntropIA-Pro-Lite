@@ -1,0 +1,32 @@
+# Triple evidence: store the source sentence of each extracted relation
+
+Future relation extractions keep the sentence each triple was built from, so
+Relaciones 3D highlights it exactly. Branch `feat/triple-evidence`.
+
+## Specs
+
+- **S1 Store evidence for future extractions.** "Eso + guardar evidencia en extracciones futuras" (L1). The triple prompt also returns the source sentence; it is stored (nullable, migration) and used for exact highlighting; existing triples keep using the current sentence scoring (PR #255).
+- **S2 Schema.** Migration `0062` adds nullable `evidence_text`, `evidence_start`, `evidence_end` to `triples` (UTF-16 offsets into the text the extraction read). Registered in the store (`migrations.generated.ts`, `schema.ts`), the Rust registry (`db/migrations.rs`) and the canonical schema fixture. Rows without evidence stay valid.
+- **S3 Prompt and parser.** The default triples prompt asks for a fourth key with the verbatim sentence. The parser accepts it (and its Spanish alias) but never requires it: custom prompts and older outputs still yield triples with no evidence. Offsets are resolved in Rust against the exact text sent to the model; evidence that is not found verbatim (after whitespace normalization) is stored as text without offsets, never with wrong offsets.
+- **S4 Highlight.** When a triple carries evidence with offsets that still match the current text, the passage view highlights exactly that span; otherwise it falls back to the PR #255 sentence scoring.
+- **S5 Sync.** Approved by the user knowing the first push after the migration raises the account `schema_tag`, so other devices must update to keep syncing (L2).
+
+## Tasks
+
+| ID | Specs | Route | Status | Commit |
+|---|---|---|---|---|
+| T1 | S2,S5 | inline (explorer out of quota): migration + store + registry + fixture, tests | done | b88ea866 |
+| T2 | S3 | inline: prompt, parser, offset resolution, persistence on both insert paths, tests | done | e4306e0c |
+| T3 | S4 | inline: frontend highlight from stored evidence with fallback, tests | in review | (T3 commit) |
+| T4 | S1-S5 | verify (Risk items 1: migration of synced data; 3: stored/synced format), PR + merge | verifier ran 0 tests (isolation required, copy forbidden); user approved parent checks + merge on green CI (L8) | |
+
+## Log
+
+- **L1** (user decision in feature relation-evidence, verbatim): "Eso + guardar evidencia en extracciones futuras".
+- **L2** (user, verbatim, after being told the migration raises the account schema_tag on first push): "tienes mi visto bueno apra T2".
+- **L3** Evidence: `triples` schema `packages/store/src/schema.ts:196-206`; last migration `packages/store/src/migrations/0061_asset_process_events.sql`, Rust registry `apps/desktop/src-tauri/src/db/migrations.rs:204-205` (`migration!(name, Atomic)`), generated map via `pnpm --filter @entropia/store generate-migrations`; prompt `llm/prompt.rs` `DEFAULT_TRIPLETS_PROMPT`; parser `llm/mod.rs` `LlmTriple` (~:1038, serde aliases), `parse_triples_json` :1191; inserts `store_triples_for_item` :1264/:1279 and `replace_triples_for_asset` :1354/:1368; `processing/triples.rs` publishes.
+- **L4** Sync evidence: capture triggers only record `(table, row_id)` (`sync/capture.rs:100-112`) and push reads the full row, so new columns travel with no sync change; apply intersects with local columns and journals `schema_drift` for unknown ones (`sync/apply.rs:360-384,499-527`); `read_schema_tag` is the max `_migrations` name (`sync/engine.rs:903-916`), so 0062 raises it.
+- **L5** Decisions while implementing: offsets are resolved at write time against the asset's current text (`text_provider::get_asset_text`), the text the reader highlights; item-level triples store the sentence without a span. The frontend trusts a span only when its slice still reads as the sentence (folded), else searches the sentence with the whitespace/diacritic-tolerant matcher, else falls back to the PR #255 scoring. Settings stores the default prompt text when saved, so a stored copy of the previous default (`LEGACY_DEFAULT_TRIPLETS_PROMPT`, byte-identical to the old Settings copy) resolves to the new default; a vitest pins the Settings copy to the Rust default. Local generation keeps max 1024 output tokens (n_ctx 4096: raising it would shrink the input), so the prompt asks for a fragment of at most 200 characters; local runs may return fewer triples per page than before — not measured (no model run).
+- **L6** Independent verifier unavailable (provider quota). Parent inline checks (not independent): apply uses `ON CONFLICT DO UPDATE` over intersected payload columns only (`sync/apply.rs:550-600`), so an older device's edit does not null local evidence; `LEGACY_DEFAULT_TRIPLETS_PROMPT` is byte-identical to origin/main's default. Known gap: an older device editing a triple pushes a row without evidence, so the server copy may lose it (local copies keep theirs). PR #258 opened, left unmerged for the user.
+- **L7** Independent verifier (static only, 0 tests run): the server rejects any tag lower than the account's with 426 on push and pull (`EntropIA-Cloud/src/handlers/sync.rs:75-88`), so an older device can neither push nor pull after the first 0062 push; this corrects L6 (no server-side loss from older devices). Open point: apply updates every column present in the payload, so an explicit NULL overwrites. Parent analysis: rows with evidence are always new ids (`replace_triples_for_asset` deletes and inserts), reach other devices only through pull, which carries the evidence; a device can only pull after it has 0062 (426 otherwise); hand edits (`triple.repo.ts:65-77`) set only subject/predicate/object and keep local evidence. No path pushes NULL over a stored evidence. Also flagged: the span is resolved against the text at persist time, not the text sent to the model; the frontend validates the span against the current text and falls back, so a stale span is never shown as wrong.
+- **L8** (user, verbatim): "bien, me parece bien, cubramos esos huecos" — approves parent checks of the NULL case and the unrun suites, then merge on green CI; then gaps 1 and 2.

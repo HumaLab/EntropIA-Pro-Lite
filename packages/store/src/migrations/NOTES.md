@@ -148,3 +148,12 @@ corrections, transcription and derived data), with tool, model and versions,
 so the person can audit what was done to a document. Append-only except for
 the coalesced manual-edit row. Local only: it stays out of device sync until
 the sync server learns the table, so each device lists the processes it ran.
+
+## 0062_triple_evidence
+
+The sentence each extracted triple came from, with its UTF-16 span in the
+text the extraction read, so Relaciones 3D can highlight it exactly. Three
+nullable columns on the synced `triples` table: older rows, hand-made triples
+and custom prompts leave them NULL, and the span stays NULL unless the
+sentence was found verbatim. The first push from an updated device raises the
+account schema_tag; devices not yet updated drop the columns on apply.
