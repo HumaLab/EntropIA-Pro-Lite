@@ -7,6 +7,23 @@ export type Locale = 'es' | 'en'
 export const DEFAULT_LOCALE: Locale = 'es'
 
 const es = {
+  'assistants.install.connect': 'Conectar {assistant}',
+  'assistants.install.connected': '{assistant} conectado',
+  'assistants.install.alternative': 'o copiá el comando',
+  'assistants.install.help':
+    'Conectar empareja un cliente de solo lectura y registra EntropIA en el asistente. Si falla, revoca ese cliente. Para copiar el comando, creá un emparejamiento con el formulario de abajo.',
+  'assistants.install.not_found': 'no encontré {assistant} en esta computadora',
+  'assistants.install.unsafe_wrapper':
+    '{assistant} está instalado mediante un script que no puedo ejecutar de forma segura; usá el comando para copiar',
+  'assistants.install.timeout':
+    '{assistant} no respondió en 30 segundos; usá el comando para copiar',
+  'assistants.install.invalid_config':
+    '{assistant}: la configuración no es un objeto JSON válido o es un enlace; no la modifiqué: {detail}',
+  'assistants.install.invalid_client': '{assistant}: el cliente ya no está emparejado',
+  'assistants.install.command_failed': '{assistant}: salida {exitCode}; {detail}',
+  'assistants.install.io': '{assistant}: {detail}',
+  'assistants.install.rollback':
+    'No pude confirmar la revocación; el emparejamiento podría seguir activo. Revisá los clientes emparejados: {detail}',
   'home.title': 'Inicio',
   'home.heading': 'Espacio de trabajo',
   'home.description': 'Para organizar, procesar, explorar, analizar y escribir con trazabilidad.',
@@ -3095,6 +3112,23 @@ type ExtraI18nKey =
   | 'settings.localModel.downloadError'
   | 'settings.ocrhPrivacyNotice'
 const en: Record<keyof typeof es | ExtraI18nKey, string> = {
+  'assistants.install.connect': 'Connect {assistant}',
+  'assistants.install.connected': '{assistant} connected',
+  'assistants.install.alternative': 'or copy the command',
+  'assistants.install.help':
+    'Connect pairs a read-only client and registers EntropIA in the assistant. On failure, it revokes that client. To copy the command, create a pairing with the form below.',
+  'assistants.install.not_found': 'could not find {assistant} on this computer',
+  'assistants.install.unsafe_wrapper':
+    '{assistant} is installed through a script that cannot be executed safely; use the copy command instead',
+  'assistants.install.timeout':
+    '{assistant} did not respond within 30 seconds; use the copy command instead',
+  'assistants.install.invalid_config':
+    '{assistant}: the configuration is not a valid JSON object or is a link; it was not changed: {detail}',
+  'assistants.install.invalid_client': '{assistant}: the client is no longer paired',
+  'assistants.install.command_failed': '{assistant}: exit {exitCode}; {detail}',
+  'assistants.install.io': '{assistant}: {detail}',
+  'assistants.install.rollback':
+    'Could not confirm revocation; the pairing may remain active. Check the paired clients: {detail}',
   'home.title': 'Home',
   'home.heading': 'Workspace',
   'home.description': 'To organize, process, explore, analyze and write with traceability.',

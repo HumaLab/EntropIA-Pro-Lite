@@ -346,6 +346,69 @@ pub fn agent_connector_location() -> ConnectorLocation {
     current_location()
 }
 
+/// Own pairing and rollback together: only the id created here can be revoked.
+/// Reuse the same pairing and revocation functions as the manual panel flow.
+pub async fn connect_assistant(
+    access: &AgentAccess,
+    endpoint: &AgentEndpointState,
+    assistant: &str,
+    name: &str,
+    program: &str,
+    paths: &super::setup::ConfigPaths,
+    runner: &impl super::setup::Runner,
+) -> Result<CreatedClientView, super::setup::SetupError> {
+    let created = create_client(access, endpoint, name)
+        .map_err(|e| super::setup::SetupError::new("io", assistant, e))?;
+    if let Err(mut error) =
+        super::setup::install(assistant, &created.client.id, program, paths, runner).await
+    {
+        if let Err(rollback) = revoke_client(access, endpoint, &created.client.id) {
+            error.rollback = Some(rollback);
+        }
+        return Err(error);
+    }
+    Ok(created)
+}
+
+/// One backend-owned operation, independent of the webview's lifetime. Dropping
+/// the IPC waiter does not cancel the spawned pairing/installation/rollback task.
+#[tauri::command]
+pub async fn agent_assistant_connect(
+    app: tauri::AppHandle,
+    access: State<'_, Arc<AgentAccess>>,
+    endpoint: State<'_, Arc<AgentEndpointState>>,
+    assistant: String,
+    name: String,
+) -> Result<CreatedClientView, super::setup::SetupError> {
+    use super::setup::{ConfigPaths, ProcessRunner, SetupError};
+    use tauri::Manager;
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| SetupError::new("io", &assistant, e))?;
+    let paths = ConfigPaths::from_home(&home, std::env::var_os("PI_CODING_AGENT_DIR"));
+    let program = current_location()
+        .path
+        .unwrap_or_else(|| "entropia-agent-connector".into());
+    let access = access.inner().clone();
+    let endpoint = endpoint.inner().clone();
+    let task_assistant = assistant.clone();
+    tokio::spawn(async move {
+        connect_assistant(
+            &access,
+            &endpoint,
+            &task_assistant,
+            &name,
+            &program,
+            &paths,
+            &ProcessRunner::from_environment(),
+        )
+        .await
+    })
+    .await
+    .map_err(|e| SetupError::new("io", &assistant, e))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,6 +444,97 @@ mod tests {
             access,
             endpoint,
         }
+    }
+
+    struct InstallRunner(bool);
+    impl super::super::setup::Runner for InstallRunner {
+        async fn run(
+            &self,
+            _: &str,
+            _: &[String],
+        ) -> Result<super::super::setup::RunOutput, super::super::setup::SetupError> {
+            Ok(super::super::setup::RunOutput {
+                code: Some(if self.0 { 0 } else { 7 }),
+                stderr: if self.0 {
+                    String::new()
+                } else {
+                    "install refused".into()
+                },
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn connecting_rolls_back_only_its_new_client_and_reports_cleanup_failure() {
+        for fail_delete in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let secrets = Arc::new(MemorySecrets {
+                fail_delete,
+                ..Default::default()
+            });
+            let access = AgentAccess::load(dir.path(), secrets.clone());
+            let endpoint = AgentEndpointState::new(
+                dir.path(),
+                dir.path().join("archive.db"),
+                dir.path().join("cache"),
+            );
+            let existing = create_client(&access, &endpoint, "Existing").unwrap();
+            let token = secrets.token(&existing.client.id).unwrap();
+            let paths = super::super::setup::ConfigPaths::from_home(dir.path(), None);
+            let error = connect_assistant(
+                &access,
+                &endpoint,
+                "codex",
+                "New",
+                "/connector",
+                &paths,
+                &InstallRunner(false),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, "command_failed");
+            assert_eq!(error.exit_code, Some(7));
+            assert_eq!(error.detail, "install refused");
+            assert_eq!(error.rollback.is_some(), fail_delete);
+            if fail_delete {
+                assert!(error
+                    .rollback
+                    .as_deref()
+                    .unwrap()
+                    .contains("delete refused"));
+            }
+            assert_eq!(status(&access, &endpoint).unwrap(), existing.status);
+            assert_eq!(secrets.token(&existing.client.id), Some(token));
+            if !fail_delete {
+                assert_eq!(secrets.tokens.lock().unwrap().len(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn connecting_success_returns_the_read_only_pairing() {
+        let harness = harness();
+        let paths = super::super::setup::ConfigPaths::from_home(harness.dir.path(), None);
+        let created = connect_assistant(
+            &harness.access,
+            &harness.endpoint,
+            "codex",
+            "  Codex  ",
+            "/connector",
+            &paths,
+            &InstallRunner(true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.client.name, "Codex");
+        assert_eq!(created.client.scopes, vec![Scope::Read]);
+        assert_eq!(
+            created.status,
+            status(&harness.access, &harness.endpoint).unwrap()
+        );
+        assert_eq!(created.status.clients, vec![created.client.clone()]);
+        let token = harness.secrets.token(&created.client.id).unwrap();
+        assert!(!serde_json::to_string(&created).unwrap().contains(&token));
     }
 
     #[test]
