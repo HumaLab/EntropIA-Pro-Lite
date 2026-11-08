@@ -151,3 +151,25 @@ async fn pipe_discovery_lifecycle() {
     h.endpoint.sync(&h.access).await.unwrap();
     assert_ne!(advertised_pipe(&h), first);
 }
+
+/// A client that opens the pipe and leaves before sending any HTTP must not
+/// leave the listener without a usable instance for the next one.
+#[tokio::test]
+async fn pipe_survives_clients_that_disconnect_before_sending_http() {
+    use tokio::net::windows::named_pipe::ClientOptions;
+    use tokio::time::{sleep, timeout, Duration};
+
+    let h = harness().await;
+    let name = advertised_pipe(&h);
+    for _ in 0..16 {
+        drop(ClientOptions::new().open(&name).unwrap());
+        sleep(Duration::from_millis(25)).await;
+    }
+    let (status, _, _) = timeout(
+        Duration::from_secs(3),
+        request(&h, MCP_PATH, &[], initialize_body()),
+    )
+    .await
+    .expect("an abandoned client must not wedge the listener");
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
