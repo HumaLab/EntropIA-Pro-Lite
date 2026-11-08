@@ -1,0 +1,31 @@
+# One-click assistant setup
+
+Connect an external assistant (Codex, Claude Code, OpenCode, Pi) to EntropIA
+with one click, without copying a command. Branch `feat/agent-one-click-setup`.
+
+## Specs
+
+- **S1 One click.** "en segundo lugar intentar que todo se resuelva con un clic, o sea que no sea necesario que el usuario copie y pegue el comando correspondiente a los Agentes apra conectarlos, ¿me explico?"
+  - Design (L2): in Ajustes → Asistentes each assistant gets a «Conectar» action that (1) pairs a client exactly as today (same read-only default scopes, same keyring storage), (2) registers the `entropia` MCP server in that assistant, (3) reports the outcome (connected, or the precise error).
+- **S2 Register through the assistant's own tools when it has them.** Codex: `codex mcp add entropia -- <connector> --client <id>` (overwrites). Claude Code: remove the user and local `entropia` entries, then `claude mcp add -s user entropia -- <connector> --client <id>`. OpenCode and Pi: merge the `entropia` entry into their JSON config (the same shape as today's recipes), keeping every other key and server untouched; create the file if missing; refuse (do not overwrite) a file that is not valid JSON.
+- **S3 Safe and honest.** Only the `entropia` entry is ever added or replaced. A missing assistant (CLI not on PATH / no config dir) is reported as «no encontré <asistente> en esta computadora» with the copy recipe still available; a failing command reports its exit and stderr (no tokens: the connector args carry only the client id). If registration fails after pairing, the new client is revoked so no orphan pairing remains. Nothing is written outside the user's own config of that assistant.
+- **S4 The copy recipes stay** as the alternative path for each assistant.
+
+## Tasks
+
+| ID | Specs | Route | Status | Commit |
+|---|---|---|---|---|
+| T1 | S1-S4 | worker — backend command (Rust, automation) that installs one assistant + frontend «Conectar» per assistant in AssistantsTab with result state; tests for each case | done (worker: 160 Rust automation + 36 frontend tests, lint, typecheck; parent: prettier) | (T1 commit) |
+| T2 | S3 | verify (Risk item 5: writes other tools' configuration) | done: verifier could not run tests (isolation timeout) but found 2 static issues, both fixed test-first | (fix commit) |
+| T3 | S1 | parent — real check: one click connects Codex (and the others present) on this machine | pending | |
+
+## Log
+
+- **L1** (user, verbatim): "otra tarea es mejorar el funcionamiento de las conexiones MCP, por un lado mejorar el funcionmaiento intenro apr aque no falle la conexion y en segundo lugar intentar que todo se resuelva con un clic, o sea que no sea necesario que el usuario copie y pegue el comando correspondiente a los Agentes apra conectarlos, ¿me explico?" (the connection part shipped in PR #256).
+- **L2** Design announced to the user (no objection): «Conectar» per assistant; Codex/Claude via their CLIs, OpenCode/Pi via JSON merge; replace a previous `entropia` entry; show the result; keep the copy recipe.
+- **L3** Evidence: recipes are generated in the frontend `apps/desktop/src/lib/agent-access.ts:283-341` (`ConnectorRecipeId` = claude | codex | opencode | pi; `connectorRecipes`; Claude line `claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- …`; Codex `codex mcp add entropia -- …`; OpenCode `{"mcp":{"entropia":{"type":"local","command":[…]}}}`; Pi `{"mcpServers":{"entropia":{"command":…,"args":["--client",…]}}}`). UI `apps/desktop/src/views/AssistantsTab.svelte:75-76,133-145,~252` (pairing then copy buttons). Backend `apps/desktop/src-tauri/src/automation/commands.rs:279` `agent_client_create`, `:345` `agent_connector_location`; `automation/connector.rs:68-95` resolves the bundled connector or the MSIX alias.
+- **L4** Parent decisions (worker asked): Pi's global MCP config path is established from the Pi documentation installed on this machine (read-only), cited in the report; if it cannot be established, Pi stays copy-only and is reported. An absent assistant configuration directory (or a CLI not on PATH) means "assistant not found"; a missing configuration file inside an existing directory is created.
+- **L5** Pi path (worker, from installed docs `@earendil-works/pi-coding-agent/docs/mcp.md:32`, `docs/environment-variables.md:81`): `~/.pi/agent/mcp.json`, overridden by `PI_CODING_AGENT_DIR`, key `mcpServers`. Parent decision on Windows CLIs: strictly shell-free — native executables directly; npm/pnpm `.cmd` shims resolved to `node <entry.js>` by parsing the shim; any other `.cmd`/`.bat`/`.ps1` wrapper rejected with a precise error and the copy recipe kept.
+- **L6** T1 delivered: `agent_assistant_install(assistant, client_id)` (automation/setup.rs + commands.rs), registered in lib.rs, build.rs APP_COMMANDS and capabilities/default.json; AssistantsTab «Conectar» per assistant with pairing rollback; OpenCode `~/.config/opencode/opencode.json`, Pi `~/.pi/agent/mcp.json` (PI_CODING_AGENT_DIR). Like today's copy recipes, the registered command carries no `--profile`, so a dev-profile build registers a connector pointing at the real profile (release builds have no dev profile).
+- **L7** Verifier findings (static): (1) npm shim entry could climb out of its directory (`../`), (2) rollback lived in the frontend only. Fixed: lexical normalization (leading `..` at most 3, no climbing back above a descent, must contain `node_modules`, .js/.cjs/.mjs) plus a `node_modules` component required after canonicalize; new `agent_assistant_connect(assistant, name)` pairs, installs and revokes its own new client on failure in the backend (spawned task, not tied to the webview), reporting a failed rollback in `rollback`. Parent found and fixed a real bug while checking this machine's shims: the current npm `cmd-shim` final line (`… & set PATHEXT=%PATHEXT:;.JS;=;% & "%_prog%"  "%dp0%
+ode_modules\…" %*`) was rejected, so «Conectar» Codex would have failed; pinned by `shim_accepts_the_current_npm_cmd_shim`. Machine survey: codex = npm shim (now accepted), claude = native exe, OpenCode/Pi are configured by JSON merge (their shims are never executed). Checks: 164 automation tests, 37 frontend tests, lint, typecheck, prettier, rustfmt.

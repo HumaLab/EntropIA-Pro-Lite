@@ -209,6 +209,14 @@ export function agentConnectorLocation(): Promise<ConnectorLocation> {
   return invoke<ConnectorLocation>('agent_connector_location')
 }
 
+/** Pair and register in one backend-owned operation, including failure rollback. */
+export function agentAssistantConnect(
+  assistant: ConnectorRecipeId,
+  name: string
+): Promise<CreatedAgentClient> {
+  return invoke<CreatedAgentClient>('agent_assistant_connect', { assistant, name })
+}
+
 /** What the panel shows for `agent_access_status`. */
 export function agentAccessStatus(): Promise<AgentAccessStatus> {
   return invoke<AgentAccessStatus>('agent_access_status')
