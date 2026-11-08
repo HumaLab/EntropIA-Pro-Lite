@@ -16,7 +16,7 @@ the connector's loopback HTTP. Branch `feat/mcp-named-pipe`. Root cause in L2.
 
 | ID | Specs | Route | Status | Commit |
 |---|---|---|---|---|
-| T1 | S1, S2, S3 | worker A — app side: named pipe listener (Windows) serving the same guarded service, owner-only DACL, remote clients rejected, advertised in discovery, same lifecycle as the TCP listener; server tests | pending | |
+| T1 | S1, S2, S3 | worker A — app side: named pipe listener (Windows) serving the same guarded service, owner-only DACL, remote clients rejected, advertised in discovery, same lifecycle as the TCP listener; server tests | done | (T1 commit) |
 | T2 | S1, S2, S3, S4 | worker B — connector side: parse the optional pipe from discovery, transport over the pipe with the same proof + bearer flow, HTTP fallback, regression test for the shield pattern | done | (T2 commit) |
 | T3 | S2 | independent verify (Risk item 2: security guard/transport) | pending | |
 | T4 | S5 | parent — real Codex CLI with Avast active (dev profile + paired client) | pending | |
