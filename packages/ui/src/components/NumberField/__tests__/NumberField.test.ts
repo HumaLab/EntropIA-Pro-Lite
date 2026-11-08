@@ -44,14 +44,14 @@ describe('NumberField', () => {
     const increment = screen.getByRole('button', { name: 'Aumentar' })
     await fireEvent.click(increment)
     expect(field()).toHaveValue(10)
-    expect(increment).toBeDisabled()
+    expect(increment).toHaveAttribute('aria-disabled', 'true')
     await fireEvent.click(increment)
     expect(onchange).toHaveBeenCalledTimes(1)
     const decrement = screen.getByRole('button', { name: 'Disminuir' })
     await fireEvent.click(decrement)
     await fireEvent.click(decrement)
     expect(field()).toHaveValue(1)
-    expect(decrement).toBeDisabled()
+    expect(decrement).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('starts an empty field from its minimum, or zero', async () => {
@@ -64,8 +64,12 @@ describe('NumberField', () => {
     const onchange = vi.fn()
     render(NumberField, { props: { ...labels, value: 2, disabled: true, onchange } })
     expect(field()).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Aumentar' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Disminuir' })).toBeDisabled()
+    for (const name of ['Aumentar', 'Disminuir']) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toHaveAttribute('aria-disabled', 'true')
+      await fireEvent.click(button)
+    }
+    expect(field()).toHaveValue(2)
     expect(onchange).not.toHaveBeenCalled()
   })
 
@@ -79,6 +83,28 @@ describe('NumberField', () => {
     expect(field()).toHaveAttribute('type', 'number')
     for (const name of ['Aumentar', 'Disminuir'])
       expect(screen.getByRole('button', { name })).toHaveAttribute('tabindex', '-1')
+  })
+
+  it('is named by a wrapping label and a click on a button does not reach the input', async () => {
+    const host = document.createElement('label')
+    host.append('Llamadas LLM')
+    document.body.append(host)
+    const onclick = vi.fn()
+    render(NumberField, { target: host, props: { ...labels, value: 40, onclick } })
+    expect(screen.getByLabelText('Llamadas LLM')).toBe(field())
+    await fireEvent.click(screen.getByRole('button', { name: 'Aumentar' }))
+    expect(field()).toHaveValue(41)
+    expect(onclick).not.toHaveBeenCalled()
+    host.remove()
+  })
+
+  it('presses a focused button with Enter and Space', async () => {
+    render(NumberField, { props: { ...labels, value: 1 } })
+    const increment = screen.getByRole('button', { name: 'Aumentar' })
+    await fireEvent.keyDown(increment, { key: 'Enter' })
+    await fireEvent.keyDown(increment, { key: ' ' })
+    await fireEvent.keyDown(increment, { key: 'a' })
+    expect(field()).toHaveValue(3)
   })
 
   it('hides the native spin buttons and draws its icons through ActionIcon', () => {

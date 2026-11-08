@@ -4,7 +4,10 @@
 
   The input stays a real `type="number"`: the browser keeps parsing, keyboard
   stepping (ArrowUp/ArrowDown) and the min/max/step validity, and the field
-  keeps its `spinbutton` role and label. A button press writes the input and
+  keeps its `spinbutton` role and label. The buttons are spans with a button
+  role, not <button>s: a caller often wraps the field in a <label>, and a label
+  names its first labelable descendant, which would then be the − button. They
+  stay out of the tab order; the keyboard steps the field with the arrows. A button press writes the input and
   fires the same `input` and `change` events typing does, so a caller's
   `bind:value`, `oninput` and `onchange` see a click exactly as an edit.
 -->
@@ -40,7 +43,11 @@
     const parsed = bound(step)
     return parsed !== null && parsed > 0 ? parsed : 1
   })
-  const current = $derived(typeof value === 'number' && Number.isFinite(value) ? value : null)
+  const current = $derived.by(() => {
+    if (value === null || value === undefined || value === '') return null
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  })
   const atLower = $derived(current !== null && lower !== null && current <= lower)
   const atUpper = $derived(current !== null && upper !== null && current >= upper)
 
@@ -51,6 +58,25 @@
     if (exponent) return Number(exponent[1])
     const dot = text.indexOf('.')
     return dot < 0 ? 0 : text.length - dot - 1
+  }
+
+  /** A press must not move focus away from the field it edits. */
+  function keepFocus(event: MouseEvent) {
+    event.preventDefault()
+  }
+
+  function press(event: MouseEvent, direction: 1 | -1, blocked: boolean) {
+    // Inside a wrapping <label>, a click would also be forwarded to the input.
+    event.preventDefault()
+    event.stopPropagation()
+    if (!blocked) nudge(direction)
+  }
+
+  /** Enter and Space press a focused button, as on a native <button>. */
+  function key(event: KeyboardEvent, direction: 1 | -1, blocked: boolean) {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    if (!blocked) nudge(direction)
   }
 
   function nudge(direction: 1 | -1) {
@@ -68,16 +94,18 @@
 </script>
 
 <div class="number-field number-field--{size} {className}" class:number-field--disabled={disabled}>
-  <button
-    type="button"
+  <span
+    role="button"
     class="number-field__step"
     tabindex="-1"
     aria-label={decrementLabel}
-    disabled={disabled || atLower}
-    onclick={() => nudge(-1)}
+    aria-disabled={disabled || atLower}
+    onmousedown={keepFocus}
+    onclick={(event) => press(event, -1, disabled || atLower)}
+    onkeydown={(event) => key(event, -1, disabled || atLower)}
   >
     <ActionIcon name="subtract" size={14} />
-  </button>
+  </span>
   <input
     bind:this={input}
     bind:value
@@ -90,16 +118,18 @@
     aria-label={label}
     {...rest}
   />
-  <button
-    type="button"
+  <span
+    role="button"
     class="number-field__step"
     tabindex="-1"
     aria-label={incrementLabel}
-    disabled={disabled || atUpper}
-    onclick={() => nudge(1)}
+    aria-disabled={disabled || atUpper}
+    onmousedown={keepFocus}
+    onclick={(event) => press(event, 1, disabled || atUpper)}
+    onkeydown={(event) => key(event, 1, disabled || atUpper)}
   >
     <ActionIcon name="add" size={14} />
-  </button>
+  </span>
 </div>
 
 <style>
@@ -107,6 +137,8 @@
     display: flex;
     align-items: stretch;
     width: 100%;
+    /* One width for every numeric field; a caller widens it with the variable. */
+    max-width: var(--number-field-max-width, 9.5rem);
     min-width: 0;
     height: var(--control-height-md);
     box-sizing: border-box;
@@ -174,6 +206,7 @@
     background: transparent;
     border: 0;
     cursor: pointer;
+    user-select: none;
     transition:
       color var(--transition-smooth),
       background-color var(--transition-smooth);
@@ -187,16 +220,16 @@
     border-left: 1px solid var(--color-hairline);
   }
 
-  .number-field__step:hover:not(:disabled) {
+  .number-field__step:hover:not([aria-disabled='true']) {
     color: var(--color-text-primary);
     background-color: color-mix(in srgb, var(--color-surface-raised) 80%, transparent);
   }
 
-  .number-field__step:active:not(:disabled) {
+  .number-field__step:active:not([aria-disabled='true']) {
     background-color: var(--color-surface-raised);
   }
 
-  .number-field__step:disabled {
+  .number-field__step[aria-disabled='true'] {
     cursor: default;
     color: var(--color-text-muted);
     opacity: 0.5;

@@ -4,8 +4,11 @@ export interface NumberFieldProps extends Omit<
   HTMLInputAttributes,
   'type' | 'value' | 'min' | 'max' | 'step' | 'size' | 'class'
 > {
-  /** Current value. Bindable; `null` while the field is empty. */
-  value?: number | null
+  /**
+   * Current value. Bindable; `null` while the field is empty. A string state is
+   * accepted as the native input accepts it; the field writes back numbers.
+   */
+  value?: number | string | null
   min?: number | string
   max?: number | string
   /** Amount one button press moves the value. Defaults to 1. */

@@ -24,7 +24,7 @@
    */
   import { onDestroy, onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { Checkbox, ConfirmDialog } from '@entropia/ui'
+  import { Checkbox, ConfirmDialog, NumberField } from '@entropia/ui'
   import type { Collection } from '@entropia/store'
   import { getStore } from '$lib/db'
   import { locale, t } from '$lib/i18n'
@@ -943,23 +943,27 @@
           </label>
           <div class="ia-form__row">
             <label class="ia-field">
-              <span class="ia-field__label">{t('internetArchive.search.yearFrom')}</span>
-              <input
-                type="number"
-                class="ia-field__input"
+              <span class="ia-field__label number-field-label"
+                >{t('internetArchive.search.yearFrom')}</span
+              >
+              <NumberField
                 min="0"
                 max="9999"
                 bind:value={searchFrom}
+                decrementLabel={t('numberField.decrease')}
+                incrementLabel={t('numberField.increase')}
               />
             </label>
             <label class="ia-field">
-              <span class="ia-field__label">{t('internetArchive.search.yearTo')}</span>
-              <input
-                type="number"
-                class="ia-field__input"
+              <span class="ia-field__label number-field-label"
+                >{t('internetArchive.search.yearTo')}</span
+              >
+              <NumberField
                 min="0"
                 max="9999"
                 bind:value={searchTo}
+                decrementLabel={t('numberField.decrease')}
+                incrementLabel={t('numberField.increase')}
               />
             </label>
           </div>

@@ -56,7 +56,7 @@
   } from '$lib/investigation-export'
   import type { ExportFormat } from '$lib/export-fidelity'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
-  import { tooltip, Button, IconButton, ActionIcon, StatusBadge } from '@entropia/ui'
+  import { tooltip, Button, IconButton, ActionIcon, StatusBadge, NumberField } from '@entropia/ui'
 
   const navigation = getNavigation()
   const paneId = getPaneId()
@@ -1063,27 +1063,30 @@
       aria-label={$currentLocale && t('investigation.adjustBudget')}
     >
       <label class="investigation-round__field">
-        <span class="investigation-round__axis">{$currentLocale && t('research.callsLabel')}</span>
-        <input
-          class="investigation-round__input"
-          type="number"
+        <span class="investigation-round__axis number-field-label"
+          >{$currentLocale && t('research.callsLabel')}</span
+        >
+        <NumberField
           min="1"
           step="1"
           bind:value={budgetCalls}
           disabled={jobActionInFlight !== null}
+          decrementLabel={$currentLocale && t('numberField.decrease')}
+          incrementLabel={$currentLocale && t('numberField.increase')}
         />
       </label>
       <label class="investigation-round__field">
-        <span class="investigation-round__axis">{$currentLocale && t('research.maxCostLabel')}</span
+        <span class="investigation-round__axis number-field-label"
+          >{$currentLocale && t('research.maxCostLabel')}</span
         >
-        <input
-          class="investigation-round__input"
-          type="number"
+        <NumberField
           min="0"
           step="0.01"
           placeholder={$currentLocale && t('research.maxCostPlaceholder')}
           bind:value={budgetCost}
           disabled={jobActionInFlight !== null}
+          decrementLabel={$currentLocale && t('numberField.decrease')}
+          incrementLabel={$currentLocale && t('numberField.increase')}
         />
       </label>
       <p class="investigation-budget__floor">{budgetFloor}</p>
