@@ -74,11 +74,12 @@ async fn start() -> ExitCode {
             println!("{}", cli::USAGE);
             ExitCode::SUCCESS
         }
-        Invocation::Run(options) => run(options).await,
+        Invocation::Run(options) => run(options, false).await,
+        Invocation::Check(options) => run(options, true).await,
     }
 }
 
-async fn run(options: cli::Options) -> ExitCode {
+async fn run(options: cli::Options, check: bool) -> ExitCode {
     let override_dir = std::env::var_os(cli::DATA_DIR_VAR).map(PathBuf::from);
     let platform_data = match &override_dir {
         // Ignored: the override replaces the whole shared directory.
@@ -86,6 +87,10 @@ async fn run(options: cli::Options) -> ExitCode {
         None => match cli::platform_data_dir(dirs::data_dir(), std::env::var_os("APPDATA")) {
             Some(dir) => dir,
             None => {
+                if check {
+                    println!("data_dir_unavailable: Indicá ENTROPIA_DATA_DIR=<ruta> para localizar los datos de EntropIA.");
+                    return ExitCode::FAILURE;
+                }
                 eprintln!(
                     "entropia-agent-connector: no pude resolver el directorio de datos del \
                      sistema; indicá {}=<ruta>",
@@ -108,6 +113,11 @@ async fn run(options: cli::Options) -> ExitCode {
             options.profile.as_deref(),
         ));
     let config = RelayConfig::new(options.client_id);
+    if check {
+        let (exit, line) = relay::check(config, source).await;
+        println!("{line}");
+        return ExitCode::from(exit);
+    }
     match relay::run(tokio::io::stdin(), tokio::io::stdout(), config, source).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

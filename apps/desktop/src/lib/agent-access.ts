@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { agentSetupCopy } from './i18n'
 
 /**
  * Frontend client of the agent endpoint's settings surface (D11).
@@ -36,6 +37,8 @@ export interface AgentClient {
 }
 
 export interface AgentAccessStatus {
+  /** Active dev profile; null for the shared/release archive. */
+  profile: string | null
   /** The persisted switch. */
   enabled: boolean
   /** Whether the loopback endpoint is listening right now. */
@@ -276,10 +279,18 @@ export function shellQuote(program: string): string {
  * Windows path takes the call operator; the `claude mcp add … --` lines pass the
  * quoted path as a plain argument and must not.
  */
-export function connectorInvocation(clientId: string, location?: ConnectorLocation | null): string {
+export function connectorInvocation(
+  clientId: string,
+  location?: ConnectorLocation | null,
+  profile: string | null = null
+): string {
   const program = connectorProgram(location)
   const call = isWindowsProgram(program) ? '& ' : ''
-  return `${call}${shellQuote(program)} --client ${clientId}`
+  return `${call}${shellQuote(program)} ${connectorArgs(clientId, profile).map(shellQuote).join(' ')}`
+}
+
+function connectorArgs(clientId: string, profile: string | null): string[] {
+  return ['--client', clientId, ...(profile ? ['--profile', profile] : [])]
 }
 
 /**
@@ -289,6 +300,44 @@ export function connectorInvocation(clientId: string, location?: ConnectorLocati
  * own configuration file.
  */
 export type ConnectorRecipeId = 'claude' | 'codex' | 'opencode' | 'pi'
+
+/** TOML basic strings escape all forbidden controls, including DEL. */
+function tomlString(value: string): string {
+  return JSON.stringify(value).replace(/\u007f/g, '\\u007f')
+}
+
+/** A self-contained, secret-free setup request; independent of the current UI locale. */
+export function agentSetupInstruction({
+  program,
+  clientId,
+  profile,
+  name,
+  lang,
+}: {
+  program: string
+  clientId: string
+  profile: string | null
+  name: string
+  lang: string
+}): string {
+  const copy = agentSetupCopy[lang === 'es' ? 'es' : 'en']
+  const args = connectorArgs(clientId, profile)
+  const location: ConnectorLocation = { installed: true, path: program, kind: 'bundled' }
+  const recipes = connectorRecipes(clientId, location, profile)
+  const command = [program, ...args].map(shellQuote).join(' ')
+  const check = `${isWindowsProgram(program) ? '& ' : ''}${shellQuote(program)} --check ${args.map(shellQuote).join(' ')}`
+  return [
+    `${copy.intro} (${JSON.stringify(name)})`,
+    copy.formats,
+    copy.secrets,
+    `\`\`\`json\n${recipes.find((recipe) => recipe.id === 'pi')!.line}\n\`\`\``,
+    `\`\`\`toml\n[mcp_servers.entropia]\ncommand = ${tomlString(program)}\nargs = [${args.map(tomlString).join(', ')}]\n\`\`\``,
+    `Claude Code:\n\`\`\`\nclaude mcp add -s user entropia -- ${command}\n\`\`\``,
+    `Codex:\n\`\`\`\ncodex mcp add entropia -- ${command}\n\`\`\``,
+    copy.verify,
+    `\`\`\`${isWindowsProgram(program) ? 'powershell' : 'sh'}\n${check}\n\`\`\``,
+  ].join('\n\n')
+}
 
 export interface ConnectorRecipe {
   id: ConnectorRecipeId
@@ -300,13 +349,15 @@ export interface ConnectorRecipe {
 /** One ready-to-copy line per supported client, in a stable order. */
 export function connectorRecipes(
   clientId: string,
-  location?: ConnectorLocation | null
+  location?: ConnectorLocation | null,
+  profile: string | null = null
 ): ConnectorRecipe[] {
   const program = connectorProgram(location)
-  const command = `${shellQuote(program)} --client ${clientId}`
+  const clientArgs = connectorArgs(clientId, profile)
+  const command = [program, ...clientArgs].map(shellQuote).join(' ')
   // JSON strings are escaped by the serializer, never by hand: a Windows path
   // arrives at the client with its backslashes and non-ASCII intact.
-  const args = JSON.stringify([program, '--client', clientId])
+  const args = JSON.stringify([program, ...clientArgs])
   return [
     {
       id: 'claude',
@@ -338,7 +389,7 @@ export function connectorRecipes(
       label: 'Pi',
       kind: 'config',
       // Pi follows the common MCP shape: program in `command`, arguments apart.
-      line: `{"mcpServers":{"entropia":{"command":${JSON.stringify(program)},"args":${JSON.stringify(['--client', clientId])}}}}`,
+      line: `{"mcpServers":{"entropia":{"command":${JSON.stringify(program)},"args":${JSON.stringify(clientArgs)}}}}`,
     },
   ]
 }

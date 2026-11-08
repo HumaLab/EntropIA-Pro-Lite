@@ -289,10 +289,17 @@ fn normalize_node_entry(relative: &str) -> Option<String> {
 pub async fn install(
     assistant: &str,
     client_id: &str,
+    profile: Option<&str>,
     connector: &str,
     paths: &ConfigPaths,
     runner: &impl Runner,
 ) -> Result<(), SetupError> {
+    // A dev profile's connector must name the profile, or it reads the shared archive.
+    let mut client: Vec<&str> = vec!["--client", client_id];
+    if let Some(name) = profile {
+        client.extend(["--profile", name]);
+    }
+    let opencode_command: Vec<&str> = [vec![connector], client.clone()].concat();
     let run = |parts: Vec<&str>| {
         let args: Vec<String> = parts.into_iter().map(String::from).collect();
         async move { runner.run(assistant, &args).await }
@@ -300,9 +307,11 @@ pub async fn install(
     match assistant {
         "codex" => check_output(
             assistant,
-            run(vec![
-                "mcp", "add", "entropia", "--", connector, "--client", client_id,
-            ])
+            run([
+                vec!["mcp", "add", "entropia", "--", connector],
+                client.clone(),
+            ]
+            .concat())
             .await?,
             false,
         ),
@@ -316,9 +325,11 @@ pub async fn install(
             }
             check_output(
                 assistant,
-                run(vec![
-                    "mcp", "add", "-s", "user", "entropia", "--", connector, "--client", client_id,
-                ])
+                run([
+                    vec!["mcp", "add", "-s", "user", "entropia", "--", connector],
+                    client.clone(),
+                ]
+                .concat())
                 .await?,
                 false,
             )
@@ -328,14 +339,14 @@ pub async fn install(
             &paths.opencode,
             "opencode.json",
             "mcp",
-            json!({"type":"local","command":[connector,"--client",client_id]}),
+            json!({"type":"local","command":opencode_command}),
         ),
         "pi" => merge(
             assistant,
             &paths.pi,
             "mcp.json",
             "mcpServers",
-            json!({"command":connector,"args":["--client",client_id]}),
+            json!({"command":connector,"args":client}),
         ),
         _ => Err(SetupError::new("not_found", assistant, "")),
     }
@@ -346,7 +357,8 @@ fn check_output(assistant: &str, output: RunOutput, removing: bool) -> Result<()
         || (removing
             && output.code == Some(1)
             && (stderr.contains("no mcp server found with name: entropia")
-                || stderr.contains("mcp server entropia not found")))
+                || stderr.contains("mcp server entropia not found")
+                || stderr.contains("no mcp server named \"entropia\"")))
     {
         return Ok(());
     }
@@ -459,6 +471,7 @@ mod tests {
         install(
             "codex",
             "cl_test",
+            None,
             "/connector with spaces",
             &paths(dir.path()),
             &runner,
@@ -490,6 +503,7 @@ mod tests {
         let error = install(
             "codex",
             "cl_test",
+            None,
             "/connector",
             &paths(dir.path()),
             &runner,
@@ -500,6 +514,30 @@ mod tests {
         assert_eq!(error.exit_code, Some(7));
         assert_eq!(error.detail, "permission denied");
         assert!(!format!("{:?}", runner.calls).contains("token"));
+    }
+    #[tokio::test]
+    async fn claude_tolerates_the_current_absence_message_among_certificate_warnings() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = Fake::default();
+        for scope in ["user", "local"] {
+            runner.replies.lock().unwrap().push_back(Ok(RunOutput {
+                code: Some(1),
+                stderr: format!(
+                    "Claude Code ignored the certificate with SHA-256 fingerprint E7:68 in the NODE_EXTRA_CA_CERTS file.\nNo MCP server named \"entropia\" in {scope} scope"
+                ),
+            }));
+        }
+        install(
+            "claude",
+            "cl_test",
+            None,
+            "/connector",
+            &paths(dir.path()),
+            &runner,
+        )
+        .await
+        .unwrap();
+        assert_eq!(runner.calls.lock().unwrap().len(), 3);
     }
     #[tokio::test]
     async fn claude_removes_both_scopes_before_adding_and_only_tolerates_absence() {
@@ -514,6 +552,7 @@ mod tests {
         install(
             "claude",
             "cl_test",
+            None,
             "/connector",
             &paths(dir.path()),
             &runner,
@@ -537,6 +576,7 @@ mod tests {
             install(
                 "claude",
                 "cl_test",
+                None,
                 "/connector",
                 &paths(dir.path()),
                 &runner
@@ -547,6 +587,112 @@ mod tests {
             "access denied"
         );
         assert_eq!(runner.calls.lock().unwrap().len(), 4);
+    }
+    #[tokio::test]
+    async fn a_dev_profile_is_named_in_every_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(dir.path());
+        let runner = Fake::default();
+        std::fs::create_dir_all(&paths.opencode).unwrap();
+        std::fs::create_dir_all(&paths.pi).unwrap();
+        for assistant in ["codex", "claude", "opencode", "pi"] {
+            install(
+                assistant,
+                "cl_test",
+                Some("lab"),
+                "/connector",
+                &paths,
+                &runner,
+            )
+            .await
+            .unwrap();
+        }
+        let calls = runner.calls.lock().unwrap().clone();
+        let lines: Vec<String> = calls.iter().map(|c| c.1.join(" ")).collect();
+        assert!(lines.contains(
+            &"mcp add entropia -- /connector --client cl_test --profile lab".to_string()
+        ));
+        assert!(lines.contains(
+            &"mcp add -s user entropia -- /connector --client cl_test --profile lab".to_string()
+        ));
+        let read = |folder: &std::path::Path, file: &str| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(folder.join(file)).unwrap()).unwrap()
+        };
+        assert_eq!(
+            read(&paths.opencode, "opencode.json")["mcp"]["entropia"],
+            json!({"type":"local","command":["/connector","--client","cl_test","--profile","lab"]})
+        );
+        assert_eq!(
+            read(&paths.pi, "mcp.json")["mcpServers"]["entropia"],
+            json!({"command":"/connector","args":["--client","cl_test","--profile","lab"]})
+        );
+    }
+    #[tokio::test]
+    async fn connector_paths_with_spaces_and_accents_stay_one_argument_and_round_trip() {
+        for connector in [
+            r"C:\Program Files\EntropIA Lite\Entropía conector.exe",
+            "/home/ana maría/bin/entropia-agent-connector",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = paths(dir.path());
+            std::fs::create_dir_all(&paths.opencode).unwrap();
+            std::fs::create_dir_all(&paths.pi).unwrap();
+            let runner = Fake::default();
+            for assistant in ["codex", "claude", "opencode", "pi"] {
+                install(assistant, "cl_test", None, connector, &paths, &runner)
+                    .await
+                    .unwrap();
+            }
+            let calls = runner.calls.lock().unwrap().clone();
+            let expected_tail = vec!["--", connector, "--client", "cl_test"];
+            for (assistant, args) in calls.iter().filter(|c| c.1.contains(&"add".to_string())) {
+                let tail: Vec<&str> = args[args.len() - 4..].iter().map(String::as_str).collect();
+                assert_eq!(tail, expected_tail, "{assistant}: {args:?}");
+            }
+            let read = |path: std::path::PathBuf| -> serde_json::Value {
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+            };
+            assert_eq!(
+                read(paths.opencode.join("opencode.json"))["mcp"]["entropia"]["command"][0],
+                connector
+            );
+            assert_eq!(
+                read(paths.pi.join("mcp.json"))["mcpServers"]["entropia"]["command"],
+                connector
+            );
+        }
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_read_only_config_is_reported_and_left_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(dir.path());
+        let runner = Fake::default();
+        for (assistant, folder, file) in [
+            ("opencode", &paths.opencode, "opencode.json"),
+            ("pi", &paths.pi, "mcp.json"),
+        ] {
+            std::fs::create_dir_all(folder).unwrap();
+            let path = folder.join(file);
+            let original = "{\"theme\":\"dark\"}";
+            std::fs::write(&path, original).unwrap();
+            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&path, permissions.clone()).unwrap();
+            let error = install(assistant, "cl_test", None, "/connector", &paths, &runner)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "io", "{assistant}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            assert_eq!(
+                std::fs::read_dir(folder).unwrap().count(),
+                1,
+                "no temp file left"
+            );
+            #[allow(clippy::permissions_set_readonly_false)]
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&path, permissions).unwrap();
+        }
     }
     #[tokio::test]
     async fn json_merge_create_replace_and_refuse_without_changes() {
@@ -570,7 +716,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                install(assistant, "cl_test", "/connector", &paths, &runner)
+                install(assistant, "cl_test", None, "/connector", &paths, &runner)
                     .await
                     .unwrap_err()
                     .code,
@@ -578,7 +724,7 @@ mod tests {
             );
             assert!(!folder.exists());
             std::fs::create_dir(folder).unwrap();
-            install(assistant, "cl_test", "/connector", &paths, &runner)
+            install(assistant, "cl_test", None, "/connector", &paths, &runner)
                 .await
                 .unwrap();
             let path = folder.join(file);
@@ -586,7 +732,7 @@ mod tests {
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             assert_eq!(value, json!({key: {"entropia": entry.clone()}}));
             std::fs::write(&path, serde_json::to_vec(&json!({"theme":"dark",key:{"other":{"command":"keep"},"entropia":{"old":true}}})).unwrap()).unwrap();
-            install(assistant, "cl_test", "/connector", &paths, &runner)
+            install(assistant, "cl_test", None, "/connector", &paths, &runner)
                 .await
                 .unwrap();
             let value: serde_json::Value =
@@ -598,7 +744,7 @@ mod tests {
             for invalid in ["not JSON", "[]", "{\"mcp\":false,\"mcpServers\":false}"] {
                 std::fs::write(&path, invalid).unwrap();
                 assert_eq!(
-                    install(assistant, "cl_test", "/connector", &paths, &runner)
+                    install(assistant, "cl_test", None, "/connector", &paths, &runner)
                         .await
                         .unwrap_err()
                         .code,

@@ -21,6 +21,7 @@ pub enum Invocation {
     Version,
     Help,
     Run(Options),
+    Check(Options),
 }
 
 /// A run: which paired client, and which dev profile's data.
@@ -58,6 +59,7 @@ El id del cliente se empareja en EntropIA (Ajustes → Asistentes); el token se
 lee del llavero del sistema y, si la máquina no tiene llavero, del archivo que
 EntropIA guarda junto a sus datos. Nunca de la configuración del agente.
 
+  --check              diagnostica la conexión (requiere --client); termina en 15 s
   --client <id>        id del cliente emparejado en EntropIA
   --profile <nombre>   perfil de desarrollo: 1 a 32 caracteres de A-Z, a-z, 0-9,
                        '-' y '_'
@@ -75,6 +77,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Invocation,
 
     let mut client_id: Option<String> = None;
     let mut profile: Option<String> = None;
+    let mut check = false;
     let mut index = 0;
     while index < arguments.len() {
         let argument = arguments[index].clone();
@@ -85,6 +88,14 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Invocation,
         match name.as_str() {
             "--version" | "-V" => return Ok(Invocation::Version),
             "--help" | "-h" => return Ok(Invocation::Help),
+            "--check" => {
+                if check || inline.is_some() {
+                    return Err(CliError(format!(
+                        "--check no admite valor ni repeticiones\n\n{USAGE}"
+                    )));
+                }
+                check = true;
+            }
             "--client" | "--profile" => {
                 let value = match inline {
                     Some(value) => value,
@@ -124,7 +135,12 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Invocation,
              EntropIA\n\n{USAGE}"
         ))
     })?;
-    Ok(Invocation::Run(Options { client_id, profile }))
+    let options = Options { client_id, profile };
+    Ok(if check {
+        Invocation::Check(options)
+    } else {
+        Invocation::Run(options)
+    })
 }
 
 /// A profile name: the rule `dev_profile.rs` applies, so both sides name the

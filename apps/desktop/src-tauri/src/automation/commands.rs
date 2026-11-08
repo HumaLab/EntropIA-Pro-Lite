@@ -26,6 +26,8 @@ use super::server::AgentEndpointState;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStatusView {
+    /// Active development profile, or null for the shared archive.
+    pub profile: Option<String>,
     pub enabled: bool,
     pub running: bool,
     /// The port the endpoint listens on, while it listens.
@@ -53,6 +55,7 @@ pub fn status(
     let view = access.view()?;
     let port = endpoint.port();
     Ok(AgentStatusView {
+        profile: super::server::profile_name(),
         enabled: view.enabled,
         running: port.is_some(),
         port,
@@ -359,8 +362,15 @@ pub async fn connect_assistant(
 ) -> Result<CreatedClientView, super::setup::SetupError> {
     let created = create_client(access, endpoint, name)
         .map_err(|e| super::setup::SetupError::new("io", assistant, e))?;
-    if let Err(mut error) =
-        super::setup::install(assistant, &created.client.id, program, paths, runner).await
+    if let Err(mut error) = super::setup::install(
+        assistant,
+        &created.client.id,
+        super::server::profile_name().as_deref(),
+        program,
+        paths,
+        runner,
+    )
+    .await
     {
         if let Err(rollback) = revoke_client(access, endpoint, &created.client.id) {
             error.rollback = Some(rollback);
@@ -538,11 +548,21 @@ mod tests {
     }
 
     #[test]
+    fn status_serializes_the_current_profile_including_null() {
+        let harness = harness();
+        let view = status(&harness.access, &harness.endpoint).unwrap();
+        let json = serde_json::to_value(&view).unwrap();
+        let expected = serde_json::to_value(super::super::server::profile_name()).unwrap();
+        assert_eq!(json.get("profile"), Some(&expected));
+    }
+
+    #[test]
     fn a_disabled_endpoint_reports_no_port_and_lists_the_paired_clients() {
         let harness = harness();
         assert_eq!(
             status(&harness.access, &harness.endpoint).unwrap(),
             AgentStatusView {
+                profile: super::super::server::profile_name(),
                 enabled: false,
                 running: false,
                 port: None,
