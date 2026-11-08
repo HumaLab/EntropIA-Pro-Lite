@@ -25,8 +25,21 @@ interface TargetAddress extends OccurrenceContext {
 export type OccurrenceTarget = TargetAddress &
   (
     | { kind: 'entity'; value: string; offsets?: TextRange[] }
-    | { kind: 'relation'; subject: string; predicate: string; object: string }
+    | {
+        kind: 'relation'
+        subject: string
+        predicate: string
+        object: string
+        /** Sentences the model said each triple came from (migration 0062). */
+        evidence?: StoredEvidence[]
+      }
   )
+/** A triple's stored source sentence; the span is a hint, trusted only when it still matches. */
+export interface StoredEvidence {
+  text: string
+  start: number | null
+  end: number | null
+}
 export interface OccurrenceSession {
   kind: 'entity' | 'relation'
   targets: OccurrenceTarget[]
@@ -54,6 +67,9 @@ export interface TripleRow {
   subject: string
   predicate: string
   object: string
+  evidenceText?: string | null
+  evidenceStart?: number | null
+  evidenceEnd?: number | null
 }
 type ContextForItem = (itemId: string) => OccurrenceContext
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
@@ -163,6 +179,17 @@ export function buildRelationTargets(
         predicate: row.predicate,
         object: row.object,
       })
+    }
+    const target = targets.get(id)!
+    if (target.kind !== 'relation' || !row.evidenceText?.trim()) continue
+    const stored: StoredEvidence = {
+      text: row.evidenceText,
+      start: row.evidenceStart ?? null,
+      end: row.evidenceEnd ?? null,
+    }
+    const known = (target.evidence ??= [])
+    if (!known.some((item) => item.text === stored.text && item.start === stored.start)) {
+      known.push(stored)
     }
   }
   return [...targets.values()]
@@ -378,44 +405,14 @@ function locateRelation(
     ROLES.map((role) => [role, contentTokens(target[role])])
   ) as Record<Role, Token[]>
   const all = sentences(raw)
-  const scored: ScoredSentence[] = []
-  for (const sentence of all) {
-    const ranges: LabeledRange[] = []
-    const evidence = {} as Record<Role, PartEvidence>
-    let score = 0
-    let parts = 0
-    for (const role of ROLES) {
-      const found = literalMatches[role].filter((range) => inside(range, sentence))
-      ranges.push(...found.map((range) => ({ ...range, role, literal: true })))
-      evidence[role] = found.length ? 'literal' : 'missing'
-      if (found.length) {
-        score += 1
-        parts++
-      }
-    }
-    const literalRanges = [...ranges]
-    const words = sentenceWords(raw, sentence).filter(
-      (word) => !literalRanges.some((range) => overlaps(range, word))
+  const score = (sentence: TextRange) => scoreSentence(raw, sentence, literalMatches, tokens)
+  const stored = storedSentences(raw, target.evidence ?? [])
+  if (stored.length) {
+    return stored.map((sentence) =>
+      completeElsewhere(raw, all, score(sentence), literalMatches, tokens)
     )
-    for (const role of ROLES) {
-      if (evidence[role] === 'literal' || !tokens[role].length) continue
-      const { hits, marked } = tokenHits(words, tokens[role])
-      if (!hits.length) continue
-      evidence[role] = 'partial'
-      score += (0.8 * hits.length) / tokens[role].length
-      parts++
-      ranges.push(...marked.map(({ start, end }) => ({ start, end, role, literal: false })))
-    }
-    if (!parts) continue
-    scored.push({
-      ...sentence,
-      ranges,
-      approximate: ROLES.some((role) => evidence[role] !== 'literal'),
-      evidence,
-      score,
-      parts,
-    })
   }
+  const scored = all.map(score).filter((sentence) => sentence.parts > 0)
   const supported = scored.filter((sentence) => sentence.parts >= 2 && sentence.score >= 1.5)
   let chosen: ScoredSentence[]
   if (supported.length) {
@@ -430,6 +427,76 @@ function locateRelation(
     chosen = fallback ? [{ ...fallback, approximate: true }] : []
   }
   return chosen.map((sentence) => completeElsewhere(raw, all, sentence, literalMatches, tokens))
+}
+
+/** How well one sentence holds each part of a relation: literal phrases, then content words. */
+function scoreSentence(
+  raw: string,
+  sentence: TextRange,
+  literalMatches: Record<Role, TextRange[]>,
+  tokens: Record<Role, Token[]>
+): ScoredSentence {
+  const ranges: LabeledRange[] = []
+  const evidence = {} as Record<Role, PartEvidence>
+  let score = 0
+  let parts = 0
+  for (const role of ROLES) {
+    const found = literalMatches[role].filter((range) => inside(range, sentence))
+    ranges.push(...found.map((range) => ({ ...range, role, literal: true })))
+    evidence[role] = found.length ? 'literal' : 'missing'
+    if (found.length) {
+      score += 1
+      parts++
+    }
+  }
+  const literalRanges = [...ranges]
+  const words = sentenceWords(raw, sentence).filter(
+    (word) => !literalRanges.some((range) => overlaps(range, word))
+  )
+  for (const role of ROLES) {
+    if (evidence[role] === 'literal' || !tokens[role].length) continue
+    const { hits, marked } = tokenHits(words, tokens[role])
+    if (!hits.length) continue
+    evidence[role] = 'partial'
+    score += (0.8 * hits.length) / tokens[role].length
+    parts++
+    ranges.push(...marked.map(({ start, end }) => ({ start, end, role, literal: false })))
+  }
+  return {
+    ...sentence,
+    ranges,
+    approximate: ROLES.some((role) => evidence[role] !== 'literal'),
+    evidence,
+    score,
+    parts,
+  }
+}
+
+/**
+ * The stored source sentences found in the text: the span when it still reads
+ * as the sentence, else the sentence searched by its words. Sentences the text
+ * no longer holds are dropped, so the caller falls back to scoring.
+ */
+function storedSentences(raw: string, stored: readonly StoredEvidence[]): TextRange[] {
+  const found: TextRange[] = []
+  for (const item of stored) {
+    const { start, end } = item
+    const span =
+      start !== null &&
+      end !== null &&
+      Number.isInteger(start) &&
+      Number.isInteger(end) &&
+      start >= 0 &&
+      end > start &&
+      end <= raw.length &&
+      searchable(raw.slice(start, end)).text.trim() === searchable(item.text).text.trim()
+        ? { start, end }
+        : matches(raw, item.text)[0]
+    if (span && !found.some((range) => range.start === span.start && range.end === span.end)) {
+      found.push(span)
+    }
+  }
+  return found.sort((a, b) => a.start - b.start)
 }
 
 /**

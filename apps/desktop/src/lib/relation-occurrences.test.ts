@@ -222,3 +222,94 @@ describe('locateOccurrences', () => {
     expect(found.every((hit) => hit.approximate)).toBe(true)
   })
 })
+
+describe('stored triple evidence', () => {
+  const text = 'José visita Lima. Años después, José visita Lima con su hermano.'
+  const second = 'Años después, José visita Lima con su hermano.'
+  const secondStart = text.indexOf(second)
+  const row = {
+    id: '1',
+    itemId: 'i',
+    assetId: 'a',
+    subject: 'José',
+    predicate: 'visita',
+    object: 'Lima',
+  }
+
+  it('carries the stored sentences of every row of an address, without repeats', () => {
+    const rows = [
+      { ...row, evidenceText: second, evidenceStart: secondStart, evidenceEnd: text.length },
+      {
+        ...row,
+        id: '2',
+        evidenceText: second,
+        evidenceStart: secondStart,
+        evidenceEnd: text.length,
+      },
+      { ...row, id: '3', predicate: 'recorre', evidenceText: 'José recorre Lima.' },
+      { ...row, id: '4', evidenceText: null, evidenceStart: null, evidenceEnd: null },
+    ]
+    const [target] = buildRelationTargets('josé', 'lima', rows, () => context)
+    expect(target).toMatchObject({
+      evidence: [
+        { text: second, start: secondStart, end: text.length },
+        { text: 'José recorre Lima.', start: null, end: null },
+      ],
+    })
+    const [withoutEvidence] = buildRelationTargets('josé', 'lima', [row], () => context)
+    expect(withoutEvidence).not.toHaveProperty('evidence')
+  })
+
+  it('shows the stored sentence, not the best scored one, and marks its parts', () => {
+    const found = locateOccurrences(text, {
+      ...relation,
+      evidence: [{ text: second, start: secondStart, end: text.length }],
+    })
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatchObject({
+      start: secondStart,
+      end: text.length,
+      approximate: false,
+      evidence: { subject: 'literal', predicate: 'literal', object: 'literal' },
+    })
+    expect(found[0]!.ranges.map(({ role, start }) => [role, start])).toEqual([
+      ['subject', text.indexOf('José', secondStart)],
+      ['predicate', text.indexOf('visita', secondStart)],
+      ['object', text.indexOf('Lima', secondStart)],
+    ])
+  })
+
+  it('finds the sentence by its words when the stored span no longer matches the text', () => {
+    const edited = `Nota. ${text.replace('Años después, ', 'Años  después,\n')}`
+    const found = locateOccurrences(edited, {
+      ...relation,
+      evidence: [{ text: second, start: secondStart, end: text.length }],
+    })
+    expect(found).toHaveLength(1)
+    expect(edited.slice(found[0]!.start, found[0]!.end)).toBe(
+      'Años  después,\nJosé visita Lima con su hermano.'
+    )
+  })
+
+  it('falls back to the scored sentences when the stored sentence is not in the text', () => {
+    const withMissing = locateOccurrences(text, {
+      ...relation,
+      evidence: [{ text: 'Pedro viajó a Quito.', start: 0, end: 20 }],
+    })
+    expect(withMissing).toEqual(locateOccurrences(text, relation))
+  })
+
+  it('still looks elsewhere for a part the stored sentence lacks', () => {
+    const doc = 'Acta de Lima. José visita la ciudad con su hermano.'
+    const found = locateOccurrences(doc, {
+      ...relation,
+      evidence: [{ text: 'José visita la ciudad con su hermano.', start: null, end: null }],
+    })
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatchObject({
+      start: doc.indexOf('José'),
+      approximate: true,
+      evidence: { subject: 'literal', predicate: 'literal', object: 'elsewhere' },
+    })
+  })
+})
