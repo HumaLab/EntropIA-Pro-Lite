@@ -19,6 +19,8 @@ export type {
 
 export { Input } from './components/Input/index'
 export type { InputProps, InputType } from './components/Input/index'
+export { NumberField } from './components/NumberField/index'
+export type { NumberFieldProps } from './components/NumberField/index'
 
 export { Checkbox } from './components/Checkbox/index'
 export type { CheckboxProps } from './components/Checkbox/index'

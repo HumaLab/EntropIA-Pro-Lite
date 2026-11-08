@@ -105,6 +105,7 @@
   import IconPlayerSkipBack from '@tabler/icons-svelte-runes/icons/player-skip-back'
   import IconPlayerSkipForward from '@tabler/icons-svelte-runes/icons/player-skip-forward'
   import IconPlus from '@tabler/icons-svelte-runes/icons/plus'
+  import IconMinus from '@tabler/icons-svelte-runes/icons/minus'
   import IconQuote from '@tabler/icons-svelte-runes/icons/quote'
   import IconRefresh from '@tabler/icons-svelte-runes/icons/refresh'
   import IconRotate from '@tabler/icons-svelte-runes/icons/rotate'
@@ -157,6 +158,7 @@
    */
   const ICONS: Record<ActionIconName, IconComponent> = {
     add: IconPlus,
+    subtract: IconMinus,
     bell: IconBell,
     bold: IconBold,
     // The Biblioteca section: the library's own books, which is also the tab

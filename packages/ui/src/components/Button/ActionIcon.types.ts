@@ -19,6 +19,7 @@
 
 export const ACTION_ICON_NAMES = [
   'add',
+  'subtract',
   'bell',
   'bold',
   'books',
