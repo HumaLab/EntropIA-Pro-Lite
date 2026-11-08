@@ -1042,6 +1042,10 @@ pub struct LlmTriple {
     pub predicate: String,
     #[serde(default, alias = "objeto")]
     pub object: String,
+    /// The sentence the model built the triple from, verbatim (0062). Optional:
+    /// custom prompts and older outputs do not return it.
+    #[serde(default, alias = "evidencia", skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
 }
 
 static TRAILING_COMMA_RE: Lazy<Regex> =
@@ -1054,6 +1058,10 @@ impl LlmTriple {
         self.subject = self.subject.trim().to_string();
         self.predicate = self.predicate.trim().to_string();
         self.object = self.object.trim().to_string();
+        self.evidence = self
+            .evidence
+            .map(|evidence| evidence.trim().to_string())
+            .filter(|evidence| !evidence.is_empty());
 
         if self.subject.is_empty() || self.predicate.is_empty() || self.object.is_empty() {
             return None;
@@ -1276,8 +1284,8 @@ fn store_triples_for_item(
     let mut count = 0;
     for triple in &triples {
         conn.execute(
-            "INSERT INTO triples (id, item_id, subject, predicate, object, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO triples (id, item_id, subject, predicate, object, created_at, evidence_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 fn_uuid_v4(),
                 item_id,
@@ -1285,6 +1293,7 @@ fn store_triples_for_item(
                 triple.predicate,
                 triple.object,
                 fn_now_millis(),
+                triple.evidence,
             ],
         )
         .map_err(|e| format!("Failed to insert triple: {e}"))?;
@@ -1351,6 +1360,20 @@ pub(crate) fn llm_history_event(
     event.params(params)
 }
 
+/// UTF-16 span (end exclusive) of `evidence` in `text`, matching words exactly
+/// and any run of whitespace as any other. `None` when it does not occur, so a
+/// reader never highlights a wrong span.
+fn evidence_span(text: &str, evidence: &str) -> Option<(usize, usize)> {
+    let words: Vec<String> = evidence.split_whitespace().map(regex::escape).collect();
+    if words.is_empty() {
+        return None;
+    }
+    let pattern = Regex::new(&words.join(r"\s+")).ok()?;
+    let found = pattern.find(text)?;
+    let utf16 = |byte: usize| text[..byte].encode_utf16().count();
+    Some((utf16(found.start()), utf16(found.end())))
+}
+
 pub(crate) fn replace_triples_for_asset(
     conn: &rusqlite::Connection,
     item_id: &str,
@@ -1363,10 +1386,18 @@ pub(crate) fn replace_triples_for_asset(
     )
     .map_err(|e| format!("Failed to delete old triples for asset: {e}"))?;
 
+    // The span is resolved against the asset's text as stored now, the text the
+    // reader highlights. Unreadable text keeps the sentence without a span.
+    let text = crate::nlp::text_provider::get_asset_text(conn, asset_id).unwrap_or_default();
     for triple in triples {
+        let span = triple
+            .evidence
+            .as_deref()
+            .and_then(|evidence| evidence_span(&text, evidence));
         conn.execute(
-            "INSERT INTO triples (id, item_id, asset_id, subject, predicate, object, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO triples (id, item_id, asset_id, subject, predicate, object, created_at,
+                                  evidence_text, evidence_start, evidence_end)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 fn_uuid_v4(),
                 item_id,
@@ -1375,6 +1406,9 @@ pub(crate) fn replace_triples_for_asset(
                 triple.predicate,
                 triple.object,
                 fn_now_millis(),
+                triple.evidence,
+                span.map(|(start, _)| start as i64),
+                span.map(|(_, end)| end as i64),
             ],
         )
         .map_err(|e| format!("Failed to insert triple: {e}"))?;
@@ -2772,6 +2806,29 @@ fn prepare_remote_job_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn triples_carry_the_optional_evidence_sentence() {
+        let raw = r#"[
+          {"subject":"El barco","predicate":"llevó","object":"cueros","evidence":"  El barco llevó cueros. "},
+          {"sujeto":"Juan","predicado":"firmó","objeto":"el acta","evidencia":"Juan firmó el acta."},
+          {"subject":"Ana","predicate":"vive en","object":"Lima","evidence":"   "},
+          {"subject":"Luis","predicate":"es","object":"juez"}
+        ]"#;
+        let evidence: Vec<Option<String>> = parse_triples_json(raw, "[test]")
+            .into_iter()
+            .map(|triple| triple.evidence)
+            .collect();
+        assert_eq!(
+            evidence,
+            [
+                Some("El barco llevó cueros.".to_string()),
+                Some("Juan firmó el acta.".to_string()),
+                None,
+                None,
+            ]
+        );
+    }
 
     /// S6: both new operations need the OpenRouter key, and a missing key is
     /// refused before any request is prepared — so a batch parks the unit on

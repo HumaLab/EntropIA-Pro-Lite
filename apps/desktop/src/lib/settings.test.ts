@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 // Mock @tauri-apps/api/core
 vi.mock('@tauri-apps/api/core', () => ({
@@ -234,6 +236,19 @@ describe('settings', () => {
       expect(DEFAULT_PROMPTS.summaryPrompt).toContain('{text}')
       expect(DEFAULT_PROMPTS.nerPrompt).toContain('{text}')
       expect(DEFAULT_PROMPTS.tripletsPrompt).toContain('{text}')
+    })
+
+    it('mirrors the Rust triples default byte for byte and asks for the evidence sentence', () => {
+      // Settings stores this text when saved. The backend upgrades a stored copy
+      // of the previous default only when it matches its constant exactly, so
+      // the two defaults must never drift.
+      const rust = readFileSync(
+        resolve(__dirname, '../../src-tauri/src/llm/prompt.rs'),
+        'utf8'
+      ).replaceAll('\r\n', '\n')
+      const current = rust.match(/pub const DEFAULT_TRIPLETS_PROMPT: &str = r#"([\s\S]*?)"#;/)
+      expect(current?.[1]).toBe(DEFAULT_PROMPTS.tripletsPrompt)
+      expect(DEFAULT_PROMPTS.tripletsPrompt).toContain('"evidence"')
     })
 
     it('asks the NER model for no character offsets', () => {

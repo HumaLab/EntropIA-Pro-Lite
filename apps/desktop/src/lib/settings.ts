@@ -297,7 +297,8 @@ Texto:
 
 Reglas obligatorias:
 - Devolvé SOLO un array JSON válido.
-- Cada elemento DEBE ser un objeto con EXACTAMENTE estas claves: "subject", "predicate", "object".
+- Cada elemento DEBE ser un objeto con EXACTAMENTE estas claves: "subject", "predicate", "object", "evidence".
+- "evidence" es la oración del texto de la que sale la relación, copiada al pie de la letra: sin corregir, traducir ni resumir. Si la oración es larga, copiá solo el fragmento continuo más breve que sostenga la relación, de hasta 200 caracteres.
 - Todos los valores DEBEN ser strings JSON válidos.
 - No agregues claves extra.
 - No agregues texto antes ni después del array.
@@ -309,7 +310,7 @@ Enfocate en relaciones fácticas: quién hizo qué, quién está relacionado con
 
 Ejemplo válido:
 [
-  {"subject":"Juan Pérez","predicate":"firmó","object":"el acta"}
+  {"subject":"Juan Pérez","predicate":"firmó","object":"el acta","evidence":"Juan Pérez firmó el acta en presencia del escribano."}
 ]
 
 Texto:
