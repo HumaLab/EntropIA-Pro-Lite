@@ -531,6 +531,11 @@
         <p class="assistants-tab__copied" role="status">
           {t('assistants.install.connected', { assistant: connectedAssistant })}
         </p>
+        {#if status && !status.enabled}
+          <p class="assistants-tab__meta" role="status">
+            {t('assistants.install.accessOff', { assistant: connectedAssistant })}
+          </p>
+        {/if}
       {/if}
       <p class="assistants-tab__meta">{t('assistants.install.alternative')}</p>
       <div class="assistants-tab__row">

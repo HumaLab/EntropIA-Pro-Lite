@@ -628,6 +628,73 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn connector_paths_with_spaces_and_accents_stay_one_argument_and_round_trip() {
+        for connector in [
+            r"C:\Program Files\EntropIA Lite\Entropía conector.exe",
+            "/home/ana maría/bin/entropia-agent-connector",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = paths(dir.path());
+            std::fs::create_dir_all(&paths.opencode).unwrap();
+            std::fs::create_dir_all(&paths.pi).unwrap();
+            let runner = Fake::default();
+            for assistant in ["codex", "claude", "opencode", "pi"] {
+                install(assistant, "cl_test", None, connector, &paths, &runner)
+                    .await
+                    .unwrap();
+            }
+            let calls = runner.calls.lock().unwrap().clone();
+            let expected_tail = vec!["--", connector, "--client", "cl_test"];
+            for (assistant, args) in calls.iter().filter(|c| c.1.contains(&"add".to_string())) {
+                let tail: Vec<&str> = args[args.len() - 4..].iter().map(String::as_str).collect();
+                assert_eq!(tail, expected_tail, "{assistant}: {args:?}");
+            }
+            let read = |path: std::path::PathBuf| -> serde_json::Value {
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+            };
+            assert_eq!(
+                read(paths.opencode.join("opencode.json"))["mcp"]["entropia"]["command"][0],
+                connector
+            );
+            assert_eq!(
+                read(paths.pi.join("mcp.json"))["mcpServers"]["entropia"]["command"],
+                connector
+            );
+        }
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_read_only_config_is_reported_and_left_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(dir.path());
+        let runner = Fake::default();
+        for (assistant, folder, file) in [
+            ("opencode", &paths.opencode, "opencode.json"),
+            ("pi", &paths.pi, "mcp.json"),
+        ] {
+            std::fs::create_dir_all(folder).unwrap();
+            let path = folder.join(file);
+            let original = "{\"theme\":\"dark\"}";
+            std::fs::write(&path, original).unwrap();
+            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&path, permissions.clone()).unwrap();
+            let error = install(assistant, "cl_test", None, "/connector", &paths, &runner)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "io", "{assistant}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            assert_eq!(
+                std::fs::read_dir(folder).unwrap().count(),
+                1,
+                "no temp file left"
+            );
+            #[allow(clippy::permissions_set_readonly_false)]
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&path, permissions).unwrap();
+        }
+    }
+    #[tokio::test]
     async fn json_merge_create_replace_and_refuse_without_changes() {
         let dir = tempfile::tempdir().unwrap();
         let paths = paths(dir.path());

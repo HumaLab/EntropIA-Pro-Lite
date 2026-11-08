@@ -191,6 +191,29 @@ describe('AssistantsTab', () => {
     expect(invokeMock).toHaveBeenCalledWith('agent_client_revoke', { clientId: client.id })
   })
 
+  it('tells the person to enable access when a one-click connection pairs while access is off', async () => {
+    const routes = reconnectRoutes()
+    const off = { ...ACTIVE_STATUS, enabled: false, running: false, port: null }
+    const created = routes.agent_client_create as { client: AgentClient; status: object }
+    respond({
+      agent_access_status: { ...off, clients: [CLAUDE] },
+      agent_assistant_connect: {
+        ...created,
+        status: { ...off, clients: [CLAUDE, created.client] },
+      },
+    })
+    render(AssistantsTab)
+    const button = await screen.findByRole('button', { name: 'Conectar Codex' })
+    await waitFor(() => expect(button).toBeEnabled())
+    await fireEvent.click(button)
+    expect(await screen.findByText('Codex conectado')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'El acceso de asistentes está apagado: activalo arriba para que Codex pueda conectarse.'
+      )
+    ).toBeInTheDocument()
+  })
+
   it.each([
     ['claude', 'Claude Code'],
     ['codex', 'Codex'],
@@ -206,6 +229,7 @@ describe('AssistantsTab', () => {
     await waitFor(() => expect(button).toBeEnabled())
     await fireEvent.click(button)
     expect(await screen.findByText(`${label} conectado`)).toBeInTheDocument()
+    expect(screen.queryByText(/acceso de asistentes está apagado/)).not.toBeInTheDocument()
     expect(invokeMock).not.toHaveBeenCalledWith('agent_client_create', expect.anything())
     expect(invokeMock).toHaveBeenCalledWith('agent_assistant_connect', {
       assistant: id,
