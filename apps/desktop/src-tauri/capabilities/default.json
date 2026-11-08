@@ -124,6 +124,7 @@
     "allow-embedding-open-models-dir",
     "allow-embedding-download-model",
     "allow-transcribe-audio",
+    "allow-transcription-is-edited-by-hand",
     "allow-transcribe-dictation",
     "allow-test-assemblyai-connection",
     "allow-zotero-verify-key",

@@ -1,9 +1,15 @@
 <script lang="ts">
-  import { ActionIcon, Button, StatusBadge, type StatusBadgeVariant } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    ConfirmDialog,
+    StatusBadge,
+    type StatusBadgeVariant,
+  } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { Asset } from '@entropia/store'
   import type { AssetOcrState, OcrMode } from '$lib/ocr'
-  import type { AssetTranscriptionState } from '$lib/transcription'
+  import { transcriptionIsEditedByHand, type AssetTranscriptionState } from '$lib/transcription'
   import type { ItemLlmState } from '$lib/llm'
   import { getAssetPathLabel } from '$lib/item-metadata'
 
@@ -56,6 +62,35 @@
     onOcrTextInput: (assetId: string, value: string) => void
     onTranscriptionTextInput: (assetId: string, value: string) => void
   } = $props()
+
+  let pendingTranscription = $state<Asset | null>(null)
+  let checkingTranscription = $state(false)
+  let transcriptionCheckError = $state<string | null>(null)
+
+  async function requestTranscription(asset: Asset) {
+    if (checkingTranscription) return
+    checkingTranscription = true
+    transcriptionCheckError = null
+    try {
+      const edited = await transcriptionIsEditedByHand(asset.id)
+      if (selectedAsset?.id !== asset.id) return
+      if (edited || transcriptionState?.editedByHand) {
+        pendingTranscription = asset
+      } else {
+        await onTranscribeAudio(asset)
+      }
+    } catch (error) {
+      transcriptionCheckError = String(error)
+    } finally {
+      checkingTranscription = false
+    }
+  }
+
+  async function confirmTranscription() {
+    const asset = pendingTranscription
+    pendingTranscription = null
+    if (asset && selectedAsset?.id === asset.id) await onTranscribeAudio(asset)
+  }
 
   function getJobStatusBadgeVariant(status: string): StatusBadgeVariant {
     if (status === 'done') return 'success'
@@ -312,8 +347,8 @@
             variant="secondary"
             size="sm"
             class="ocr-btn"
-            disabled={busy}
-            onclick={() => onTranscribeAudio(selectedAsset)}
+            disabled={busy || checkingTranscription}
+            onclick={() => requestTranscription(selectedAsset)}
             title={busy ? translate('item.transcribeBusyTitle') : translate('item.transcribeTitle')}
           >
             {getTranscriptionActionLabel(busy)}
@@ -337,6 +372,9 @@
         </div>
       </div>
 
+      {#if transcriptionCheckError}
+        <p role="alert" class="ocr-error">{transcriptionCheckError}</p>
+      {/if}
       {#if transcriptionState.status === 'running'}
         <progress class="ocr-progress" value={transcriptionState.progress} max="100">
           {transcriptionState.progress}%
@@ -378,6 +416,17 @@
       {/if}
     </div>
   </section>
+{/if}
+
+{#if pendingTranscription && pendingTranscription.id === selectedAsset?.id}
+  <ConfirmDialog
+    title={translate('item.retranscribeAction')}
+    message={translate('item.retranscribeWarning')}
+    cancelLabel={translate('collections.cancel')}
+    confirmLabel={translate('item.retranscribeAction')}
+    oncancel={() => (pendingTranscription = null)}
+    onconfirm={confirmTranscription}
+  />
 {/if}
 
 {#if selectedAsset && (currentSummary || isSummarizing)}

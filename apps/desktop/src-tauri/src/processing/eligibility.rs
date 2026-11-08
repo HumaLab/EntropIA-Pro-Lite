@@ -445,6 +445,8 @@ pub enum ExtractionDecision {
 /// Verdict for one asset under the OCR-correction rule (S3–S6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CorrectionDecision {
+    /// The last text writer was the person, not an automatic process.
+    EditedByHand,
     /// Extraction text exists and no correction matches it.
     Eligible,
     /// The stored `correct_ocr` result already equals the current text: the
@@ -460,12 +462,15 @@ pub enum CorrectionDecision {
 /// "Done" reads the same facts the per-document command writes in one
 /// transaction: `extractions.text_content` is replaced by the corrected text
 /// and `llm_results correct_ocr` stores that same text. Equality is therefore
-/// the anti-stale proof — a later edit of the page's text breaks it, and so
-/// does «Restaurar OCR original», which clears both rows.
+/// the anti-stale proof. Manual edits are protected before comparing results;
+/// a later automatic write (including restore) releases that protection.
 pub fn correction_decision(
     conn: &Connection,
     asset_id: &str,
 ) -> Result<CorrectionDecision, String> {
+    if crate::asset_history::text_is_edited_by_hand(conn, asset_id)? {
+        return Ok(CorrectionDecision::EditedByHand);
+    }
     let extraction: Option<String> = conn
         .query_row(
             "SELECT text_content FROM extractions WHERE asset_id = ?1 ORDER BY created_at DESC LIMIT 1",

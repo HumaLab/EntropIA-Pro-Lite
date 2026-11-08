@@ -1823,7 +1823,14 @@
       bumpTick: () => {
         transcriptionTick++
       },
-      execute: () => transcribeAudio(asset.id, asset.path),
+      execute: async () => {
+        // Finish debounced edits before the automatic writer can replace them.
+        await transcriptionTextPersistor.flushAndWait(asset.id)
+        await transcribeAudio(asset.id, asset.path)
+        const nextEditedText = new Map(transEditedText)
+        nextEditedText.delete(asset.id)
+        transEditedText = nextEditedText
+      },
       fallbackError: 'Transcription failed',
     })
   }
