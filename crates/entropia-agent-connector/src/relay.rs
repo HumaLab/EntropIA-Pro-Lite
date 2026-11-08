@@ -326,6 +326,117 @@ where
     Ok(())
 }
 
+/// Diagnose a connection using the relay's own discovery, proof, credential,
+/// transport and response handling. No diagnostic detail or remote error body
+/// is printed: callers receive one safe line and the process exit code.
+pub async fn check(config: RelayConfig, source: Arc<dyn ConnectorSource>) -> (u8, String) {
+    check_with_timeout(config, source, std::time::Duration::from_secs(15)).await
+}
+
+/// Deadline injection for behavioral tests; production always uses 15 seconds.
+/// A dedicated thread isolates synchronous credential-store calls. Unlike a
+/// Tokio blocking task, it cannot hold up the caller's runtime shutdown.
+#[doc(hidden)]
+pub async fn check_with_timeout(
+    config: RelayConfig,
+    source: Arc<dyn ConnectorSource>,
+    deadline: std::time::Duration,
+) -> (u8, String) {
+    let (mut sender, receiver) = tokio::sync::oneshot::channel();
+    let worker = std::thread::Builder::new()
+        .name("connector-check".into())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            let result = match runtime {
+                Ok(runtime) => runtime.block_on(async {
+                    tokio::select! {
+                        result = check_round_trip(config, source) => Some(result),
+                        _ = sender.closed() => None,
+                    }
+                }),
+                Err(error) => Some(Err(ConnectorError::invalid_reply(error))),
+            };
+            if let Some(result) = result {
+                let _ = sender.send(result);
+            }
+        });
+    if worker.is_err() {
+        let error = ConnectorError::invalid_reply("could not start check thread");
+        return (1, format!("{}: {}", error.code, error.message));
+    }
+    match tokio::time::timeout(deadline, receiver).await {
+        Ok(Ok(Ok(line))) => (0, line),
+        Ok(Ok(Err(error))) => (1, format!("{}: {}", error.code, error.message)),
+        Ok(Err(_)) => {
+            let error = ConnectorError::invalid_reply("check thread stopped");
+            (1, format!("{}: {}", error.code, error.message))
+        }
+        Err(_) => (
+            1,
+            "timeout: EntropIA no respondió a tiempo: abrí la aplicación y volvé a intentarlo."
+                .to_string(),
+        ),
+    }
+}
+
+async fn check_round_trip(
+    config: RelayConfig,
+    source: Arc<dyn ConnectorSource>,
+) -> Result<String, ConnectorError> {
+    async {
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .map_err(ConnectorError::invalid_reply)?;
+        let (lines, _pending) = mpsc::channel(1);
+        let connector = Connector {
+            client_id: config.client_id,
+            source,
+            http,
+            negotiated: Mutex::new(None),
+            diagnostics: config.diagnostics,
+            lines,
+        };
+        let init = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-03-26","capabilities":{},
+            "clientInfo":{"name":"entropia-agent-connector","version":env!("CARGO_PKG_VERSION")}
+        }})
+        .to_string();
+        let initialized = connector.check_request("initialize", &init, 1).await?;
+        let version = initialized["result"]["serverInfo"]["version"]
+            .as_str()
+            .filter(|v| !v.is_empty() && !v.chars().any(char::is_control))
+            .ok_or_else(|| ConnectorError::invalid_reply("missing server version"))?;
+        connector
+            .forward(
+                "notifications/initialized",
+                &json!({
+                    "jsonrpc":"2.0","method":"notifications/initialized"
+                })
+                .to_string(),
+            )
+            .await?;
+        let tools = connector
+            .check_request(
+                "tools/list",
+                &json!({
+                    "jsonrpc":"2.0","id":2,"method":"tools/list","params":{}
+                })
+                .to_string(),
+                2,
+            )
+            .await?;
+        let count = tools["result"]["tools"]
+            .as_array()
+            .ok_or_else(|| ConnectorError::invalid_reply("missing tools"))?
+            .len();
+        Ok::<_, ConnectorError>(format!("ok: EntropIA {version} · {count} herramientas"))
+    }
+    .await
+}
+
 /// The one writer: a whole line at a time, flushed before the next.
 async fn write_lines<W>(mut writer: W, mut pending: mpsc::Receiver<String>)
 where
@@ -352,6 +463,32 @@ where
 }
 
 impl Connector {
+    async fn check_request(
+        &self,
+        method: &str,
+        body: &str,
+        id: u64,
+    ) -> Result<Value, ConnectorError> {
+        let bodies = match self.forward(method, body).await? {
+            Reply::Empty => return Err(ConnectorError::empty_reply()),
+            Reply::Json(body) => vec![body],
+            Reply::Sse(body) => parse_sse(&body),
+        };
+        for body in bodies {
+            let value: Value =
+                serde_json::from_str(&body).map_err(ConnectorError::invalid_reply)?;
+            if value["id"] != json!(id) {
+                continue;
+            }
+            if value.get("error").is_some() || !value["result"].is_object() {
+                return Err(ConnectorError::invalid_reply("unsuccessful JSON-RPC reply"));
+            }
+            self.remember_version(method, &body);
+            return Ok(value);
+        }
+        Err(ConnectorError::empty_stream())
+    }
+
     async fn handle(&self, raw: &str) {
         let message: Value = match serde_json::from_str(raw) {
             Ok(message) => message,
