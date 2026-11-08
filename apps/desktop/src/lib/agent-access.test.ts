@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  agentAssistantInstall,
+  agentAssistantConnect,
   agentClientCreate,
   agentClientRevoke,
   connectorRecipes,
@@ -13,12 +13,12 @@ describe('assistant installation IPC', () => {
   beforeEach(() => invokeMock.mockReset().mockResolvedValue(undefined))
 
   it.each(['claude', 'codex', 'opencode', 'pi'] as const)(
-    'installs %s with only its paired client id',
+    'connects %s with only its name',
     async (assistant) => {
-      await agentAssistantInstall(assistant, 'cl_test')
-      expect(invokeMock).toHaveBeenCalledExactlyOnceWith('agent_assistant_install', {
+      await agentAssistantConnect(assistant, 'New assistant')
+      expect(invokeMock).toHaveBeenCalledExactlyOnceWith('agent_assistant_connect', {
         assistant,
-        clientId: 'cl_test',
+        name: 'New assistant',
       })
     }
   )

@@ -209,12 +209,12 @@ export function agentConnectorLocation(): Promise<ConnectorLocation> {
   return invoke<ConnectorLocation>('agent_connector_location')
 }
 
-/** Register an existing pairing in the assistant; no token crosses IPC. */
-export function agentAssistantInstall(
+/** Pair and register in one backend-owned operation, including failure rollback. */
+export function agentAssistantConnect(
   assistant: ConnectorRecipeId,
-  clientId: string
-): Promise<void> {
-  return invoke<void>('agent_assistant_install', { assistant, clientId })
+  name: string
+): Promise<CreatedAgentClient> {
+  return invoke<CreatedAgentClient>('agent_assistant_connect', { assistant, name })
 }
 
 /** What the panel shows for `agent_access_status`. */

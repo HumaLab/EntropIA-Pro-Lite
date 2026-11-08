@@ -1776,7 +1776,7 @@ pub fn run() {
             corpus::commands::corpus_items_delete,
             corpus::commands::corpus_collection_delete,
             automation::commands::agent_connector_location,
-            automation::commands::agent_assistant_install,
+            automation::commands::agent_assistant_connect,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

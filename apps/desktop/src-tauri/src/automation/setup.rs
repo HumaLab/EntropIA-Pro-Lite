@@ -11,6 +11,7 @@ pub struct SetupError {
     pub assistant: String,
     pub detail: String,
     pub exit_code: Option<i32>,
+    pub rollback: Option<String>,
 }
 impl SetupError {
     pub fn new(code: &'static str, assistant: &str, detail: impl ToString) -> Self {
@@ -19,6 +20,7 @@ impl SetupError {
             assistant: label(assistant).into(),
             detail: detail.to_string(),
             exit_code: None,
+            rollback: None,
         }
     }
 }
@@ -127,7 +129,11 @@ impl ProcessRunner {
             .join(relative)
             .canonicalize()
             .map_err(|_| unsupported())?;
-        if !entry.is_file() {
+        if !entry.is_file()
+            || !entry
+                .components()
+                .any(|part| part.as_os_str() == "node_modules")
+        {
             return Err(unsupported());
         }
         let local_node = dir.join("node.exe");
@@ -175,10 +181,15 @@ fn parse_node_shim(text: &str) -> Option<String> {
         }
         let launch = line
             .strip_prefix("endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & ")
+            .map(|tail| {
+                tail.strip_prefix("set PATHEXT=%PATHEXT:;.JS;=;% & ")
+                    .unwrap_or(tail)
+            })
             .unwrap_or(line);
         let rest = ["\"%_prog%\" ", "\"%~dp0\\node.exe\" ", "node "]
             .iter()
-            .find_map(|prefix| launch.strip_prefix(prefix));
+            .find_map(|prefix| launch.strip_prefix(prefix))
+            .map(str::trim_start);
         if let Some(rest) = rest {
             let quoted = rest
                 .strip_suffix(" %*")?
@@ -199,10 +210,7 @@ fn parse_node_shim(text: &str) -> Option<String> {
             {
                 return None;
             }
-            let relative = relative.replace('\\', "/");
-            if !(relative.starts_with("node_modules/") || relative.starts_with("../")) {
-                return None;
-            }
+            let relative = normalize_node_entry(relative)?;
             if entry.as_ref().is_some_and(|old| old != &relative) {
                 return None;
             }
@@ -240,6 +248,42 @@ fn parse_node_shim(text: &str) -> Option<String> {
         return None;
     }
     entry
+}
+
+/// pnpm may climb to its package root first, but a later descent must not
+/// escape that root. Require package ownership both here and after canonicalize.
+fn normalize_node_entry(relative: &str) -> Option<String> {
+    let relative = relative.replace('\\', "/");
+    if relative.starts_with('/') {
+        return None;
+    }
+    let mut leading = 0;
+    let mut descended = false;
+    let mut parts = Vec::new();
+    for part in relative.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if !descended => {
+                leading += 1;
+                if leading > 3 {
+                    return None;
+                }
+            }
+            ".." => {
+                parts.pop()?;
+            }
+            _ => {
+                descended = true;
+                parts.push(part);
+            }
+        }
+    }
+    if !parts.contains(&"node_modules") {
+        return None;
+    }
+    let mut normalized = vec![".."; leading];
+    normalized.extend(parts);
+    Some(normalized.join("/"))
 }
 
 pub async fn install(
@@ -311,6 +355,7 @@ fn check_output(assistant: &str, output: RunOutput, removing: bool) -> Result<()
         assistant: label(assistant).into(),
         detail: output.stderr,
         exit_code: output.code,
+        rollback: None,
     })
 }
 fn merge(
@@ -351,6 +396,34 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::Mutex;
+
+    #[test]
+    fn shim_accepts_the_current_npm_cmd_shim() {
+        let shim = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n";
+        assert_eq!(
+            parse_node_shim(shim),
+            Some("node_modules/@openai/codex/bin/codex.js".into())
+        );
+        let chained = shim.replace("%* ", "%* & calc ");
+        let chained = chained.replace("%*\r\n", "%* & calc\r\n");
+        assert_eq!(parse_node_shim(&chained), None);
+    }
+
+    #[test]
+    fn shim_rejects_traversal_outside_its_directory() {
+        for entry in [
+            "../outside.js",
+            "node_modules/../../outside.js",
+            "node_modules/pkg/../../../outside.cjs",
+        ] {
+            let shim = format!("node \"%~dp0\\{entry}\" %*\n");
+            assert_eq!(
+                parse_node_shim(&shim),
+                None,
+                "accepted escaping shim entry: {entry}"
+            );
+        }
+    }
 
     #[derive(Default)]
     struct Fake {
@@ -544,10 +617,10 @@ mod tests {
             parse_node_shim(npm),
             Some("node_modules/@openai/codex/bin/codex.js".into())
         );
-        let pnpm = "@SETLOCAL\n@IF EXIST \"%~dp0\\node.exe\" (\n  \"%~dp0\\node.exe\" \"%~dp0\\..\\@anthropic-ai\\claude-code\\cli.js\" %*\n) ELSE (\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\n  node \"%~dp0\\..\\@anthropic-ai\\claude-code\\cli.js\" %*\n)\n";
+        let pnpm = "@SETLOCAL\n@IF EXIST \"%~dp0\\node.exe\" (\n  \"%~dp0\\node.exe\" \"%~dp0\\..\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\n) ELSE (\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\n  node \"%~dp0\\..\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\n)\n";
         assert_eq!(
             parse_node_shim(pnpm),
-            Some("../@anthropic-ai/claude-code/cli.js".into())
+            Some("../node_modules/@anthropic-ai/claude-code/cli.js".into())
         );
         assert_eq!(parse_node_shim(&format!("{npm}\npowershell evil")), None);
         assert_eq!(parse_node_shim("@echo off\nnode evil.js %*"), None);

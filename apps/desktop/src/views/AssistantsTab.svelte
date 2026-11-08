@@ -14,7 +14,7 @@
   import { open as openFolderDialog } from '@tauri-apps/plugin-dialog'
   import { ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
   import {
-    agentAssistantInstall,
+    agentAssistantConnect,
     agentAccessSetEnabled,
     agentAccessStatus,
     agentClientCreate,
@@ -159,6 +159,7 @@
       assistant?: string
       detail?: string
       exitCode?: number
+      rollback?: string | null
     }
     const known = [
       'not_found',
@@ -170,42 +171,35 @@
       'io',
     ]
     if (!known.includes(failure.code)) return String(error)
-    return t(`assistants.install.${failure.code}`, {
+    const message = t(`assistants.install.${failure.code}`, {
       assistant: failure.assistant ?? '',
       detail: failure.detail ?? '',
       exitCode: failure.exitCode ?? '—',
     })
+    return failure.rollback
+      ? `${message} ${t('assistants.install.rollback', { detail: failure.rollback })}`
+      : message
   }
 
-  /** Pair with the existing read-only defaults, then register; rollback even if
-   * this tab unmounts while the operating-system operation is in flight. */
+  /** The backend owns pairing and rollback, even after this tab closes. */
   async function connectAssistant(assistant: ConnectorRecipe) {
     if (busy || !status) return
     busy = true
     errorMessage = null
     connectedAssistant = null
     copiedLabel = null
-    let pairing: CreatedAgentClient | null = null
     try {
-      pairing = await agentClientCreate(assistant.label)
-      await agentAssistantInstall(assistant.id, pairing.client.id)
+      const pairing = await agentAssistantConnect(assistant.id, assistant.label)
       if (!destroyed) {
         created = pairing
         status = pairing.status
         connectedAssistant = assistant.label
       }
     } catch (error) {
-      let message = installError(error)
-      if (pairing) {
-        try {
-          const next = await agentClientRevoke(pairing.client.id)
-          if (!destroyed) status = next
-        } catch (rollbackError) {
-          message += ` ${t('assistants.install.rollback', { detail: String(rollbackError) })}`
-          if (!destroyed) await refresh()
-        }
+      if (!destroyed) {
+        await refresh()
+        errorMessage = installError(error)
       }
-      if (!destroyed) errorMessage = message
     } finally {
       if (!destroyed) busy = false
     }

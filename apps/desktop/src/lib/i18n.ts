@@ -23,7 +23,7 @@ const es = {
   'assistants.install.command_failed': '{assistant}: salida {exitCode}; {detail}',
   'assistants.install.io': '{assistant}: {detail}',
   'assistants.install.rollback':
-    'No pude confirmar la revocación; revisá los clientes emparejados: {detail}',
+    'No pude confirmar la revocación; el emparejamiento podría seguir activo. Revisá los clientes emparejados: {detail}',
   'home.title': 'Inicio',
   'home.heading': 'Espacio de trabajo',
   'home.description': 'Para organizar, procesar, explorar, analizar y escribir con trazabilidad.',
@@ -3127,7 +3127,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'assistants.install.invalid_client': '{assistant}: the client is no longer paired',
   'assistants.install.command_failed': '{assistant}: exit {exitCode}; {detail}',
   'assistants.install.io': '{assistant}: {detail}',
-  'assistants.install.rollback': 'Could not confirm revocation; check the paired clients: {detail}',
+  'assistants.install.rollback':
+    'Could not confirm revocation; the pairing may remain active. Check the paired clients: {detail}',
   'home.title': 'Home',
   'home.heading': 'Workspace',
   'home.description': 'To organize, process, explore, analyze and write with traceability.',
