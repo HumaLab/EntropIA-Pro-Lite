@@ -39,6 +39,8 @@ const es = {
   'assistants.install.connected': '{assistant} conectado',
   'assistants.install.accessOff':
     'El acceso de asistentes está apagado: activalo arriba para que {assistant} pueda conectarse.',
+  'numberField.decrease': 'Disminuir',
+  'numberField.increase': 'Aumentar',
   'assistants.install.alternative': 'o copiá el comando',
   'assistants.install.help':
     'Conectar empareja un cliente de solo lectura y registra EntropIA en el asistente. Si falla, revoca ese cliente. Para copiar el comando, creá un emparejamiento con el formulario de abajo.',
@@ -3158,6 +3160,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'assistants.install.connected': '{assistant} connected',
   'assistants.install.accessOff':
     'Assistant access is off: turn it on above so {assistant} can connect.',
+  'numberField.decrease': 'Decrease',
+  'numberField.increase': 'Increase',
   'assistants.install.alternative': 'or copy the command',
   'assistants.install.help':
     'Connect pairs a read-only client and registers EntropIA in the assistant. On failure, it revokes that client. To copy the command, create a pairing with the form below.',

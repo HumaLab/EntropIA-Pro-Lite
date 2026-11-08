@@ -50,6 +50,7 @@
     Checkbox,
     ConfirmDialog,
     Input,
+    NumberField,
     ToolbarMenu,
     type ToolbarMenuItem,
   } from '@entropia/ui'
@@ -658,16 +659,16 @@
             {t('sync.card.autoSyncToggle')}
           </Checkbox>
           <div class="sync-card__interval">
-            <label class="sync-card__label" for="sync-auto-interval">
+            <label class="sync-card__label number-field-label" for="sync-auto-interval">
               {t('sync.card.autoSyncInterval')}
             </label>
-            <input
+            <NumberField
               id="sync-auto-interval"
-              type="number"
               min="1"
-              class="sync-card__number-input"
               bind:value={autoInterval}
               onchange={handleAutoSyncChange}
+              decrementLabel={t('numberField.decrease')}
+              incrementLabel={t('numberField.increase')}
             />
           </div>
         </div>

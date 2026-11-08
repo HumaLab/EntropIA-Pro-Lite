@@ -25,7 +25,15 @@
     type CollectionAnalysisSettings,
     type GraphSettings,
   } from '$lib/analysis-settings'
-  import { Panel, Button, TabList, TabButton, IconButton, ActionIcon } from '@entropia/ui'
+  import {
+    Panel,
+    Button,
+    TabList,
+    TabButton,
+    IconButton,
+    ActionIcon,
+    NumberField,
+  } from '@entropia/ui'
   import RelationGraph3D from '../components/RelationGraph3D.svelte'
   import GraphSettingsForm from './GraphSettingsForm.svelte'
   import type { CollectionAnalysisRestore } from '$lib/relation-graph-view-state'
@@ -488,17 +496,17 @@
         {translate('collectionAnalysis.textSettingsTitle')}
       </h3>
       <div class="settings-field">
-        <label class="settings-label" for="analysis-term-count">
+        <label class="settings-label number-field-label" for="analysis-term-count">
           {translate('collectionAnalysis.termCountLabel')}
         </label>
-        <input
+        <NumberField
           id="analysis-term-count"
-          class="settings-input"
-          type="number"
           min={MIN_CLOUD_TERMS}
           max={MAX_CLOUD_TERMS}
           value={settings.cloudTermCount}
           onchange={onTermCountChange}
+          decrementLabel={translate('numberField.decrease')}
+          incrementLabel={translate('numberField.increase')}
         />
         <p class="settings-hint">
           {translate('collectionAnalysis.termCountHint', {
@@ -692,7 +700,6 @@
     color: var(--color-text-primary);
   }
 
-  .settings-input,
   .settings-textarea {
     padding: var(--space-2);
     border: 1px solid var(--border-subtle);
@@ -703,17 +710,11 @@
     font-family: inherit;
   }
 
-  .settings-input {
-    max-width: 120px;
-    font-variant-numeric: tabular-nums;
-  }
-
   .settings-textarea {
     resize: vertical;
     min-height: 96px;
   }
 
-  .settings-input:focus-visible,
   .settings-textarea:focus-visible {
     outline: none;
     border-color: var(--border-focus);

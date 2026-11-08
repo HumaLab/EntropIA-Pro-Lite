@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Checkbox } from '@entropia/ui'
+  import { Button, Checkbox, NumberField } from '@entropia/ui'
   import { locale, t, type I18nKey } from '$lib/i18n'
   import {
     GRAPH_SETTINGS_BOUNDS,
@@ -235,16 +235,16 @@
           {@const id = `graph-setting-${control.field}`}
           {@const range = bounds(control)}
           <label class="graph-settings__field" for={id}>
-            <span class="graph-settings__label">{translate(control.label)}</span>
-            <input
+            <span class="graph-settings__label number-field-label">{translate(control.label)}</span>
+            <NumberField
               {id}
-              class="graph-settings__input"
-              type="number"
               min={range.min}
               max={range.max}
               step={control.step}
               value={view(control)}
               onchange={(event) => onNumber(control, event)}
+              decrementLabel={translate('numberField.decrease')}
+              incrementLabel={translate('numberField.increase')}
             />
           </label>
         {/each}
