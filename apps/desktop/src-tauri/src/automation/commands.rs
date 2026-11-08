@@ -359,8 +359,15 @@ pub async fn connect_assistant(
 ) -> Result<CreatedClientView, super::setup::SetupError> {
     let created = create_client(access, endpoint, name)
         .map_err(|e| super::setup::SetupError::new("io", assistant, e))?;
-    if let Err(mut error) =
-        super::setup::install(assistant, &created.client.id, program, paths, runner).await
+    if let Err(mut error) = super::setup::install(
+        assistant,
+        &created.client.id,
+        super::server::profile_name().as_deref(),
+        program,
+        paths,
+        runner,
+    )
+    .await
     {
         if let Err(rollback) = revoke_client(access, endpoint, &created.client.id) {
             error.rollback = Some(rollback);
