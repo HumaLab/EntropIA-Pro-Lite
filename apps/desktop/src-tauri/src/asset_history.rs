@@ -170,6 +170,37 @@ fn record_at(conn: &Connection, event: &ProcessEvent, at: i64) -> Result<(), Str
     Ok(())
 }
 
+/// Whether the latest extraction-text writer was a manual edit. Unrelated
+/// history (embeddings, summaries, file edits) cannot release this protection.
+/// Match the history writer's ordering, including writes in the same millisecond.
+/// Archives predating process history have no manual-edit signal.
+pub fn text_is_edited_by_hand(conn: &Connection, asset_id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT process FROM asset_process_events
+         WHERE asset_id = ?1 AND process IN (?2, ?3, ?4, ?5, ?6, ?7)
+         ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        params![
+            asset_id,
+            PROCESS_TEXT_EDIT,
+            PROCESS_OCR,
+            PROCESS_OCR_CORRECTION,
+            PROCESS_OCR_RESTORE,
+            PROCESS_LAYOUT_BOX_OCR,
+            PROCESS_TEXT_REPLACE
+        ],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map(|process| process.as_deref() == Some(PROCESS_TEXT_EDIT))
+    .or_else(|error| {
+        if is_missing_table(&error.to_string()) {
+            Ok(false)
+        } else {
+            Err(format!("Failed to read the asset process history: {error}"))
+        }
+    })
+}
+
 fn is_missing_table(error: &str) -> bool {
     error.contains("no such table: asset_process_events")
 }
@@ -434,6 +465,27 @@ mod tests {
                 APP_VERSION.to_string()
             )]
         );
+    }
+
+    #[test]
+    fn manual_text_rule_ignores_unrelated_history_and_orders_ties() {
+        let conn = conn();
+        assert!(!text_is_edited_by_hand(&conn, "a1").unwrap());
+        record_text_edit_at(&conn, "a1", PROCESS_TEXT_EDIT, "one", 1000).unwrap();
+        record_text_edit_at(&conn, "a1", PROCESS_TEXT_EDIT, "two", 1001).unwrap();
+        record_at(
+            &conn,
+            &ProcessEvent::new("a1", PROCESS_EMBEDDING, "test"),
+            1002,
+        )
+        .unwrap();
+        assert!(text_is_edited_by_hand(&conn, "a1").unwrap());
+        record_at(&conn, &ProcessEvent::new("a1", PROCESS_OCR, "test"), 1002).unwrap();
+        assert!(!text_is_edited_by_hand(&conn, "a1").unwrap());
+        record_text_edit_at(&conn, "a1", PROCESS_TEXT_EDIT, "three", 1002).unwrap();
+        assert!(text_is_edited_by_hand(&conn, "a1").unwrap());
+        assert!(!text_is_edited_by_hand(&conn, "missing").unwrap());
+        assert!(!text_is_edited_by_hand(&Connection::open_in_memory().unwrap(), "a1").unwrap());
     }
 
     #[test]

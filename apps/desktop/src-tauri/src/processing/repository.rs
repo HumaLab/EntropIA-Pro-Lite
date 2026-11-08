@@ -4986,6 +4986,10 @@ fn validate_corpus_claim_input(
             "SELECT EXISTS(SELECT 1 FROM processing_batch_tasks l JOIN processing_batches b ON b.id=l.batch_id WHERE l.task_id=?1 AND l.request_state='active' AND b.origin='manual')",
             [task_id], |row| row.get(0),
         ).map_err(|e| format!("Failed to read OCR intent: {e}"))?;
+        if !manual && crate::asset_history::text_is_edited_by_hand(conn, asset_id)? {
+            mark_skipped(conn, task_id, "edited_by_hand")?;
+            return Ok(None);
+        }
         let skip = match super::eligibility::ocr_decision(conn, asset_id)? {
             super::eligibility::OcrDecision::AlreadyDone { method } if !manual => {
                 // A batch that asked for native-text pages still wants a page
@@ -5013,6 +5017,10 @@ fn validate_corpus_claim_input(
         return match super::eligibility::correction_decision(conn, asset_id)? {
             CorrectionDecision::Eligible => {
                 Ok(Some((source_revision(conn, asset_id)?, String::new())))
+            }
+            CorrectionDecision::EditedByHand => {
+                mark_skipped(conn, task_id, "edited_by_hand")?;
+                Ok(None)
             }
             CorrectionDecision::AlreadyDone => {
                 mark_skipped(conn, task_id, "already_satisfied")?;
@@ -6310,7 +6318,9 @@ fn plan_member(
     let mut notes: Vec<String> = Vec::new();
     // OCR first: an eligible OCR task becomes the embedding dependency below.
     let mut ocr_open: Option<String> = None;
-    if ops.ocr {
+    if ops.ocr && crate::asset_history::text_is_edited_by_hand(conn, asset_id)? {
+        notes.push("ocr:edited_by_hand".to_string());
+    } else if ops.ocr {
         let decision = match super::eligibility::ocr_decision(conn, asset_id)? {
             super::eligibility::OcrDecision::AlreadyDone { method }
                 if method == "native" && ops.ocr_include_native =>
@@ -6360,6 +6370,9 @@ fn plan_member(
                 ));
                 correction_open = true;
                 notes.push("ocr_correction:admit".to_string());
+            }
+            CorrectionDecision::EditedByHand => {
+                notes.push("ocr_correction:edited_by_hand".to_string());
             }
             CorrectionDecision::AlreadyDone => {
                 notes.push("ocr_correction:already_done".to_string());
@@ -7949,6 +7962,85 @@ mod tests {
                 reason: EmbeddingStaleReason::SourceChanged
             }
         );
+    }
+
+    #[test]
+    fn batches_preserve_manual_text_at_planning_and_claim() {
+        use crate::asset_history::{
+            record, record_text_edit, ProcessEvent, PROCESS_TEXT_EDIT, TEST_DDL,
+        };
+        for (operations, kind) in [
+            (r#"["ocr", "ocr_include_native"]"#, "ocr"),
+            (r#"["ocr_correction"]"#, "ocr_correction"),
+        ] {
+            for edit_before_plan in [true, false] {
+                let (_dir, conn) = batch_db();
+                conn.execute_batch(TEST_DDL).unwrap();
+                if kind == "ocr_correction" && edit_before_plan {
+                    conn.execute(
+                        "INSERT INTO llm_results (id, target_id, target_type, job_type, result, created_at) VALUES ('manual-test', 'a4', 'asset', 'correct_ocr', 'old correction', 1)", [],
+                    ).unwrap();
+                    record(&conn, &ProcessEvent::new("a4", "ocr_correction", "test")).unwrap();
+                }
+                if edit_before_plan {
+                    record_text_edit(&conn, "a4", PROCESS_TEXT_EDIT, "manual text");
+                }
+                conn.execute(
+                    "UPDATE extractions SET text_content='manual text' WHERE asset_id='a4'",
+                    [],
+                )
+                .unwrap();
+                insert_batch(&conn, "b1", "req-1", operations);
+                prepare_membership(&conn, "b1", &["c1".to_string()]).unwrap();
+                advance_planning(&conn, "b1", 10, 200).unwrap();
+                if edit_before_plan {
+                    assert_eq!(member_class(&conn, "b1", "a4").0, "already_done");
+                    assert!(member_class(&conn, "b1", "a4").1.contains("edited_by_hand"));
+                    assert!(live_task(&conn, "corpus", "asset", "a4", kind)
+                        .unwrap()
+                        .is_none());
+                } else {
+                    assert_eq!(member_class(&conn, "b1", "a4").0, "admitted");
+                    record_text_edit(&conn, "a4", PROCESS_TEXT_EDIT, "manual text");
+                }
+                while let Some(task) = claim_next(&conn, "s", &[kind], 1).unwrap() {
+                    assert_ne!(task.asset_id, "a4", "manual text must not be claimed");
+                }
+                assert_eq!(extraction_text(&conn, "a4"), "manual text");
+            }
+        }
+    }
+
+    #[test]
+    fn automatic_text_after_manual_edit_reopens_correction() {
+        use super::super::eligibility::{correction_decision, CorrectionDecision};
+        use crate::asset_history::{
+            record, record_text_edit, ProcessEvent, PROCESS_TEXT_EDIT, TEST_DDL,
+        };
+        for process in [
+            "ocr",
+            "ocr_correction",
+            "ocr_restore",
+            "layout_box_ocr",
+            "text_replace",
+        ] {
+            let (_dir, conn) = batch_db();
+            conn.execute_batch(TEST_DDL).unwrap();
+            assert_eq!(
+                correction_decision(&conn, "a4").unwrap(),
+                CorrectionDecision::Eligible
+            );
+            record_text_edit(&conn, "a4", PROCESS_TEXT_EDIT, "manual");
+            assert_ne!(
+                correction_decision(&conn, "a4").unwrap(),
+                CorrectionDecision::Eligible
+            );
+            record(&conn, &ProcessEvent::new("a4", process, "test")).unwrap();
+            assert_eq!(
+                correction_decision(&conn, "a4").unwrap(),
+                CorrectionDecision::Eligible
+            );
+        }
     }
 
     #[test]
