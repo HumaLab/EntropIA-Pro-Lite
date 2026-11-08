@@ -84,6 +84,19 @@ describe('transcription helpers', () => {
 })
 
 describe('TranscriptionStore', () => {
+  it('marks pending manual edits and releases protection on automatic completion', async () => {
+    const callbacks = new Map<string, (e: { payload: unknown }) => void>()
+    const store = new TranscriptionStore()
+    await store.startListening(async (event, callback) => {
+      callbacks.set(event, callback)
+      return vi.fn<() => void>()
+    })
+    callbacks.get('transcription:complete')?.({ payload: { asset_id: 'a', text: 'original' } })
+    store.setTextContent('a', 'edited')
+    expect(store.getState('a')).toMatchObject({ text: 'edited', editedByHand: true })
+    callbacks.get('transcription:complete')?.({ payload: { asset_id: 'a', text: 'new' } })
+    expect(store.getState('a')).toMatchObject({ text: 'new', editedByHand: false })
+  })
   it('stores the rich completion payload emitted by the backend', async () => {
     const callbacks = new Map<string, (e: { payload: unknown }) => void>()
     const store = new TranscriptionStore()

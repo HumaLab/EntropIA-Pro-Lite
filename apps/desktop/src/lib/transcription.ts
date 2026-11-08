@@ -32,6 +32,7 @@ export interface TranscriptionResult {
 
 export interface AssetTranscriptionState {
   status: TranscriptionStatus
+  editedByHand?: boolean
   progress: number
   stage?: string
   error?: string
@@ -147,6 +148,7 @@ export class TranscriptionStore {
       const p = e.payload as CompletePayload
       this._updateState(p.asset_id, {
         status: 'done',
+        editedByHand: false,
         progress: 100,
         stage: 'done',
         text: p.text ?? p.text_content ?? '',
@@ -196,7 +198,7 @@ export class TranscriptionStore {
   setTextContent(assetId: string, text: string): void {
     const current = this.states.get(assetId)
     if (!current) return
-    this.states.set(assetId, { ...current, text })
+    this.states.set(assetId, { ...current, text, editedByHand: true })
   }
 }
 
@@ -209,6 +211,10 @@ export class TranscriptionStore {
  * Does not mutate store state; callers own pending-state handling
  * (see runPendingAssetJob in item-view-media-jobs.ts).
  */
+export async function transcriptionIsEditedByHand(assetId: string): Promise<boolean> {
+  return invoke<boolean>('transcription_is_edited_by_hand', { assetId })
+}
+
 export async function transcribeAudio(assetId: string, assetPath: string): Promise<void> {
   await invoke('transcribe_audio', { assetId, assetPath })
 }

@@ -1621,6 +1621,7 @@ pub fn run() {
             nlp::commands::embedding_open_models_dir,
             nlp::commands::embedding_download_model,
             transcription::commands::transcribe_audio,
+            transcription::commands::transcription_is_edited_by_hand,
             transcription::commands::transcribe_dictation,
             transcription::commands::test_assemblyai_connection,
             zotero_web::zotero_verify_key,

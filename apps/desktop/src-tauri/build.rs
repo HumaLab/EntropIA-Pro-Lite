@@ -132,6 +132,7 @@ const APP_COMMANDS: &[&str] = &[
     "embedding_open_models_dir",
     "embedding_download_model",
     "transcribe_audio",
+    "transcription_is_edited_by_hand",
     "transcribe_dictation",
     "test_assemblyai_connection",
     "zotero_verify_key",

@@ -76,6 +76,23 @@ pub async fn transcribe_audio(
     Ok("queued".to_string())
 }
 
+/// Read the manual-edit signal without changing the transcription.
+#[tauri::command]
+pub async fn transcription_is_edited_by_hand(
+    asset_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<bool, String> {
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock poisoned: {e}"))?;
+        crate::asset_history::transcription_is_edited_by_hand(&conn, &asset_id)
+    })
+    .await
+}
+
 /// Update the text_content of the latest transcription for an asset.
 ///
 /// This allows users to manually correct transcription output.

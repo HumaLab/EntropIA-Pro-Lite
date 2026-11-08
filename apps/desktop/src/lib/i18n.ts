@@ -2323,6 +2323,9 @@ const es = {
   'item.transcribeTitle': 'Transcribir este archivo de audio',
   'item.transcribeBusyTitle': 'Transcripción en progreso…',
   'item.transcribeAction': 'Transcribir',
+  'item.retranscribeAction': 'Transcribir de nuevo',
+  'item.retranscribeWarning':
+    'La transcripción tiene correcciones hechas a mano. Si la volvés a transcribir, se reemplazan. ¿Continuar?',
   'item.transcribeShortAction': 'STT',
   'item.transcribeBusyAction': 'STTR',
   'item.pdfCorrectTitle': 'Corrección OCR',
@@ -3039,6 +3042,8 @@ type ExtraI18nKey =
   | 'item.pdfCorrectAction'
   | 'item.summaryPdfAction'
   | 'item.summaryAudioAction'
+  | 'item.retranscribeAction'
+  | 'item.retranscribeWarning'
   | 'item.transcribeShortAction'
   | 'item.transcribeBusyAction'
   | 'item.layoutBlocksCount'
@@ -5403,6 +5408,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.transcribeTitle': 'Transcribe this audio file',
   'item.transcribeBusyTitle': 'Transcription in progress…',
   'item.transcribeAction': 'Transcribe',
+  'item.retranscribeAction': 'Transcribe again',
+  'item.retranscribeWarning':
+    'The transcription has manual corrections. Transcribing it again will replace them. Continue?',
   'item.transcribeShortAction': 'STT',
   'item.transcribeBusyAction': 'STTR',
   'item.pdfCorrectTitle': 'OCR correction',
