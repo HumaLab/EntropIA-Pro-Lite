@@ -1,9 +1,9 @@
-//! Behavior of the stdio relay: what the agent writes on stdin, what EntropIA
-//! answers, and what reaches the connector's stdout.
-//!
-//! Every test drives the real relay against a fake endpoint over loopback and a
-//! pair of duplex streams standing in for stdin and stdout, so the assertions
-//! are on the wire and on stdout, never on internals.
+// Behavior of the stdio relay: what the agent writes on stdin, what EntropIA
+// answers, and what reaches the connector's stdout.
+//
+// Every test drives the real relay against a fake endpoint over loopback and a
+// pair of duplex streams standing in for stdin and stdout, so the assertions
+// are on the wire and on stdout, never on internals.
 
 mod common;
 
@@ -232,6 +232,23 @@ fn assert_rpc_family(response: &Value) {
         (-32099..=-32000).contains(&code),
         "code {code} is outside the -32000 family"
     );
+}
+
+#[test]
+fn discovery_accepts_optional_pipe_and_future_fields() {
+    for pipe in [None, Some(r"\\.\pipe\entropia-agent-0123456789abcdef")] {
+        let mut value = json!({"protocol":"entropia-agent/1", "port":12345, "instanceKey":common::INSTANCE_KEY, "futureField":true});
+        if let Some(pipe) = pipe {
+            value["pipe"] = json!(pipe);
+        }
+        let discovery = entropia_agent_connector::discovery::parse(
+            value.to_string().as_bytes(),
+            Path::new("test-discovery.json"),
+        )
+        .unwrap();
+        assert_eq!(discovery.pipe.as_deref(), pipe);
+        assert_eq!(discovery.endpoint(), "http://127.0.0.1:12345/mcp");
+    }
 }
 
 // ---------------------------------------------------------------------------

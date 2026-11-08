@@ -24,6 +24,91 @@ use crate::discovery::{self, Discovery};
 use crate::error::ConnectorError;
 use crate::proof;
 
+#[cfg(windows)]
+#[path = "pipe.rs"]
+mod pipe;
+
+/// Keep status handling and reply classification identical for both transports.
+enum Response {
+    Http(reqwest::Response),
+    #[cfg(windows)]
+    Pipe(hyper::Response<hyper::body::Incoming>),
+}
+
+impl Response {
+    fn status(&self) -> reqwest::StatusCode {
+        match self {
+            Self::Http(response) => response.status(),
+            #[cfg(windows)]
+            Self::Pipe(response) => response.status(),
+        }
+    }
+
+    fn headers(&self) -> &reqwest::header::HeaderMap {
+        match self {
+            Self::Http(response) => response.headers(),
+            #[cfg(windows)]
+            Self::Pipe(response) => response.headers(),
+        }
+    }
+
+    async fn chunk(&mut self) -> Result<Option<Vec<u8>>, String> {
+        match self {
+            Self::Http(response) => response
+                .chunk()
+                .await
+                .map(|chunk| chunk.map(|bytes| bytes.to_vec()))
+                .map_err(|error| error.to_string()),
+            #[cfg(windows)]
+            Self::Pipe(response) => pipe::chunk(response.body_mut())
+                .await
+                .map(|chunk| chunk.map(|bytes| bytes.to_vec()))
+                .map_err(|error| error.to_string()),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Transport {
+    #[cfg(windows)]
+    pipe: Option<pipe::Pipe>,
+}
+
+impl Transport {
+    async fn select(discovery: &Discovery) -> Result<Self, ConnectorError> {
+        #[cfg(windows)]
+        if let Some(name) = &discovery.pipe {
+            return Ok(Self {
+                pipe: pipe::Pipe::select(name).await.map_err(|error| {
+                    ConnectorError::app_absent(format!(
+                        "no pude conectar con {}: {error}",
+                        discovery.endpoint()
+                    ))
+                })?,
+            });
+        }
+        let _ = discovery;
+        Ok(Self::default())
+    }
+
+    async fn send(
+        &mut self,
+        request: reqwest::RequestBuilder,
+        url: &str,
+    ) -> Result<Response, ConnectorError> {
+        #[cfg(windows)]
+        if let Some(pipe) = &mut self.pipe {
+            let request = request.build().map_err(|error| {
+                ConnectorError::app_absent(format!("no pude conectar con {url}: {error}"))
+            })?;
+            return pipe.send(request).await.map(Response::Pipe);
+        }
+        request.send().await.map(Response::Http).map_err(|error| {
+            ConnectorError::app_absent(format!("no pude conectar con {url}: {error}"))
+        })
+    }
+}
+
 /// Where the relay gets its credential and its endpoint from. Production reads
 /// the OS keyring and the app's data directory; tests implement it directly, so
 /// no test touches either.
@@ -318,7 +403,7 @@ impl Connector {
                             forwarded += 1;
                         }
                         Err(error) => self.diagnostics.warn(&format!(
-                            "EntropIA envió un evento SSE que no es JSON ({error}): {event}"
+                            "EntropIA envió un evento SSE que no es JSON ({error})"
                         )),
                     }
                 }
@@ -337,7 +422,8 @@ impl Connector {
     /// process that has not just proved it holds this discovery file (D12).
     async fn forward(&self, method: &str, body: &str) -> Result<Reply, ConnectorError> {
         let discovery = self.discovery().await?;
-        self.verify_instance(&discovery).await?;
+        let mut transport = Transport::select(&discovery).await?;
+        self.verify_instance(&discovery, &mut transport).await?;
         let token = self
             .source
             .token(&self.client_id)
@@ -371,9 +457,7 @@ impl Connector {
             request = request.header(name, value);
         }
 
-        let response = request.send().await.map_err(|error| {
-            ConnectorError::app_absent(format!("no pude conectar con {url}: {error}"))
-        })?;
+        let response = transport.send(request, &url).await?;
         let status = response.status().as_u16();
         match status {
             401 => Err(ConnectorError::unauthorized()),
@@ -399,20 +483,23 @@ impl Connector {
     /// answers it with the usual 401 plus the HMAC of the challenge under the
     /// instance key. A missing or wrong proof is `app_absent` and the token is
     /// never sent.
-    async fn verify_instance(&self, discovery: &Discovery) -> Result<(), ConnectorError> {
+    async fn verify_instance(
+        &self,
+        discovery: &Discovery,
+        transport: &mut Transport,
+    ) -> Result<(), ConnectorError> {
         let url = discovery.endpoint();
         let challenge = proof::challenge().map_err(|error| {
             ConnectorError::instance_unverified(format!("no pude generar el desafío: {error}"))
         })?;
-        let response = self
-            .http
-            .post(&url)
-            .header(proof::CHALLENGE_HEADER, &challenge)
-            .send()
-            .await
-            .map_err(|error| {
-                ConnectorError::app_absent(format!("no pude conectar con {url}: {error}"))
-            })?;
+        let response = transport
+            .send(
+                self.http
+                    .post(&url)
+                    .header(proof::CHALLENGE_HEADER, &challenge),
+                &url,
+            )
+            .await?;
         let status = response.status().as_u16();
         let answer = response
             .headers()
@@ -433,11 +520,7 @@ impl Connector {
         Ok(())
     }
 
-    async fn read_reply(
-        &self,
-        mut response: reqwest::Response,
-        url: &str,
-    ) -> Result<Reply, ConnectorError> {
+    async fn read_reply(&self, mut response: Response, url: &str) -> Result<Reply, ConnectorError> {
         let streamed = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)

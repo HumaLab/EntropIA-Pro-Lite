@@ -32,6 +32,10 @@ keyring = { version = "3", default-features = false, features = ["sync-secret-se
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
 
 [target.'cfg(windows)'.dependencies]
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["net", "time"] }
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [dev-dependencies]

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use entropia_agent_connector::proof::{self, CHALLENGE_HEADER, PROOF_HEADER};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 
 /// The instance key a fake app advertises unless a test says otherwise.
 pub const INSTANCE_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -121,7 +121,7 @@ impl Reply {
 
 /// What the app answers to a challenge: the guard's `unauthorized` body and, if
 /// the proof mode says so, the HMAC of the challenge under the instance key.
-fn challenge_reply(mode: Proof, instance_key: &str, challenge: &str) -> Reply {
+pub fn challenge_reply(mode: Proof, instance_key: &str, challenge: &str) -> Reply {
     let body = serde_json::json!({
         "error": "unauthorized",
         "message": "Falta la credencial del asistente o ya no sirve: volvé a emparejarlo en EntropIA.",
@@ -266,7 +266,7 @@ pub fn closed_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
-async fn read_request(mut stream: TcpStream) -> Option<(TcpStream, Request)> {
+pub async fn read_request<S: tokio::io::AsyncRead + Unpin>(mut stream: S) -> Option<(S, Request)> {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 4096];
     let header_end = loop {
@@ -340,13 +340,22 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-async fn write_reply(stream: &mut TcpStream, reply: &Reply) -> std::io::Result<()> {
+pub async fn write_reply<S: tokio::io::AsyncWrite + Unpin>(
+    stream: &mut S,
+    reply: &Reply,
+) -> std::io::Result<()> {
     let mut head = format!(
-        "HTTP/1.1 {} {}\r\nConnection: close\r\nContent-Length: {}\r\n",
+        "HTTP/1.1 {} {}\r\nConnection: close\r\n",
         reply.status,
         reason(reply.status),
-        reply.body.len()
     );
+    if !reply
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("transfer-encoding"))
+    {
+        head.push_str(&format!("Content-Length: {}\r\n", reply.body.len()));
+    }
     if let Some(content_type) = reply.content_type {
         head.push_str(&format!("Content-Type: {content_type}\r\n"));
     }

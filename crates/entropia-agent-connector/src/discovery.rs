@@ -29,6 +29,9 @@ pub struct Discovery {
     #[serde(default = "default_mcp_path")]
     pub mcp_path: String,
     pub port: u16,
+    /// Optional Windows local transport. Older apps advertise only the port.
+    #[serde(default)]
+    pub pipe: Option<String>,
     #[serde(default)]
     pub pid: u32,
     #[serde(default)]
