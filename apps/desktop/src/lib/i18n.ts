@@ -1393,6 +1393,14 @@ const es = {
   'writing.historyBeforeReceive': 'Antes de recibir cambios de otra cuenta',
   'writing.historyBeforeRestore': 'Antes de restaurar otra versión',
   'writing.historyOther': 'Versión guardada',
+  'writing.historySectionLabel': 'Apartado',
+  'writing.historySectionAll': 'Todos los apartados',
+  'writing.historySectionEmpty': 'Ninguna versión cambió este apartado.',
+  'writing.historyRestoreSection': 'Restaurar solo este apartado',
+  'writing.historyRestoreSectionHint':
+    'Solo «{title}» vuelve a esta versión; el resto del manuscrito queda como está, y lo que cambia se guarda como otra versión.',
+  'writing.historyRestoreSectionMissing':
+    'Ese apartado no está en esta versión o en el manuscrito actual.',
   'writing.historyRestore': 'Restaurar esta versión',
   'writing.historyRestoreHint':
     'No se pierde nada: lo que tenés ahora queda guardado como otra versión.',
@@ -3618,6 +3626,14 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.historyBeforeReceive': 'Before changes from another account',
   'writing.historyBeforeRestore': 'Before restoring another version',
   'writing.historyOther': 'Saved version',
+  'writing.historySectionLabel': 'Section',
+  'writing.historySectionAll': 'All sections',
+  'writing.historySectionEmpty': 'No version changed this section.',
+  'writing.historyRestoreSection': 'Restore only this section',
+  'writing.historyRestoreSectionHint':
+    'Only “{title}” goes back to this version; the rest of the manuscript stays as it is, and what changes is kept as another version.',
+  'writing.historyRestoreSectionMissing':
+    'That section is not in this version or in the current manuscript.',
   'writing.historyRestore': 'Restore this version',
   'writing.historyRestoreHint': 'Nothing is lost: what you have now is kept as another version.',
   'writing.shareTitle': 'Share with another account',
