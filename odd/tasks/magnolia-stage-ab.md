@@ -57,6 +57,15 @@ Branch `feat/magnolia-stage-ab`. Source plan: `G:\EntropIA-Stack\docs\magnolia-c
   - 835 Rust tests (llm, rag, research, writing) pass.
   - Not run locally: the Pro-only local RAG path (`local-ml`; CI «Rust Pro (Linux)» covers it).
   - In one combined run, 12 `sync::research_*` tests failed while the dev app ran; 97/97 pass alone.
+- L10 (advisory fixes):
+  - Advisory 1, commit 411ea416 (see above).
+  - Advisory 4, commit c310149f: new `truncate_reserving` wrapper reserves the project-context length inside the truncation budget; used in both OCR branches (local and remote). Unit test pins text + reserved fitting the budget.
+  - Advisory 5, commit d2cf335e: `corpus`, `zotero` and `citation` pieces in the writing agent travel fenced via `fence_untrusted` (now `pub(crate)`); the writer's own pieces (`note`, `instruction`, `heading`, `surrounding`, `outline`) go verbatim. Test pins both sides.
+  - Advisory 7, commit e815d09e: `buildCollocates` clamps `o21`/`o22` at 0 with a comment; regression test with overlapping windows. Existing G² expectations unchanged.
+- Pending for another round (verifier advisories 2, 3, 6, all non-blocking):
+  - (2) Investigation with no selection sends every collection (and its contexts); RAG chat with no selection sends none. Changing either would alter established scope behavior.
+  - (3) Legacy item-level `LlmJob::CorrectOcr` gets no context; its only caller is unused by any view.
+  - (6) Previous chat turns are not fenced; fencing them whole would mislabel the model's own text, and per-part fencing is complex.
 - L10 (advisory 1 fix, commit 411ea416): the stored investigation question keeps the context block (the engine needs it on every advance), but readers no longer show it. New `stripProjectContext` in `lib/research.ts` removes the leading block; applied to the post-create navigation title and to `visibleQuestion` in InvestigationView (which also feeds the report download). 2 unit tests; ResearchView + InvestigationView + research suites green (62), typecheck Pro/Lite, lint, format green.
 - L9 (S5 evidence):
   - `section-history.ts` (packages/ui) applies the `sections.ts` rule to the stored JSON of each version. A section is found by level + title + occurrence (so moves keep it), then by its position among the headings of its level when that title is gone (so a rename in place keeps it).
