@@ -248,13 +248,15 @@ END;";
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
-        let connection = Connection::open_in_memory().expect("in-memory database");
+        let mut connection = Connection::open_in_memory().expect("in-memory database");
         let calls = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&calls);
-        connection.authorizer(Some(move |_ctx: AuthContext<'_>| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            Authorization::Deny
-        }));
+        connection
+            .authorizer(Some(move |_ctx: AuthContext<'_>| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Authorization::Deny
+            }))
+            .expect("install the counting authorizer");
 
         let sql = format!(
             "{RAG_CHUNKS_TRIGGER}\n\

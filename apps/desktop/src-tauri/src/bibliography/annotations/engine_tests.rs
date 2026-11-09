@@ -577,7 +577,11 @@ fn file_archive(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     conn.execute_batch("PRAGMA journal_mode = WAL;").unwrap();
     let memory = archive_with_library(name);
     memory
-        .backup(rusqlite::DatabaseName::Main, &path, None)
+        .backup(
+            rusqlite::MAIN_DB,
+            &path,
+            None::<fn(rusqlite::backup::Progress)>,
+        )
         .unwrap();
     drop(conn);
     (dir, path)

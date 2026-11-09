@@ -108,9 +108,9 @@ pub async fn db_execute_batch(db: State<'_, AppDbState>, sql: String) -> Result<
 /// validation + authorizer path without a Tauri runtime.
 fn execute_batch_on(db: &AppDbState, sql: &str) -> Result<(), String> {
     validate_sql_batch(sql)?;
-    let conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+    let mut conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
     for statement in split_sql_statements(sql) {
-        if let Err(error) = execute_batch_statement(&conn, &statement) {
+        if let Err(error) = execute_batch_statement(&mut conn, &statement) {
             rollback_open_transaction(&conn);
             return Err(error);
         }
@@ -131,9 +131,9 @@ fn rollback_open_transaction(conn: &Connection) {
 }
 
 /// Runs one split statement of a batch under the renderer authorizer.
-fn execute_batch_statement(conn: &Connection, statement: &str) -> Result<(), String> {
-    let _authorizer = RendererSqlAuthorizer::install(conn);
-    conn.execute_batch(statement).map_err(map_db_error)
+fn execute_batch_statement(conn: &mut Connection, statement: &str) -> Result<(), String> {
+    let authorized = RendererSqlAuthorizer::install(conn)?;
+    authorized.execute_batch(statement).map_err(map_db_error)
 }
 
 #[derive(Debug, Deserialize)]
@@ -163,20 +163,18 @@ fn execute_transaction_on(
     }
 
     let mut conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+    // SQLite authorizes trigger bodies when they fire, not when the outer
+    // statement is prepared, so the guard is installed before BEGIN and stays
+    // until after COMMIT: the transaction is opened through it. The policy
+    // allows the transaction actions themselves.
+    let mut authorized = RendererSqlAuthorizer::install(&mut conn)?;
     // IMMEDIATE takes the write lock up front, so a busy archive makes this
     // wait out busy_timeout. A DEFERRED transaction that reads first fails
     // instantly with `database is locked` when a worker is mid-write:
     // SQLite refuses to upgrade a read lock rather than risk a deadlock.
-    let tx = conn
+    let tx = authorized
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    // SQLite authorizes trigger bodies when they fire, not when the outer
-    // statement is prepared, so the guard stays installed while the statements
-    // run. It is lifted before COMMIT because the borrow checker cannot move
-    // `tx` while the guard borrows it; the policy allows the transaction
-    // actions themselves anyway.
-    let authorizer = RendererSqlAuthorizer::install(&tx);
-
     for statement in statements {
         let params: Vec<Box<dyn rusqlite::ToSql>> =
             statement.params.iter().map(json_to_sql_param).collect();
@@ -186,7 +184,6 @@ fn execute_transaction_on(
             .map_err(map_db_error)?;
     }
 
-    drop(authorizer);
     tx.commit().map_err(map_db_error)
 }
 
@@ -207,11 +204,11 @@ fn execute_on(
     params: &[serde_json::Value],
 ) -> Result<ExecuteResult, String> {
     validate_sql_execute(sql)?;
-    let conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
-    let _authorizer = RendererSqlAuthorizer::install(&conn);
+    let mut conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+    let authorized = RendererSqlAuthorizer::install(&mut conn)?;
     let params_ref: Vec<Box<dyn rusqlite::ToSql>> = params.iter().map(json_to_sql_param).collect();
     let params_as_refs: Vec<&dyn rusqlite::ToSql> = params_ref.iter().map(|b| b.as_ref()).collect();
-    let rows_affected = conn
+    let rows_affected = authorized
         .execute(sql, params_as_refs.as_slice())
         .map_err(map_db_error)?;
     Ok(ExecuteResult {
@@ -236,11 +233,11 @@ fn select_on(
     params: &[serde_json::Value],
 ) -> Result<Vec<serde_json::Value>, String> {
     validate_sql_row_query(sql)?;
-    let conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
-    let _authorizer = RendererSqlAuthorizer::install(&conn);
+    let mut conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+    let authorized = RendererSqlAuthorizer::install(&mut conn)?;
     let params_ref: Vec<Box<dyn rusqlite::ToSql>> = params.iter().map(json_to_sql_param).collect();
     let params_as_refs: Vec<&dyn rusqlite::ToSql> = params_ref.iter().map(|b| b.as_ref()).collect();
-    let mut stmt = conn.prepare(sql).map_err(map_db_error)?;
+    let mut stmt = authorized.prepare(sql).map_err(map_db_error)?;
     let col_count = stmt.column_count();
     let col_names: Vec<String> = (0..col_count)
         .map(|i| stmt.column_name(i).unwrap_or("").to_string())
@@ -281,11 +278,11 @@ fn select_rows_on(
     params: &[serde_json::Value],
 ) -> Result<Vec<Vec<serde_json::Value>>, String> {
     validate_sql_row_query(sql)?;
-    let conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
-    let _authorizer = RendererSqlAuthorizer::install(&conn);
+    let mut conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+    let authorized = RendererSqlAuthorizer::install(&mut conn)?;
     let params_ref: Vec<Box<dyn rusqlite::ToSql>> = params.iter().map(json_to_sql_param).collect();
     let params_as_refs: Vec<&dyn rusqlite::ToSql> = params_ref.iter().map(|b| b.as_ref()).collect();
-    let mut stmt = conn.prepare(sql).map_err(map_db_error)?;
+    let mut stmt = authorized.prepare(sql).map_err(map_db_error)?;
     let col_count = stmt.column_count();
 
     let rows = stmt
@@ -1615,10 +1612,10 @@ mod tests {
 
     #[test]
     fn layer_two_alone_denies_a_subquery_over_app_settings() {
-        let conn = setup_db_browser_test_db();
+        let mut conn = setup_db_browser_test_db();
         {
-            let _guard = RendererSqlAuthorizer::install(&conn);
-            let denied = conn.query_row(
+            let guard = RendererSqlAuthorizer::install(&mut conn).unwrap();
+            let denied = guard.query_row(
                 "SELECT COUNT(*) FROM (SELECT * FROM app_settings)",
                 [],
                 |row| row.get::<_, i64>(0),
@@ -1641,14 +1638,14 @@ mod tests {
 
     #[test]
     fn plain_vacuum_is_also_denied_by_the_attach_check() {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);")
             .unwrap();
-        let _guard = RendererSqlAuthorizer::install(&conn);
+        let guard = RendererSqlAuthorizer::install(&mut conn).unwrap();
         // SQLite routes plain VACUUM through the same SQLITE_ATTACH check as
         // VACUUM INTO (with a NULL filename), so the guard denies it too. In
         // production layer 1 rejects it before the authorizer runs.
-        let result = conn.execute_batch("VACUUM");
+        let result = guard.execute_batch("VACUUM");
         assert!(result.is_err(), "plain VACUUM unexpectedly ran: {result:?}");
     }
 
@@ -1843,7 +1840,7 @@ mod tests {
     fn layer_two_alone_denies_ddl_when_the_validators_are_bypassed() {
         // The text validators are layer 1; this test calls SQLite directly
         // with the authorizer installed, so only layer 2 can deny.
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE items (id TEXT PRIMARY KEY, title TEXT NOT NULL);
              CREATE INDEX idx_items_title ON items(title);
@@ -1851,7 +1848,7 @@ mod tests {
         )
         .unwrap();
         {
-            let _guard = RendererSqlAuthorizer::install(&conn);
+            let guard = RendererSqlAuthorizer::install(&mut conn).unwrap();
             for sql in [
                 "CREATE TABLE t2 (id TEXT)",
                 "CREATE INDEX idx_t2 ON items(title)",
@@ -1865,7 +1862,7 @@ mod tests {
                 "REINDEX items",
                 "ANALYZE items",
             ] {
-                assert!(conn.execute_batch(sql).is_err(), "layer 2 allowed {sql}");
+                assert!(guard.execute_batch(sql).is_err(), "layer 2 allowed {sql}");
             }
         }
         // The guard's drop uninstalls the hook, so the raw backend path works.
@@ -1893,10 +1890,10 @@ mod tests {
         assert!(execute_on(&db, "PRAGMA defer_foreign_keys=ON", &[]).is_err());
         assert!(execute_on(&db, "PRAGMA quick_check", &[]).is_err());
 
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         for sql in ["PRAGMA defer_foreign_keys=ON", "PRAGMA quick_check"] {
             assert_eq!(
-                execute_batch_statement(&conn, sql).unwrap_err(),
+                execute_batch_statement(&mut conn, sql).unwrap_err(),
                 SQL_AUTHORIZER_DENIED_ERROR,
                 "layer 2 allowed {sql}"
             );

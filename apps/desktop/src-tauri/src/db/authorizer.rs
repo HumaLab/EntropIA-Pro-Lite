@@ -210,24 +210,49 @@ fn is_capture_trigger(accessor: Option<&str>) -> bool {
     accessor.is_some_and(|name| is_sync_object(name, "trg_sync_"))
 }
 
-/// Installs the renderer authorizer on `conn` and removes it on drop. The
-/// guard borrows the connection mutably-neutrally: SQLite keeps the hook in
-/// the connection, so dropping the guard restores the unguarded backend
+/// Installs the renderer authorizer on `conn` and removes it on drop.
+///
+/// rusqlite 0.41 installs hooks through `&mut Connection`, so the guard holds
+/// the connection exclusively and hands it out through `Deref`/`DerefMut`:
+/// renderer SQL runs *through the guard*, and nothing can reach the connection
+/// while the hook is in place without going through it. SQLite keeps the hook
+/// in the connection, so dropping the guard restores the unguarded backend
 /// behaviour for every later non-renderer user of the same connection.
+///
+/// Installing can fail; the caller then refuses the renderer SQL (fail closed)
+/// instead of running it unguarded.
 pub(crate) struct RendererSqlAuthorizer<'conn> {
-    conn: &'conn Connection,
+    conn: &'conn mut Connection,
 }
 
 impl<'conn> RendererSqlAuthorizer<'conn> {
-    pub(crate) fn install(conn: &'conn Connection) -> Self {
-        conn.authorizer(Some(|ctx: AuthContext<'_>| authorize(&ctx)));
-        Self { conn }
+    pub(crate) fn install(conn: &'conn mut Connection) -> Result<Self, String> {
+        conn.authorizer(Some(|ctx: AuthContext<'_>| authorize(&ctx)))
+            .map_err(|error| format!("Failed to install the SQL authorizer: {error}"))?;
+        Ok(Self { conn })
+    }
+}
+
+impl std::ops::Deref for RendererSqlAuthorizer<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        self.conn
+    }
+}
+
+impl std::ops::DerefMut for RendererSqlAuthorizer<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.conn
     }
 }
 
 impl Drop for RendererSqlAuthorizer<'_> {
     fn drop(&mut self) {
-        self.conn
+        // Removing a hook only fails on a closed connection, which has no
+        // hook left to remove.
+        let _ = self
+            .conn
             .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     }
 }
@@ -568,9 +593,9 @@ mod tests {
             .execute_batch("CREATE VIRTUAL TABLE fts_items USING fts5(body);")
             .unwrap();
 
-        let conn = Connection::open(&path).unwrap();
-        let _guard = RendererSqlAuthorizer::install(&conn);
-        let count: i64 = conn
+        let mut conn = Connection::open(&path).unwrap();
+        let guard = RendererSqlAuthorizer::install(&mut conn).unwrap();
+        let count: i64 = guard
             .query_row("SELECT COUNT(*) FROM fts_items", [], |row| row.get(0))
             .expect("the FTS5 constructor's read-only pragma must not be denied");
         assert_eq!(count, 0);
@@ -578,11 +603,11 @@ mod tests {
 
     #[test]
     fn the_guard_removes_the_authorizer_on_panic() {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE app_settings (key TEXT, value TEXT);")
             .unwrap();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = RendererSqlAuthorizer::install(&conn);
+            let _guard = RendererSqlAuthorizer::install(&mut conn).unwrap();
             panic!("simulated command panic");
         }));
         assert!(result.is_err());
