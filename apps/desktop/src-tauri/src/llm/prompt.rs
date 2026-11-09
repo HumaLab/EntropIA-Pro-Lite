@@ -310,7 +310,7 @@ const UNTRUSTED_RULE: &str = "Los fragmentos van entre <fragmentos_no_confiables
 /// Wraps retrieved text in the untrusted block. A document cannot close (or
 /// reopen) the block early: any mark of the block inside the text, in any
 /// letter case, loses its `<`.
-fn fence_untrusted(context: &str) -> String {
+pub(crate) fn fence_untrusted(context: &str) -> String {
     let mut text = context.to_string();
     for mark in [UNTRUSTED_CLOSE, UNTRUSTED_OPEN] {
         // ASCII lowercasing keeps every byte offset, so matches map back.
