@@ -267,8 +267,11 @@ export function buildCollocates(
     const e11 = (slots * c1) / total
     if (o11 <= e11) continue
     const o12 = slots - o11
-    const o21 = c1 - o11
-    const o22 = total - slots - o21
+    // Overlapping windows can count a neighbour more often than it occurs
+    // (o11 > c1): the cells below would go negative. Clamp them instead of
+    // letting the log terms silently swallow the inconsistency.
+    const o21 = Math.max(0, c1 - o11)
+    const o22 = Math.max(0, total - slots - o21)
     const g2 =
       2 *
       (llTerm(o11, e11) +

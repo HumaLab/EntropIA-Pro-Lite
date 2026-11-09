@@ -229,6 +229,17 @@ describe('phrases, associations and word trees', () => {
     expect(buildCollocates(corpus, 'inexistente', { stopwords })).toEqual([])
   })
 
+  it('keeps G² finite when overlapping windows overcount a neighbour', () => {
+    // "guerra" falls 6 times inside the windows of the 2 "paz" (slots), while
+    // occurring only 3 times in total: o21 would go negative without clamping.
+    const dense: CorpusText[] = [{ kind: 'extraction', text: 'guerra paz guerra paz guerra' }]
+    const collocates = buildCollocates(dense, 'paz', { window: 5, minCount: 1 })
+    const guerra = collocates.find((c) => c.word === 'guerra')
+    expect(guerra).toBeDefined()
+    expect(Number.isFinite(guerra!.g2)).toBe(true)
+    expect(guerra!.g2).toBeGreaterThanOrEqual(0)
+  })
+
   it('builds a word tree of what follows or precedes a word', () => {
     expect(buildWordTree(corpus, 'guerra', { depth: 2 })).toEqual({
       word: 'guerra',
