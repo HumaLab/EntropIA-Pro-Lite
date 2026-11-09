@@ -1181,6 +1181,8 @@ const es = {
     'En pausa: la API local de Zotero está apagada. Activala en Zotero y volvé a sincronizar.',
   'writing.zoteroBibliographySyncPaused': 'En pausa: {detail}',
   'writing.zoteroBibliographySyncUpToDate': 'Biblioteca al día',
+  'writing.zoteroBibliographySyncDrainedWithFailures':
+    'Sincronizada, pero {failed} fichas o pasajes fallaron al procesarse.',
   'writing.zoteroBibliographySyncDone':
     'Sincronizada. Obras nuevas o actualizadas: {works}. Adjuntos nuevos: {attachments}.',
   'writing.zoteroBibliographySyncCancelled': 'La sincronización se canceló.',
@@ -3418,6 +3420,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     "Paused: Zotero's local API is off. Turn it on in Zotero and synchronize again.",
   'writing.zoteroBibliographySyncPaused': 'Paused: {detail}',
   'writing.zoteroBibliographySyncUpToDate': 'Library up to date',
+  'writing.zoteroBibliographySyncDrainedWithFailures':
+    'Synced, but {failed} works or passages failed to process.',
   'writing.zoteroBibliographySyncDone':
     'Synchronized. New or updated works: {works}. New attachments: {attachments}.',
   'writing.zoteroBibliographySyncCancelled': 'The synchronization was cancelled.',

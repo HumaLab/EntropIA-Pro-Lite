@@ -305,6 +305,28 @@ describe('E2b-4 selected-library synchronization', () => {
       ).toBeInTheDocument()
     })
 
+    it('says how many failed when the derived work drains with failures', async () => {
+      await renderWith({
+        state: 'succeeded',
+        newProfiles: 3,
+        newExtractions: 2,
+        profilesDone: 1,
+        profilesTotal: 3,
+        profilesFailed: 2,
+        extractionsDone: 0,
+        extractionsTotal: 2,
+        extractionsFailed: 2,
+        etaMs: 0,
+      })
+
+      expect(
+        screen.getByText('Sincronizada, pero 4 fichas o pasajes fallaron al procesarse.')
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByText('Sincronizada. Obras nuevas o actualizadas: 3. Adjuntos nuevos: 2.')
+      ).toBeNull()
+    })
+
     it('names the work being OCRd, its page and the humane ETA on a second line', async () => {
       await renderWith({
         state: 'succeeded',

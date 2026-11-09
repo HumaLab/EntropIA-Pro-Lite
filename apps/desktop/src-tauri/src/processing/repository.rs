@@ -1803,24 +1803,27 @@ pub fn bibliography_sync_status(
     // interrupted) is what is left to do. A GROUP BY subject_id over the
     // window with a MAX(rowid) join keeps this index-friendly at backlog
     // sizes.
-    let window_progress = |kind: &str| -> Result<(i64, i64, i64), String> {
+    // Settled splits in two: done (succeeded/skipped) and failed
+    // (failed/cancelled). Both are finished, so done + failed + left = total.
+    let window_progress = |kind: &str| -> Result<(i64, i64, i64, i64), String> {
         conn.query_row(
-            "SELECT COALESCE(SUM(t.state IN ('succeeded', 'skipped', 'failed', 'cancelled')), 0),
+            "SELECT COALESCE(SUM(t.state IN ('succeeded', 'skipped')), 0),
                     COUNT(*),
-                    COALESCE(SUM(t.state = 'blocked'), 0)
+                    COALESCE(SUM(t.state = 'blocked'), 0),
+                    COALESCE(SUM(t.state IN ('failed', 'cancelled')), 0)
                FROM (SELECT MAX(rowid) AS latest_rowid
                        FROM processing_tasks
                       WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
                       GROUP BY subject_id) AS latest
                JOIN processing_tasks t ON t.rowid = latest.latest_rowid",
             rusqlite::params![kind, window_anchor],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(|error| format!("Failed to count derived bibliography work: {error}"))
     };
-    let (profiles_done, profiles_total, profiles_blocked) =
+    let (profiles_done, profiles_total, profiles_blocked, profiles_failed) =
         window_progress("bibliography_profile")?;
-    let (extractions_done, extractions_total, extractions_blocked) =
+    let (extractions_done, extractions_total, extractions_blocked, extractions_failed) =
         window_progress("bibliography_extract")?;
     // Why each kind's blocked work is parked: each blocked subject's latest
     // task is its latest blocked task, and among those the first in window
@@ -1876,12 +1879,12 @@ pub fn bibliography_sync_status(
     for (kind, remaining, blocked) in [
         (
             "bibliography_profile",
-            profiles_total - profiles_done,
+            profiles_total - profiles_done - profiles_failed,
             profiles_blocked,
         ),
         (
             "bibliography_extract",
-            extractions_total - extractions_done,
+            extractions_total - extractions_done - extractions_failed,
             extractions_blocked,
         ),
     ] {
@@ -1946,6 +1949,8 @@ pub fn bibliography_sync_status(
         profiles_total,
         extractions_done,
         extractions_total,
+        profiles_failed,
+        extractions_failed,
         profiles_blocked,
         extractions_blocked,
         profiles_waiting,
@@ -11883,6 +11888,43 @@ mod tests {
         assert_eq!(latest.state, "succeeded");
         assert_eq!((latest.profiles_done, latest.profiles_total), (1, 1));
         assert_eq!((latest.extractions_done, latest.extractions_total), (0, 1));
+    }
+
+    /// Failed and cancelled work is finished (the counters still converge) but
+    /// is NOT done: it is counted apart, so a window where everything failed
+    /// never reads as a completed one.
+    #[test]
+    fn failed_and_cancelled_work_is_counted_apart_from_done() {
+        let (_dir, conn) = migrated_db();
+        conn.execute_batch(
+            "INSERT INTO processing_tasks
+                (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state,
+                 progress_done, created_at, updated_at)
+             VALUES ('sync-1', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1',
+                     'succeeded', 40, 1, 1),
+                    ('profile-ok', 'bibliography_profile', 'item-1', 'bibliography', 'item', 'item-1',
+                     'succeeded', 0, 2, 2),
+                    ('profile-skip', 'bibliography_profile', 'item-2', 'bibliography', 'item', 'item-2',
+                     'skipped', 0, 3, 3),
+                    ('profile-fail', 'bibliography_profile', 'item-3', 'bibliography', 'item', 'item-3',
+                     'failed', 0, 4, 4),
+                    ('profile-cancel', 'bibliography_profile', 'item-4', 'bibliography', 'item', 'item-4',
+                     'cancelled', 0, 5, 5),
+                    ('extract-fail', 'bibliography_extract', 'att-1', 'bibliography', 'attachment', 'att-1',
+                     'failed', 0, 6, 6),
+                    ('extract-pending', 'bibliography_extract', 'att-2', 'bibliography', 'attachment', 'att-2',
+                     'pending', 0, 7, 7)",
+        )
+        .expect("seed a window with failures");
+
+        let status = bibliography_sync_status(&conn, "sync-1").expect("status");
+        assert_eq!((status.profiles_done, status.profiles_total), (2, 4));
+        assert_eq!(status.profiles_failed, 2, "failed + cancelled");
+        assert_eq!((status.extractions_done, status.extractions_total), (0, 2));
+        assert_eq!(status.extractions_failed, 1);
+        let wire = serde_json::to_value(&status).expect("wire shape");
+        assert_eq!(wire["profilesFailed"], serde_json::json!(2));
+        assert_eq!(wire["extractionsFailed"], serde_json::json!(1));
     }
 
     /// §2.6 / S5: work the pull-before-pay gate parked is counted APART from the

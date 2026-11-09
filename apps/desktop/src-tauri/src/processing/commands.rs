@@ -303,6 +303,12 @@ pub struct BibliographySyncStatus {
     pub profiles_total: i64,
     pub extractions_done: i64,
     pub extractions_total: i64,
+    /// Settled but unsuccessful derived work in the backlog window: subjects
+    /// whose latest task `failed` or was `cancelled`. Finished (the counters
+    /// still converge: done + failed + left = total) but never counted as
+    /// done, so a window where everything failed does not read as complete.
+    pub profiles_failed: i64,
+    pub extractions_failed: i64,
     /// Live blocked derived work in the backlog window: subjects whose
     /// latest task is parked `blocked`, waiting for a change only the owner
     /// can make. Not settled and never counted as done — the screen says «en

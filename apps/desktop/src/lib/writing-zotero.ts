@@ -144,12 +144,19 @@ export interface BibliographySyncStatus {
   newProfiles: number
   /** Attachments new since the last sync. */
   newExtractions: number
-  /** Live works (fichas) of the backlog window: settled over queued, one unit per work. */
+  /** Live works (fichas) of the backlog window: succeeded/skipped over queued, one unit per work. */
   profilesDone: number
   profilesTotal: number
-  /** Live attachments (pasajes) of the backlog window: settled over queued, one unit per attachment. */
+  /** Live attachments (pasajes) of the backlog window: succeeded/skipped over queued, one unit per attachment. */
   extractionsDone: number
   extractionsTotal: number
+  /**
+   * Works/attachments whose latest task failed or was cancelled: finished but
+   * never done (done + failed + left = total). Optional: a status written
+   * before this signal existed counts as "none failed".
+   */
+  profilesFailed?: number
+  extractionsFailed?: number
   /** Live blocked derived work of the backlog window: parked on an owner-side change, never done. */
   profilesBlocked: number
   extractionsBlocked: number
@@ -214,6 +221,8 @@ export interface BibliographyDerivedProgress {
   passagesBlocked: number
   /** Passages the gate deferred: waiting on the account's cache, not on the owner. */
   passagesWaiting: number
+  /** Works and attachments whose work failed or was cancelled: finished, not done. */
+  failed: number
   etaMs: number | null
   /** Works and attachments still unsettled in the window; zero = nothing left to show. */
   remaining: number
@@ -292,7 +301,8 @@ export function bibliographyDerivedProgress(
   const passagesWaiting = status.extractionsWaiting ?? 0
   const blocked = worksBlocked + passagesBlocked
   const waiting = worksWaiting + passagesWaiting
-  const remaining = worksTotal - worksDone + (passagesTotal - passagesDone)
+  const failed = (status.profilesFailed ?? 0) + (status.extractionsFailed ?? 0)
+  const remaining = worksTotal - worksDone + (passagesTotal - passagesDone) - failed
   return {
     worksDone,
     worksTotal,
@@ -302,6 +312,7 @@ export function bibliographyDerivedProgress(
     passagesTotal,
     passagesBlocked,
     passagesWaiting,
+    failed,
     etaMs: status.etaMs ?? null,
     remaining,
     remainingActive: remaining - blocked,
