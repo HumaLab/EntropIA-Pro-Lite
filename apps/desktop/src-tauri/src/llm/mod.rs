@@ -2125,6 +2125,14 @@ const TEMPLATE_OVERHEAD_TOKENS: i32 = 128;
 
 /// Truncate text so that the resulting prompt + max_tokens fits within n_ctx.
 /// Uses a conservative heuristic and cuts at sentence boundaries when possible.
+/// Like [`truncate_text_for_context`], but leaves `reserved_chars` of the
+/// budget free for text prepended after truncation (the project context),
+/// so the whole prompt still fits the assumed budget.
+fn truncate_reserving(n_ctx: u32, max_tokens: i32, reserved_chars: usize, text: &str) -> String {
+    let reserved_tokens = reserved_chars.div_ceil(CHARS_PER_TOKEN_ESTIMATE) as i32;
+    truncate_text_for_context(n_ctx, max_tokens.saturating_add(reserved_tokens), text)
+}
+
 pub(crate) fn truncate_text_for_context(n_ctx: u32, max_tokens: i32, text: &str) -> String {
     let budget_tokens = (n_ctx as i32) - max_tokens - TEMPLATE_OVERHEAD_TOKENS;
     if budget_tokens <= 0 {
@@ -2272,13 +2280,12 @@ fn process_job(
                 return Err("No text available for OCR correction on this asset".to_string());
             }
             ocr_extraction_snapshot = Some(text.clone());
-            let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
+            let block = project_context::for_asset(conn, asset_id);
+            let truncated =
+                truncate_reserving(n_ctx, max_tokens_for(job), block.chars().count(), &text);
             let rendered =
                 render_prompt_from_settings(conn, GenerationFlow::OcrCorrection, &truncated);
-            let p = prompt::gemma_wrap(&format!(
-                "{}{rendered}",
-                project_context::for_asset(conn, asset_id)
-            ));
+            let p = prompt::gemma_wrap(&format!("{block}{rendered}"));
             engine.generate_ocr_correction(&p, max_tokens_for(job), &log_prefix)
         }
 
@@ -2699,11 +2706,13 @@ fn prepare_remote_job_request(
             }
             ocr_extraction_snapshot = Some(text.clone());
             let protected = ocr_correction::protect_image_references(&text);
-            let truncated = truncate_text_for_context(n_ctx, max_tokens, &protected);
+            let block = project_context::for_asset(conn, asset_id);
+            let truncated =
+                truncate_reserving(n_ctx, max_tokens, block.chars().count(), &protected);
             let rendered =
                 render_prompt_from_settings(conn, GenerationFlow::OcrCorrection, &truncated);
             Ok(PreparedRemotePrompt {
-                prompt: format!("{}{rendered}", project_context::for_asset(conn, asset_id)),
+                prompt: format!("{block}{rendered}"),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
             })
@@ -3807,5 +3816,20 @@ mod tests {
             crate::settings::get_setting(&conn, LOCAL_MODEL_SOURCE_URL_KEY).as_deref(),
             Some(DEFAULT_MODEL_SOURCE_URL)
         );
+    }
+
+    /// Text prepended after truncation (the project context) must fit the
+    /// same budget the truncation assumed.
+    #[test]
+    fn reserving_room_keeps_text_plus_reserved_inside_budget() {
+        let text = "palabra ".repeat(2000);
+        // (2000 - 500 - 128) tokens * 3 chars.
+        let budget_chars = (2000 - 500 - 128) * 3;
+        let plain = truncate_text_for_context(2000, 500, &text);
+        assert!(plain.chars().count() <= budget_chars);
+        let reserved = truncate_reserving(2000, 500, 300, &text);
+        assert!(reserved.chars().count() + 300 <= budget_chars);
+        assert!(reserved.chars().count() < plain.chars().count());
+        assert_eq!(truncate_reserving(2000, 500, 0, &text), plain);
     }
 }
