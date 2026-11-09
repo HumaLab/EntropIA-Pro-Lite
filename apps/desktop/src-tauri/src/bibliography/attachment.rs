@@ -1,8 +1,8 @@
 //! Attachment file resolution (E4a-WU1): maps one cataloged Zotero
 //! attachment to a local file or to an honest unavailability verdict.
 //!
-//! The resolver never guesses, never touches the network, and never
-//! creates corpus assets: it only answers "read this path" or "here is
+//! The resolver never guesses among candidates, never touches the network,
+//! and never creates corpus assets: it only answers "read this path" or "here is
 //! why there is nothing to read". Extraction (E4a-WU2) and selective OCR
 //! (E4b) consume the verdict; the UI renders the reason verbatim.
 
@@ -80,6 +80,9 @@ pub fn resolve_attachment_file(
             if candidate.is_file() {
                 return AttachmentResolution::File(candidate);
             }
+            if let Some(renamed) = sole_renamed_copy(&candidate, filename) {
+                return AttachmentResolution::File(renamed);
+            }
             AttachmentResolution::Unavailable {
                 reason: "stored_copy_missing",
                 detail: format!("no stored copy at {}", candidate.display()),
@@ -114,6 +117,35 @@ pub fn resolve_attachment_file(
             detail: "no readable native path for this link mode".to_string(),
         },
     }
+}
+
+/// The stored copy after Zotero renamed it (Zotero 8 "Continuous File
+/// Renaming" changes the file name when metadata changes; the catalog keeps
+/// the old one until the next sync). The attachment's own `storage/<key>/`
+/// directory belongs to it alone, so its one file is its copy — but only when
+/// exactly one visible file there shares the cataloged extension. Zotero's
+/// hidden bookkeeping files (`.zotero-ft-cache`, …) never count, and several
+/// candidates (an HTML snapshot with resources, say) are never guessed among.
+fn sole_renamed_copy(expected: &std::path::Path, filename: &str) -> Option<PathBuf> {
+    let extension = std::path::Path::new(filename)
+        .extension()?
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    let mut candidates = std::fs::read_dir(expected.parent()?)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && !path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+                && path
+                    .extension()
+                    .is_some_and(|ext| ext.to_string_lossy().to_ascii_lowercase() == extension)
+        });
+    let first = candidates.next()?;
+    candidates.next().is_none().then_some(first)
 }
 
 /// Reads one cataloged attachment into its file reference. `None` when
@@ -352,8 +384,49 @@ mod tests {
                     ..
                 }
             ),
-            "a missing stored copy reports missing instead of scanning"
+            "a key with no stored copy reports missing; nothing outside storage/<key>/ is searched"
         );
+    }
+
+    /// Zotero 8 renames stored copies when metadata changes; until the next
+    /// catalog sync the stored filename is stale. The attachment's own
+    /// `storage/<key>/` directory still holds its one file: use it, but only
+    /// when exactly one candidate with the same extension is there.
+    #[test]
+    fn a_renamed_stored_copy_resolves_through_its_key_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().to_string_lossy().to_string();
+        let renamed = stored_copy(&dir, "ABCDEF12", "Bloch - 1949 - Oficio.pdf", b"%PDF-1.4");
+        // Zotero's own hidden bookkeeping files never count as candidates.
+        stored_copy(&dir, "ABCDEF12", ".zotero-ft-cache", b"text");
+        stored_copy(&dir, "ABCDEF12", ".zotero-reader-state", b"{}");
+
+        let att = attachment("imported_file"); // catalog still says paper.pdf
+        assert_eq!(
+            resolve_attachment_file(&att, Some(&data_dir)),
+            AttachmentResolution::File(PathBuf::from(&renamed))
+        );
+
+        // Two candidates: no guessing.
+        stored_copy(&dir, "ABCDEF12", "otro.pdf", b"%PDF-1.4");
+        assert!(matches!(
+            resolve_attachment_file(&att, Some(&data_dir)),
+            AttachmentResolution::Unavailable {
+                reason: "stored_copy_missing",
+                ..
+            }
+        ));
+
+        // A lone file with another extension is not this attachment's copy.
+        let other = tempfile::tempdir().expect("tempdir");
+        stored_copy(&other, "ABCDEF12", "snapshot.html", b"<html>");
+        assert!(matches!(
+            resolve_attachment_file(&att, Some(&other.path().to_string_lossy())),
+            AttachmentResolution::Unavailable {
+                reason: "stored_copy_missing",
+                ..
+            }
+        ));
     }
 
     #[test]
