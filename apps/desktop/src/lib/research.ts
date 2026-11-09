@@ -253,6 +253,12 @@ export interface ResearchCreateRequest {
   question: string
   project: string
   collection_ids: string[]
+  /**
+   * Collections chosen by hand: the only ones whose project context the
+   * backend prepends. Empty when none was chosen, even though `collection_ids`
+   * then lists every collection for the search. Stripped before the engine.
+   */
+  context_collection_ids: string[]
   max_llm_calls: number
   max_cost: number | null
   context: ResearchContextMessage[] | null

@@ -293,6 +293,29 @@ describe('ResearchView alcance de la investigación', () => {
         alcance: 'corpus',
         bibliotecas: [],
         collection_ids: ['c-conflicto', 'c-voces'],
+        // Nothing chosen by hand: search everything, prepend no context.
+        context_collection_ids: [],
+      }),
+    })
+  })
+
+  it('las colecciones elegidas a mano son las únicas que aportan contexto', async () => {
+    backend()
+    render(ResearchView)
+    await waitFor(() => {
+      expect(screen.getByText('Conflicto SOIP 1965-66')).toBeInTheDocument()
+    })
+
+    // Uncheck "Voces": the person now chose only the first collection.
+    await fireEvent.click(screen.getByRole('checkbox', { name: /Voces/ }))
+    await writeQuestion()
+    await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
+
+    await waitFor(() => expect(createCalls()).toHaveLength(1))
+    expect(createCalls()[0]![1]).toEqual({
+      request: expect.objectContaining({
+        collection_ids: ['c-conflicto'],
+        context_collection_ids: ['c-conflicto'],
       }),
     })
   })

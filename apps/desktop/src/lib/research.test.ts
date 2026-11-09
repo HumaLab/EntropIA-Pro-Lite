@@ -89,6 +89,7 @@ describe('research request shapes', () => {
       question: '¿Pregunta?',
       project: 'investigación',
       collection_ids: ['c-1'],
+      context_collection_ids: [],
       max_llm_calls: 10,
       max_cost: null,
       context: null,

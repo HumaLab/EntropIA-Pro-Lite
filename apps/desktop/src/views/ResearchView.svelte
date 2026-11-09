@@ -394,6 +394,11 @@
           selectedCollectionIds.length > 0
             ? [...selectedCollectionIds]
             : collections.map((collection) => collection.id),
+        // Context only for what was chosen by hand: searching everything
+        // does not mean every collection's context belongs in the prompt.
+        // The view starts with every collection selected; only a selection
+        // the person touched counts as chosen by hand.
+        context_collection_ids: scopeTouched ? [...selectedCollectionIds] : [],
         max_llm_calls: parsedCalls,
         max_cost: parsedCost,
         context: handoff?.context ?? null,
