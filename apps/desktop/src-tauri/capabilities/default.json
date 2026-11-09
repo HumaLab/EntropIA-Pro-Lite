@@ -130,7 +130,6 @@
     "allow-zotero-verify-key",
     "allow-update-transcription-text-cmd",
     "allow-prepare-audio-preview",
-    "allow-llm-correct-ocr",
     "allow-llm-extract-entities",
     "allow-llm-extract-triples",
     "allow-llm-summarize",

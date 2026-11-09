@@ -1627,7 +1627,6 @@ pub fn run() {
             zotero_web::zotero_verify_key,
             transcription::commands::update_transcription_text_cmd,
             audio_preview::prepare_audio_preview,
-            llm::commands::llm_correct_ocr,
             llm::commands::llm_extract_entities,
             llm::commands::llm_extract_triples,
             llm::commands::llm_summarize,

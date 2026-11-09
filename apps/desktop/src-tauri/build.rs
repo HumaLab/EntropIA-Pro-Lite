@@ -138,7 +138,6 @@ const APP_COMMANDS: &[&str] = &[
     "zotero_verify_key",
     "update_transcription_text_cmd",
     "prepare_audio_preview",
-    "llm_correct_ocr",
     "llm_extract_entities",
     "llm_extract_triples",
     "llm_summarize",
