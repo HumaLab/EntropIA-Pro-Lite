@@ -63,6 +63,7 @@ function detail(over: Record<string, unknown> = {}) {
       itemVersion: 3,
       collections: ['Historia'],
       tags: ['metodología'],
+      automaticTags: ['Historia social'],
       attachments: [attachment()],
     },
     ...over,

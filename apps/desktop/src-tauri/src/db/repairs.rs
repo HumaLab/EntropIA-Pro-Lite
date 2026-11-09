@@ -650,7 +650,7 @@ mod tests {
             )
             .expect("check the unique index");
         assert_eq!(unique_index, 1);
-        assert_eq!(registry_row_count(&conn), 62, "every migration is applied");
+        assert_eq!(registry_row_count(&conn), 63, "every migration is applied");
         assert_eq!(
             dedup_oplog_rows(&conn),
             0,

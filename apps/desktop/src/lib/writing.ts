@@ -19,6 +19,7 @@
  *    `Cambios pendientes`.
  */
 
+import { restoreSection as restoreSectionContent, type SectionKey } from '@entropia/ui'
 import { invoke } from '@tauri-apps/api/core'
 import { workspace } from './workspace'
 import {
@@ -399,6 +400,26 @@ export class WritingStore {
    * backend keeps what it replaces as a version of its own (§16.4). Flushes
    * first so the revision it checks against is the one on disk.
    */
+  /**
+   * Brings back one section of an earlier version: the current manuscript with
+   * that section replaced, saved as a normal edit. History is kept as it is,
+   * and the replaced text stays in the versions. False when the section is
+   * missing from the version or from the current manuscript.
+   */
+  async restoreSection(versionNumber: number, key: SectionKey): Promise<boolean> {
+    await this.flush()
+    const current = this.#state.content
+    if (!this.#state.open || !current) return false
+    const from = await this.readVersion(versionNumber)
+    if (!from) return false
+    const next = restoreSectionContent(current, from, key)
+    if (!next) return false
+    this.applyEdit(next)
+    await this.flush()
+    await this.refreshOpen()
+    return true
+  }
+
   async restoreVersion(versionNumber: number): Promise<void> {
     await this.flush()
     const open = this.#state.open

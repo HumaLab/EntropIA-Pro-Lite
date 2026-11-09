@@ -207,6 +207,24 @@ describe('CollectionRepo', () => {
       expect(result).toEqual(updated)
       expect(result.name).toBe('Updated Name')
     })
+
+    it('stores a trimmed AI context and clears an empty one to NULL', async () => {
+      const setMock = vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'u1' }]) }),
+      })
+      db.mocks.update.chain['set'] = setMock
+
+      await repo.update('u1', { aiContext: '  Buenos Aires, 1870–1914; grafía original.  ' })
+      expect(setMock.mock.calls[0]![0]).toMatchObject({
+        aiContext: 'Buenos Aires, 1870–1914; grafía original.',
+      })
+
+      await repo.update('u1', { aiContext: '   ' })
+      expect(setMock.mock.calls[1]![0]).toMatchObject({ aiContext: null })
+
+      await repo.update('u1', { name: 'Solo nombre' })
+      expect(setMock.mock.calls[2]![0]).not.toHaveProperty('aiContext')
+    })
   })
 
   describe('delete', () => {

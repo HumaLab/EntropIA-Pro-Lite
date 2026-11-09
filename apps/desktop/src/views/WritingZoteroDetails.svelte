@@ -1,6 +1,7 @@
 <script module lang="ts">
   import { invoke } from '@tauri-apps/api/core'
   import type { LibraryEntry } from '$lib/writing-zotero'
+  import ZoteroTags from '../components/ZoteroTags.svelte'
 
   /** One Zotero creator, camelCase exactly as `writing_zotero_item_detail` answers. */
   export interface ZoteroDetailCreator {
@@ -39,6 +40,8 @@
     itemVersion?: number | null
     collections: string[]
     tags: string[]
+    /** Tags Zotero added by itself; hidden unless asked. */
+    automaticTags?: string[]
     attachments: ZoteroDetailAttachment[]
   }
 
@@ -256,10 +259,14 @@
         <dd>{item.collections.join(', ')}</dd>
       </div>
     {/if}
-    {#if item.tags.length > 0}
+    {#if item.tags.length > 0 || (item.automaticTags?.length ?? 0) > 0}
       <div class="details__field">
         <dt>{t('writing.zoteroDetailTags')}</dt>
-        <dd>{item.tags.join(', ')}</dd>
+        <dd>
+          {#key item}
+            <ZoteroTags tags={item.tags} automaticTags={item.automaticTags ?? []} />
+          {/key}
+        </dd>
       </div>
     {/if}
     {#if item.attachments.length > 0}

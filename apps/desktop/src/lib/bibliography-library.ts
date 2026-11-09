@@ -135,7 +135,10 @@ export interface BibliographyWorkDetailItem {
   url: string | null
   itemVersion: number | null
   collections: string[]
+  /** Tags a person gave the work in Zotero. */
   tags: string[]
+  /** Tags Zotero added by itself; the ficha hides them unless asked. */
+  automaticTags: string[]
   attachments: BibliographyWorkAttachmentRef[]
 }
 

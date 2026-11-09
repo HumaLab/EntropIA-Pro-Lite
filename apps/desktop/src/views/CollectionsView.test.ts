@@ -27,6 +27,7 @@ type CollectionRow = {
   id: string
   name: string
   description: string | null
+  aiContext?: string | null
   createdAt: number
   updatedAt: number
 }
@@ -66,6 +67,46 @@ vi.mock('$lib/pane-context', () => ({
 vi.mock('$lib/workspace', () => ({
   workspace: workspaceRef,
 }))
+
+describe('CollectionsView project context for the AI', () => {
+  let store: ReturnType<typeof createStore>
+
+  beforeEach(() => {
+    locale.set('es')
+    store = createStore([
+      {
+        id: 'col-1',
+        name: 'Historia',
+        description: 'Prensa obrera',
+        aiContext: 'Buenos Aires, 1890–1930.',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    ])
+    storeRef.current = store
+  })
+
+  it('edits the collection context and saves it with the name and description', async () => {
+    render(CollectionsView)
+    await fireEvent.click(await screen.findByTestId('edit-button'))
+    const context = screen.getByLabelText('Contexto para la IA') as HTMLTextAreaElement
+    expect(context.value).toBe('Buenos Aires, 1890–1930.')
+    expect(screen.getByText(/tema, período, convenciones y grafías de nombres/)).toBeInTheDocument()
+
+    await fireEvent.input(context, {
+      target: { value: 'Buenos Aires, 1890–1930. Grafía: «Yrigoyen».' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar' }))
+
+    await waitFor(() =>
+      expect(store.collections.update).toHaveBeenCalledWith('col-1', {
+        name: 'Historia',
+        description: 'Prensa obrera',
+        aiContext: 'Buenos Aires, 1890–1930. Grafía: «Yrigoyen».',
+      })
+    )
+  })
+})
 
 describe('CollectionsView collection deletion', () => {
   beforeEach(() => {

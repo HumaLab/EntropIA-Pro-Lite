@@ -204,6 +204,7 @@ static REGISTRY: &[Migration] = &[
     migration!("0060_processing_ocr_correction_summary_tasks", Atomic),
     migration!("0061_asset_process_events", Atomic),
     migration!("0062_triple_evidence", Atomic),
+    migration!("0063_collection_ai_context", Atomic),
 ];
 
 // ---------------------------------------------------------------------------
@@ -693,8 +694,8 @@ mod tests {
         );
         assert_eq!(
             from_registry.len(),
-            62,
-            "the Phase 4 shell must keep all 62 migrations"
+            63,
+            "the Phase 4 shell must keep all 63 migrations"
         );
     }
 
@@ -717,7 +718,7 @@ mod tests {
         );
         assert_eq!(
             expected.len(),
-            31,
+            32,
             "the TS atomic condition changed shape; re-check the extractor"
         );
     }
@@ -729,7 +730,7 @@ mod tests {
             apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("apply everything");
         assert_eq!(
             report.applied.len(),
-            62,
+            63,
             "every registry migration must run once"
         );
         assert_matches_canonical_fixture(

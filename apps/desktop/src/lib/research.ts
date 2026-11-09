@@ -348,6 +348,20 @@ export function researchList(): Promise<ResearchListResponse> {
   return researchRequest({ op: 'list' }) as Promise<ResearchListResponse>
 }
 
+/**
+ * Removes the project-context block the backend prepends to the stored
+ * question (see `con_contexto_del_proyecto` in research.rs): the engine needs
+ * it on every advance, so it stays stored, but readers never show it.
+ * Anything that is not exactly that leading block is returned untouched.
+ */
+export function stripProjectContext(question: string): string {
+  const prefix = 'Contexto del proyecto ('
+  if (!question.startsWith(prefix)) return question
+  const end = question.indexOf('\n\n')
+  if (end < 0) return question
+  return question.slice(end + 2)
+}
+
 export async function researchCreate(request: ResearchCreateRequest): Promise<ResearchJobSummary> {
   const result = (await researchRequest({ op: 'create', ...request })) as ResearchDetailResponse
   return result.job

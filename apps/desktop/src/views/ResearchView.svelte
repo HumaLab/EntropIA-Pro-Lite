@@ -10,6 +10,7 @@
     researchDelete,
     researchList,
     takeResearchHandoff,
+    stripProjectContext,
     type ResearchCollectionSummary,
     type ResearchHandoffDraft,
     type ResearchJobStatus,
@@ -409,7 +410,7 @@
       navigation.navigate({
         name: 'investigation',
         jobId: created.id,
-        title: created.question,
+        title: stripProjectContext(created.question),
       })
     } catch (createError) {
       submitError = describeBackendError(createError, () => translate('research.startError'))

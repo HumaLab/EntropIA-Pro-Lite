@@ -28,6 +28,7 @@
     type ResearchReportContent,
     researchGet,
     researchPause,
+    stripProjectContext,
     researchResume,
     describeBackendError,
     researchSource,
@@ -509,7 +510,7 @@
   }
 
   const visibleJobTitle = $derived(job?.title || title)
-  const visibleQuestion = $derived(job?.question ?? title)
+  const visibleQuestion = $derived(stripProjectContext(job?.question ?? title))
   const WORKING_COPY: Record<ResearchJobPhase, I18nKey> = {
     coverage: 'investigation.working.coverage',
     design: 'investigation.working.design',

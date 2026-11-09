@@ -71,7 +71,11 @@ pub struct ItemDetailItem {
     pub url: Option<String>,
     pub item_version: Option<i64>,
     pub collections: Vec<String>,
+    /// Tags a person gave the work in Zotero.
     pub tags: Vec<String>,
+    /// Tags Zotero added by itself (`type: 1`: imported keywords, subject
+    /// headings). The ficha hides them unless asked.
+    pub automatic_tags: Vec<String>,
     pub attachments: Vec<AttachmentDetail>,
 }
 
@@ -391,6 +395,17 @@ pub(crate) fn project_item(
                 format!("Failed to decode confirmed Zotero tags: {error}"),
             )
         })?;
+    // The native snapshot carries each tag with its Zotero type; the catalog
+    // table does not, so the snapshot decides manual versus automatic.
+    let (snapshot_manual, snapshot_automatic) = split_snapshot_tags(&item.native_json_snapshot);
+    let mut tags = tags;
+    tags.extend(snapshot_manual);
+    tags.sort();
+    tags.dedup();
+    let automatic_tags: Vec<String> = snapshot_automatic
+        .into_iter()
+        .filter(|tag| tags.binary_search(tag).is_err())
+        .collect();
 
     let mut attachments_statement = conn
         .prepare(
@@ -446,6 +461,7 @@ pub(crate) fn project_item(
         item_version: item.item_version,
         collections,
         tags,
+        automatic_tags,
         attachments,
     })
 }
@@ -498,6 +514,39 @@ fn date_part(value: Option<&serde_json::Value>) -> Option<i64> {
         serde_json::Value::String(text) => text.trim().parse().ok(),
         _ => None,
     }
+}
+
+/// Splits the tags of a native Zotero row (`data.tags`, each `{tag, type}`)
+/// into manual and automatic ones, trimmed, sorted and deduplicated. Zotero
+/// omits `type` for a manual tag and writes `1` for an automatic one. A row
+/// without a readable `data.tags` array has no tags here.
+fn split_snapshot_tags(snapshot: &str) -> (Vec<String>, Vec<String>) {
+    let mut manual = Vec::new();
+    let mut automatic = Vec::new();
+    let Ok(row) = serde_json::from_str::<serde_json::Value>(snapshot) else {
+        return (manual, automatic);
+    };
+    let Some(entries) = row.pointer("/data/tags").and_then(|tags| tags.as_array()) else {
+        return (manual, automatic);
+    };
+    for entry in entries {
+        let Some(text) = entry.get("tag").and_then(|tag| tag.as_str()).map(str::trim) else {
+            continue;
+        };
+        if text.is_empty() {
+            continue;
+        }
+        if entry.get("type").and_then(|kind| kind.as_i64()) == Some(1) {
+            automatic.push(text.to_string());
+        } else {
+            manual.push(text.to_string());
+        }
+    }
+    for list in [&mut manual, &mut automatic] {
+        list.sort();
+        list.dedup();
+    }
+    (manual, automatic)
 }
 
 #[cfg(test)]
@@ -565,7 +614,9 @@ mod tests {
         BibliographicItemInput {
             item_key: key.to_string(),
             item_version: Some(version),
-            native_json_snapshot: format!(r#"{{"key":"{key}"}}"#),
+            native_json_snapshot: format!(
+                r#"{{"key":"{key}","data":{{"tags":[{{"tag":"draft"}},{{"tag":"_auto","type":1}}]}}}}"#
+            ),
             csl_json_snapshot: format!(r#"{{"id":"csl-{key}","type":"book"}}"#),
             item_type: Some("book".to_string()),
             title: Some("Synthetic work".to_string()),
@@ -781,6 +832,7 @@ mod tests {
             ]
         );
         assert_eq!(item.tags, vec!["draft".to_string(), "thesis".to_string()]);
+        assert_eq!(item.automatic_tags, vec!["_auto".to_string()]);
         assert_eq!(item.attachments.len(), 1);
         let attachment = &item.attachments[0];
         assert_eq!(attachment.attachment_key, "PDF01");
@@ -1229,6 +1281,7 @@ mod tests {
                 item_version: Some(3),
                 collections: vec!["Alpha collection".to_string()],
                 tags: vec![],
+                automatic_tags: vec![],
                 attachments: vec![AttachmentDetail {
                     attachment_id: "ATTACH01".to_string(),
                     attachment_key: "PDF01".to_string(),
@@ -1263,6 +1316,7 @@ mod tests {
                     "itemVersion": 3,
                     "collections": ["Alpha collection"],
                     "tags": [],
+                    "automaticTags": [],
                     "attachments": [
                         {
                             "attachmentId": "ATTACH01",
@@ -1385,5 +1439,25 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0))
             .expect("settings rows");
         assert_eq!(rows, 0, "a work that is not there opens nothing");
+    }
+
+    #[test]
+    fn snapshot_tags_split_manual_from_automatic() {
+        let (manual, automatic) = split_snapshot_tags(
+            r#"{"key":"K","data":{"tags":[{"tag":"thesis"},{"tag":" auto ","type":1},{"tag":"draft","type":0},{"tag":"thesis"},{"tag":"  "}]}}"#,
+        );
+        assert_eq!(manual, vec!["draft".to_string(), "thesis".to_string()]);
+        assert_eq!(automatic, vec!["auto".to_string()]);
+        for snapshot in [
+            r#"{"key":"K"}"#,
+            r#"{"key":"K","data":{"tags":"x"}}"#,
+            "not json",
+        ] {
+            assert_eq!(
+                split_snapshot_tags(snapshot),
+                (vec![], vec![]),
+                "{snapshot}"
+            );
+        }
     }
 }

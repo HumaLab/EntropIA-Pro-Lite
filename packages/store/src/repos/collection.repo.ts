@@ -25,17 +25,19 @@ export class CollectionRepo {
       id: data.id ?? crypto.randomUUID(),
       name: data.name,
       description: data.description ?? null,
+      aiContext: data.aiContext?.trim() || null,
       createdAt: now,
       updatedAt: now,
     }
 
     if (this.rawClient) {
       await this.rawClient.execute(
-        'INSERT INTO collections (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO collections (id, name, description, ai_context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
         [
           createdCollection.id,
           createdCollection.name,
           createdCollection.description,
+          createdCollection.aiContext,
           createdCollection.createdAt,
           createdCollection.updatedAt,
         ]
@@ -78,11 +80,14 @@ export class CollectionRepo {
 
   async update(
     id: string,
-    data: Partial<Pick<NewCollection, 'name' | 'description'>>
+    data: Partial<Pick<NewCollection, 'name' | 'description' | 'aiContext'>>
   ): Promise<Collection> {
+    const values = { ...data }
+    // A blank project context is no context: NULL keeps every AI prompt as before.
+    if ('aiContext' in values) values.aiContext = values.aiContext?.trim() || null
     const rows = await this.db
       .update(collections)
-      .set({ ...data, updatedAt: Date.now() })
+      .set({ ...values, updatedAt: Date.now() })
       .where(eq(collections.id, id))
       .returning()
 

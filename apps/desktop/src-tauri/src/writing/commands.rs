@@ -843,8 +843,14 @@ pub async fn writing_agent_ask(
         );
         let llm = ClienteLlmOpenRouter::new(key, model);
 
-        let messages =
-            super::agent_prompt::messages(&input.action_type, &input.selection, &input.context);
+        let project_context =
+            crate::llm::project_context::for_manuscript(&conn, &input.document_id);
+        let messages = super::agent_prompt::messages(
+            &project_context,
+            &input.action_type,
+            &input.selection,
+            &input.context,
+        );
 
         // No tools. A writing action is one question about one passage, and a
         // tool loop here would let the agent reach for material the writer

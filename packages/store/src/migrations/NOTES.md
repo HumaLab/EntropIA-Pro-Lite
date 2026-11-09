@@ -157,3 +157,12 @@ nullable columns on the synced `triples` table: older rows, hand-made triples
 and custom prompts leave them NULL, and the span stays NULL unless the
 sentence was found verbatim. The first push from an updated device raises the
 account schema_tag; devices not yet updated drop the columns on apply.
+
+## 0063_collection_ai_context
+
+A project context per collection (topic, period, conventions, spellings of
+names) that the AI prompts read: RAG chat, investigation, OCR correction and
+the writing agent, where a manuscript uses its primary collection's. One
+nullable column on the synced `collections` table; NULL keeps every prompt as
+it was. The first push from an updated device raises the account schema_tag;
+devices not yet updated drop the column on apply.

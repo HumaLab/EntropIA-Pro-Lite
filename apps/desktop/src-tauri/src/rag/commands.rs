@@ -62,6 +62,7 @@ enum RagAnswerMode {
 
 /// Resultado de la fase bloqueante (settings + historial + recuperación).
 struct RetrievalPhase {
+    project_context: String,
     mode: RagAnswerMode,
     model: String,
     /// Modelo del reranker Lite (`rag_reranker_model`, ver
@@ -260,6 +261,7 @@ pub async fn rag_ask(
     let scope = RagScope::parse(scope.as_deref())?;
     let libraries = libraries.unwrap_or_default();
     // Absent or empty: the whole corpus, as before the chat could choose.
+    let context_collections = collections.clone().unwrap_or_default();
     let collections = retrieval::CollectionScope::only(&collections.unwrap_or_default());
     let requested_top_k = top_k;
     let db_path = db.db_path.clone();
@@ -290,6 +292,7 @@ pub async fn rag_ask(
             &format!("history_turns={}", history.len()),
         );
         Ok(RetrievalPhase {
+            project_context: crate::llm::project_context::load(&conn, &context_collections),
             mode,
             model,
             reranker_model,
@@ -704,6 +707,7 @@ pub async fn rag_ask(
 
     let generation_started = std::time::Instant::now();
     let answer = generate_answer(
+        &phase.project_context,
         &app_handle,
         &db_path,
         &phase.mode,
@@ -765,7 +769,9 @@ pub async fn rag_ask(
 // arm. In lean only the OpenRouter arm runs, so allow them to be unused rather than
 // renaming the parameters (keeps the signature and call sites stable).
 #[cfg_attr(not(feature = "local-ml"), allow(unused_variables))]
+#[allow(clippy::too_many_arguments)]
 async fn generate_answer(
+    project_context: &str,
     app_handle: &tauri::AppHandle,
     db_path: &std::path::Path,
     mode: &RagAnswerMode,
@@ -781,7 +787,12 @@ async fn generate_answer(
             let context = format_fragments(sources);
             let history_block =
                 format_history(history, params.history_turns, params.history_turn_max_chars);
-            let prompt = crate::llm::prompt::raw_rag_answer(question, &context, &history_block);
+            let prompt = crate::llm::prompt::raw_rag_answer(
+                project_context,
+                question,
+                &context,
+                &history_block,
+            );
             let client =
                 crate::llm::openrouter::OpenRouterClient::new(api_key.clone(), model.clone());
             let generation = crate::llm::generation::OpenRouterGenerationParams::provider_defaults(
@@ -794,6 +805,7 @@ async fn generate_answer(
         RagAnswerMode::Local => {
             // Camino local de Pro: motor LLM en el equipo. Mismo patrón que
             // `run_local_gemma_ner`.
+            let project_context = project_context.to_string();
             let app_handle = app_handle.clone();
             let db_path = db_path.to_path_buf();
             let question = question.to_string();
@@ -828,7 +840,13 @@ async fn generate_answer(
                 // como red de seguridad final, lo truncamos al presupuesto de
                 // tokens (evidencia + historial ≈ n_ctx - salida - margen).
                 let prompt = build_local_rag_prompt(
-                    n_ctx, max_tokens, &question, &sources, &history, &params,
+                    &project_context,
+                    n_ctx,
+                    max_tokens,
+                    &question,
+                    &sources,
+                    &history,
+                    &params,
                 );
                 engine.generate_chat_with_ctx(
                     &prompt,
@@ -1545,6 +1563,7 @@ fn build_local_direct_prompt(
 /// crudas; el motor aplica el chat template provisto por el modelo.
 #[cfg(feature = "local-ml")]
 fn build_local_rag_prompt(
+    project_context: &str,
     n_ctx: u32,
     max_tokens: i32,
     question: &str,
@@ -1560,14 +1579,22 @@ fn build_local_rag_prompt(
     } else {
         n_ctx
     };
-    fit_local_rag_instruction(budget_ctx, max_tokens, question, &context, &history_block)
+    fit_local_rag_instruction(
+        project_context,
+        budget_ctx,
+        max_tokens,
+        question,
+        &context,
+        &history_block,
+    )
 }
 
 /// Fits only optional RAG material. The instruction/citation scaffold and the
-/// complete current question are mandatory; if the requested output reserve
+/// complete current question and project context are mandatory; if the requested output reserve
 /// leaves no room for them, generation reduces that reserve after tokenization.
-#[cfg(feature = "local-ml")]
+#[cfg(any(feature = "local-ml", test))]
 fn fit_local_rag_instruction(
+    project_context: &str,
     n_ctx: u32,
     max_tokens: i32,
     question: &str,
@@ -1577,14 +1604,14 @@ fn fit_local_rag_instruction(
     const CHARS_PER_TOKEN_ESTIMATE: usize = 3;
     const TEMPLATE_OVERHEAD_TOKENS: i64 = 128;
 
-    let mandatory = crate::llm::prompt::raw_rag_answer(question, "", "");
+    let mandatory = crate::llm::prompt::raw_rag_answer(project_context, question, "", "");
     let input_tokens = i64::from(n_ctx) - i64::from(max_tokens) - TEMPLATE_OVERHEAD_TOKENS;
     if input_tokens <= 0 {
         return mandatory;
     }
 
     let input_budget_chars = input_tokens as usize * CHARS_PER_TOKEN_ESTIMATE;
-    let complete = crate::llm::prompt::raw_rag_answer(question, context, history);
+    let complete = crate::llm::prompt::raw_rag_answer(project_context, question, context, history);
     if complete.chars().count() <= input_budget_chars {
         return complete;
     }
@@ -1596,13 +1623,15 @@ fn fit_local_rag_instruction(
 
     let context_budget = input_budget_chars - mandatory_chars;
     let fitted_context: String = context.chars().take(context_budget).collect();
-    let without_history = crate::llm::prompt::raw_rag_answer(question, &fitted_context, "");
+    let without_history =
+        crate::llm::prompt::raw_rag_answer(project_context, question, &fitted_context, "");
     let remaining_chars = input_budget_chars.saturating_sub(without_history.chars().count());
     if history.trim().is_empty() || remaining_chars == 0 {
         return without_history;
     }
 
-    let one_history_char = crate::llm::prompt::raw_rag_answer(question, &fitted_context, "x");
+    let one_history_char =
+        crate::llm::prompt::raw_rag_answer(project_context, question, &fitted_context, "x");
     let history_wrapper_chars = one_history_char
         .chars()
         .count()
@@ -1613,7 +1642,7 @@ fn fit_local_rag_instruction(
     }
 
     let fitted_history: String = history.chars().take(history_budget).collect();
-    crate::llm::prompt::raw_rag_answer(question, &fitted_context, &fitted_history)
+    crate::llm::prompt::raw_rag_answer(project_context, question, &fitted_context, &fitted_history)
 }
 
 /// Fragmentos con el formato `[n] «item_title» (collection_name):\n{snippet}`.
@@ -2066,6 +2095,7 @@ mod tests {
         ];
         let history = vec![turn("user", "hola"), turn("assistant", "buenas")];
         let prompt = build_local_rag_prompt(
+            "",
             4096,
             1500,
             "¿Qué pasó en mayo?",
@@ -2090,8 +2120,15 @@ mod tests {
     #[test]
     fn build_local_rag_prompt_without_history_omits_history_block() {
         let sources = vec![source(1, "Acta", "Archivo", "fragmento")];
-        let prompt =
-            build_local_rag_prompt(4096, 1500, "pregunta", &sources, &[], &RagParams::default());
+        let prompt = build_local_rag_prompt(
+            "",
+            4096,
+            1500,
+            "pregunta",
+            &sources,
+            &[],
+            &RagParams::default(),
+        );
         assert!(!prompt.contains("Conversación previa"));
         assert!(prompt.contains("Pregunta: pregunta"));
     }
@@ -2105,6 +2142,7 @@ mod tests {
         let big_snippet = "e".repeat(40_000);
         let sources = vec![source(1, "Acta", "Archivo", &big_snippet)];
         let prompt = build_local_rag_prompt(
+            "",
             crate::llm::DEFAULT_LOCAL_RAG_N_CTX,
             crate::llm::LOCAL_RAG_MAX_OUTPUT_TOKENS,
             "pregunta",
@@ -2124,6 +2162,7 @@ mod tests {
         let big_snippet = "ñ".repeat(500_000);
         let sources = vec![source(1, "Acta", "Archivo", &big_snippet)];
         let prompt = build_local_rag_prompt(
+            "",
             crate::llm::DEFAULT_LOCAL_RAG_N_CTX,
             crate::llm::LOCAL_RAG_MAX_OUTPUT_TOKENS,
             "pregunta",
@@ -2147,8 +2186,15 @@ mod tests {
         // n_ctx - max_tokens - 128. Un contexto de 20K chars se trunca a eso.
         let big_snippet = "a".repeat(20_000);
         let sources = vec![source(1, "Acta", "Archivo", &big_snippet)];
-        let prompt =
-            build_local_rag_prompt(4096, 1500, "pregunta", &sources, &[], &RagParams::default());
+        let prompt = build_local_rag_prompt(
+            "",
+            4096,
+            1500,
+            "pregunta",
+            &sources,
+            &[],
+            &RagParams::default(),
+        );
         // (4096 - 1500 - 128) tokens * 3 chars/token = 7404 chars + wrap.
         assert!(prompt.chars().count() <= 7404 + 64);
     }
@@ -2161,6 +2207,7 @@ mod tests {
         let history = vec![turn("assistant", &"á".repeat(4_000))];
 
         let prompt = build_local_rag_prompt(
+            "",
             4096,
             4096,
             question,
@@ -2173,6 +2220,27 @@ mod tests {
         assert!(prompt.contains("usando el formato [n]"));
         assert!(prompt.contains(&format!("Pregunta: {question}")));
         assert!(std::str::from_utf8(prompt.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn local_rag_fitting_never_truncates_project_context() {
+        let block = "Contexto del proyecto:\n- «Archivo»: siglo XIX\n\n".repeat(100);
+        for (n_ctx, output) in [(4096, 4096), (4096, 1500), (8192, 1500)] {
+            let prompt = fit_local_rag_instruction(
+                &block,
+                n_ctx,
+                output,
+                "pregunta",
+                &"e".repeat(50_000),
+                "historia",
+            );
+            assert!(prompt.contains(&block));
+            assert!(prompt.ends_with("Pregunta: pregunta"));
+        }
+        assert_eq!(
+            fit_local_rag_instruction("", 4096, 4096, "pregunta", "evidencia", "historia"),
+            crate::llm::prompt::raw_rag_answer("", "pregunta", "", "")
+        );
     }
 
     #[test]
