@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte'
   import { convertFileSrc } from '@tauri-apps/api/core'
   import { locale, t } from '$lib/i18n'
+  import ZoteroTags from '../components/ZoteroTags.svelte'
   import {
     bibliographyOpenWorkAttachment,
     bibliographyWorkDetail,
@@ -753,10 +754,14 @@
               <dd>{detail.item.collections.join(', ')}</dd>
             </div>
           {/if}
-          {#if detail.item.tags.length > 0}
+          {#if detail.item.tags.length > 0 || detail.item.automaticTags.length > 0}
             <div class="work-meta__row">
               <dt>{$currentLocale && t('writing.zoteroDetailTags')}</dt>
-              <dd>{detail.item.tags.join(', ')}</dd>
+              <dd>
+                {#key detail.item}
+                  <ZoteroTags tags={detail.item.tags} automaticTags={detail.item.automaticTags} />
+                {/key}
+              </dd>
             </div>
           {/if}
         </dl>

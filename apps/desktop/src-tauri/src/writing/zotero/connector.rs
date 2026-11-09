@@ -117,12 +117,12 @@ pub fn search_url(library: &Library, page: Page, query: &str) -> String {
 /// The URL for specific works, with native key and version beside the CSL.
 ///
 /// `/items/top` because `itemKey` over `/items` also returns the children.
-/// `include=csljson` keeps the same CSL text while `json` retains the native
+/// `include=data,csljson` keeps the same CSL text while `json` retains the native
 /// fields the citation needs.
 pub fn works_url(library: &Library, keys: &[String]) -> String {
     let keys = &keys[..keys.len().min(MAX_KEYS)];
     format!(
-        "{}/items/top?format=json&include=csljson&limit={MAX_KEYS}&start=0&itemKey={}",
+        "{}/items/top?format=json&include=data,csljson&limit={MAX_KEYS}&start=0&itemKey={}",
         prefix(library),
         urlencoding::encode(&keys.join(","))
     )
@@ -169,11 +169,12 @@ pub fn versions_url(library: &Library, start: u32, limit: u32) -> String {
 /// The URL for a page of works with their key and version beside the CSL.
 ///
 /// `format=csljson` alone drops the key, and the key is what the version map
-/// speaks. `include=csljson` carries the same CSL a `format=csljson` read
-/// does — same `id`, same fields (measured over a whole library).
+/// speaks. `include=data,csljson` carries the same CSL a `format=csljson` read
+/// does — same `id`, same fields (measured over a whole library). `data` adds
+/// the native fields, among them each tag with its type (manual or automatic).
 pub fn entries_url(library: &Library, page: Page) -> String {
     format!(
-        "{}/items/top?format=json&include=csljson&limit={}&start={}",
+        "{}/items/top?format=json&include=data,csljson&limit={}&start={}",
         prefix(library),
         page.limit(),
         page.start()
@@ -374,7 +375,7 @@ pub struct EntriesPageAnswer {
 }
 
 /// Reads exactly one bounded page of a library's works with native identity
-/// beside the CSL (`/items/top`, `format=json&include=csljson`).
+/// beside the CSL (`/items/top`, `format=json&include=data,csljson`).
 pub async fn read_entries_page(
     client: &reqwest::Client,
     library: &Library,
@@ -659,7 +660,7 @@ mod tests {
         );
 
         assert!(url.contains("/api/users/0/items/top?"), "{url}");
-        assert!(url.contains("format=json&include=csljson"), "{url}");
+        assert!(url.contains("format=json&include=data,csljson"), "{url}");
         assert!(url.contains("itemKey=AAAA1111%2CBBBB2222"), "{url}");
         assert!(url.contains("limit=") && url.contains("start="), "{url}");
     }
@@ -677,7 +678,7 @@ mod tests {
     }
 
     /// The copy needs each work's key and version beside its CSL, which only
-    /// `json` carries; `include=csljson` keeps the CSL the same as a
+    /// `json` carries; `include=data,csljson` keeps the CSL the same as a
     /// `format=csljson` read.
     #[test]
     fn entries_carry_their_key_version_and_csl() {
@@ -687,7 +688,7 @@ mod tests {
 
         for url in [&paged, &by_key] {
             assert!(url.contains("/api/users/0/items/top?"), "{url}");
-            assert!(url.contains("format=json&include=csljson"), "{url}");
+            assert!(url.contains("format=json&include=data,csljson"), "{url}");
             assert!(url.contains("limit=") && url.contains("start="), "{url}");
         }
         assert!(paged.contains("start=200"), "{paged}");

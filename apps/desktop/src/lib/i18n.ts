@@ -1338,6 +1338,8 @@ const es = {
   'writing.zoteroDetailUrl': 'Enlace',
   'writing.zoteroDetailCollections': 'Colecciones',
   'writing.zoteroDetailTags': 'Etiquetas',
+  'writing.zoteroAutomaticTagsShow': 'Mostrar tags automáticos ({count})',
+  'writing.zoteroAutomaticTagsHide': 'Ocultar tags automáticos',
   'writing.zoteroDetailAttachments': 'Adjuntos',
   'writing.zoteroDetailOpenInZotero': 'Abrir en Zotero',
   'writing.zoteroDetailOpenPending':
@@ -3545,6 +3547,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroDetailUrl': 'Link',
   'writing.zoteroDetailCollections': 'Collections',
   'writing.zoteroDetailTags': 'Tags',
+  'writing.zoteroAutomaticTagsShow': 'Show automatic tags ({count})',
+  'writing.zoteroAutomaticTagsHide': 'Hide automatic tags',
   'writing.zoteroDetailAttachments': 'Attachments',
   'writing.zoteroDetailOpenInZotero': 'Open in Zotero',
   'writing.zoteroDetailOpenPending':

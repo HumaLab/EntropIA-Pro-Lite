@@ -89,7 +89,7 @@ impl BibliographyPageQuery {
 
 /// One work as a page carries it: the complete native Zotero row plus its
 /// qualified key/version and normalized CSL-JSON text (the
-/// `format=json&include=csljson` shape the writing connector already reads).
+/// `format=json&include=data,csljson` shape the writing connector already reads).
 /// Keeping the full row is required for E2b-3's lossless native snapshot;
 /// re-constructing it from CSL would discard Zotero fields. Owned data only —
 /// no client, runtime or transport type crosses this boundary.
@@ -331,7 +331,7 @@ pub trait ZoteroPageSource: Send + Sync {
 
 /// Production page source: Zotero's local API through the writing
 /// connector's URL and request conventions (bounded `/items/top` pages with
-/// `format=json&include=csljson`, the connector's timeout, honest status
+/// `format=json&include=data,csljson`, the connector's timeout, honest status
 /// classification).
 pub struct LocalZoteroPageSource {
     client: reqwest::Client,
@@ -1798,7 +1798,7 @@ mod tests {
 
     /// E2b-3's catalog upsert needs the lossless native Zotero JSON: every
     /// item carries the serialized ORIGINAL row of the
-    /// `/items/top?format=json&include=csljson` answer — including fields
+    /// `/items/top?format=json&include=data,csljson` answer — including fields
     /// the executor never interprets (`data`, `library`, `links`, `meta`) —
     /// not a reconstructed subset.
     #[test]
@@ -1966,7 +1966,7 @@ mod tests {
             ConnectorPage::new(BibliographyPageQuery::new(200, 100).start(), 100),
         );
         assert!(url.contains("/api/users/0/items/top?"), "{url}");
-        assert!(url.contains("format=json&include=csljson"), "{url}");
+        assert!(url.contains("format=json&include=data,csljson"), "{url}");
         assert!(url.contains("limit=100"), "{url}");
         assert!(url.contains("start=200"), "{url}");
     }
