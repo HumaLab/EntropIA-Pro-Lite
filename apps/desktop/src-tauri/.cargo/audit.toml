@@ -31,4 +31,17 @@ ignore = [
     # heavily on a malicious stylesheet the user loaded; no code execution.
     # Accepted 2026-10-10. Drop both lines when citationberg publishes a
     # release on quick-xml >= 0.41 (its main branch already uses 0.41).
+
+    # libsqlite3-sys 0.28.0 (bundled SQLite < 3.54.0, CVE-2026-119375):
+    # opening a database together with a sibling -wal file whose page size
+    # differs can return uninitialized page-cache memory. Local, and only when
+    # the process opens a database/-wal pair a less trusted party wrote.
+    # EntropIA opens its own archive (entropia.sqlite and its -wal, written by
+    # the app itself) and its own backup copies; sync applies rows, never
+    # foreign database files, and a granted Zotero data dir is only checked for
+    # zotero.sqlite's existence, never opened. The fix is libsqlite3-sys >= 0.39
+    # (rusqlite 0.41), a 0.31 -> 0.41 upgrade across every database access,
+    # tracked as its own change. Accepted 2026-11-09. Drop this line with that
+    # upgrade.
+    "RUSTSEC-2026-0459",
 ]
