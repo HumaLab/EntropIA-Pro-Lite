@@ -1,6 +1,8 @@
 export { default as WritingEditor } from './WritingEditor.svelte'
 export { createWritingExtensions, DocumentCitation } from './extensions'
 export { outlineFromDocument, outlineDepth } from './outline'
+export { documentSections, findSection, sectionChanges, restoreSection } from './section-history'
+export type { SectionKey, DocumentSection } from './section-history'
 export {
   citationProjection,
   citationsFromDocument,

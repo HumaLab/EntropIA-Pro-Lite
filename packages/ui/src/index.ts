@@ -158,6 +158,10 @@ export {
   createWritingExtensions,
   DocumentCitation,
   outlineFromDocument,
+  documentSections,
+  findSection,
+  sectionChanges,
+  restoreSection,
   outlineDepth,
   citationProjection,
   zoteroCitationProjection,
@@ -191,6 +195,8 @@ export {
   refusalMessage,
 } from './components/WritingEditor/index'
 export type {
+  SectionKey,
+  DocumentSection,
   CanonicalDocument,
   WritingColor,
   LineHeight,
