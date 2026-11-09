@@ -15,7 +15,6 @@ const {
   extractEntitiesForAssetMock,
   indexFtsMock,
   extractTriplesMock,
-  llmCorrectOcrMock,
   llmSummarizeAssetMock,
   llmCorrectOcrAssetMock,
   llmCanRestoreOriginalOcrAssetMock,
@@ -39,7 +38,6 @@ const {
   extractEntitiesForAssetMock: vi.fn<(_: string, __: string) => Promise<void>>(),
   indexFtsMock: vi.fn<(_: string) => Promise<void>>(),
   extractTriplesMock: vi.fn<(_: string) => Promise<void>>(),
-  llmCorrectOcrMock: vi.fn<(_: string) => Promise<void>>(),
   llmSummarizeAssetMock: vi.fn<(_: string) => Promise<void>>(),
   llmCorrectOcrAssetMock: vi.fn<(_: string) => Promise<void>>(),
   llmCanRestoreOriginalOcrAssetMock: vi.fn<(_: string) => Promise<boolean>>(),
@@ -387,7 +385,6 @@ vi.mock('$lib/llm', async () => {
     llmOcrCorrectionIsAvailable: llmOcrCorrectionIsAvailableMock,
     llmGetResults: llmGetResultsMock,
     llmSummarize: vi.fn().mockResolvedValue(undefined),
-    llmCorrectOcr: llmCorrectOcrMock,
     llmExtractTriples: llmExtractTriplesMock,
     llmSummarizeAsset: llmSummarizeAssetMock,
     llmCorrectOcrAsset: llmCorrectOcrAssetMock,
@@ -523,7 +520,6 @@ beforeEach(() => {
   clipboardWriteTextMock.mockReset().mockResolvedValue(undefined)
   llmIsAvailableMock.mockReset().mockResolvedValue(true)
   llmOcrCorrectionIsAvailableMock.mockReset().mockResolvedValue(true)
-  llmCorrectOcrMock.mockReset().mockResolvedValue(undefined)
   llmCorrectOcrAssetMock.mockReset().mockResolvedValue(undefined)
   llmGetResultsMock.mockReset().mockResolvedValue([])
   llmCanRestoreOriginalOcrAssetMock.mockReset().mockResolvedValue(false)
@@ -575,7 +571,6 @@ describe('ItemView multi-asset navigation', () => {
     nlpEventHandlers.clear()
     embedAssetMock.mockReset().mockResolvedValue(undefined)
     similarAssetsMock.mockReset().mockResolvedValue([])
-    llmCorrectOcrMock.mockReset().mockResolvedValue(undefined)
     llmSummarizeAssetMock.mockReset().mockResolvedValue(undefined)
     llmCorrectOcrAssetMock.mockReset().mockResolvedValue(undefined)
     llmExtractTriplesAssetMock.mockReset().mockResolvedValue(undefined)
@@ -1572,7 +1567,6 @@ describe('ItemView multi-asset navigation', () => {
 
     expect(llmCorrectOcrAssetMock).toHaveBeenCalledWith('asset-page-2')
     expect(llmCorrectOcrAssetMock).not.toHaveBeenCalledWith('asset-page-1')
-    expect(llmCorrectOcrMock).not.toHaveBeenCalled()
   })
 })
 

@@ -187,10 +187,6 @@ export class LlmStore {
 // Invoke helpers — item-level (legacy, concatenates all assets)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function llmCorrectOcr(itemId: string): Promise<string> {
-  return invoke<string>('llm_correct_ocr', { itemId })
-}
-
 export function llmExtractEntities(itemId: string): Promise<string> {
   return invoke<string>('llm_extract_entities', { itemId })
 }

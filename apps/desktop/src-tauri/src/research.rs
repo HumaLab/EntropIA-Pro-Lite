@@ -395,6 +395,22 @@ fn colecciones_del_pedido(pedido: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Separa del `create` las colecciones cuyo contexto se antepone. La búsqueda
+/// usa `collection_ids` (todas, cuando no se eligió ninguna); el contexto,
+/// solo las elegidas a mano (`context_collection_ids`). Ese campo es de esta
+/// app, no del motor: se saca del pedido antes de mandárselo. Un pedido sin
+/// el campo conserva la regla anterior (el contexto de `collection_ids`).
+fn colecciones_de_contexto(mut pedido: Value) -> (Value, Vec<String>) {
+    let elegidas = pedido
+        .as_object_mut()
+        .and_then(|campos| campos.remove("context_collection_ids"));
+    let ids = match elegidas {
+        Some(lista) => colecciones_del_pedido(&json!({ "collection_ids": lista })),
+        None => colecciones_del_pedido(&pedido),
+    };
+    (pedido, ids)
+}
+
 /// Antepone el contexto del proyecto a la pregunta del `create`: el motor de
 /// investigación (EntropIA-Agent) no tiene un campo propio para él, y la
 /// pregunta es lo que lee para planificar. Sin contexto, el pedido no cambia.
@@ -450,7 +466,7 @@ impl ResearchState {
                     request,
                     crate::settings::get_setting(&conn, RESEARCH_AGENT_PARAMETERS).as_deref(),
                 );
-                let ids = colecciones_del_pedido(&pedido);
+                let (pedido, ids) = colecciones_de_contexto(pedido);
                 con_contexto_del_proyecto(pedido, &crate::llm::project_context::load(&conn, &ids))
             } else {
                 request
@@ -776,10 +792,10 @@ pub fn research_parameters_validate(parameters: Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bibliotecas_del_trabajo, capture_terminal_job, colecciones_del_pedido,
-        con_contexto_del_proyecto, modelo_del_trabajo, parametros_defaults, parametros_del_trabajo,
-        parametros_json_del_job, pasaje_del_hallazgo, pedido_del_motor, plan_json_del_job,
-        ref_de_biblioteca, terminal_job_id, uses_model, validar_parametros,
+        bibliotecas_del_trabajo, capture_terminal_job, colecciones_de_contexto,
+        colecciones_del_pedido, con_contexto_del_proyecto, modelo_del_trabajo, parametros_defaults,
+        parametros_del_trabajo, parametros_json_del_job, pasaje_del_hallazgo, pedido_del_motor,
+        plan_json_del_job, ref_de_biblioteca, terminal_job_id, uses_model, validar_parametros,
     };
     use crate::rag::scope::PassageResult;
     use crate::rag::RagBibliographyLocation;
@@ -1351,5 +1367,33 @@ mod tests {
         assert_eq!(con["question"], format!("{bloque}¿Qué pasó?"));
         assert_eq!(con["collection_ids"], pedido["collection_ids"]);
         assert!(colecciones_del_pedido(&json!({"op":"create"})).is_empty());
+    }
+
+    /// S1: the search scope (`collection_ids`, every collection when none was
+    /// chosen) is not the context scope. Context comes only from collections
+    /// chosen by hand (`context_collection_ids`), and that field never reaches
+    /// the engine.
+    #[test]
+    fn el_contexto_sale_solo_de_las_colecciones_elegidas_a_mano() {
+        let sin_eleccion = json!({
+            "op":"create","question":"q",
+            "collection_ids":["c1","c2"],"context_collection_ids":[]
+        });
+        let (pedido, ids) = colecciones_de_contexto(sin_eleccion);
+        assert!(ids.is_empty(), "no hand-picked collection: no context");
+        assert!(pedido.get("context_collection_ids").is_none());
+        assert_eq!(pedido["collection_ids"], json!(["c1", "c2"]));
+
+        let elegidas = json!({
+            "op":"create","question":"q",
+            "collection_ids":["c2"],"context_collection_ids":["c2"]
+        });
+        let (pedido, ids) = colecciones_de_contexto(elegidas);
+        assert_eq!(ids, vec!["c2".to_string()]);
+        assert!(pedido.get("context_collection_ids").is_none());
+
+        // A request without the field (an older caller) keeps today's rule.
+        let (_, ids) = colecciones_de_contexto(json!({"op":"create","collection_ids":["c1"]}));
+        assert_eq!(ids, vec!["c1".to_string()]);
     }
 }

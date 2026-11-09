@@ -493,7 +493,7 @@ fn llm_prefix(use_cloud: bool) -> &'static str {
 
 fn llm_job_suffix(job: &LlmJob) -> Option<&'static str> {
     match job {
-        LlmJob::CorrectOcr { .. } | LlmJob::CorrectOcrAsset { .. } => Some("correction"),
+        LlmJob::CorrectOcrAsset { .. } => Some("correction"),
         LlmJob::Summarize { .. } | LlmJob::SummarizeAsset { .. } => Some("summary"),
         LlmJob::ExtractTriples { .. } | LlmJob::ExtractTriplesAsset { .. } => Some("triples"),
         _ => None,
@@ -524,9 +524,6 @@ fn log_target(prefix: &str) -> &str {
 
 #[derive(Debug)]
 pub enum LlmJob {
-    CorrectOcr {
-        item_id: String,
-    },
     ExtractEntities {
         item_id: String,
     },
@@ -581,7 +578,6 @@ pub enum LlmJob {
 impl LlmJob {
     fn job_name(&self) -> &'static str {
         match self {
-            LlmJob::CorrectOcr { .. } => "correct_ocr",
             LlmJob::ExtractEntities { .. } => "extract_entities",
             LlmJob::ConsolidateEntities { .. } => "consolidate_entities",
             LlmJob::ExtractTriples { .. } => "extract_triples",
@@ -601,8 +597,7 @@ impl LlmJob {
     /// For asset-level jobs, this is the asset_id; for item-level, the item_id.
     fn target_id(&self) -> &str {
         match self {
-            LlmJob::CorrectOcr { item_id }
-            | LlmJob::ExtractEntities { item_id }
+            LlmJob::ExtractEntities { item_id }
             | LlmJob::ConsolidateEntities { item_id, .. }
             | LlmJob::ExtractTriples { item_id }
             | LlmJob::Summarize { item_id }
@@ -619,8 +614,7 @@ impl LlmJob {
 
     fn target_type(&self) -> &'static str {
         match self {
-            LlmJob::CorrectOcr { .. }
-            | LlmJob::ExtractEntities { .. }
+            LlmJob::ExtractEntities { .. }
             | LlmJob::ConsolidateEntities { .. }
             | LlmJob::ExtractTriples { .. }
             | LlmJob::Summarize { .. }
@@ -2033,7 +2027,7 @@ impl LlmQueue {
 /// Max tokens for generation per job type.
 fn max_tokens_for(job: &LlmJob) -> i32 {
     match job {
-        LlmJob::CorrectOcr { .. } | LlmJob::CorrectOcrAsset { .. } => 2048,
+        LlmJob::CorrectOcrAsset { .. } => 2048,
         LlmJob::ExtractEntities { .. }
         | LlmJob::ExtractEntitiesAsset { .. }
         | LlmJob::ConsolidateEntities { .. }
@@ -2176,20 +2170,6 @@ fn process_job(
     let mut ocr_extraction_snapshot = None;
 
     let output = match job {
-        LlmJob::CorrectOcr { item_id } => {
-            let text = text_provider::get_item_text(conn, item_id)?;
-            if text.is_empty() {
-                return Err("No text available for OCR correction".to_string());
-            }
-            let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::gemma_wrap(&render_prompt_from_settings(
-                conn,
-                GenerationFlow::OcrCorrection,
-                &truncated,
-            ));
-            engine.generate_ocr_correction(&p, max_tokens_for(job), &log_prefix)
-        }
-
         LlmJob::ExtractEntities { item_id } => {
             let text = text_provider::get_item_text(conn, item_id)?;
             if text.is_empty() {
@@ -2448,9 +2428,7 @@ fn gather_collection_context(
 }
 fn generation_flow_for_job(job: &LlmJob) -> Option<GenerationFlow> {
     match job {
-        LlmJob::CorrectOcr { .. } | LlmJob::CorrectOcrAsset { .. } => {
-            Some(GenerationFlow::OcrCorrection)
-        }
+        LlmJob::CorrectOcrAsset { .. } => Some(GenerationFlow::OcrCorrection),
         LlmJob::Summarize { .. } | LlmJob::SummarizeAsset { .. } => Some(GenerationFlow::Summary),
         LlmJob::ExtractEntities { .. }
         | LlmJob::ExtractEntitiesAsset { .. }
@@ -2594,23 +2572,6 @@ fn prepare_remote_job_request(
     let mut ocr_extraction_snapshot = None;
 
     let prepared: Result<PreparedRemotePrompt, String> = match job {
-        LlmJob::CorrectOcr { item_id } => {
-            let text = text_provider::get_item_text(conn, item_id)?;
-            if text.is_empty() {
-                return Err("No text available for OCR correction".to_string());
-            }
-            let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
-            Ok(PreparedRemotePrompt {
-                prompt: render_prompt_from_settings(
-                    conn,
-                    GenerationFlow::OcrCorrection,
-                    &truncated,
-                ),
-                max_tokens,
-                truncate_to_sentence_boundary: false,
-            })
-        }
-
         LlmJob::ExtractEntities { item_id } => {
             let text = text_provider::get_item_text(conn, item_id)?;
             if text.is_empty() {
