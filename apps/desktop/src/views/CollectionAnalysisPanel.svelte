@@ -14,6 +14,7 @@
     type WordFrequency,
   } from '$lib/text-analysis'
   import { DEFAULT_STOPWORDS } from '$lib/stopwords'
+  import PhraseAnalysis from '../components/PhraseAnalysis.svelte'
   import { layoutWordCloud, CLOUD_FONT_STACK, CLOUD_FONT_WEIGHT } from '$lib/cloud-layout'
   import {
     clampCloudTermCount,
@@ -69,7 +70,7 @@
   let stopwordsInput = $state(settings.customStopwords.join(', '))
   // the restore is only read at mount
   // svelte-ignore state_referenced_locally
-  let activeTab = $state<'viz' | 'graph' | 'settings'>(restore?.tab ?? 'viz')
+  let activeTab = $state<'viz' | 'phrases' | 'graph' | 'settings'>(restore?.tab ?? 'viz')
 
   const fetchGuard = new LatestRequestGuard()
   const computeGuard = new LatestRequestGuard()
@@ -325,6 +326,15 @@
       {translate('collectionAnalysis.vizTab')}
     </TabButton>
     <TabButton
+      active={activeTab === 'phrases'}
+      class="analysis-panel-tab"
+      onclick={() => {
+        activeTab = 'phrases'
+      }}
+    >
+      {translate('phraseAnalysis.tab')}
+    </TabButton>
+    <TabButton
       active={activeTab === 'graph'}
       class="analysis-panel-tab"
       onclick={() => {
@@ -345,6 +355,21 @@
   </TabList>
 
   <div class="analysis-content">
+    {#if activeTab === 'phrases'}
+      <div class="analysis-pane">
+        {#if corpus && status === 'ready'}
+          <PhraseAnalysis texts={corpus} customStopwords={settings.customStopwords} />
+        {:else if status === 'error'}
+          <p class="surface-message surface-message--error">
+            {translate('collectionAnalysis.error')}
+          </p>
+        {:else}
+          <p class="surface-message surface-message--center">
+            {translate('collectionAnalysis.loading')}
+          </p>
+        {/if}
+      </div>
+    {/if}
     <div class="analysis-pane" class:is-hidden={activeTab !== 'viz'}>
       {#if status === 'loading'}
         <p class="surface-message surface-message--center">

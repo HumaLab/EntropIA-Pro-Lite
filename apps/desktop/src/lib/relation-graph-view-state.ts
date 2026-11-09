@@ -33,7 +33,7 @@ export interface GraphViewSnapshot {
   expanded?: string[]
 }
 
-export type AnalysisTab = 'viz' | 'graph' | 'settings'
+export type AnalysisTab = 'viz' | 'phrases' | 'graph' | 'settings'
 
 /** Saved on the collection view entry when the user leaves from the analysis panel. */
 export interface CollectionAnalysisRestore {
