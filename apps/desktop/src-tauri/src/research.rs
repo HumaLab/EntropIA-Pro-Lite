@@ -382,6 +382,32 @@ fn fuente_del_trabajo(
         .map(|bibliotecas| FuenteBiblioteca::nuevo(corpus.to_path_buf(), &bibliotecas))
         .transpose()
 }
+
+/// Las colecciones de un `create` (`collection_ids`), en el orden en que llegan.
+fn colecciones_del_pedido(pedido: &Value) -> Vec<String> {
+    pedido["collection_ids"]
+        .as_array()
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Antepone el contexto del proyecto a la pregunta del `create`: el motor de
+/// investigación (EntropIA-Agent) no tiene un campo propio para él, y la
+/// pregunta es lo que lee para planificar. Sin contexto, el pedido no cambia.
+fn con_contexto_del_proyecto(mut pedido: Value, bloque: &str) -> Value {
+    if bloque.trim().is_empty() {
+        return pedido;
+    }
+    if let Some(pregunta) = pedido["question"].as_str() {
+        pedido["question"] = Value::String(format!("{bloque}{pregunta}"));
+    }
+    pedido
+}
+
 impl ResearchState {
     pub fn new(app_dir: PathBuf, corpus: PathBuf) -> Result<Self, String> {
         let root = app_dir.join("research");
@@ -420,10 +446,12 @@ impl ResearchState {
                     rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
                 )
                 .map_err(|e| e.to_string())?;
-                pedido_del_motor(
+                let pedido = pedido_del_motor(
                     request,
                     crate::settings::get_setting(&conn, RESEARCH_AGENT_PARAMETERS).as_deref(),
-                )
+                );
+                let ids = colecciones_del_pedido(&pedido);
+                con_contexto_del_proyecto(pedido, &crate::llm::project_context::load(&conn, &ids))
             } else {
                 request
             };
@@ -748,9 +776,10 @@ pub fn research_parameters_validate(parameters: Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bibliotecas_del_trabajo, capture_terminal_job, modelo_del_trabajo, parametros_defaults,
-        parametros_del_trabajo, parametros_json_del_job, pasaje_del_hallazgo, pedido_del_motor,
-        plan_json_del_job, ref_de_biblioteca, terminal_job_id, uses_model, validar_parametros,
+        bibliotecas_del_trabajo, capture_terminal_job, colecciones_del_pedido,
+        con_contexto_del_proyecto, modelo_del_trabajo, parametros_defaults, parametros_del_trabajo,
+        parametros_json_del_job, pasaje_del_hallazgo, pedido_del_motor, plan_json_del_job,
+        ref_de_biblioteca, terminal_job_id, uses_model, validar_parametros,
     };
     use crate::rag::scope::PassageResult;
     use crate::rag::RagBibliographyLocation;
@@ -1296,5 +1325,31 @@ mod tests {
             .expect("table");
         drop(conn);
         capture_terminal_job(&raw, &state, "job-3").expect("missing sync schema is a no-op");
+    }
+
+    #[test]
+    fn el_contexto_del_proyecto_va_antes_de_la_pregunta_y_sin_el_nada_cambia() {
+        let pedido = json!({"op":"create","question":"¿Qué pasó?","collection_ids":["c1","c2"]});
+        assert_eq!(
+            colecciones_del_pedido(&pedido),
+            vec!["c1".to_string(), "c2".to_string()]
+        );
+        assert_eq!(con_contexto_del_proyecto(pedido.clone(), ""), pedido);
+        assert_eq!(
+            con_contexto_del_proyecto(
+                pedido.clone(),
+                "  
+"
+            ),
+            pedido
+        );
+        let bloque = "Contexto del proyecto (escrito por quien investiga; usalo para interpretar nombres, grafías, período y convenciones):
+- «Prensa»: 1890–1930
+
+";
+        let con = con_contexto_del_proyecto(pedido.clone(), bloque);
+        assert_eq!(con["question"], format!("{bloque}¿Qué pasó?"));
+        assert_eq!(con["collection_ids"], pedido["collection_ids"]);
+        assert!(colecciones_del_pedido(&json!({"op":"create"})).is_empty());
     }
 }

@@ -6,6 +6,7 @@ pub mod engine;
 pub mod generation;
 pub(crate) mod ocr_correction;
 pub mod openrouter;
+pub mod project_context;
 pub mod prompt;
 
 use std::collections::HashSet;
@@ -2272,10 +2273,11 @@ fn process_job(
             }
             ocr_extraction_snapshot = Some(text.clone());
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::gemma_wrap(&render_prompt_from_settings(
-                conn,
-                GenerationFlow::OcrCorrection,
-                &truncated,
+            let rendered =
+                render_prompt_from_settings(conn, GenerationFlow::OcrCorrection, &truncated);
+            let p = prompt::gemma_wrap(&format!(
+                "{}{rendered}",
+                project_context::for_asset(conn, asset_id)
             ));
             engine.generate_ocr_correction(&p, max_tokens_for(job), &log_prefix)
         }
@@ -2698,12 +2700,10 @@ fn prepare_remote_job_request(
             ocr_extraction_snapshot = Some(text.clone());
             let protected = ocr_correction::protect_image_references(&text);
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &protected);
+            let rendered =
+                render_prompt_from_settings(conn, GenerationFlow::OcrCorrection, &truncated);
             Ok(PreparedRemotePrompt {
-                prompt: render_prompt_from_settings(
-                    conn,
-                    GenerationFlow::OcrCorrection,
-                    &truncated,
-                ),
+                prompt: format!("{}{rendered}", project_context::for_asset(conn, asset_id)),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
             })
@@ -3609,6 +3609,39 @@ mod tests {
         assert!(request.prompt.contains("borrador OCR"));
         assert!(!request.prompt.contains(image_reference));
         assert!(request.prompt.contains("<!--OCRC_IMAGE_REFERENCE_0001-->"));
+
+        conn.execute_batch(
+            "CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT, ai_context TEXT);
+             CREATE TABLE items (id TEXT PRIMARY KEY, collection_id TEXT);
+             ALTER TABLE assets ADD COLUMN item_id TEXT;
+             INSERT INTO collections VALUES ('c','Archivo',NULL);
+             INSERT INTO items VALUES ('i','c');
+             UPDATE assets SET item_id='i';",
+        )
+        .unwrap();
+        let prepare = || {
+            prepare_remote_job_request(
+                &conn,
+                &LlmJob::CorrectOcrAsset {
+                    asset_id: "asset-1".into(),
+                },
+                262_144,
+                app_data.path(),
+            )
+            .unwrap()
+        };
+        assert_eq!(prepare().prompt, request.prompt);
+        conn.execute("UPDATE collections SET ai_context='Siglo XIX'", [])
+            .unwrap();
+        let block = project_context::for_asset(&conn, "asset-1");
+        assert!(!block.is_empty());
+        let contextual = prepare();
+        assert_eq!(contextual.prompt, format!("{block}{}", request.prompt));
+        assert_eq!(
+            contextual.ocr_extraction_snapshot,
+            request.ocr_extraction_snapshot
+        );
+        assert_eq!(contextual.visual_source_path, request.visual_source_path);
     }
 
     #[test]
