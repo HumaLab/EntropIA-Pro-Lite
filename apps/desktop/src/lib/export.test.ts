@@ -137,6 +137,7 @@ describe('buildCollectionExportData', () => {
       id: 'c1',
       name: 'Archivo Municipal',
       description: 'docs',
+      aiContext: null,
       createdAt: 1,
       updatedAt: 2,
     }
@@ -219,6 +220,7 @@ describe('buildCollectionExportData', () => {
       id: 'c1',
       name: 'Empty',
       description: null,
+      aiContext: null,
       createdAt: 1,
       updatedAt: 2,
     }
@@ -260,6 +262,7 @@ describe('buildCollectionExportData', () => {
       id: 'c1',
       name: 'UnderlineOnly',
       description: null,
+      aiContext: null,
       createdAt: 1,
       updatedAt: 2,
     }
@@ -309,6 +312,7 @@ describe('buildCollectionExportData', () => {
       id: 'c1',
       name: 'Multi',
       description: null,
+      aiContext: null,
       createdAt: 1,
       updatedAt: 2,
     }
@@ -388,6 +392,7 @@ describe('buildCollectionExportData', () => {
       id: 'c1',
       name: 'WithOCR',
       description: null,
+      aiContext: null,
       createdAt: 1,
       updatedAt: 2,
     }
@@ -431,6 +436,7 @@ describe('buildCollectionExportData', () => {
       id: 'c1',
       name: 'WithTranscription',
       description: null,
+      aiContext: null,
       createdAt: 1,
       updatedAt: 2,
     }
@@ -477,6 +483,7 @@ describe('buildCollectionExportData', () => {
       id: 'c1',
       name: 'Both',
       description: null,
+      aiContext: null,
       createdAt: 1,
       updatedAt: 2,
     }
@@ -532,6 +539,7 @@ describe('buildCollectionExportData', () => {
       id: 'c1',
       name: 'NoText',
       description: null,
+      aiContext: null,
       createdAt: 1,
       updatedAt: 2,
     }

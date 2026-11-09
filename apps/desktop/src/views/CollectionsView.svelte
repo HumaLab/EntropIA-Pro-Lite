@@ -31,6 +31,7 @@
   let editingId = $state<string | null>(null)
   let editName = $state('')
   let editDescription = $state('')
+  let editAiContext = $state('')
   let deletingId = $state<string | null>(null)
   let deletingName = $state('')
   let deleting = $state(false)
@@ -107,12 +108,14 @@
     editingId = collection.id
     editName = collection.name
     editDescription = collection.description ?? ''
+    editAiContext = collection.aiContext ?? ''
   }
 
   function handleCancelEdit() {
     editingId = null
     editName = ''
     editDescription = ''
+    editAiContext = ''
   }
 
   async function handleSaveEdit() {
@@ -122,10 +125,12 @@
       await store.collections.update(editingId, {
         name: editName.trim(),
         description: editDescription.trim() || null,
+        aiContext: editAiContext.trim() || null,
       })
       editingId = null
       editName = ''
       editDescription = ''
+      editAiContext = ''
       notifyCollectionsChanged()
       await loadCollections()
     } catch (e) {
@@ -312,6 +317,18 @@
                 placeholder={t('collections.descriptionPlaceholder')}
                 bind:value={editDescription}
               />
+              <label class="edit-form__label" for="collection-ai-context-{collection.id}">
+                {t('collections.aiContextLabel')}
+              </label>
+              <textarea
+                id="collection-ai-context-{collection.id}"
+                class="edit-form__textarea"
+                rows="3"
+                aria-describedby="collection-ai-context-hint-{collection.id}"
+                bind:value={editAiContext}></textarea>
+              <p class="edit-form__hint" id="collection-ai-context-hint-{collection.id}">
+                {t('collections.aiContextHint')}
+              </p>
               <div class="edit-form__actions">
                 <Button variant="primary" type="submit" disabled={!editName.trim()}
                   >{t('collections.save')}</Button
@@ -365,6 +382,39 @@
 </div>
 
 <style>
+  .edit-form__label {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+  }
+
+  .edit-form__textarea {
+    width: 100%;
+    min-height: 4.5rem;
+    padding: var(--space-2) var(--space-3);
+    box-sizing: border-box;
+    font-family: var(--font-ui);
+    font-size: var(--font-size-sm);
+    line-height: var(--line-height-base);
+    color: var(--color-text-primary);
+    background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-input);
+    resize: vertical;
+    outline: none;
+  }
+
+  .edit-form__textarea:focus-visible {
+    border-color: var(--color-accent);
+    box-shadow: var(--focus-ring);
+  }
+
+  .edit-form__hint {
+    margin: 0;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+  }
+
   .collections-view {
     min-height: 100%;
   }

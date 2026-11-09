@@ -18,6 +18,8 @@ export const collections = sqliteTable('collections', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   description: text('description'),
+  /** Project context the AI reads for this collection (0063); NULL: none. */
+  aiContext: text('ai_context'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 })

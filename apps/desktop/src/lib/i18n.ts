@@ -1900,6 +1900,9 @@ const es = {
     'Creá un espacio para agrupar documentos, notas y análisis relacionados.',
   'collections.namePlaceholder': 'Nombre de la colección',
   'collections.descriptionPlaceholder': 'Descripción (opcional)',
+  'collections.aiContextLabel': 'Contexto para la IA',
+  'collections.aiContextHint':
+    'Lo leen el chat, la investigación, la corrección de OCR y el agente de redacción: tema, período, convenciones y grafías de nombres.',
   'collections.createAction': 'Crear colección',
   'collections.loading': 'Cargando colecciones...',
   'collections.emptySearch':
@@ -4999,6 +5002,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Create a space to group related documents, notes, and analysis.',
   'collections.namePlaceholder': 'Collection name',
   'collections.descriptionPlaceholder': 'Description (optional)',
+  'collections.aiContextLabel': 'Context for the AI',
+  'collections.aiContextHint':
+    'Read by the chat, the investigation, OCR correction and the writing agent: topic, period, conventions and spellings of names.',
   'collections.createAction': 'Create collection',
   'collections.loading': 'Loading collections...',
   'collections.emptySearch':
