@@ -631,7 +631,8 @@ fn stress_3_two_processes_write_the_same_archive() {
         total += n;
     }
     let conn = open(&path);
-    let notes: u64 = conn
+    // rusqlite 0.41 reads COUNT(*) as i64 (no u64 FromSql).
+    let notes: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM notes WHERE id LIKE 'ui-note-%'",
             [],
@@ -642,7 +643,11 @@ fn stress_3_two_processes_write_the_same_archive() {
         "[stress 3 two-process] {TWO_PROCESS_SECS}s, 2 processes committed {total} transactions, {notes} notes on disk, {:.0} tx/s",
         total as f64 / TWO_PROCESS_SECS as f64
     );
-    assert_eq!(notes, total, "every committed transaction must be on disk");
+    assert_eq!(
+        u64::try_from(notes).expect("a count is never negative"),
+        total,
+        "every committed transaction must be on disk"
+    );
     assert_eq!(integrity_ok(&conn), "ok");
 }
 
