@@ -317,6 +317,16 @@
             error: false,
           }
         }
+        // Drained, but not all of it landed: failed work is finished, never
+        // done, and a finished-sync claim would hide it.
+        if (derived.failed > 0) {
+          return {
+            text: t('writing.zoteroBibliographySyncDrainedWithFailures', {
+              failed: String(derived.failed),
+            }),
+            error: true,
+          }
+        }
         return {
           text:
             status.newProfiles + status.newExtractions === 0

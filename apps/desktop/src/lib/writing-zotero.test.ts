@@ -576,6 +576,33 @@ describe('a backlog parked blocked on configuration', () => {
     }) as never)
   }
 
+  it('counts failed work apart: finished, never done, never left to do', () => {
+    const derived = bibliographyDerivedProgress(
+      status({
+        profilesDone: 2,
+        profilesTotal: 5,
+        profilesFailed: 3,
+        profilesBlocked: 0,
+        profilesBlockedReason: null,
+        extractionsDone: 0,
+        extractionsTotal: 1,
+        extractionsFailed: 1,
+      })
+    )
+    expect(derived.worksDone).toBe(2)
+    expect(derived.failed).toBe(4)
+    expect(derived.remaining).toBe(0)
+    expect(derived.remainingActive).toBe(0)
+  })
+
+  it('reads a status from before the failed counts as having none', () => {
+    const derived = bibliographyDerivedProgress(
+      status({ profilesBlocked: 0, profilesBlockedReason: null, profilesDone: 1, profilesTotal: 1 })
+    )
+    expect(derived.failed).toBe(0)
+    expect(derived.remaining).toBe(0)
+  })
+
   it('counts the parked work separately and keeps it out of the ETA', () => {
     const derived = bibliographyDerivedProgress(status({ etaMs: null }))
 
@@ -1846,6 +1873,7 @@ describe('P3 derived work of a library sync', () => {
       passagesTotal: 400,
       passagesBlocked: 0,
       passagesWaiting: 0,
+      failed: 0,
       etaMs: 720_000,
       remaining: 700,
       remainingActive: 700,
