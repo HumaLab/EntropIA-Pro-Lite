@@ -7,6 +7,7 @@ import {
   type ResearchArtifact,
   type ResearchCreateRequest,
   type ResearchCitation,
+  stripProjectContext,
 } from './research'
 
 function artifact(kind: string, content: unknown, obsolete = false, version = 1): ResearchArtifact {
@@ -177,5 +178,21 @@ describe('agentParametersForm', () => {
     const parameters = agentParametersJson(form)
     expect(parameters.max_tokens_salida).toBeNull()
     expect(parameters.lotes_archivo_bytes).toEqual([48000, null])
+  })
+})
+
+describe('stripProjectContext', () => {
+  it('removes the leading project-context block the backend prepends', () => {
+    const block = `Contexto del proyecto (escrito por quien investiga; usalo para interpretar nombres):
+- «Prensa»: 1890\n\n`
+    expect(stripProjectContext(block + '¿Qué pasó?')).toBe('¿Qué pasó?')
+  })
+
+  it('leaves any other question untouched', () => {
+    expect(stripProjectContext('¿Qué pasó?')).toBe('¿Qué pasó?')
+    expect(stripProjectContext('')).toBe('')
+    expect(stripProjectContext('Contexto del proyecto (incompleto')).toBe(
+      'Contexto del proyecto (incompleto'
+    )
   })
 })
