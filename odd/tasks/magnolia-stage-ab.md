@@ -57,6 +57,7 @@ Branch `feat/magnolia-stage-ab`. Source plan: `G:\EntropIA-Stack\docs\magnolia-c
   - 835 Rust tests (llm, rag, research, writing) pass.
   - Not run locally: the Pro-only local RAG path (`local-ml`; CI «Rust Pro (Linux)» covers it).
   - In one combined run, 12 `sync::research_*` tests failed while the dev app ran; 97/97 pass alone.
+- L10 (advisory 1 fix, commit 411ea416): the stored investigation question keeps the context block (the engine needs it on every advance), but readers no longer show it. New `stripProjectContext` in `lib/research.ts` removes the leading block; applied to the post-create navigation title and to `visibleQuestion` in InvestigationView (which also feeds the report download). 2 unit tests; ResearchView + InvestigationView + research suites green (62), typecheck Pro/Lite, lint, format green.
 - L9 (S5 evidence):
   - `section-history.ts` (packages/ui) applies the `sections.ts` rule to the stored JSON of each version. A section is found by level + title + occurrence (so moves keep it), then by its position among the headings of its level when that title is gone (so a rename in place keeps it).
   - The position fallback refuses a heading whose title still exists in the origin document. A section both renamed and moved reads as absent.
