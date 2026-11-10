@@ -166,3 +166,14 @@ the writing agent, where a manuscript uses its primary collection's. One
 nullable column on the synced `collections` table; NULL keeps every prompt as
 it was. The first push from an updated device raises the account schema_tag;
 devices not yet updated drop the column on apply.
+
+## 0064_derived_source_path
+
+The file each layout and each extraction was computed from: its relative path
+and the sha256 of its raw bytes. An image asset changes file with every edit,
+so without this nothing can tell that the boxes or the text belong to another
+version of the image. Two nullable columns on each of the synced `layouts` and
+`extractions` tables; NULL means unknown origin, which is every row from
+before, and there is no backfill because SQL cannot read a file. The first
+push from an updated device raises the account schema_tag; devices not yet
+updated drop the columns on apply.

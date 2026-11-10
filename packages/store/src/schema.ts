@@ -150,6 +150,10 @@ export const extractions = sqliteTable('extractions', {
   method: text('method').notNull(), // 'native' | 'ocr'
   confidence: real('confidence'),
   createdAt: integer('created_at').notNull(),
+  /** Relative path of the file this text was computed from (0064); NULL: unknown. */
+  sourcePath: text('source_path'),
+  /** sha256 of that file's raw bytes (0064); NULL: unknown. */
+  sourceSha256: text('source_sha256'),
 })
 
 // ---------------------------------------------------------------------------
@@ -166,6 +170,10 @@ export const layouts = sqliteTable('layouts', {
   imageWidth: integer('image_width').notNull(),
   imageHeight: integer('image_height').notNull(),
   createdAt: integer('created_at').notNull(),
+  /** Relative path of the file this layout was computed from (0064); NULL: unknown. */
+  sourcePath: text('source_path'),
+  /** sha256 of that file's raw bytes (0064); NULL: unknown. */
+  sourceSha256: text('source_sha256'),
 })
 
 // ---------------------------------------------------------------------------

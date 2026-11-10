@@ -84,6 +84,8 @@ function toAssetLayout(row: LayoutRow): AssetLayout {
     imageWidth: row.imageWidth,
     imageHeight: row.imageHeight,
     createdAt: row.createdAt,
+    sourcePath: row.sourcePath,
+    sourceSha256: row.sourceSha256,
     regions: parseJsonArray(row.regions, 'regions').map(parseRegion),
     blocks: parseJsonArray(row.blocks, 'blocks').map(parseBlock),
   }

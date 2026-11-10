@@ -182,6 +182,8 @@ describe('buildCollectionExportData', () => {
           method: 'ocr',
           confidence: 0.95,
           createdAt: 8,
+          sourcePath: null,
+          sourceSha256: null,
         },
       },
       // annotationsByAssetId
@@ -422,6 +424,8 @@ describe('buildCollectionExportData', () => {
           method: 'native',
           confidence: null,
           createdAt: 8,
+          sourcePath: null,
+          sourceSha256: null,
         },
       },
       {}
@@ -513,6 +517,8 @@ describe('buildCollectionExportData', () => {
           method: 'ocr',
           confidence: null,
           createdAt: 8,
+          sourcePath: null,
+          sourceSha256: null,
         },
       },
       {},
