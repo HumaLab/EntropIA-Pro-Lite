@@ -1083,6 +1083,50 @@ describe('ItemView multi-asset navigation', () => {
     }
   )
 
+  it('opens on the asset the collection card shows, without reordering the pages', async () => {
+    // Two photos with no page order set: the strip is A-Z by path, but the card
+    // shows the one imported first. Opening the item must show that same photo.
+    const store = createStore({
+      assetsRows: [
+        {
+          id: 'asset-second-imported',
+          itemId: 'item-1',
+          path: 'docs/alpha.jpg',
+          type: 'image',
+          sortIndex: 0,
+          createdAt: 20,
+        },
+        {
+          id: 'asset-first-imported',
+          itemId: 'item-1',
+          path: 'docs/zeta.jpg',
+          type: 'image',
+          sortIndex: 0,
+          createdAt: 10,
+        },
+      ],
+    })
+    storeRef.current = store
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+        'data-path',
+        'docs/zeta.jpg'
+      )
+    })
+    expect(screen.getByText(/2\s*\/\s*2/)).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: /Página anterior|Previous page/i }))
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+        'data-path',
+        'docs/alpha.jpg'
+      )
+    })
+  })
+
   it('resets to each document first asset across repeated sibling navigation', async () => {
     const itemIds = ['item-1', 'item-2', 'item-3', 'item-4']
     const assetsByItem = Object.fromEntries(

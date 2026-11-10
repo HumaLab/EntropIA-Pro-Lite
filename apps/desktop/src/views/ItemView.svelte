@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getStore } from '$lib/db'
-  import { visibleAssets } from '$lib/asset-visibility'
+  import { openingAssetIndex, visibleAssets } from '$lib/asset-visibility'
   import { deleteAssetFile, duplicateAssetFile, getAssetUrl } from '$lib/file-import'
   import {
     DebouncedMetadataPersistor,
@@ -153,7 +153,7 @@
     EditTool,
     ImageEditResult,
   } from '@entropia/ui'
-  import { TranscriptionRepo } from '@entropia/store'
+  import { AssetRepo, TranscriptionRepo } from '@entropia/store'
 
   const navigation = getNavigation()
 
@@ -2678,7 +2678,10 @@
       // Commit the child selection with the new parent's asset list. Resetting
       // before the await lets pending asset effects from the previous item
       // restore its index while this request is in flight.
-      selectedAssetIndex = 0
+      // Open on the asset the collection card shows. The strip is sorted by
+      // path when no page order was set, and the card is not, so "the first
+      // one" would open a different picture than the thumbnail promised.
+      selectedAssetIndex = openingAssetIndex(assets, AssetRepo.primaryOf(loadedAssets))
       if (correctingOcrAssetId && !assets.some((asset) => asset.id === correctingOcrAssetId)) {
         correctingOcrAssetId = null
       }
