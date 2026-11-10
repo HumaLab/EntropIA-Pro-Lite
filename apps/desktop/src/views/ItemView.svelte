@@ -103,6 +103,8 @@
   import { checkExtractionVersion } from '$lib/extraction-version'
   import LayoutVersionNotice from '../components/LayoutVersionNotice.svelte'
   import OtherVersionNotice from '../components/OtherVersionNotice.svelte'
+  import ImageVersionsPanel from '../components/ImageVersionsPanel.svelte'
+  import { assetHasImageVersions, type ImageVersion } from '$lib/image-versions'
   import { runPendingAssetJob } from '$lib/item-view-media-jobs'
   import { recordAssetProcess, type RendererProcess } from '$lib/asset-history'
   import { OcrStore, extractText, extractionIsEditedByHand, type OcrMode } from '$lib/ocr'
@@ -298,6 +300,9 @@
   // A user-requested OCR waiting for the person to accept that it replaces
   // corrections made by hand.
   let pendingOcrRerun = $state<{ assetId: string; mode: OcrMode } | null>(null)
+  // A version chosen in the versions panel, waiting for the person to accept
+  // that the annotations of the image may not match it.
+  let pendingVersionSwitch = $state<{ assetId: string; version: ImageVersion } | null>(null)
   // Whether the OCR text of an asset was last written by hand. Read from the
   // process history when the asset is selected (a promise until it answers)
   // and kept current by this view's own writers, so that a click on an OCR
@@ -1913,6 +1918,50 @@
 
   async function handleUndo() {
     await restoreViewerHistory('undo')
+  }
+
+  /**
+   * Shows another file of the image's version family. It is an edit like any
+   * other, except that its result already exists: the same path change, the
+   * same history step (undo goes back to the file shown before) and the same
+   * notice to the other panes. No file is written, and the annotations are
+   * the ones on screen, unchanged; the version guard then decides by itself
+   * whether the layout and the text belong to the file now shown.
+   */
+  async function useImageVersion(version: ImageVersion) {
+    const asset = selectedAsset
+    if (!asset || !assetHasImageVersions(asset) || version.path === asset.path) return
+    await runEditOperation(
+      async (_asset, previous) =>
+        createImageEditUndoEntry({
+          ...previous,
+          path: version.path,
+          width: version.width ?? previous.width,
+          height: version.height ?? previous.height,
+        }),
+      { process: 'image_use_version', params: { version: version.version } }
+    )
+  }
+
+  /**
+   * Annotations do not record which version they were drawn on, so they are
+   * kept as they are and the person is told first that they may not match.
+   */
+  function requestUseImageVersion(version: ImageVersion): void | Promise<void> {
+    const asset = selectedAsset
+    if (!asset || !assetHasImageVersions(asset)) return
+    if (annotations.length > 0) {
+      pendingVersionSwitch = { assetId: asset.id, version }
+      return
+    }
+    return useImageVersion(version)
+  }
+
+  async function confirmUseImageVersion() {
+    const pending = pendingVersionSwitch
+    pendingVersionSwitch = null
+    if (!pending || pending.assetId !== selectedAssetId) return
+    await useImageVersion(pending.version)
   }
 
   async function handleRedo() {
@@ -3732,6 +3781,19 @@
               {translate}
               onMetadataChange={handleMetadataChange}
             />
+            {#if selectedAsset && assetHasImageVersions(selectedAsset)}
+              <ImageVersionsPanel
+                asset={selectedAsset}
+                visible={rightPanelTab === 'metadata'}
+                refreshKey={`${ocrTick}:${imageVersion}:${assetLayout?.createdAt ?? 0}:${staleLayout !== null}:${staleText !== null}:${layoutBoxBusy}`}
+                busy={annotationsLoading ||
+                  editInProgress ||
+                  undoInProgress ||
+                  duplicateAssetInProgress}
+                {translate}
+                onUseVersion={requestUseImageVersion}
+              />
+            {/if}
             <AssetProcessHistory
               asset={selectedAsset}
               refreshKey={`${rightPanelTab === 'metadata'}:${ocrTick}:${imageVersion}:${transcriptionTick}:${nlpTick}:${llmTick}:${summaryTick}:${assetLayout?.createdAt ?? 0}:${layoutBoxBusy}`}
@@ -3954,6 +4016,17 @@
       confirmLabel={translate('item.textRerun')}
       oncancel={() => (pendingOcrRerun = null)}
       onconfirm={confirmOcrRerun}
+    />
+  {/if}
+
+  {#if pendingVersionSwitch && pendingVersionSwitch.assetId === selectedAssetId}
+    <ConfirmDialog
+      title={translate('item.imageVersions')}
+      message={translate('item.imageVersionAnnotationsWarning')}
+      cancelLabel={translate('collections.cancel')}
+      confirmLabel={translate('item.imageVersionUse')}
+      oncancel={() => (pendingVersionSwitch = null)}
+      onconfirm={confirmUseImageVersion}
     />
   {/if}
 {/if}

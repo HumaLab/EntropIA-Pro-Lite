@@ -334,6 +334,7 @@ fn renderer_tool(process: &str) -> Option<&'static str> {
         }
         "pdf_crop" | "pdf_erase" | "pdf_rotate" => Some("EntropIA edit_pdf (pdfium + lopdf)"),
         "image_undo" | "image_redo" => Some("EntropIA historial de edición"),
+        "image_use_version" => Some("EntropIA versiones de la imagen"),
         "duplicate" => Some("EntropIA (duplicar asset)"),
         _ => None,
     }

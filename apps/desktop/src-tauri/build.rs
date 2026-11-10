@@ -111,6 +111,7 @@ const APP_COMMANDS: &[&str] = &[
     "extraction_is_edited_by_hand",
     "reocr_layout_block",
     "asset_file_facts",
+    "list_image_versions",
     "asset_history_record",
     "generate_pdf_thumbnail",
     "generate_image_thumbnail",

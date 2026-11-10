@@ -75,7 +75,8 @@ struct ShaCache {
     entries: Mutex<HashMap<PathBuf, CachedSha>>,
 }
 
-fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
+/// Modification time in milliseconds since the Unix epoch, `0` when unknown.
+pub(crate) fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
     meta.modified()
         .ok()
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())

@@ -29,6 +29,7 @@ mod derived_source;
 mod geo;
 mod image_edit;
 mod image_orient;
+mod image_versions;
 mod instance_guard;
 mod internet_archive;
 mod llm;
@@ -1602,6 +1603,7 @@ pub fn run() {
             ocr::commands::extraction_is_edited_by_hand,
             ocr::block_reocr::reocr_layout_block,
             derived_source::asset_file_facts,
+            image_versions::list_image_versions,
             asset_history::asset_history_record,
             ocr::commands::generate_pdf_thumbnail,
             ocr::commands::generate_image_thumbnail,

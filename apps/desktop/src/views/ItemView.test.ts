@@ -4339,6 +4339,317 @@ describe('ItemView image annotations', () => {
     })
   })
 
+  describe('versions of the image', () => {
+    // The asset shows a crop; the layout and the text were computed on the original.
+    const imageAsset = {
+      id: 'asset-image-1',
+      itemId: 'item-1',
+      path: 'docs/photo-a_v2.jpg',
+      type: 'image' as const,
+      createdAt: 1,
+    }
+    const filesOnDisk = [
+      { path: 'docs/photo-a.jpg', version: 0, width: 1000, height: 1400, sha256: 'sha-original' },
+      { path: 'docs/photo-a_v2.jpg', version: 2, width: 500, height: 560, sha256: 'sha-v2' },
+      { path: 'docs/photo-a_v11.jpg', version: 11, width: 560, height: 500, sha256: 'sha-v11' },
+    ].map((file) => ({ ...file, orientation: 1, modifiedMs: 1_700_000_000_000, size: 2048 }))
+    const storedAnnotation: AnnotationRow = {
+      id: 'ann-1',
+      assetId: 'asset-image-1',
+      page: 1,
+      kind: 'rectangle',
+      color: '#ff0000',
+      x: 0.125,
+      y: 0.25,
+      width: 0.375,
+      height: 0.5,
+      createdAt: 10,
+      updatedAt: 20,
+    }
+    const WARNING =
+      'Esta imagen tiene anotaciones. Pueden no coincidir con la versión que elegiste. ¿Continuar?'
+
+    const currentPath = () =>
+      (storeRef.current.assets.updatePath.mock.calls.at(-1)?.[1] as string | undefined) ??
+      imageAsset.path
+    const panel = () => screen.queryByTestId('image-versions-panel')
+    const rows = () => screen.getAllByTestId('image-version')
+    const rowOf = (path: string) => rows().find((row) => row.getAttribute('data-path') === path)!
+    const useButton = (path: string) =>
+      within(rowOf(path)).getByRole('button', { name: 'Usar esta versión' })
+    const layoutNotice = () => screen.queryByTestId('layout-version-notice')
+    const drawnBoxes = () => screen.getByTestId('viewer-layout-region-count').textContent
+    const viewerAnnotations = () => screen.getByTestId('viewer-annotations').textContent
+    const commandsInvoked = () => invokeMock.mock.calls.map(([command]) => command)
+
+    beforeEach(() => {
+      getLayoutByAssetMock.mockResolvedValue({
+        ...layoutFixture,
+        sourcePath: 'docs/photo-a.jpg',
+        sourceSha256: 'sha-original',
+      })
+      // The backend answers for the file `assets.path` names: the last path written.
+      assetFileFactsMock.mockImplementation(async () =>
+        filesOnDisk.find((file) => file.path === currentPath())
+      )
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'list_image_versions') {
+          return filesOnDisk.map((file) => ({ ...file, current: file.path === currentPath() }))
+        }
+        if (command === 'llm_get_results') return []
+        if (command === 'llm_is_available') return true
+        if (command === 'db_select') return []
+        return null
+      })
+    })
+
+    async function openVersions(options: StoreOptions = {}) {
+      storeRef.current = createStore({
+        assetsRows: [imageAsset],
+        extractionsByAsset: {
+          'asset-image-1': { textContent: 'Texto', sourceSha256: 'sha-v2' },
+        },
+        ...options,
+      })
+      render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+      await screen.findByTestId('mock-document-viewer')
+      await fireEvent.click(screen.getByRole('tab', { name: 'Metadatos' }))
+      await waitFor(() => {
+        expect(rows()).toHaveLength(filesOnDisk.length)
+      })
+    }
+
+    it('lists the versions of an image by number, with what each one corresponds to', async () => {
+      await openVersions()
+
+      expect(panel()).toHaveTextContent('Versiones de la imagen')
+      expect(rows().map((row) => row.getAttribute('data-path'))).toEqual([
+        'docs/photo-a.jpg',
+        'docs/photo-a_v2.jpg',
+        'docs/photo-a_v11.jpg',
+      ])
+      // A stamp exists, so the versions are hashed to be compared with it.
+      expect(invokeMock).toHaveBeenCalledWith('list_image_versions', {
+        assetId: 'asset-image-1',
+        withSha: true,
+      })
+
+      const original = rowOf('docs/photo-a.jpg')
+      expect(original).toHaveTextContent('Original')
+      expect(original).toHaveTextContent('1000×1400')
+      expect(original).toHaveTextContent('Corresponde al layout')
+      expect(original).not.toHaveTextContent('Corresponde al texto')
+      expect(original).not.toHaveTextContent('Actual')
+      expect(within(original).getByRole('img')).toHaveAttribute(
+        'src',
+        'https://asset.localhost/docs/photo-a.jpg'
+      )
+
+      const shown = rowOf('docs/photo-a_v2.jpg')
+      expect(shown).toHaveTextContent('Versión 2')
+      expect(shown).toHaveTextContent('Actual')
+      expect(shown).toHaveTextContent('Corresponde al texto')
+      expect(shown).not.toHaveTextContent('Corresponde al layout')
+      expect(useButton('docs/photo-a_v2.jpg')).toBeDisabled()
+
+      const last = rowOf('docs/photo-a_v11.jpg')
+      expect(last).toHaveTextContent('Versión 11')
+      expect(last).not.toHaveTextContent('Corresponde')
+      expect(useButton('docs/photo-a_v11.jpg')).toBeEnabled()
+    })
+
+    it('is not offered for a PDF nor for a page of one, and their files are never listed', async () => {
+      storeRef.current = createStore({
+        assetsRows: [
+          { id: 'asset-pdf-1', itemId: 'item-1', path: 'docs/acta.pdf', type: 'pdf', createdAt: 1 },
+          {
+            id: 'asset-page-1',
+            itemId: 'item-1',
+            path: 'docs/acta-p1.png',
+            type: 'image',
+            createdAt: 2,
+            parentAssetId: 'asset-pdf-1',
+            pageNumber: 1,
+          },
+          {
+            id: 'asset-pdf-2',
+            itemId: 'item-1',
+            path: 'docs/otra.pdf',
+            type: 'pdf',
+            createdAt: 3,
+          },
+        ],
+      })
+      render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+      await screen.findByTestId('mock-document-viewer')
+      await fireEvent.click(screen.getByRole('tab', { name: 'Metadatos' }))
+      await screen.findByTestId('asset-process-history')
+
+      // The page of the first PDF, then the second PDF.
+      expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+        'data-path',
+        'docs/acta-p1.png'
+      )
+      expect(panel()).not.toBeInTheDocument()
+      await fireEvent.click(screen.getByRole('button', { name: 'Página siguiente' }))
+      await waitFor(() => {
+        expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+          'data-path',
+          'docs/otra.pdf'
+        )
+      })
+      expect(panel()).not.toBeInTheDocument()
+      expect(commandsInvoked()).not.toContain('list_image_versions')
+    })
+
+    it('shows the chosen version through the path of the asset, writing no file, and draws its layout again', async () => {
+      await openVersions()
+      await waitFor(() => {
+        expect(layoutNotice()).toBeInTheDocument()
+      })
+      expect(drawnBoxes()).toBe('0')
+      await fireEvent.click(screen.getByRole('button', { name: /report image dimensions/i }))
+      const invokedBefore = invokeMock.mock.calls.length
+
+      await fireEvent.click(useButton('docs/photo-a.jpg'))
+
+      await waitFor(() => {
+        expect(storeRef.current.assets.updatePath).toHaveBeenCalledWith(
+          'asset-image-1',
+          'docs/photo-a.jpg'
+        )
+        expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+          'data-path',
+          'docs/photo-a.jpg'
+        )
+      })
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(storeRef.current.assets.updatePath).toHaveBeenCalledTimes(1)
+
+      // Recorded in the history of the asset, with the file it replaced.
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith('asset_history_record', {
+          report: {
+            assetId: 'asset-image-1',
+            process: 'image_use_version',
+            params: { page: 1, version: 0 },
+            previousPath: 'docs/photo-a_v2.jpg',
+          },
+        })
+      })
+      // The other panes on this asset are told, by the view that did it.
+      expect(emitMock).toHaveBeenCalledWith('asset:image-updated', {
+        itemId: 'item-1',
+        assetId: 'asset-image-1',
+        path: 'docs/photo-a.jpg',
+        sourceId: expect.any(String),
+      })
+
+      // No file is written: nothing but the history and the listing is invoked,
+      // and no asset, layout or text is created or deleted.
+      const invokedSince = invokeMock.mock.calls.slice(invokedBefore).map(([command]) => command)
+      expect(new Set(invokedSince)).toEqual(
+        new Set(['asset_history_record', 'list_image_versions'])
+      )
+      expect(duplicateAssetFileMock).not.toHaveBeenCalled()
+      expect(storeRef.current.assets.create).not.toHaveBeenCalled()
+      expect(storeRef.current.layouts.deleteByAssetId).not.toHaveBeenCalled()
+      expect(storeRef.current.extractions.deleteByAsset).not.toHaveBeenCalled()
+      expect(extractTextMock).not.toHaveBeenCalled()
+
+      // The version guard decides by itself: this is the file of the layout.
+      await waitFor(() => {
+        expect(layoutNotice()).not.toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /mostrar overlay/i })).toBeEnabled()
+      })
+      await fireEvent.click(screen.getByRole('button', { name: /mostrar overlay/i }))
+      expect(drawnBoxes()).toBe('5')
+
+      // The panel follows: the original is the current one now.
+      await waitFor(() => {
+        expect(rowOf('docs/photo-a.jpg')).toHaveTextContent('Actual')
+        expect(rowOf('docs/photo-a_v2.jpg')).not.toHaveTextContent('Actual')
+      })
+      expect(useButton('docs/photo-a.jpg')).toBeDisabled()
+
+      // It is one more step of the history: undo goes back to what was shown.
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /undo edit/i })).toBeEnabled()
+      })
+      await fireEvent.click(screen.getByRole('button', { name: /undo edit/i }))
+      await waitFor(() => {
+        expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+          'asset-image-1',
+          'docs/photo-a_v2.jpg'
+        )
+        expect(screen.getByRole('button', { name: /redo edit/i })).toBeEnabled()
+      })
+    })
+
+    it('asks first when the image has annotations, and cancelling changes nothing', async () => {
+      await openVersions({ annotationsByAsset: { 'asset-image-1': [storedAnnotation] } })
+      await waitFor(() => {
+        expect(screen.getByTestId('viewer-annotation-count')).toHaveTextContent('1')
+      })
+      const annotationsBefore = viewerAnnotations()
+
+      await fireEvent.click(useButton('docs/photo-a.jpg'))
+
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog).toHaveTextContent(WARNING)
+      expect(storeRef.current.assets.updatePath).not.toHaveBeenCalled()
+
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }))
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      })
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(storeRef.current.assets.updatePath).not.toHaveBeenCalled()
+      expect(storeRef.current.annotations.replaceForAssetPage).not.toHaveBeenCalled()
+      expect(commandsInvoked()).not.toContain('asset_history_record')
+      expect(emitMock).not.toHaveBeenCalledWith('asset:image-updated', expect.anything())
+      expect(viewerAnnotations()).toBe(annotationsBefore)
+      expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+        'data-path',
+        'docs/photo-a_v2.jpg'
+      )
+      expect(screen.getByRole('button', { name: /undo edit/i })).toBeDisabled()
+    })
+
+    it('keeps the annotations exactly as they are when the version is confirmed', async () => {
+      await openVersions({ annotationsByAsset: { 'asset-image-1': [storedAnnotation] } })
+      await waitFor(() => {
+        expect(screen.getByTestId('viewer-annotation-count')).toHaveTextContent('1')
+      })
+      const annotationsBefore = viewerAnnotations()
+      expect(JSON.parse(annotationsBefore!)).toEqual([storedAnnotation])
+
+      await fireEvent.click(useButton('docs/photo-a.jpg'))
+      const dialog = await screen.findByRole('dialog')
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Usar esta versión' }))
+
+      await waitFor(() => {
+        expect(storeRef.current.assets.updatePath).toHaveBeenCalledWith(
+          'asset-image-1',
+          'docs/photo-a.jpg'
+        )
+      })
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+      // What is written back is what was stored: same page, same boxes, nothing
+      // dropped and nothing added.
+      expect(storeRef.current.annotations.replaceForAssetPage.mock.calls).toEqual([
+        [
+          'asset-image-1',
+          1,
+          [{ kind: 'rectangle', color: '#ff0000', x: 0.125, y: 0.25, width: 0.375, height: 0.5 }],
+        ],
+      ])
+      expect(viewerAnnotations()).toBe(annotationsBefore)
+    })
+  })
+
   it('does not run NER for duplicate OCR completion events', async () => {
     storeRef.current = createStore({
       assetsRows: [
