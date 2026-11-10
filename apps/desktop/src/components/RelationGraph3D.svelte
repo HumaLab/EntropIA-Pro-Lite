@@ -45,6 +45,9 @@
     type ResolvedSelection,
     type Vec3,
   } from '$lib/relation-graph-view-state'
+  import { relationGraphToGexf } from '$lib/relation-graph-gexf'
+  import { save } from '@tauri-apps/plugin-dialog'
+  import { writeFile } from '@tauri-apps/plugin-fs'
   import type { ForceGraph3DInstance } from '3d-force-graph'
 
   let {
@@ -269,6 +272,26 @@
       assetId: first.assetId,
       occurrenceSession: { kind, targets, index: 0 },
     })
+  }
+
+  // ── Saving for Gephi ─────────────────────────────────────────────────────
+  let exportFailed = $state(false)
+
+  /** Writes the graph as drawn (filters and caps included) to a GEXF file. */
+  async function exportGexf() {
+    if (!graph) return
+    exportFailed = false
+    try {
+      const filePath = await save({
+        defaultPath: `entropia-relaciones-${collectionId}.gexf`,
+        filters: [{ name: 'GEXF', extensions: ['gexf'] }],
+      })
+      if (!filePath) return
+      await writeFile(filePath, new TextEncoder().encode(relationGraphToGexf(graph, types)))
+    } catch (failure) {
+      console.warn('[RelationGraph3D] failed to save the graph:', failure)
+      exportFailed = true
+    }
   }
 
   // ── Building and drawing ─────────────────────────────────────────────────
@@ -578,6 +601,15 @@
     <p class="relation-graph__note">{$currentLocale && t('collectionAnalysis.graphEmpty')}</p>
   {:else if status === 'ready' && graph}
     <p class="relation-graph__note">
+      <IconButton
+        size="sm"
+        variant="secondary"
+        label={$currentLocale && t('collectionAnalysis.graphExport')}
+        title={t('collectionAnalysis.graphExport')}
+        onclick={() => void exportGexf()}
+      >
+        <ActionIcon name="download" size={14} />
+      </IconButton>
       {$currentLocale &&
         t('collectionAnalysis.graphSummary', {
           nodes: graph.nodes.length,
@@ -591,6 +623,9 @@
       {/if}
       {#if graph.hiddenBy.thresholds > 0}
         {t('collectionAnalysis.graphHiddenByThresholds', { count: graph.hiddenBy.thresholds })}
+      {/if}
+      {#if exportFailed}
+        <span role="alert">{t('collectionAnalysis.graphExportError')}</span>
       {/if}
     </p>
   {/if}
