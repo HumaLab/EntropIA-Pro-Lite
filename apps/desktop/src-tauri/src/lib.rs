@@ -27,6 +27,7 @@ pub mod deps;
 pub mod deps;
 mod geo;
 mod image_edit;
+mod image_orient;
 mod instance_guard;
 mod internet_archive;
 mod llm;
