@@ -917,9 +917,9 @@ where
     true
 }
 
-#[cfg(feature = "paddle-ocr")]
+#[cfg(any(feature = "paddle-ocr", test))]
 fn detect_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    image::load_from_memory(bytes)
+    crate::image_orient::decode_oriented_bytes(bytes)
         .map(|img| (img.width(), img.height()))
         .ok()
 }
@@ -1412,9 +1412,12 @@ pub(crate) async fn process_job(
     // Stage 1 — reading file (25 %)
     emit_progress(app_handle, &asset_id, 25, "reading");
 
-    let file_bytes = tokio::fs::read(&job.asset_path)
+    let raw_bytes = tokio::fs::read(&job.asset_path)
         .await
         .map_err(|e| format!("Failed to read {}: {e}", job.asset_path))?;
+    // Single ingress: an image asset reaches every engine below upright and
+    // without an orientation tag. `raw_bytes` is the file as it is on disk.
+    let file_bytes = crate::image_orient::upright_asset_bytes(&job.asset_type, raw_bytes)?;
 
     match job.asset_type.as_str() {
         "pdf" => {
@@ -1989,6 +1992,18 @@ mod tests {
     use crate::runtime::status::{RuntimeCapability, RuntimeState, RuntimeStatus};
     use std::cell::RefCell;
     use std::path::PathBuf;
+
+    #[test]
+    fn layout_dimensions_of_a_camera_photo_are_the_upright_ones() {
+        use crate::image_orient::test_support::{camera_jpeg, encode_jpeg, upright_quadrants};
+        // What the person sees is 64 wide and 32 tall; the file stores 32x64.
+        let photo = camera_jpeg(&upright_quadrants(64, 32), 6);
+        assert_eq!(detect_image_dimensions(&photo), Some((64, 32)));
+
+        let scan = encode_jpeg(upright_quadrants(64, 32));
+        assert_eq!(detect_image_dimensions(&scan), Some((64, 32)));
+        assert_eq!(detect_image_dimensions(b"not an image"), None);
+    }
 
     fn atomic_ocr_layout(content: &str) -> LayoutPersistencePayload {
         LayoutPersistencePayload {

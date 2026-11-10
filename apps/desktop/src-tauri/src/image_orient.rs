@@ -14,6 +14,11 @@ use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use std::io::{BufRead, Cursor, Seek};
 use std::path::Path;
 
+/// `assets.type` of a file the WebView draws as an image.
+const IMAGE_ASSET_TYPE: &str = "image";
+/// How a PDF starts, whatever the asset row says about it.
+const PDF_HEADER: &[u8] = b"%PDF-";
+
 /// An image file opened by path. The extension gives the format and the
 /// content overrides it when it says otherwise.
 fn open_reader(
@@ -63,8 +68,9 @@ pub(crate) fn decode_oriented(path: impl AsRef<Path>) -> Result<DynamicImage, St
 
 /// Decode an in-memory image with its EXIF orientation applied. The format is
 /// guessed from the content.
-// Wired into the OCR, layout, thumbnail and LLM readers by the next tasks.
-#[allow(dead_code)]
+// The Lite build has no consumer yet: the layout dimensions are Pro-only, and
+// the per-block re-OCR and the thumbnail are wired by the next tasks.
+#[cfg_attr(not(feature = "paddle-ocr"), allow(dead_code))]
 pub(crate) fn decode_oriented_bytes(bytes: &[u8]) -> Result<DynamicImage, String> {
     let reader = bytes_reader(bytes).map_err(|e| format!("Failed to decode image: {e}"))?;
     decode_upright(reader)
@@ -84,7 +90,6 @@ pub(crate) fn exif_orientation(path: impl AsRef<Path>) -> u8 {
 
 /// EXIF orientation of an in-memory image, `1..=8`. `1` when the bytes carry no
 /// tag or cannot be read.
-#[allow(dead_code)]
 pub(crate) fn exif_orientation_bytes(bytes: &[u8]) -> u8 {
     bytes_reader(bytes)
         .map(probe)
@@ -101,7 +106,6 @@ pub(crate) fn exif_orientation_bytes(bytes: &[u8]) -> u8 {
 /// A tagged image is decoded, turned upright and encoded again: as JPEG at
 /// [`JPEG_QUALITY`] when the source is a JPEG, as PNG in every other case.
 /// Neither encoder writes the tag back.
-#[allow(dead_code)]
 pub(crate) fn oriented_bytes(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
     if exif_orientation_bytes(&bytes) == 1 {
         return Ok(bytes);
@@ -119,6 +123,25 @@ pub(crate) fn oriented_bytes(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
     }
     .map_err(|e| format!("Failed to encode upright image: {e}"))?;
     Ok(out.into_inner())
+}
+
+/// The bytes of an asset file as every OCR, layout and LLM consumer receives
+/// them: an image asset comes out upright (see [`oriented_bytes`]), anything
+/// else comes out as the very same bytes.
+///
+/// This is the single ingress: it runs once, where the file is read, and the
+/// engines downstream never see an orientation tag. `asset_type` is the
+/// `assets.type` column. A PDF stored under an image asset is recognised by
+/// its header and left alone, like every other non-image.
+///
+/// `raw` is the file exactly as read from disk. Whoever needs to identify the
+/// source file (its `sha256`) does so over `raw`, before calling this: the
+/// bytes returned for a tagged photo are a re-encoding, not the file.
+pub(crate) fn upright_asset_bytes(asset_type: &str, raw: Vec<u8>) -> Result<Vec<u8>, String> {
+    if asset_type != IMAGE_ASSET_TYPE || raw.starts_with(PDF_HEADER) {
+        return Ok(raw);
+    }
+    oriented_bytes(raw)
 }
 
 #[cfg(test)]
@@ -379,6 +402,47 @@ mod tests {
             // Plain decode, on purpose: the bytes themselves must be upright.
             let plain = image::load_from_memory(&out).expect("plain decode");
             assert_upright_quadrants(&plain, W, H, &case);
+        }
+    }
+
+    #[test]
+    fn an_image_asset_reaches_its_consumers_upright_and_untagged() {
+        let jpeg = camera_jpeg(&upright_quadrants(W, H), 6);
+
+        let out = upright_asset_bytes("image", jpeg).expect("ingress");
+
+        assert_eq!(exif_orientation_bytes(&out), 1);
+        let plain = image::load_from_memory(&out).expect("plain decode");
+        assert_upright_quadrants(&plain, W, H, "image asset, orientation 6");
+    }
+
+    #[test]
+    fn the_ingress_hands_on_the_same_bytes_when_there_is_nothing_to_turn() {
+        let untagged = encode_jpeg(upright_quadrants(W, H));
+        assert_eq!(
+            upright_asset_bytes("image", untagged.clone()).expect("ingress"),
+            untagged
+        );
+
+        // A PDF, whether the asset says so or it sits under an image asset.
+        let pdf = b"%PDF-1.7\n1 0 obj\n<< >>\nendobj\n%%EOF\n".to_vec();
+        assert_eq!(
+            upright_asset_bytes("pdf", pdf.clone()).expect("ingress"),
+            pdf
+        );
+        assert_eq!(
+            upright_asset_bytes("image", pdf.clone()).expect("ingress"),
+            pdf
+        );
+
+        // Only image assets are turned: the type decides, not the content.
+        let tagged = camera_jpeg(&upright_quadrants(W, H), 6);
+        for asset_type in ["pdf", "audio"] {
+            assert_eq!(
+                upright_asset_bytes(asset_type, tagged.clone()).expect("ingress"),
+                tagged,
+                "{asset_type}"
+            );
         }
     }
 

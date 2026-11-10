@@ -34,8 +34,8 @@ Forecast: well over 400 authored lines. Strategy: one branch per plan PR, stacke
 
 | ID | PR | Task | Route | Commit |
 | --- | --- | --- | --- | --- |
-| T0.1 | 0 | Oriented decoder module: `decode_oriented`, `decode_oriented_bytes`, `oriented_bytes`, orientation probe; tests for the eight orientations | delegated (writer trigger: new module + editors) | |
-| T0.2 | 0 | The four editors in `image_edit.rs` decode through it; crop test on a 4000×3000 orientation-6 JPEG | delegated, with T0.1 | |
+| T0.1 | 0 | Oriented decoder module: `decode_oriented`, `decode_oriented_bytes`, `oriented_bytes`, orientation probe; tests for the eight orientations | delegated (writer trigger: new module + editors) | 1ad252bf |
+| T0.2 | 0 | The four editors in `image_edit.rs` decode through it; crop test on a 4000×3000 orientation-6 JPEG | delegated, with T0.1 | 1ad252bf |
 | T0.3 | 0 | Single ingress for asset image bytes (`ocr/mod.rs`, `processing/ocr.rs`, `block_reocr.rs`, `llm/openrouter.rs`) and every decode site listed in the plan | delegated | |
 | T0.4 | 0 | Thumbnails: oriented, generator version in the hashed input, orphan cleanup | delegated | |
 | T0.5 | 0 | Card and viewer open the same asset (C6) | delegated | |
@@ -62,3 +62,5 @@ The test lists under each PR in the source plan (RED first). Per task: `cargo te
 
 - L1 (user, 2026-11-10): «implementar G:\EntropIA-Stack\EntropIA-Pro-Lite\docs\plan-versiones-imagen-y-layout.md».
 - L2: branch `fix/exif-orientation` created from `main` at `9c6f531d`. Receipt-driven development: on (global).
+- L3 (T0.1, T0.2): `image_orient.rs` with `decode_oriented`, `decode_oriented_bytes`, `exif_orientation`, `exif_orientation_bytes`, `oriented_bytes`; fixtures in `image_orient::test_support`. RED observed (5 of 6 decoder tests, 2 editor tests), GREEN: `cargo test --lib image_orient` 6 passed (parent re-ran), `image_edit` 20 passed, fmt and clippy clean. Review assessment: medium, `under_budget` (580 lines, mostly tests). Note: the path variant now guesses the format from content, so a mislabelled file decodes.
+- L4 (T0.3, partial): ingress helper `image_orient::upright_asset_bytes(asset_type, raw)` wired at `processing/ocr.rs` (`read_asset_bytes`), `ocr/mod.rs` `process_job` (Pro, not compiled locally) and `llm/openrouter.rs` `from_validated_file`; `detect_image_dimensions` decodes upright. RED observed on 4 tests, GREEN: image_orient 8, ocr 302, openrouter 45, processing 226, fmt and clippy clean. PENDING: `ocr/block_reocr.rs:518` `render_page` must switch `image::load_from_memory` to `decode_oriented_bytes`, with its crop test (the file is under `ocr/`, the surface named the wrong path); then drop the `cfg_attr(allow(dead_code))` on `decode_oriented_bytes`. For T1.2: in Pro the queue reads an image twice (`processing/ocr.rs:226` and `ocr/mod.rs:1415`), so the writer hash must pick one read. `layout_onnx.rs` `detect` has no caller.

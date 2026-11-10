@@ -223,8 +223,7 @@ impl Executor for OcrExecutor {
             let (stored_path, asset_type) = self.read_asset(&task.asset_id)?;
             let asset_path =
                 crate::path_utils::resolve_asset_path_at_boundary(&stored_path, &self.app)?;
-            let bytes = std::fs::read(&asset_path)
-                .map_err(|e| format!("Failed to read {asset_path}: {e}"))?;
+            let bytes = read_asset_bytes(&asset_path, &asset_type)?;
             let children: i64 = self
                 .settings_conn()?
                 .query_row(
@@ -307,6 +306,17 @@ impl Executor for OcrExecutor {
             },
         }
     }
+}
+
+/// Reads an asset file for the OCR engines: an image comes back upright, a
+/// PDF as it is on disk. The orientation is applied here, once, so no engine
+/// downstream has to know about the tag.
+///
+/// `raw` is the file as it is on disk; a hash that identifies the source file
+/// is taken over it, before the orientation.
+fn read_asset_bytes(asset_path: &str, asset_type: &str) -> Result<Vec<u8>, String> {
+    let raw = std::fs::read(asset_path).map_err(|e| format!("Failed to read {asset_path}: {e}"))?;
+    crate::image_orient::upright_asset_bytes(asset_type, raw)
 }
 
 fn merge_pages(pages: Vec<OcrComputeOutput>) -> Result<OcrComputeOutput, String> {
@@ -607,6 +617,44 @@ fn to_compute_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_engines_read_a_camera_photo_upright_and_everything_else_as_stored() {
+        use crate::image_orient::test_support::{
+            assert_upright_quadrants, camera_jpeg, encode_jpeg, upright_quadrants,
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let write = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).expect("write fixture");
+            path.to_string_lossy().into_owned()
+        };
+
+        let photo = camera_jpeg(&upright_quadrants(64, 32), 6);
+        let read = read_asset_bytes(&write("photo.jpg", &photo), "image").expect("read photo");
+        assert_eq!(crate::image_orient::exif_orientation_bytes(&read), 1);
+        let decoded = image::load_from_memory(&read).expect("plain decode");
+        assert_upright_quadrants(&decoded, 64, 32, "queue read, orientation 6");
+
+        let scan = encode_jpeg(upright_quadrants(64, 32));
+        assert_eq!(
+            read_asset_bytes(&write("scan.jpg", &scan), "image").expect("read scan"),
+            scan
+        );
+
+        let pdf = b"%PDF-1.7\n1 0 obj\n<< >>\nendobj\n%%EOF\n".to_vec();
+        assert_eq!(
+            read_asset_bytes(&write("doc.pdf", &pdf), "pdf").expect("read pdf"),
+            pdf
+        );
+
+        let missing = dir.path().join("gone.jpg").to_string_lossy().into_owned();
+        let error = read_asset_bytes(&missing, "image").expect_err("missing file");
+        assert!(matches!(
+            map_ocr_error(&error),
+            ExecOutput::Fatal { code, .. } if code == "file_missing"
+        ));
+    }
 
     #[test]
     fn ocr_errors_map_to_retry_block_or_fatal() {
