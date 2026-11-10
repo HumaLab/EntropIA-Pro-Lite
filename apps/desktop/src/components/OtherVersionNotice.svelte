@@ -33,8 +33,8 @@
   {/if}
   <!-- One line whatever the width: the message gives way and the action never
        wraps or shrinks. The full message stays in the tooltip. -->
-  <div class="notice" role="status">
-    <span class="notice__message" title={message}>{message}</span>
+  <div class="notice">
+    <span class="notice__message" role="status" title={message}>{message}</span>
     <Button
       variant="secondary"
       size="sm"
