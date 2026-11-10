@@ -112,6 +112,8 @@ const APP_COMMANDS: &[&str] = &[
     "reocr_layout_block",
     "asset_file_facts",
     "list_image_versions",
+    "scan_image_version_repairs",
+    "apply_image_version_repairs",
     "asset_history_record",
     "generate_pdf_thumbnail",
     "generate_image_thumbnail",

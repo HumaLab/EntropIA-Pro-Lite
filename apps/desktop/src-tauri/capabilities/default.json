@@ -104,6 +104,8 @@
     "allow-reocr-layout-block",
     "allow-asset-file-facts",
     "allow-list-image-versions",
+    "allow-scan-image-version-repairs",
+    "allow-apply-image-version-repairs",
     "allow-asset-history-record",
     "allow-generate-pdf-thumbnail",
     "allow-generate-image-thumbnail",
