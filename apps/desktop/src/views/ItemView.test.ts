@@ -6835,6 +6835,12 @@ describe('ItemView text of another version of the image', () => {
       expect(readingNotice()).toHaveTextContent(WARNING)
     })
     expect(screen.getByRole('tab', { name: 'Texto' })).toHaveAttribute('aria-selected', 'false')
+    // It belongs to the text tab: the document tab keeps its full height.
+    const textPane = screen.getByRole('tabpanel', { name: 'Texto extraído' })
+    expect(textPane).toContainElement(readingNotice())
+    await fireEvent.click(screen.getByRole('tab', { name: 'Documento' }))
+    expect(textPane).not.toBeVisible()
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto extraído' }))
 
     await fireEvent.click(
       within(readingNotice()!).getByRole('button', { name: 'Volver a correr el OCR' })
@@ -6863,7 +6869,14 @@ describe('ItemView text of another version of the image', () => {
     assetFileFactsMock.mockResolvedValue(fileWithSha('sha-edited'))
     await openReadingPane({ textContent: 'Texto sin origen' })
 
+    // The check is asynchronous: let it settle before reading the absence.
+    await waitFor(() => {
+      expect(storeRef.current.extractions.findByAsset).toHaveBeenCalledWith('asset-image-1')
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
     expect(readingNotice()).not.toBeInTheDocument()
+    // An unstamped text has no origin to compare: the file is never hashed for it.
+    expect(assetFileFactsMock).not.toHaveBeenCalledWith('asset-image-1', { withSha: true })
   })
 
   it('warns, and keeps the text, when it was extracted from another file', async () => {

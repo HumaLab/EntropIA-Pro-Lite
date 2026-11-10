@@ -3556,18 +3556,6 @@
           onchange={navigateOccurrence}
         />
       {/if}
-      <!-- The left pane is where the text is read full-size, and its tabs live
-           inside ItemAssetPanel: the notice goes above them. -->
-      {#if textOtherVersion}
-        <OtherVersionNotice
-          testId="text-version-notice-reading"
-          message={translate('item.textOtherVersion')}
-          actionLabel={translate('item.textRerun')}
-          busy={textPanelOcrState?.status === 'pending' || textPanelOcrState?.status === 'running'}
-          busyTitle={translate('item.ocrHighBusyTitle')}
-          onRerun={rerunStaleText}
-        />
-      {/if}
       <ItemAssetPanel
         {selectedAsset}
         {viewerSrc}
@@ -3631,7 +3619,23 @@
           imageNaturalW = dims.width
           imageNaturalH = dims.height
         }}
-      />
+      >
+        <!-- The left pane is where the text is read full-size: the notice goes
+             inside its text tab, above the text. -->
+        {#snippet textNotice()}
+          {#if textOtherVersion}
+            <OtherVersionNotice
+              testId="text-version-notice-reading"
+              message={translate('item.textOtherVersion')}
+              actionLabel={translate('item.textRerun')}
+              busy={textPanelOcrState?.status === 'pending' ||
+                textPanelOcrState?.status === 'running'}
+              busyTitle={translate('item.ocrHighBusyTitle')}
+              onRerun={rerunStaleText}
+            />
+          {/if}
+        {/snippet}
+      </ItemAssetPanel>
 
       {#if assets.length > 1 && !occurrenceSession}
         <div class="asset-pagination">

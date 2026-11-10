@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte'
   import {
     ActionIcon,
     DocumentViewer,
@@ -95,6 +96,7 @@
     onRestoreOriginalOcr,
     onPageChange,
     onDimensionsChange,
+    textNotice,
   }: {
     selectedAsset: Asset | null
     viewerSrc: string
@@ -159,6 +161,8 @@
     onRestoreOriginalOcr: () => void | Promise<void>
     onPageChange: (page: number, totalPages: number) => void
     onDimensionsChange: (dimensions: { width: number; height: number }) => void
+    /** Shown at the top of the extracted-text pane, above the text. */
+    textNotice?: Snippet
   } = $props()
   let currentCitationRange = $state.raw<{
     start: number
@@ -508,6 +512,7 @@
       class:is-hidden={leftPanelTab !== 'text'}
       hidden={leftPanelTab !== 'text'}
     >
+      {@render textNotice?.()}
       {#if occurrenceActive && occurrenceMarkFailed}
         <p role="status">{translate('occurrence.none')}</p>
       {/if}
