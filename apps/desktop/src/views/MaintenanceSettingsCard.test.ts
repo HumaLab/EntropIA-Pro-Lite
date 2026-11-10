@@ -139,6 +139,38 @@ describe('MaintenanceSettingsCard', () => {
     expect(scanCalls()).toHaveLength(1)
   })
 
+  it('confirms one image and one layout in the singular', async () => {
+    backend(scanResult([repair(1)], 1))
+    render(MaintenanceSettingsCard)
+    await review()
+
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Anotar también el origen de 1 layout anterior' })
+    )
+    await fireEvent.click(applyButton())
+
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent('Vas a cambiar la versión mostrada de 1 imagen.')
+    expect(dialog).toHaveTextContent('Vas a anotar el origen de 1 layout.')
+  })
+
+  it('confirms one image and one layout in the singular in English', async () => {
+    locale.set('en')
+    backend(scanResult([repair(1)], 1))
+    render(MaintenanceSettingsCard)
+    await fireEvent.click(screen.getByRole('button', { name: 'Review' }))
+    await screen.findByText('Review result')
+
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Also record the source of 1 earlier layout' })
+    )
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent('You are about to change the version shown of 1 image.')
+    expect(dialog).toHaveTextContent('You are about to record the source of 1 layout.')
+  })
+
   it('sends only the checked proposals, then reviews again', async () => {
     backend(scanResult([repair(1), repair(2), repair(3)], 2), async () => ({
       repaired: [

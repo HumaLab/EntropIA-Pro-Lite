@@ -81,3 +81,15 @@ The test lists under each PR in the source plan (RED first). Per task: `cargo te
 ## Status
 
 All 14 tasks done on four stacked local branches; nothing pushed. Pro variant checked by the parent on the branch tip: `cargo check --lib --tests --features local-ml` clean, `cargo clippy --lib --tests --features local-ml -- -D warnings` clean, `cargo test --lib --features local-ml ocr` 353 passed (the first check attempt died in the MNN C++ build with C1056, a transient file lock; the retry passed). No Pro installer was built. Pending, outside what tests can show: a pass in the running app under `ENTROPIA_DEV_PROFILE` (notices, versions panel thumbnails, Maintenance tab, a camera photo with orientation 6). Push, PRs and merge are the user's decisions. PR 3 (sync) stays out.
+
+## Test in the running app (2026-11-10)
+
+Lite, dark theme, dev profile `versiones-test` (`profile=dev:versiones-test ... sync=disabled`), driven by the parent through the WebView debugging port with real clicks and drags; results read from screenshots, the profile's database and the files on disk. Layouts and texts were seeded by hand (the profile has no GLM key).
+
+Passed: upright thumbnail of an orientation-6 photo; crop of the selected area of that photo (912x480, upright, original untouched and still tagged); erase and rotate on it; versions panel with thumbnails loading through the real asset protocol and its two markers; layout notice with both sizes and without them (legacy layout on a tagged photo); text notice; "Usar esta versión" with the annotations confirmation, cancel and confirm, boxes landing on every line afterwards, process event recorded, annotation row unchanged; undo and redo of that switch; split view (the other pane follows a rotation); Maintenance scan (1 repairable, 1 ambiguous) and apply through the confirmation, with the process event; OCR confirmation only when the text is hand-edited.
+
+Findings fixed: F1 the left "Texto extraído" pane showed stale text with no notice (now `text-version-notice-reading` above its tabs); F2 «de 1 imágenes» in the Maintenance confirmation (`.one` strings).
+
+Findings left open: F3 per-block re-OCR checks the GLM key before the layout version, so without a key the rejection cannot be seen in the app (nothing is written either way; covered by unit tests). F4 Svelte `derived_inert` warning in the console when using the split view, no visible effect. F5 a click on a "recent activity" row in Home did not open the document (not confirmed as a defect). F6 the new reading-pane notice also shows above the "Documento" tab, taking vertical room from the image.
+
+Not tested: real OCR (no key), export (native save dialog), Pro, light theme.

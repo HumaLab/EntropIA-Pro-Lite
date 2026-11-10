@@ -6812,6 +6812,60 @@ describe('ItemView text of another version of the image', () => {
     })
   }
 
+  /** The left pane, where the extracted text is read full-size. */
+  const readingNotice = () => screen.queryByTestId('text-version-notice-reading')
+
+  async function openReadingPane(extraction: { textContent: string; sourceSha256?: string }) {
+    storeRef.current = createStore({
+      assetsRows: [imageAsset],
+      extractionsByAsset: { [imageAsset.id]: extraction },
+    })
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto extraído' }))
+    const pane = screen.getByRole('tabpanel', { name: 'Texto extraído' })
+    await within(pane).findByText(extraction.textContent)
+  }
+
+  it('warns where the text is read, with the right panel on another tab', async () => {
+    assetFileFactsMock.mockResolvedValue(fileWithSha('sha-edited'))
+    await openReadingPane({ textContent: 'Texto corregido', sourceSha256: 'sha-original' })
+
+    await waitFor(() => {
+      expect(readingNotice()).toHaveTextContent(WARNING)
+    })
+    expect(screen.getByRole('tab', { name: 'Texto' })).toHaveAttribute('aria-selected', 'false')
+
+    await fireEvent.click(
+      within(readingNotice()!).getByRole('button', { name: 'Volver a correr el OCR' })
+    )
+    await waitFor(() => {
+      expect(extractTextMock).toHaveBeenCalledWith(
+        'asset-image-1',
+        'docs/photo-a.jpg',
+        'image',
+        LOCAL_ML ? 'light' : 'high'
+      )
+    })
+  })
+
+  it('says nothing where the text is read when it comes from the file on screen', async () => {
+    assetFileFactsMock.mockResolvedValue(fileWithSha('sha-original'))
+    await openReadingPane({ textContent: 'Texto', sourceSha256: 'sha-original' })
+
+    await waitFor(() => {
+      expect(assetFileFactsMock).toHaveBeenCalledWith('asset-image-1', { withSha: true })
+    })
+    expect(readingNotice()).not.toBeInTheDocument()
+  })
+
+  it('says nothing where the text is read for a text with no stamp', async () => {
+    assetFileFactsMock.mockResolvedValue(fileWithSha('sha-edited'))
+    await openReadingPane({ textContent: 'Texto sin origen' })
+
+    expect(readingNotice()).not.toBeInTheDocument()
+  })
+
   it('warns, and keeps the text, when it was extracted from another file', async () => {
     assetFileFactsMock.mockResolvedValue(fileWithSha('sha-edited'))
     await openTextTab(imageAsset, {
@@ -7001,6 +7055,25 @@ describe('ItemView text of another version of the image', () => {
 
       await fireEvent.click(
         within(notice()!).getByRole('button', { name: 'Volver a correr el OCR' })
+      )
+
+      expect(await screen.findByRole('dialog')).toHaveTextContent(CONFIRMATION)
+      expect(extractTextMock).not.toHaveBeenCalled()
+    })
+
+    it('asks from the notice where the text is read', async () => {
+      editedByHand(true)
+      assetFileFactsMock.mockResolvedValue(fileWithSha('sha-edited'))
+      await openReadingPane({
+        textContent: 'Texto corregido a mano',
+        sourceSha256: 'sha-original',
+      })
+      await waitFor(() => {
+        expect(readingNotice()).toBeInTheDocument()
+      })
+
+      await fireEvent.click(
+        within(readingNotice()!).getByRole('button', { name: 'Volver a correr el OCR' })
       )
 
       expect(await screen.findByRole('dialog')).toHaveTextContent(CONFIRMATION)

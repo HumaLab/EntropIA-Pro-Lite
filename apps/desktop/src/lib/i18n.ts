@@ -273,12 +273,15 @@ const es = {
   'settings.maintenance.repairChange': 'Muestra {from}; el layout es de {to}',
   'settings.maintenance.showMore': 'Mostrar {count} más',
   'settings.maintenance.completions': 'Anotar también el origen de {count} layouts anteriores',
+  'settings.maintenance.completions.one': 'Anotar también el origen de {count} layout anterior',
   'settings.maintenance.completionsHint':
     'Son layouts calculados antes de que la app registrara de qué archivo salieron, y su imagen coincide sin ambigüedad. Solo se anota el archivo de origen.',
   'settings.maintenance.apply': 'Aplicar',
   'settings.maintenance.confirmTitle': 'Reparar versiones de imágenes',
   'settings.maintenance.confirmRepairs': 'Vas a cambiar la versión mostrada de {count} imágenes.',
+  'settings.maintenance.confirmRepairs.one': 'Vas a cambiar la versión mostrada de {count} imagen.',
   'settings.maintenance.confirmCompletions': 'Vas a anotar el origen de {count} layouts.',
+  'settings.maintenance.confirmCompletions.one': 'Vas a anotar el origen de {count} layout.',
   'settings.maintenance.confirmNoDelete': 'No se borra ni se modifica ningún archivo.',
   'settings.maintenance.confirmCancel': 'Cancelar',
   'settings.maintenance.done':
@@ -4019,14 +4022,19 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.maintenance.repairChange': 'Shows {from}; the layout belongs to {to}',
   'settings.maintenance.showMore': 'Show {count} more',
   'settings.maintenance.completions': 'Also record the source of {count} earlier layouts',
+  'settings.maintenance.completions.one': 'Also record the source of {count} earlier layout',
   'settings.maintenance.completionsHint':
     'These layouts were computed before the app recorded which file they came from, and their image matches unambiguously. Only the source file is recorded.',
   'settings.maintenance.apply': 'Apply',
   'settings.maintenance.confirmTitle': 'Repair image versions',
   'settings.maintenance.confirmRepairs':
     'You are about to change the version shown of {count} images.',
+  'settings.maintenance.confirmRepairs.one':
+    'You are about to change the version shown of {count} image.',
   'settings.maintenance.confirmCompletions':
     'You are about to record the source of {count} layouts.',
+  'settings.maintenance.confirmCompletions.one':
+    'You are about to record the source of {count} layout.',
   'settings.maintenance.confirmNoDelete': 'No file is deleted or modified.',
   'settings.maintenance.confirmCancel': 'Cancel',
   'settings.maintenance.done':

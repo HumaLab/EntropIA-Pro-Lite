@@ -231,7 +231,12 @@
       {#if completions.length > 0}
         <div class="maintenance__block">
           <Checkbox bind:checked={completeSources} disabled={busy}>
-            {t('settings.maintenance.completions', { count: completions.length })}
+            {t(
+              completions.length === 1
+                ? 'settings.maintenance.completions.one'
+                : 'settings.maintenance.completions',
+              { count: completions.length }
+            )}
           </Checkbox>
           <p class="maintenance__hint">{t('settings.maintenance.completionsHint')}</p>
         </div>
@@ -262,10 +267,24 @@
     onconfirm={apply}
   >
     {#if selectedRepairs.length > 0}
-      <p>{t('settings.maintenance.confirmRepairs', { count: selectedRepairs.length })}</p>
+      <p>
+        {t(
+          selectedRepairs.length === 1
+            ? 'settings.maintenance.confirmRepairs.one'
+            : 'settings.maintenance.confirmRepairs',
+          { count: selectedRepairs.length }
+        )}
+      </p>
     {/if}
     {#if selectedCompletions.length > 0}
-      <p>{t('settings.maintenance.confirmCompletions', { count: selectedCompletions.length })}</p>
+      <p>
+        {t(
+          selectedCompletions.length === 1
+            ? 'settings.maintenance.confirmCompletions.one'
+            : 'settings.maintenance.confirmCompletions',
+          { count: selectedCompletions.length }
+        )}
+      </p>
     {/if}
     <p>{t('settings.maintenance.confirmNoDelete')}</p>
   </ConfirmDialog>
