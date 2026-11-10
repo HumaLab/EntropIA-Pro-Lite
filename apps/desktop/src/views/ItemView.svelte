@@ -19,8 +19,10 @@
     createImageUpdatedPayload,
     discardLatestImageEditUndoEntry,
     getLatestImageEditUndoEntry,
+    isImageUpdateFromAnotherView,
     updateAssetPathInList,
     type ImageEditUndoEntry,
+    type ImageUpdatedPayload,
   } from '$lib/item-view-image-edit'
   import {
     DebouncedAnnotationPersistor,
@@ -98,10 +100,12 @@
     type LayoutVersionCheck,
     type LayoutVersionVerdict,
   } from '$lib/layout-version'
+  import { checkExtractionVersion } from '$lib/extraction-version'
   import LayoutVersionNotice from '../components/LayoutVersionNotice.svelte'
+  import OtherVersionNotice from '../components/OtherVersionNotice.svelte'
   import { runPendingAssetJob } from '$lib/item-view-media-jobs'
   import { recordAssetProcess, type RendererProcess } from '$lib/asset-history'
-  import { OcrStore, extractText, type OcrMode } from '$lib/ocr'
+  import { OcrStore, extractText, extractionIsEditedByHand, type OcrMode } from '$lib/ocr'
   import { TranscriptionStore, transcribeAudio, transcribeDictation } from '$lib/transcription'
   import {
     NlpStore,
@@ -129,6 +133,7 @@
   import { GeoStore, geocodeEntity } from '$lib/geo'
   import {
     ActionIcon,
+    ConfirmDialog,
     IconButton,
     Panel,
     TabButton,
@@ -283,6 +288,36 @@
     model: string
     verdict: Extract<LayoutVersionVerdict, { status: 'other_version' }>
   } | null>(null)
+  // The OCR text is kept whatever file it was read from. This only says that
+  // the text on screen was read from another version of the image.
+  let staleText = $state<{
+    assetId: string
+    /** `extractions.method`: the engine to run again. */
+    method: string
+  } | null>(null)
+  // A user-requested OCR waiting for the person to accept that it replaces
+  // corrections made by hand.
+  let pendingOcrRerun = $state<{ assetId: string; mode: OcrMode } | null>(null)
+  // Whether the OCR text of an asset was last written by hand. Read from the
+  // process history when the asset is selected (a promise until it answers)
+  // and kept current by this view's own writers, so that a click on an OCR
+  // button is answered at once.
+  const ocrTextEditedByHand = new Map<string, boolean | Promise<boolean>>()
+  function loadOcrTextEditedByHand(assetId: string) {
+    const answer = extractionIsEditedByHand(assetId).then(
+      (edited) => edited === true,
+      (e: unknown) => {
+        // Not knowing is no reason to replace corrections without asking.
+        console.warn('[ItemView] Could not tell whether the text was edited by hand:', e)
+        return true
+      }
+    )
+    ocrTextEditedByHand.set(assetId, answer)
+    void answer.then((edited) => {
+      // A writer of this view may have settled it while the history was read.
+      if (ocrTextEditedByHand.get(assetId) === answer) ocrTextEditedByHand.set(assetId, edited)
+    })
+  }
   let layoutLoading = $state(false)
   let layoutError = $state<string | null>(null)
   let showLayout = $state(false)
@@ -300,6 +335,14 @@
   )
   const itemLoadGuard = new LatestRequestGuard()
   const layoutLoadGuard = new LatestRequestGuard()
+  const textVersionLoadGuard = new LatestRequestGuard()
+  const externalEditLoadGuard = new LatestRequestGuard()
+  // Names this view in the `asset:image-updated` events it emits, so that it
+  // can tell them from the ones another pane on the same asset emits.
+  const viewInstanceId = crypto.randomUUID()
+  // Bumped when another pane edited the asset on screen: the viewer state of
+  // this one is reloaded from the archive.
+  let externalEditEpoch = $state(0)
   const notesLoadGuard = new LatestRequestGuard()
   const selectedAssetStateLoadGuard = new LatestRequestGuard()
   const entitiesLoadGuard = new LatestRequestGuard()
@@ -355,6 +398,7 @@
   // OCR state — plain TS class, updated via Tauri events
   const ocrStore = new OcrStore({
     onComplete: (assetId, _method, createdPageAssetCount) => {
+      ocrTextEditedByHand.set(assetId, false)
       const nextEditedText = new Map(ocrEditedText)
       nextEditedText.delete(assetId)
       ocrEditedText = nextEditedText
@@ -373,6 +417,7 @@
           void loadData()
         }
         void reloadSelectedAssetPersistedState({ layout: true })
+        void reloadTextVersionForAsset(selectedAsset)
       }
     },
   })
@@ -760,6 +805,7 @@
         })
         if (assetId) {
           ocrCorrectedAssets = new Set(ocrCorrectedAssets).add(assetId)
+          ocrTextEditedByHand.set(assetId, false)
           ocrRestoreStateLoadGuardFor(assetId).next()
           ocrRestorableAssets = new Set(ocrRestorableAssets).add(assetId)
           ocrEditedText.set(assetId, result)
@@ -929,6 +975,7 @@
       nextEditedText.set(asset.id, original)
       ocrEditedText = nextEditedText
       ocrStore.setTextContent(asset.id, original)
+      ocrTextEditedByHand.set(asset.id, false)
 
       const nextCorrectedAssets = new Set(ocrCorrectedAssets)
       nextCorrectedAssets.delete(asset.id)
@@ -1203,6 +1250,9 @@
   let layoutOtherVersion = $derived(
     staleLayout && staleLayout.assetId === selectedAssetId ? staleLayout : null
   )
+  let textOtherVersion = $derived(
+    staleText && staleText.assetId === selectedAssetId ? staleText : null
+  )
   let textPanelOcrState = $derived(
     selectedAsset && selectedAsset.type !== 'audio' ? getOcrState(selectedAsset.id) : null
   )
@@ -1355,11 +1405,13 @@
       nextEditedText.set(asset.id, result.textContent)
       ocrEditedText = nextEditedText
       ocrStore.setTextContent(asset.id, result.textContent)
+      ocrTextEditedByHand.set(asset.id, false)
       ocrTick++
       layoutBoxDraft = null
       scheduleAssetReanalysis(asset.id)
 
       await reloadLayoutForAsset(asset)
+      void reloadTextVersionForAsset(asset)
       const editedBlockId = layoutBlockIdForIndex(result.blockIndex)
       setSelectedLayoutBlock(editedBlockId)
       const editedBlock = findLayoutBlockById(layoutBlocks, editedBlockId)
@@ -1449,7 +1501,8 @@
 
   // ── Image editing handlers ────────────────────────────────────────────
 
-  function viewerPageKey(assetId: string, page: number) {
+  /** `page` empty: the prefix every page key of the asset starts with. */
+  function viewerPageKey(assetId: string, page: number | '') {
     return `${assetId}\u0000${page}`
   }
 
@@ -1478,9 +1531,62 @@
 
   async function notifyViewerEdit(assetId: string, path: string) {
     try {
-      await emit('asset:image-updated', createImageUpdatedPayload({ itemId, assetId, path }))
+      await emit(
+        'asset:image-updated',
+        createImageUpdatedPayload({ itemId, assetId, path, sourceId: viewInstanceId })
+      )
     } catch (e) {
       console.warn('[ItemView] Failed to emit asset:image-updated event:', e)
+    }
+  }
+
+  /**
+   * Another pane edited an asset this one shows. Its path here is now an old
+   * version and its undo history leads to files that are no longer the previous
+   * ones, so both are dropped and the asset list is read again. The pane that
+   * made the edit never gets here: it already holds the new state.
+   */
+  async function handleImageUpdatedElsewhere(payload: ImageUpdatedPayload) {
+    if (
+      !isImageUpdateFromAnotherView(payload, {
+        sourceId: viewInstanceId,
+        assetIds: assets.map((asset) => asset.id),
+      })
+    ) {
+      return
+    }
+    const { assetId } = payload
+    const reloadedItemId = itemId
+    const requestToken = externalEditLoadGuard.next()
+
+    // Dropped before the read, so an undo cannot slip in while it is in flight.
+    const { [assetId]: _staleHistory, ...otherHistories } = editHistories
+    editHistories = otherHistories
+    const pageKeyPrefix = viewerPageKey(assetId, '')
+    for (const key of [...viewerPageStates.keys()]) {
+      if (key.startsWith(pageKeyPrefix)) viewerPageStates.delete(key)
+    }
+    // A pending save would write annotations placed on the old version over
+    // the ones the other pane just stored for the new one.
+    if (annotationPersistor.getPendingAssetId() === assetId) annotationPersistor.cancelAll()
+
+    try {
+      const loadedAssets = visibleAssets(await getStore().assets.findByItem(reloadedItemId))
+      // A newer event owns the reload; a navigation owns the whole view.
+      if (!externalEditLoadGuard.isCurrent(requestToken) || itemId !== reloadedItemId) return
+
+      const keptAssetId = selectedAssetId
+      assets = loadedAssets
+      const keptIndex = loadedAssets.findIndex((asset) => asset.id === keptAssetId)
+      selectedAssetIndex =
+        keptIndex >= 0 ? keptIndex : Math.min(selectedAssetIndex, Math.max(0, assets.length - 1))
+      if (keptAssetId === assetId) {
+        editTool = 'none'
+        imageVersion++
+        externalEditEpoch++
+      }
+    } catch (e) {
+      console.warn('[ItemView] Failed to reload after an edit in another pane:', e)
     }
   }
 
@@ -1577,6 +1683,7 @@
   $effect(() => {
     void selectedAssetId
     editError = null
+    pendingOcrRerun = null
   })
 
   function rotateAnnotationsByQuarterTurns(
@@ -1842,6 +1949,37 @@
   }
 
   /**
+   * Every OCR the person asks for in this view goes through here. It replaces
+   * the text, so when the text carries corrections made by hand the person is
+   * asked first; nothing starts until they accept.
+   */
+  function requestExtractText(asset: Asset, mode: OcrMode = 'light'): void | Promise<void> {
+    const editedByHand = ocrTextEditedByHand.get(asset.id) ?? false
+    if (typeof editedByHand === 'boolean') return startOrConfirmOcr(asset, mode, editedByHand)
+    // Clicked before the history answered: wait for it rather than guess.
+    return editedByHand.then((edited) => {
+      if (selectedAssetId === asset.id) return startOrConfirmOcr(asset, mode, edited)
+    })
+  }
+
+  function startOrConfirmOcr(asset: Asset, mode: OcrMode, editedByHand: boolean) {
+    if (editedByHand) {
+      pendingOcrRerun = { assetId: asset.id, mode }
+      return
+    }
+    return handleExtractText(asset, mode)
+  }
+
+  async function confirmOcrRerun() {
+    const pending = pendingOcrRerun
+    pendingOcrRerun = null
+    // The asset as it is now: its path may have changed while the dialog was open.
+    const asset = selectedAsset
+    if (!pending || !asset || asset.id !== pending.assetId) return
+    await handleExtractText(asset, pending.mode)
+  }
+
+  /**
    * Computes the layout of the image on screen again, with the same OCR
    * action the Text tab offers. The new layout replaces the stale one.
    */
@@ -1849,7 +1987,15 @@
     const asset = selectedAsset
     const stale = layoutOtherVersion
     if (!asset || !stale) return
-    void handleExtractText(asset, layoutRerunMode(stale.model, LOCAL_ML))
+    void requestExtractText(asset, layoutRerunMode(stale.model, LOCAL_ML))
+  }
+
+  /** Reads the text of the image on screen again, with the engine that read the stale one. */
+  function rerunStaleText() {
+    const asset = selectedAsset
+    const stale = textOtherVersion
+    if (!asset || !stale) return
+    void requestExtractText(asset, layoutRerunMode(stale.method, LOCAL_ML))
   }
 
   async function handleTranscribeAudio(asset: Asset) {
@@ -2806,7 +2952,35 @@
     }
   }
 
+  /**
+   * Whether the stored text of this asset was read from the file it shows now.
+   * Only images are checked; a text with no stamp, or a file that cannot be
+   * read, says nothing.
+   */
+  async function reloadTextVersionForAsset(asset: Asset | null) {
+    const requestToken = textVersionLoadGuard.next()
+    if (!asset || asset.type !== 'image') {
+      staleText = null
+      return
+    }
+    try {
+      const extraction = await getStore().extractions.findByAsset(asset.id)
+      if (!textVersionLoadGuard.isCurrent(requestToken)) return
+      // Never throws, and reads the file only for a stamped text.
+      const check = extraction ? await checkExtractionVersion(asset, extraction) : 'matches'
+      if (!textVersionLoadGuard.isCurrent(requestToken)) return
+      staleText =
+        extraction && check === 'other_version'
+          ? { assetId: asset.id, method: extraction.method }
+          : null
+    } catch {
+      if (textVersionLoadGuard.isCurrent(requestToken)) staleText = null
+    }
+  }
+
   $effect(() => {
+    // Another pane's edit replaced what this page shows: read it again.
+    void externalEditEpoch
     const currentAssetId = selectedAssetId
     const asset = untrack(() => selectedAsset)
     const switchedAsset = currentAssetId !== lastSelectedAssetId
@@ -2960,6 +3134,12 @@
     void reloadLayoutForAsset(selectedAsset)
   })
 
+  // Keyed on the asset object: an edit swaps it for one with the new path, and
+  // the text then belongs, or stops belonging, to the file on screen.
+  $effect(() => {
+    void reloadTextVersionForAsset(selectedAsset)
+  })
+
   $effect(() => {
     const nextState = pruneLayoutInteractionSelectionState(visibleLayoutBlocks, {
       selectedBlockId: layoutSelectedBlockId,
@@ -2997,6 +3177,8 @@
 
     // Reload notes for this asset (plus item-level notes)
     void refreshNotesForAsset(asset)
+
+    if (asset.type !== 'audio') loadOcrTextEditedByHand(asset.id)
 
     // Load existing extraction text for this asset
     const store = getStore()
@@ -3235,9 +3417,34 @@
     return () => window.removeEventListener(DOCUMENT_ASSET_DELETED_EVENT, handleAssetDeleted)
   })
 
+  onMount(() => {
+    // The same document can be open in two panes of the split view. Only the
+    // collection view used to hear about an edit; the other pane kept editing
+    // from the path it had loaded.
+    let disposed = false
+    let unlisten: (() => void) | null = null
+    listen<ImageUpdatedPayload>('asset:image-updated', (event) => {
+      if (disposed) return
+      void handleImageUpdatedElsewhere(event.payload)
+    })
+      .then((stop) => {
+        if (disposed) stop()
+        else unlisten = stop
+      })
+      .catch((e: unknown) => {
+        console.warn('[ItemView] Failed to subscribe to asset:image-updated:', e)
+      })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  })
+
   onDestroy(() => {
     itemLoadGuard.invalidate()
     layoutLoadGuard.invalidate()
+    textVersionLoadGuard.invalidate()
+    externalEditLoadGuard.invalidate()
     notesLoadGuard.invalidate()
     selectedAssetStateLoadGuard.invalidate()
     entitiesLoadGuard.invalidate()
@@ -3587,6 +3794,17 @@
           </div>
 
           <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'text'}>
+            {#if textOtherVersion}
+              <OtherVersionNotice
+                testId="text-version-notice"
+                message={translate('item.textOtherVersion')}
+                actionLabel={translate('item.textRerun')}
+                busy={textPanelOcrState?.status === 'pending' ||
+                  textPanelOcrState?.status === 'running'}
+                busyTitle={translate('item.ocrHighBusyTitle')}
+                onRerun={rerunStaleText}
+              />
+            {/if}
             <ItemTextPanel
               {selectedAsset}
               assetsCount={assets.length}
@@ -3608,7 +3826,7 @@
               currentSummary={textPanelCurrentSummary}
               isSummarizing={textPanelIsSummarizing}
               {translate}
-              onExtractText={handleExtractText}
+              onExtractText={requestExtractText}
               onCorrectOcr={handleLlmCorrectOcr}
               onSummarize={handleLlmSummarize}
               onTranscribeAudio={handleTranscribeAudio}
@@ -3617,6 +3835,7 @@
                   return
                 ocrEditedText.set(assetId, value)
                 ocrStore.setTextContent(assetId, value)
+                ocrTextEditedByHand.set(assetId, true)
                 schedulePersist(assetId, value)
                 ocrTick++
               }}
@@ -3724,6 +3943,17 @@
       {documentViewerLabels}
       loadFullText={loadSimilarAssetFullText}
       onclose={closeSimilarAssetPreview}
+    />
+  {/if}
+
+  {#if pendingOcrRerun && pendingOcrRerun.assetId === selectedAssetId}
+    <ConfirmDialog
+      title={translate('item.textRerun')}
+      message={translate('item.reocrWarning')}
+      cancelLabel={translate('collections.cancel')}
+      confirmLabel={translate('item.textRerun')}
+      oncancel={() => (pendingOcrRerun = null)}
+      onconfirm={confirmOcrRerun}
     />
   {/if}
 {/if}

@@ -11,6 +11,7 @@ import { DOCUMENT_ASSET_DELETED_EVENT } from '$lib/document-explorer'
 
 const {
   nlpEventHandlers,
+  tauriListeners,
   embedAssetMock,
   extractEntitiesForAssetMock,
   indexFtsMock,
@@ -35,6 +36,8 @@ const {
   deleteAssetFileMock,
 } = vi.hoisted(() => ({
   nlpEventHandlers: new Map<string, (event: { payload: unknown }) => void>(),
+  // Every live subscription, per event: two views on screen both listen.
+  tauriListeners: new Map<string, Set<(event: { payload: unknown }) => void>>(),
   embedAssetMock: vi.fn<(_: string, __: string) => Promise<void>>(),
   extractEntitiesForAssetMock: vi.fn<(_: string, __: string) => Promise<void>>(),
   indexFtsMock: vi.fn<(_: string) => Promise<void>>(),
@@ -170,7 +173,10 @@ type StoreOptions = {
     }
   >
   annotationsByAsset?: Record<string, AnnotationRow[]>
-  extractionsByAsset?: Record<string, { textContent: string; method?: string }>
+  extractionsByAsset?: Record<
+    string,
+    { textContent: string; method?: string; sourcePath?: string; sourceSha256?: string }
+  >
   transcriptionsByAsset?: Record<
     string,
     {
@@ -268,7 +274,12 @@ function createStore({
       findByAsset: vi.fn().mockImplementation(async (assetId: string) => {
         const extraction = extractionsByAsset[assetId]
         return extraction
-          ? { textContent: extraction.textContent, method: extraction.method ?? 'light' }
+          ? {
+              textContent: extraction.textContent,
+              method: extraction.method ?? 'light',
+              sourcePath: extraction.sourcePath ?? null,
+              sourceSha256: extraction.sourceSha256 ?? null,
+            }
           : null
       }),
       deleteByAsset: vi.fn().mockResolvedValue(undefined),
@@ -407,7 +418,10 @@ vi.mock('$lib/llm', async () => {
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn((eventName: string, callback: (event: { payload: unknown }) => void) => {
     nlpEventHandlers.set(eventName, callback)
-    return Promise.resolve(vi.fn())
+    const listeners = tauriListeners.get(eventName) ?? new Set()
+    listeners.add(callback)
+    tauriListeners.set(eventName, listeners)
+    return Promise.resolve(vi.fn(() => listeners.delete(callback)))
   }),
   emit: emitMock,
 }))
@@ -535,6 +549,7 @@ beforeEach(() => {
   llmCanRestoreOriginalOcrAssetMock.mockReset().mockResolvedValue(false)
   llmRestoreOriginalOcrAssetMock.mockReset().mockResolvedValue('OCR original')
   emitMock.mockReset().mockResolvedValue(undefined)
+  tauriListeners.clear()
   duplicateAssetFileMock.mockReset()
   deleteAssetFileMock.mockReset().mockResolvedValue(undefined)
   extractEntitiesForAssetMock.mockReset().mockResolvedValue(undefined)
@@ -6341,5 +6356,336 @@ describe('ItemView Escape behavior', () => {
     expect(metaRule).toMatch(/overflow:\s*hidden;/)
     expect(metaRule).toMatch(/text-overflow:\s*ellipsis;/)
     expect(metaRule).toMatch(/white-space:\s*nowrap;/)
+  })
+})
+
+describe('ItemView text of another version of the image', () => {
+  const imageAsset = {
+    id: 'asset-image-1',
+    itemId: 'item-1',
+    path: 'docs/photo-a.jpg',
+    type: 'image' as const,
+    createdAt: 1,
+  }
+  const WARNING =
+    'Este texto se extrajo de otra versión de la imagen. Puede no coincidir con lo que ves.'
+  const notice = () => screen.queryByTestId('text-version-notice')
+  const ocrText = () => document.querySelector('textarea.ocr-textarea')
+  const fileWithSha = (sha256: string) => ({ orientation: 1, width: 1000, height: 1400, sha256 })
+
+  beforeEach(() => {
+    nlpEventHandlers.clear()
+    getLayoutByAssetMock.mockReset().mockResolvedValue(null)
+    extractTextMock.mockReset().mockResolvedValue(undefined)
+    similarAssetsMock.mockReset().mockResolvedValue([])
+    assetFileFactsMock.mockReset()
+  })
+
+  async function openTextTab(
+    asset: typeof imageAsset | (Omit<typeof imageAsset, 'type'> & { type: 'pdf' }),
+    extraction: { textContent: string; method?: string; sourceSha256?: string }
+  ) {
+    storeRef.current = createStore({
+      assetsRows: [asset],
+      extractionsByAsset: { [asset.id]: extraction },
+    })
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(await screen.findByRole('tab', { name: 'Texto' }))
+    await waitFor(() => {
+      expect(ocrText()).toHaveValue(extraction.textContent)
+    })
+  }
+
+  it('warns, and keeps the text, when it was extracted from another file', async () => {
+    assetFileFactsMock.mockResolvedValue(fileWithSha('sha-edited'))
+    await openTextTab(imageAsset, {
+      textContent: 'Texto corregido',
+      method: 'paddle_vl',
+      sourceSha256: 'sha-original',
+    })
+
+    await waitFor(() => {
+      expect(notice()).toHaveTextContent(WARNING)
+    })
+    expect(assetFileFactsMock).toHaveBeenCalledWith('asset-image-1', { withSha: true })
+    expect(ocrText()).toHaveValue('Texto corregido')
+    expect(storeRef.current.extractions.deleteByAsset).not.toHaveBeenCalled()
+
+    await fireEvent.click(within(notice()!).getByRole('button', { name: 'Volver a correr el OCR' }))
+    await waitFor(() => {
+      expect(extractTextMock).toHaveBeenCalledWith(
+        'asset-image-1',
+        'docs/photo-a.jpg',
+        'image',
+        LOCAL_ML ? 'light' : 'high'
+      )
+    })
+  })
+
+  it('stops warning once a new OCR has read the current file', async () => {
+    assetFileFactsMock.mockResolvedValue(fileWithSha('sha-edited'))
+    await openTextTab(imageAsset, { textContent: 'Texto viejo', sourceSha256: 'sha-original' })
+    await waitFor(() => {
+      expect(notice()).toBeInTheDocument()
+    })
+
+    storeRef.current.extractions.findByAsset.mockResolvedValue({
+      textContent: 'Texto nuevo',
+      method: 'paddle_vl',
+      sourcePath: 'docs/photo-a.jpg',
+      sourceSha256: 'sha-edited',
+    })
+    nlpEventHandlers.get('ocr:complete')?.({
+      payload: {
+        asset_id: 'asset-image-1',
+        method: 'paddle_vl',
+        text_length: 11,
+        text_content: 'Texto nuevo',
+      },
+    })
+
+    await waitFor(() => {
+      expect(notice()).not.toBeInTheDocument()
+    })
+  })
+
+  it('says nothing when the text was extracted from the file on screen', async () => {
+    assetFileFactsMock.mockResolvedValue(fileWithSha('sha-original'))
+    await openTextTab(imageAsset, { textContent: 'Texto', sourceSha256: 'sha-original' })
+
+    await waitFor(() => {
+      expect(assetFileFactsMock).toHaveBeenCalledWith('asset-image-1', { withSha: true })
+    })
+    expect(notice()).not.toBeInTheDocument()
+  })
+
+  it('says nothing, and hashes nothing, for a text with no stamp', async () => {
+    assetFileFactsMock.mockResolvedValue(fileWithSha('sha-edited'))
+    await openTextTab(imageAsset, { textContent: 'Texto sin origen' })
+
+    expect(notice()).not.toBeInTheDocument()
+    expect(assetFileFactsMock).not.toHaveBeenCalledWith('asset-image-1', { withSha: true })
+  })
+
+  it('never warns about a PDF, and never reads its file', async () => {
+    assetFileFactsMock.mockResolvedValue(fileWithSha('sha-edited'))
+    await openTextTab(
+      { ...imageAsset, id: 'asset-pdf-1', path: 'docs/acta.pdf', type: 'pdf' },
+      { textContent: 'Texto del PDF', sourceSha256: 'sha-of-some-other-file' }
+    )
+
+    expect(notice()).not.toBeInTheDocument()
+    expect(assetFileFactsMock).not.toHaveBeenCalled()
+  })
+
+  it('says nothing, and keeps the text, when the file cannot be read', async () => {
+    assetFileFactsMock.mockRejectedValue(new Error('Failed to read docs/photo-a.jpg'))
+    await openTextTab(imageAsset, { textContent: 'Texto', sourceSha256: 'sha-original' })
+
+    await waitFor(() => {
+      expect(assetFileFactsMock).toHaveBeenCalledWith('asset-image-1', { withSha: true })
+    })
+    expect(notice()).not.toBeInTheDocument()
+    expect(ocrText()).toHaveValue('Texto')
+  })
+
+  describe('running the OCR again over a text edited by hand', () => {
+    const CONFIRMATION =
+      'El texto tiene correcciones hechas a mano. Si volvés a correr el OCR, se reemplazan. ¿Continuar?'
+
+    function editedByHand(edited: boolean) {
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'extraction_is_edited_by_hand') return edited
+        if (command === 'llm_get_results') return []
+        if (command === 'llm_is_available') return true
+        if (command === 'db_select') return []
+        return null
+      })
+    }
+
+    it('asks first; cancelling starts nothing and leaves the text as it was', async () => {
+      editedByHand(true)
+      await openTextTab(imageAsset, { textContent: 'Texto corregido a mano' })
+
+      await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog).toHaveTextContent(CONFIRMATION)
+      expect(invokeMock).toHaveBeenCalledWith('extraction_is_edited_by_hand', {
+        assetId: 'asset-image-1',
+      })
+      expect(extractTextMock).not.toHaveBeenCalled()
+
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }))
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      })
+      expect(extractTextMock).not.toHaveBeenCalled()
+      expect(ocrText()).toHaveValue('Texto corregido a mano')
+      expect(screen.getByRole('button', { name: 'OCRH' })).toBeEnabled()
+    })
+
+    it('runs it once confirmed', async () => {
+      editedByHand(true)
+      await openTextTab(imageAsset, { textContent: 'Texto corregido a mano' })
+
+      await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+      const dialog = await screen.findByRole('dialog')
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Volver a correr el OCR' }))
+
+      await waitFor(() => {
+        expect(extractTextMock).toHaveBeenCalledWith(
+          'asset-image-1',
+          'docs/photo-a.jpg',
+          'image',
+          'high'
+        )
+      })
+      expect(extractTextMock).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+
+    it('does not ask when the text was not touched', async () => {
+      editedByHand(false)
+      await openTextTab(imageAsset, { textContent: 'Texto del OCR' })
+
+      await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+
+      await waitFor(() => {
+        expect(extractTextMock).toHaveBeenCalledWith(
+          'asset-image-1',
+          'docs/photo-a.jpg',
+          'image',
+          'high'
+        )
+      })
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+
+    it('asks about a correction typed just now, before the history knows of it', async () => {
+      editedByHand(false)
+      await openTextTab(imageAsset, { textContent: 'Texto del OCR' })
+
+      await fireEvent.input(ocrText()!, { target: { value: 'Texto del OCR, corregido' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+
+      expect(await screen.findByRole('dialog')).toHaveTextContent(CONFIRMATION)
+      expect(extractTextMock).not.toHaveBeenCalled()
+    })
+
+    it('asks from the notices too', async () => {
+      editedByHand(true)
+      assetFileFactsMock.mockResolvedValue(fileWithSha('sha-edited'))
+      await openTextTab(imageAsset, {
+        textContent: 'Texto corregido a mano',
+        sourceSha256: 'sha-original',
+      })
+      await waitFor(() => {
+        expect(notice()).toBeInTheDocument()
+      })
+
+      await fireEvent.click(
+        within(notice()!).getByRole('button', { name: 'Volver a correr el OCR' })
+      )
+
+      expect(await screen.findByRole('dialog')).toHaveTextContent(CONFIRMATION)
+      expect(extractTextMock).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('ItemView on the same asset in two panes', () => {
+  const imageAsset = {
+    id: 'asset-image-1',
+    itemId: 'item-1',
+    path: 'docs/photo-a.jpg',
+    type: 'image' as const,
+    createdAt: 1,
+  }
+
+  beforeEach(() => {
+    nlpEventHandlers.clear()
+    getLayoutByAssetMock.mockReset().mockResolvedValue(null)
+    similarAssetsMock.mockReset().mockResolvedValue([])
+    assetFileFactsMock
+      .mockReset()
+      .mockResolvedValue({ orientation: 1, width: 1000, height: 1400, sha256: null })
+  })
+
+  it('reloads the path and drops the stale history of the other pane, not of the one that edited', async () => {
+    storeRef.current = createStore({ assetsRows: [imageAsset] })
+    // The archive: every pane reads the path the last edit wrote.
+    let storedPath = imageAsset.path
+    storeRef.current.assets.findByItem.mockImplementation(async () => [
+      { ...imageAsset, path: storedPath },
+    ])
+    storeRef.current.assets.updatePath.mockImplementation(async (_id: string, path: string) => {
+      storedPath = path
+    })
+    let version = 1
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'rotate_image') {
+        version += 1
+        return { path: `docs/photo-a_v${version}.jpg`, width: 1400, height: 1000 }
+      }
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_is_available') return true
+      if (command === 'db_select') return []
+      return null
+    })
+    // Tauri delivers an emitted event to every listener, the emitter included.
+    emitMock.mockImplementation(async (eventName: string, payload?: unknown) => {
+      for (const listener of [...(tauriListeners.get(eventName) ?? [])]) listener({ payload })
+    })
+
+    const first = within(render(ItemView, { itemId: 'item-1', collectionId: 'col-1' }).container)
+    const second = within(render(ItemView, { itemId: 'item-1', collectionId: 'col-1' }).container)
+    const viewerOf = (pane: typeof first) => pane.getByTestId('mock-document-viewer')
+    const undoOf = (pane: typeof first) => pane.getByRole('button', { name: /undo edit/i })
+    await first.findByTestId('mock-document-viewer')
+    await second.findByTestId('mock-document-viewer')
+    await waitFor(() => {
+      expect(tauriListeners.get('asset:image-updated')?.size).toBe(2)
+    })
+
+    // The second pane edits: it owns a history, and the first one follows.
+    await fireEvent.click(second.getByRole('button', { name: /report image dimensions/i }))
+    await fireEvent.click(second.getByRole('button', { name: 'Rotate right' }))
+    await waitFor(() => {
+      expect(undoOf(second)).toBeEnabled()
+      expect(viewerOf(first)).toHaveAttribute('data-path', 'docs/photo-a_v2.jpg')
+    })
+    expect(viewerOf(second)).toHaveAttribute('data-path', 'docs/photo-a_v2.jpg')
+    expect(undoOf(first)).toBeDisabled()
+
+    // The first pane edits from the path it just reloaded, not from the old one.
+    await fireEvent.click(first.getByRole('button', { name: /report image dimensions/i }))
+    await fireEvent.click(first.getByRole('button', { name: 'Rotate right' }))
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('rotate_image', {
+        path: 'docs/photo-a_v2.jpg',
+        direction: 'right',
+      })
+      expect(undoOf(first)).toBeEnabled()
+      expect(viewerOf(second)).toHaveAttribute('data-path', 'docs/photo-a_v3.jpg')
+    })
+    // The second pane's undo would have restored a file that is no longer the
+    // previous version of what is on screen.
+    await waitFor(() => {
+      expect(undoOf(second)).toBeDisabled()
+    })
+    expect(undoOf(first)).toBeEnabled()
+    expect(viewerOf(first)).toHaveAttribute('data-path', 'docs/photo-a_v3.jpg')
+
+    // An edit of some other asset is nobody's business here.
+    const reads = storeRef.current.assets.findByItem.mock.calls.length
+    await emitMock('asset:image-updated', {
+      itemId: 'item-9',
+      assetId: 'asset-of-another-item',
+      path: 'docs/other_v2.jpg',
+    })
+    await Promise.resolve()
+    expect(storeRef.current.assets.findByItem.mock.calls.length).toBe(reads)
+    expect(undoOf(first)).toBeEnabled()
+    expect(viewerOf(first)).toHaveAttribute('data-path', 'docs/photo-a_v3.jpg')
   })
 })

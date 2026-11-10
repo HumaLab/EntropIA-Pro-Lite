@@ -2231,6 +2231,11 @@ const es = {
   'item.layoutRerun': 'Volver a correr el layout',
   'item.layoutVersionUnknown':
     'no se pudo leer el archivo de la imagen para comprobar a qué versión corresponde.',
+  'item.textOtherVersion':
+    'Este texto se extrajo de otra versión de la imagen. Puede no coincidir con lo que ves.',
+  'item.textRerun': 'Volver a correr el OCR',
+  'item.reocrWarning':
+    'El texto tiene correcciones hechas a mano. Si volvés a correr el OCR, se reemplazan. ¿Continuar?',
   'item.layoutHelp': 'Tocá o pasá el mouse sobre un bloque para resaltarlo en el viewer.',
   'item.layoutPageSelect': 'Seleccionar página del layout',
   'item.layoutShowing': 'Mostrando {visible} de {total} bloques.',
@@ -5362,6 +5367,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.layoutRerun': 'Run the layout again',
   'item.layoutVersionUnknown':
     'the image file could not be read to check which version it belongs to.',
+  'item.textOtherVersion':
+    'This text was extracted from another version of the image. It may not match what you see.',
+  'item.textRerun': 'Run the OCR again',
+  'item.reocrWarning':
+    'The text has manual corrections. Running the OCR again will replace them. Continue?',
   'item.layoutMissing': 'This page does not have persisted layout yet.',
   'item.layoutNoBlocks': 'Layout data exists, but it has no navigable blocks.',
   'item.layoutHelp': 'Tap or hover a block to highlight it in the viewer.',

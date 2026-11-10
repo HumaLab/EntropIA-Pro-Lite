@@ -361,6 +361,26 @@ pub async fn test_glm_ocr_connection(
         .await
 }
 
+/// Read the manual-edit signal of an asset's OCR text without changing it.
+///
+/// A user-requested OCR replaces the text even when it was corrected by hand
+/// (only the automatic one skips it), so the item view asks first.
+#[tauri::command]
+pub async fn extraction_is_edited_by_hand(
+    asset_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<bool, String> {
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock poisoned: {e}"))?;
+        crate::asset_history::text_is_edited_by_hand(&conn, &asset_id)
+    })
+    .await
+}
+
 /// Update the text_content of the latest extraction for an asset.
 ///
 /// This allows users to manually correct OCR output and persist the correction.

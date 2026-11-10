@@ -1599,6 +1599,7 @@ pub fn run() {
             ocr::commands::edit_pdf,
             ocr::commands::test_glm_ocr_connection,
             ocr::commands::update_extraction_text_cmd,
+            ocr::commands::extraction_is_edited_by_hand,
             ocr::block_reocr::reocr_layout_block,
             derived_source::asset_file_facts,
             asset_history::asset_history_record,
