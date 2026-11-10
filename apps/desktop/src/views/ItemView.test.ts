@@ -4119,7 +4119,7 @@ describe('ItemView image annotations', () => {
           'docs/photo-a_v2.jpg'
         )
         expect(notice()).toHaveTextContent(
-          'Este layout corresponde a otra versión de la imagen (1000×1400); la actual mide 500×560. Volvé a correr el layout.'
+          'Este layout corresponde a otra versión de la imagen (1000×1400); la actual mide 500×560.'
         )
       })
       expect(drawnBoxes()).toBe('0')
@@ -4191,8 +4191,7 @@ describe('ItemView image annotations', () => {
         }
         return tauriDefaults(command)
       })
-      const sizeless =
-        'Este layout corresponde a otra versión de la imagen. Volvé a correr el layout.'
+      const sizeless = 'Este layout corresponde a otra versión de la imagen.'
 
       render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
       await screen.findByTestId('mock-document-viewer')
@@ -4247,7 +4246,7 @@ describe('ItemView image annotations', () => {
 
       await waitFor(() => {
         expect(notice()).toHaveTextContent(
-          'Este layout corresponde a otra versión de la imagen (1000×1400); la actual mide 3456×4608. Volvé a correr el layout.'
+          'Este layout corresponde a otra versión de la imagen (1000×1400); la actual mide 3456×4608.'
         )
       })
       expect(drawnBoxes()).toBe('0')
@@ -4309,9 +4308,7 @@ describe('ItemView image annotations', () => {
       await screen.findByTestId('mock-document-viewer')
 
       await waitFor(() => {
-        expect(notice()).toHaveTextContent(
-          'Este layout corresponde a otra versión de la imagen. Volvé a correr el layout.'
-        )
+        expect(notice()).toHaveTextContent('Este layout corresponde a otra versión de la imagen.')
       })
       expect(notice()).not.toHaveTextContent('1000×1400')
       expect(drawnBoxes()).toBe('0')
