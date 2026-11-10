@@ -700,7 +700,7 @@
       "type": "table",
       "name": "extractions",
       "tbl_name": "extractions",
-      "sql": "CREATE TABLE extractions (\n  id TEXT PRIMARY KEY,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  text_content TEXT NOT NULL,\n  method TEXT NOT NULL,\n  confidence REAL,\n  created_at INTEGER NOT NULL\n)"
+      "sql": "CREATE TABLE extractions (\n  id TEXT PRIMARY KEY,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  text_content TEXT NOT NULL,\n  method TEXT NOT NULL,\n  confidence REAL,\n  created_at INTEGER NOT NULL\n, source_path TEXT, source_sha256 TEXT)"
     },
     {
       "type": "table",
@@ -754,7 +754,7 @@
       "type": "table",
       "name": "layouts",
       "tbl_name": "layouts",
-      "sql": "CREATE TABLE layouts (\n      id TEXT PRIMARY KEY,\n      asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n      regions TEXT NOT NULL,\n      blocks TEXT NOT NULL DEFAULT '[]',\n      model TEXT NOT NULL,\n      image_width INTEGER NOT NULL,\n      image_height INTEGER NOT NULL,\n      created_at INTEGER NOT NULL\n    )"
+      "sql": "CREATE TABLE layouts (\n      id TEXT PRIMARY KEY,\n      asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n      regions TEXT NOT NULL,\n      blocks TEXT NOT NULL DEFAULT '[]',\n      model TEXT NOT NULL,\n      image_width INTEGER NOT NULL,\n      image_height INTEGER NOT NULL,\n      created_at INTEGER NOT NULL\n    , source_path TEXT, source_sha256 TEXT)"
     },
     {
       "type": "table",
@@ -3536,6 +3536,24 @@
           "dflt_value": null,
           "pk": 0,
           "hidden": 0
+        },
+        {
+          "cid": 6,
+          "name": "source_path",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 7,
+          "name": "source_sha256",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
         }
       ],
       "foreign_keys": [
@@ -4008,6 +4026,24 @@
           "name": "created_at",
           "type": "INTEGER",
           "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 8,
+          "name": "source_path",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 9,
+          "name": "source_sha256",
+          "type": "TEXT",
+          "notnull": 0,
           "dflt_value": null,
           "pk": 0,
           "hidden": 0
@@ -11488,6 +11524,7 @@
     "0060_processing_ocr_correction_summary_tasks",
     "0061_asset_process_events",
     "0062_triple_evidence",
-    "0063_collection_ai_context"
+    "0063_collection_ai_context",
+    "0064_derived_source_path"
   ]
 }

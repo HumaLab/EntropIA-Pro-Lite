@@ -25,8 +25,12 @@ pub mod deps;
 #[cfg(not(feature = "local-ml"))]
 #[path = "deps/mod_lite.rs"]
 pub mod deps;
+mod derived_source;
 mod geo;
 mod image_edit;
+mod image_orient;
+mod image_version_repair;
+mod image_versions;
 mod instance_guard;
 mod internet_archive;
 mod llm;
@@ -1597,7 +1601,12 @@ pub fn run() {
             ocr::commands::edit_pdf,
             ocr::commands::test_glm_ocr_connection,
             ocr::commands::update_extraction_text_cmd,
+            ocr::commands::extraction_is_edited_by_hand,
             ocr::block_reocr::reocr_layout_block,
+            derived_source::asset_file_facts,
+            image_versions::list_image_versions,
+            image_version_repair::scan_image_version_repairs,
+            image_version_repair::apply_image_version_repairs,
             asset_history::asset_history_record,
             ocr::commands::generate_pdf_thumbnail,
             ocr::commands::generate_image_thumbnail,

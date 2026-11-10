@@ -15,6 +15,7 @@ export type RendererProcess =
   | 'pdf_rotate'
   | 'image_undo'
   | 'image_redo'
+  | 'image_use_version'
   | 'duplicate'
 
 export interface RendererProcessReport {

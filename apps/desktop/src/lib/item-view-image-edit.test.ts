@@ -4,6 +4,7 @@ import {
   cloneViewerAnnotations,
   createImageEditUndoEntry,
   createImageUpdatedPayload,
+  isImageUpdateFromAnotherView,
   discardLatestImageEditUndoEntry,
   getLatestImageEditUndoEntry,
   updateAssetPathInList,
@@ -95,5 +96,22 @@ describe('item view image edit helpers', () => {
     expect(
       createImageUpdatedPayload({ itemId: 'item-1', assetId: 'asset-1', path: '/new.png' })
     ).toEqual({ itemId: 'item-1', assetId: 'asset-1', path: '/new.png' })
+  })
+
+  it('tells an edit made by another view from its own, and from one of an asset it does not show', () => {
+    const view = { sourceId: 'view-a', assetIds: ['asset-1', 'asset-2'] }
+    const payload = createImageUpdatedPayload({
+      itemId: 'item-1',
+      assetId: 'asset-1',
+      path: '/new.png',
+      sourceId: 'view-b',
+    })
+
+    expect(payload.sourceId).toBe('view-b')
+    expect(isImageUpdateFromAnotherView(payload, view)).toBe(true)
+    expect(isImageUpdateFromAnotherView({ ...payload, sourceId: 'view-a' }, view)).toBe(false)
+    expect(isImageUpdateFromAnotherView({ ...payload, assetId: 'asset-9' }, view)).toBe(false)
+    // An emitter that does not say who it is (an older one) is never "this view".
+    expect(isImageUpdateFromAnotherView({ ...payload, sourceId: undefined }, view)).toBe(true)
   })
 })

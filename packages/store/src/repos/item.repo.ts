@@ -247,6 +247,10 @@ const FTS_FILTER_SQL = 'i.rowid IN (SELECT f.rowid FROM fts_items f WHERE fts_it
  * The card summary projection shared by the full-collection query, the
  * paginated query, and the two sibling queries. Kept in one place so a change
  * to what a card shows cannot drift between the four callers.
+ *
+ * The `ORDER BY` that picks the primary asset is mirrored by
+ * `AssetRepo.primaryOf`, which the viewer uses to open on the same asset.
+ * Change them together; `item.repo.test.ts` runs both over the same rows.
  */
 const CARD_SUMMARY_SOURCE_SQL = `
         SELECT
@@ -303,7 +307,8 @@ const CARD_SUMMARY_SOURCE_SQL = `
               ELSE 2
             END,
             p.sort_index ASC,
-            p.created_at ASC
+            p.created_at ASC,
+            p.id ASC
           LIMIT 1
         )`
 

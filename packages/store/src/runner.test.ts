@@ -3284,3 +3284,143 @@ describe('batch OCR correction and summary tasks migration (0060)', () => {
     }
   })
 })
+
+describe('derived source path migration (0064)', () => {
+  const MIGRATION_0064 = '0064_derived_source_path'
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  const columnsOf = (db: DatabaseSync, table: string) =>
+    db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .map((column) => ({ name: column.name, type: column.type, notnull: column.notnull }))
+
+  /** An archive with every migration but 0064, holding one layout and one extraction. */
+  const archiveAt0063 = async (db: DatabaseSync) => {
+    db.exec(`PRAGMA foreign_keys=ON;
+      CREATE TABLE _migrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at INTEGER NOT NULL);
+      INSERT INTO _migrations (name, applied_at) VALUES ('${MIGRATION_0064}', 1);`)
+    await applyMigrations(shim(db))
+    db.exec(`DELETE FROM _migrations WHERE name = '${MIGRATION_0064}';
+      INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'Collection', 0, 0);
+      INSERT INTO items (id, title, collection_id, created_at, updated_at) VALUES ('i1', 'Item', 'c1', 0, 0);
+      INSERT INTO assets (id, item_id, path, type, created_at) VALUES ('a1', 'i1', 'assets/a.jpg', 'image', 0);
+      INSERT INTO layouts (id, asset_id, regions, blocks, model, image_width, image_height, created_at)
+        VALUES ('lay-a1', 'a1', '[]', '[]', 'glm_ocr', 30, 40, 5);
+      INSERT INTO extractions (id, asset_id, text_content, method, confidence, created_at)
+        VALUES ('ext-a1', 'a1', 'texto', 'ocr', 0.5, 6);`)
+  }
+
+  it('adds two nullable text columns to layouts and extractions on an archive at 0063', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await archiveAt0063(db)
+      expect(columnsOf(db, 'layouts').map((column) => column.name)).not.toContain('source_path')
+      expect(columnsOf(db, 'extractions').map((column) => column.name)).not.toContain('source_path')
+
+      await applyMigrations(shim(db))
+
+      for (const table of ['layouts', 'extractions']) {
+        expect(columnsOf(db, table).slice(-2), table).toEqual([
+          { name: 'source_path', type: 'TEXT', notnull: 0 },
+          { name: 'source_sha256', type: 'TEXT', notnull: 0 },
+        ])
+      }
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM _migrations WHERE name = ?').get(MIGRATION_0064)?.n
+      ).toBe(1)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps the rows written before it, with an unknown source', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await archiveAt0063(db)
+
+      await applyMigrations(shim(db))
+
+      expect({ ...db.prepare('SELECT * FROM layouts').get() }).toEqual({
+        id: 'lay-a1',
+        asset_id: 'a1',
+        regions: '[]',
+        blocks: '[]',
+        model: 'glm_ocr',
+        image_width: 30,
+        image_height: 40,
+        created_at: 5,
+        source_path: null,
+        source_sha256: null,
+      })
+      expect({ ...db.prepare('SELECT * FROM extractions').get() }).toEqual({
+        id: 'ext-a1',
+        asset_id: 'a1',
+        text_content: 'texto',
+        method: 'ocr',
+        confidence: 0.5,
+        created_at: 6,
+        source_path: null,
+        source_sha256: null,
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('is skipped by a second run', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await archiveAt0063(db)
+      await applyMigrations(shim(db))
+      const before = [columnsOf(db, 'layouts'), columnsOf(db, 'extractions')]
+
+      await applyMigrations(shim(db))
+
+      expect([columnsOf(db, 'layouts'), columnsOf(db, 'extractions')]).toEqual(before)
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM _migrations WHERE name = ?').get(MIGRATION_0064)?.n
+      ).toBe(1)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('leaves the source unknown for a writer that does not name the columns', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await archiveAt0063(db)
+      await applyMigrations(shim(db))
+
+      db.prepare(
+        `INSERT INTO layouts (id, asset_id, regions, blocks, model, image_width, image_height, created_at)
+         VALUES ('lay-new', 'a1', '[1]', '[1]', 'glm_ocr', 30, 40, 9)
+         ON CONFLICT(asset_id) DO UPDATE SET blocks = excluded.blocks, created_at = excluded.created_at`
+      ).run()
+
+      expect({
+        ...db.prepare('SELECT blocks, source_path, source_sha256 FROM layouts').get(),
+      }).toEqual({ blocks: '[1]', source_path: null, source_sha256: null })
+    } finally {
+      db.close()
+    }
+  })
+})

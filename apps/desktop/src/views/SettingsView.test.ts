@@ -332,6 +332,27 @@ describe('SettingsView', () => {
     expect(screen.getByRole('button', { name: 'Tipografía Académica' })).toBeInTheDocument()
   })
 
+  it('opens the Mantenimiento tab, in Pro and in Lite, on the image versions review', async () => {
+    render(SettingsView)
+
+    const tabs = (await screen.findAllByRole('tab')).map((tab) => tab.textContent?.trim())
+    // After Copias; Apariencia stays last.
+    expect(tabs.indexOf('Mantenimiento')).toBe(tabs.indexOf('Copias') + 1)
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Mantenimiento' }))
+
+    expect(screen.getByRole('tab', { name: 'Mantenimiento' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(
+      screen.getByRole('heading', { name: 'Revisar versiones de imágenes' })
+    ).toBeInTheDocument()
+    // Opening the tab reviews nothing: the review starts on its button.
+    expect(screen.getByRole('button', { name: 'Revisar' })).toBeInTheDocument()
+    expect(invokeMock).not.toHaveBeenCalledWith('scan_image_version_repairs')
+  })
+
   it.runIf(LOCAL_ML)(
     'exposes the LLM mode, embedding provider, STT and OCR-H local selectors',
     async () => {

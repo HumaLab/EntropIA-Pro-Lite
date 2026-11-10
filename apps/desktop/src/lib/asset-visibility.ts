@@ -50,3 +50,22 @@ export function visibleAssets<T extends AssetLike>(assets: T[]): T[] {
 export function firstVisibleAsset<T extends AssetLike>(assets: T[]): T | null {
   return visibleAssets(assets)[0] ?? null
 }
+
+/**
+ * Where in the shown assets a viewer should open, given the asset the item's
+ * collection card shows (`AssetRepo.primaryOf`).
+ *
+ * The card shows a root asset. When that asset is itself shown, the viewer
+ * opens on it; when it is a hidden container, on its first page. Without a
+ * usable card asset the viewer opens on the first one.
+ */
+export function openingAssetIndex<T extends AssetLike>(
+  shown: T[],
+  cardAsset: AssetLike | null
+): number {
+  if (!cardAsset) return 0
+  const index = shown.findIndex(
+    (asset) => asset.id === cardAsset.id || asset.parentAssetId === cardAsset.id
+  )
+  return Math.max(index, 0)
+}

@@ -54,6 +54,7 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview'
   import { listen } from '@tauri-apps/api/event'
+  import { AssetRepo } from '@entropia/store'
   import type { Item, Asset, CollectionItemCardSummary, CollectionStats } from '@entropia/store'
   import type { CollectionAnalysisRestore } from '$lib/relation-graph-view-state'
 
@@ -393,10 +394,6 @@
       try {
         const assets: Asset[] = await store.assets.findByItem(itemId)
         if (requestId !== itemAssetsLoadRequestId) return
-        // Generated PDF page images are not independent collection assets. A
-        // parent PDF remains the deletion target even though its children are
-        // also image assets.
-        const rootAssets = assets.filter((asset) => !asset.parentAssetId)
         // The asset count reflects viewable assets (pages/leaves). A parent that
         // owns page children is a container, not a counted asset — its children
         // are. Standalone assets (no children) count themselves.
@@ -411,10 +408,14 @@
         const pdfPageCount = leafAssets.filter((a) => a.type === 'pdf').length
         const imageCount = leafAssets.filter((a) => a.type === 'image').length
         const audioCount = leafAssets.filter((a) => a.type === 'audio').length
-        const imageAsset = rootAssets.find((a) => a.type === 'image')
+        // Same rule as the card summary query and the viewer's opening asset.
+        // It is always a root asset: generated PDF page images are not
+        // independent collection assets.
+        const primaryAsset = AssetRepo.primaryOf(assets)
+        const imageAsset = primaryAsset?.type === 'image' ? primaryAsset : undefined
         // A PDF card shows its first page; ItemCard keeps the PDF icon until the
         // thumbnail arrives, or for good when Pdfium cannot render it.
-        const pdfAsset = rootAssets.find((a) => a.type === 'pdf')
+        const pdfAsset = primaryAsset?.type === 'pdf' ? primaryAsset : undefined
 
         let thumbnailUrl: string | null = null
         let primaryAssetType: string | null = null
@@ -432,7 +433,7 @@
           })
           primaryAssetType = pdfAsset.type
         } else {
-          const thumbAsset = rootAssets[0]
+          const thumbAsset = primaryAsset
           const isAudio = thumbAsset?.type === 'audio'
           thumbnailUrl = !isAudio && thumbAsset ? getAssetUrl(thumbAsset.path) : null
           primaryAssetType = thumbAsset?.type ?? null
@@ -444,8 +445,8 @@
           imageCount,
           audioCount,
           thumbnailUrl,
-          primaryAssetId: imageAsset?.id ?? pdfAsset?.id ?? rootAssets[0]?.id ?? null,
-          primaryAssetPath: imageAsset?.path ?? pdfAsset?.path ?? rootAssets[0]?.path ?? null,
+          primaryAssetId: primaryAsset?.id ?? null,
+          primaryAssetPath: primaryAsset?.path ?? null,
           primaryAssetType,
         })
       } catch (e) {

@@ -14,6 +14,7 @@ use tauri::AppHandle;
 
 use super::scheduler::{ClaimedTask, ExecCtx, ExecOutput, ExecResult, Executor, StopFlag};
 use crate::db::open::open_archive_connection;
+use crate::derived_source::SourceStamp;
 use crate::ocr;
 
 /// Whole-asset OCR result in plain data. Checkpoint-serializable: no
@@ -35,6 +36,21 @@ pub struct OcrComputeOutput {
     /// for the asset's process history. Empty for one image.
     #[serde(default)]
     pub page_methods: Vec<String>,
+    /// The file this result was computed from: its `assets.path` and the hash
+    /// of its bytes at the moment the engine's input was read. It is part of
+    /// the checkpointed unit, so a result resumed by a later attempt keeps the
+    /// stamp of the read that produced it. `None` when the origin is unknown
+    /// (a checkpoint written before the stamp existed).
+    #[serde(default)]
+    pub source: Option<SourceStamp>,
+}
+
+impl OcrComputeOutput {
+    /// This result, stamped with the file its input was read from.
+    fn read_from(mut self, source: &SourceStamp) -> Self {
+        self.source = Some(source.clone());
+        self
+    }
 }
 
 /// Writes extraction/layout rows for one asset. Runs INSIDE the commit
@@ -50,7 +66,13 @@ pub fn publish_ocr_output(
     asset_id: &str,
     output: &OcrComputeOutput,
 ) -> Result<(), String> {
-    ocr::save_extraction_row(conn, asset_id, &output.text, &output.method)?;
+    ocr::save_extraction_row(
+        conn,
+        asset_id,
+        &output.text,
+        &output.method,
+        output.source.as_ref(),
+    )?;
     crate::asset_history::record_best_effort(conn, &ocr_history_event(asset_id, output));
     match (&output.regions_json, &output.blocks_json) {
         (Some(regions), Some(blocks)) => ocr::save_layout_rows(
@@ -61,6 +83,7 @@ pub fn publish_ocr_output(
             &output.layout_model,
             output.image_width,
             output.image_height,
+            output.source.as_ref(),
         )?,
         _ => ocr::delete_layout(conn, asset_id)?,
     }
@@ -223,8 +246,7 @@ impl Executor for OcrExecutor {
             let (stored_path, asset_type) = self.read_asset(&task.asset_id)?;
             let asset_path =
                 crate::path_utils::resolve_asset_path_at_boundary(&stored_path, &self.app)?;
-            let bytes = std::fs::read(&asset_path)
-                .map_err(|e| format!("Failed to read {asset_path}: {e}"))?;
+            let (bytes, source) = read_asset_bytes(&stored_path, &asset_path, &asset_type)?;
             let children: i64 = self
                 .settings_conn()?
                 .query_row(
@@ -241,8 +263,12 @@ impl Executor for OcrExecutor {
                 if stop.stopped() {
                     return Err("stopped".to_string());
                 }
+                // The stamp is stored inside the unit: an attempt that resumes
+                // from the checkpoint publishes the stamp of the read that
+                // produced the result, not of its own.
                 return ctx.unit(task, "image", || {
-                    self.compute(task, &asset_path, &asset_type, &bytes)
+                    self.compute(task, &asset_type, &bytes)
+                        .map(|output| output.read_from(&source))
                 });
             }
             let pages = crate::ocr::pdf::split_pdf_to_single_page_bytes(&bytes)?;
@@ -267,16 +293,12 @@ impl Executor for OcrExecutor {
                                 provider: "native".to_string(),
                                 page_count: 1,
                                 page_methods: Vec::new(),
+                                source: Some(source.clone()),
                             });
                         }
                     }
-                    use std::io::Write;
-                    let mut file = tempfile::Builder::new()
-                        .suffix(".pdf")
-                        .tempfile()
-                        .map_err(|e| e.to_string())?;
-                    file.write_all(&page).map_err(|e| e.to_string())?;
-                    self.compute(task, &file.path().to_string_lossy(), "pdf", &page)
+                    self.compute(task, "pdf", &page)
+                        .map(|output| output.read_from(&source))
                 })?;
                 outputs.push(output);
             }
@@ -309,6 +331,39 @@ impl Executor for OcrExecutor {
     }
 }
 
+/// Reads an asset file for the OCR engines: an image comes back upright, a
+/// PDF as it is on disk. The orientation is applied here, once, so no engine
+/// downstream has to know about the tag.
+///
+/// `raw` is the file as it is on disk; a hash that identifies the source file
+/// is taken over it, before the orientation.
+///
+/// The second value is the stamp of that file: `stored_path` is the
+/// `assets.path` the file was found under.
+fn read_asset_bytes(
+    stored_path: &str,
+    asset_path: &str,
+    asset_type: &str,
+) -> Result<(Vec<u8>, SourceStamp), String> {
+    let raw = std::fs::read(asset_path).map_err(|e| format!("Failed to read {asset_path}: {e}"))?;
+    let source = SourceStamp::of(stored_path, &raw);
+    Ok((
+        crate::image_orient::upright_asset_bytes(asset_type, raw)?,
+        source,
+    ))
+}
+
+/// The file every page was read from, or `None` when they do not agree (a
+/// page resumed from a checkpoint of another read) or one of them has no stamp:
+/// a text put together from two files has no single origin.
+fn common_source(pages: &[OcrComputeOutput]) -> Option<SourceStamp> {
+    let first = pages.first()?.source.as_ref()?;
+    pages
+        .iter()
+        .all(|page| page.source.as_ref() == Some(first))
+        .then(|| first.clone())
+}
+
 fn merge_pages(pages: Vec<OcrComputeOutput>) -> Result<OcrComputeOutput, String> {
     let count = pages.len() as i64;
     // "pdf_ocr" only when some page actually went through an OCR engine; a PDF
@@ -326,6 +381,7 @@ fn merge_pages(pages: Vec<OcrComputeOutput>) -> Result<OcrComputeOutput, String>
         provider: String::new(),
         page_count: count,
         page_methods: Vec::new(),
+        source: common_source(&pages),
     };
     let mut regions = Vec::<serde_json::Value>::new();
     let mut blocks = Vec::<serde_json::Value>::new();
@@ -368,7 +424,6 @@ impl OcrExecutor {
     fn compute(
         &self,
         task: &ClaimedTask,
-        _asset_path: &str,
         asset_type: &str,
         bytes: &[u8],
     ) -> Result<OcrComputeOutput, String> {
@@ -428,7 +483,6 @@ impl OcrExecutor {
     fn compute(
         &self,
         task: &ClaimedTask,
-        asset_path: &str,
         asset_type: &str,
         bytes: &[u8],
     ) -> Result<OcrComputeOutput, String> {
@@ -506,7 +560,6 @@ impl OcrExecutor {
             }
             let job = ocr::OcrJob {
                 asset_id: task.asset_id.clone(),
-                asset_path: asset_path.to_string(),
                 asset_type: asset_type.to_string(),
                 mode: ocr::OcrMode::High,
             };
@@ -514,6 +567,7 @@ impl OcrExecutor {
                 &engines.provider,
                 &conn,
                 &job,
+                bytes,
                 &self.app,
                 vl.as_ref(),
             ))?;
@@ -527,7 +581,6 @@ impl OcrExecutor {
         }
         let job = ocr::OcrJob {
             asset_id: task.asset_id.clone(),
-            asset_path: asset_path.to_string(),
             asset_type: asset_type.to_string(),
             mode: ocr::OcrMode::Light,
         };
@@ -540,6 +593,7 @@ impl OcrExecutor {
             &engines.provider,
             &conn,
             &job,
+            bytes,
             &self.app,
             vl_guard.as_ref(),
         ))?;
@@ -601,12 +655,67 @@ fn to_compute_output(
         provider: provider.to_string(),
         page_count,
         page_methods: Vec::new(),
+        source: None,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_engines_read_a_camera_photo_upright_and_everything_else_as_stored() {
+        use crate::image_orient::test_support::{
+            assert_upright_quadrants, camera_jpeg, encode_jpeg, upright_quadrants,
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let write = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).expect("write fixture");
+            path.to_string_lossy().into_owned()
+        };
+
+        let photo = camera_jpeg(&upright_quadrants(64, 32), 6);
+        let photo_path = write("photo.jpg", &photo);
+        let (read, source) =
+            read_asset_bytes("assets/c1/photo.jpg", &photo_path, "image").expect("read photo");
+        // The stamp is the file on disk, not the upright re-encoding.
+        assert_eq!(source.path, "assets/c1/photo.jpg");
+        assert_eq!(
+            source.sha256,
+            crate::sync::blobs::hash_file(std::path::Path::new(&photo_path))
+                .expect("hash")
+                .0
+        );
+        assert_ne!(read, photo, "the engine gets the upright re-encoding");
+        assert_eq!(crate::image_orient::exif_orientation_bytes(&read), 1);
+        let decoded = image::load_from_memory(&read).expect("plain decode");
+        assert_upright_quadrants(&decoded, 64, 32, "queue read, orientation 6");
+
+        let scan = encode_jpeg(upright_quadrants(64, 32));
+        assert_eq!(
+            read_asset_bytes("assets/scan.jpg", &write("scan.jpg", &scan), "image")
+                .expect("read scan")
+                .0,
+            scan
+        );
+
+        let pdf = b"%PDF-1.7\n1 0 obj\n<< >>\nendobj\n%%EOF\n".to_vec();
+        assert_eq!(
+            read_asset_bytes("assets/doc.pdf", &write("doc.pdf", &pdf), "pdf")
+                .expect("read pdf")
+                .0,
+            pdf
+        );
+
+        let missing = dir.path().join("gone.jpg").to_string_lossy().into_owned();
+        let error =
+            read_asset_bytes("assets/gone.jpg", &missing, "image").expect_err("missing file");
+        assert!(matches!(
+            map_ocr_error(&error),
+            ExecOutput::Fatal { code, .. } if code == "file_missing"
+        ));
+    }
 
     #[test]
     fn ocr_errors_map_to_retry_block_or_fatal() {
@@ -661,9 +770,9 @@ mod tests {
     fn publish_writes_extraction_and_layout_atomically() {
         let conn = Connection::open_in_memory().expect("memory db");
         conn.execute_batch(
-            "CREATE TABLE extractions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL, method TEXT NOT NULL, confidence REAL, created_at INTEGER NOT NULL);
+            "CREATE TABLE extractions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL, method TEXT NOT NULL, confidence REAL, created_at INTEGER NOT NULL, source_path TEXT, source_sha256 TEXT);
              CREATE UNIQUE INDEX idx_extractions_asset_id_unique ON extractions(asset_id);
-             CREATE TABLE layouts (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, regions TEXT NOT NULL, blocks TEXT NOT NULL, model TEXT NOT NULL, image_width INTEGER NOT NULL, image_height INTEGER NOT NULL, created_at INTEGER NOT NULL);
+             CREATE TABLE layouts (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, regions TEXT NOT NULL, blocks TEXT NOT NULL, model TEXT NOT NULL, image_width INTEGER NOT NULL, image_height INTEGER NOT NULL, created_at INTEGER NOT NULL, source_path TEXT, source_sha256 TEXT);
              CREATE UNIQUE INDEX idx_layouts_asset_id_unique ON layouts(asset_id);
              CREATE TABLE llm_results (id TEXT PRIMARY KEY, target_id TEXT NOT NULL, target_type TEXT NOT NULL DEFAULT 'unknown', job_type TEXT NOT NULL, result TEXT NOT NULL, created_at INTEGER NOT NULL);
              CREATE TABLE ocr_correction_backups (asset_id TEXT PRIMARY KEY, text_content TEXT NOT NULL);",
@@ -688,6 +797,7 @@ mod tests {
             provider: "test".to_string(),
             page_count: 1,
             page_methods: Vec::new(),
+            source: None,
         };
         publish_ocr_output(&conn, "a1", &output).expect("publish");
         let (text, method): (String, String) = conn
@@ -729,7 +839,143 @@ mod tests {
             provider: method.to_string(),
             page_count: 1,
             page_methods: Vec::new(),
+            source: None,
         }
+    }
+
+    fn stamped_db() -> Connection {
+        use crate::sync::test_support::new_synced_test_db;
+        let conn = new_synced_test_db();
+        conn.execute_batch(
+            "INSERT INTO collections(id,name,created_at,updated_at) VALUES('c1','C',1,1);
+             INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','I','c1',1,1);
+             INSERT INTO assets(id,item_id,path,type,created_at)
+             VALUES('a1','i1','assets/c1/photo_v3.jpg','image',1);",
+        )
+        .expect("seed asset");
+        crate::llm::ocr_correction::ensure_schema(&conn).expect("correction schema");
+        conn
+    }
+
+    fn output_from(source: Option<SourceStamp>, text: &str) -> OcrComputeOutput {
+        OcrComputeOutput {
+            text: text.to_string(),
+            regions_json: Some("[]".to_string()),
+            blocks_json: Some("[]".to_string()),
+            layout_model: "glm_ocr".to_string(),
+            source,
+            ..page_output("glm_ocr")
+        }
+    }
+
+    type Stamp = (Option<String>, Option<String>);
+
+    fn stored_stamps(conn: &Connection, asset_id: &str) -> (Stamp, Stamp) {
+        let read = |table: &str| -> Stamp {
+            conn.query_row(
+                &format!("SELECT source_path, source_sha256 FROM {table} WHERE asset_id = ?1"),
+                [asset_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("stamp row")
+        };
+        (read("extractions"), read("layouts"))
+    }
+
+    fn as_columns(stamp: &SourceStamp) -> Stamp {
+        (Some(stamp.path.clone()), Some(stamp.sha256.clone()))
+    }
+
+    #[test]
+    fn a_result_is_stamped_with_the_file_it_read_even_if_the_asset_moved_on() {
+        use crate::image_orient::test_support::{camera_jpeg, upright_quadrants};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("photo_v3.jpg");
+        std::fs::write(&file, camera_jpeg(&upright_quadrants(64, 32), 6)).expect("fixture");
+        let conn = stamped_db();
+
+        // The engine reads `_v3`...
+        let (_, source) =
+            read_asset_bytes("assets/c1/photo_v3.jpg", &file.to_string_lossy(), "image")
+                .expect("read");
+        // ...and the person edits the image while it works.
+        conn.execute(
+            "UPDATE assets SET path = 'assets/c1/photo_v4.jpg' WHERE id = 'a1'",
+            [],
+        )
+        .expect("edit lands");
+        publish_ocr_output(&conn, "a1", &output_from(Some(source), "texto")).expect("publish");
+
+        let on_disk = crate::sync::blobs::hash_file(&file).expect("hash").0;
+        let expected: Stamp = (Some("assets/c1/photo_v3.jpg".to_string()), Some(on_disk));
+        assert_eq!(stored_stamps(&conn, "a1"), (expected.clone(), expected));
+    }
+
+    #[test]
+    fn new_content_never_keeps_the_stamp_of_the_row_it_replaces() {
+        let conn = stamped_db();
+        let first = SourceStamp::of("assets/c1/photo_v3.jpg", b"third version");
+        let second = SourceStamp::of("assets/c1/photo_v4.jpg", b"fourth version");
+
+        publish_ocr_output(&conn, "a1", &output_from(Some(first.clone()), "uno")).expect("first");
+        assert_eq!(
+            stored_stamps(&conn, "a1"),
+            (as_columns(&first), as_columns(&first))
+        );
+
+        publish_ocr_output(&conn, "a1", &output_from(Some(second.clone()), "dos")).expect("second");
+        assert_eq!(
+            stored_stamps(&conn, "a1"),
+            (as_columns(&second), as_columns(&second))
+        );
+
+        // A result of unknown origin clears the stamp instead of inheriting it.
+        publish_ocr_output(&conn, "a1", &output_from(None, "tres")).expect("third");
+        assert_eq!(stored_stamps(&conn, "a1"), ((None, None), (None, None)));
+        let text: String = conn
+            .query_row(
+                "SELECT text_content FROM extractions WHERE asset_id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("unstamped row reads as before");
+        assert_eq!(text, "tres");
+    }
+
+    #[test]
+    fn the_stamp_survives_the_checkpoint_and_an_older_checkpoint_has_none() {
+        let stamp = SourceStamp::of("assets/c1/photo_v3.jpg", b"bytes");
+        let output = output_from(Some(stamp.clone()), "texto");
+
+        let payload = serde_json::to_string(&output).expect("checkpoint");
+        let resumed: OcrComputeOutput = serde_json::from_str(&payload).expect("resume");
+        assert_eq!(resumed.source, Some(stamp));
+
+        // A unit checkpointed before the stamp existed.
+        let mut legacy: serde_json::Value = serde_json::from_str(&payload).expect("json");
+        legacy.as_object_mut().expect("object").remove("source");
+        let resumed: OcrComputeOutput = serde_json::from_value(legacy).expect("legacy resume");
+        assert_eq!(resumed.source, None);
+    }
+
+    #[test]
+    fn merged_pages_keep_the_stamp_only_when_every_page_read_the_same_file() {
+        let stamp = SourceStamp::of("assets/doc.pdf", b"pdf bytes");
+        let page = |source: Option<SourceStamp>| OcrComputeOutput {
+            source,
+            ..page_output("native")
+        };
+
+        let same =
+            merge_pages(vec![page(Some(stamp.clone())), page(Some(stamp.clone()))]).expect("merge");
+        assert_eq!(same.source, Some(stamp.clone()));
+
+        let other = SourceStamp::of("assets/doc.pdf", b"other pdf bytes");
+        let mixed = merge_pages(vec![page(Some(stamp.clone())), page(Some(other))]).expect("merge");
+        assert_eq!(mixed.source, None, "pages of two files: origin unknown");
+
+        let partial = merge_pages(vec![page(Some(stamp)), page(None)]).expect("merge");
+        assert_eq!(partial.source, None);
     }
 
     #[test]

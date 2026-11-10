@@ -205,6 +205,7 @@ static REGISTRY: &[Migration] = &[
     migration!("0061_asset_process_events", Atomic),
     migration!("0062_triple_evidence", Atomic),
     migration!("0063_collection_ai_context", Atomic),
+    migration!("0064_derived_source_path", Atomic),
 ];
 
 // ---------------------------------------------------------------------------
@@ -694,8 +695,8 @@ mod tests {
         );
         assert_eq!(
             from_registry.len(),
-            63,
-            "the Phase 4 shell must keep all 63 migrations"
+            64,
+            "the Phase 4 shell must keep all 64 migrations"
         );
     }
 
@@ -718,7 +719,7 @@ mod tests {
         );
         assert_eq!(
             expected.len(),
-            32,
+            33,
             "the TS atomic condition changed shape; re-check the extractor"
         );
     }
@@ -730,7 +731,7 @@ mod tests {
             apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("apply everything");
         assert_eq!(
             report.applied.len(),
-            63,
+            64,
             "every registry migration must run once"
         );
         assert_matches_canonical_fixture(
@@ -828,6 +829,99 @@ mod tests {
             "the ALTER must add blocks with its default"
         );
         assert_eq!(survivor.2, FIXED_CLOCK_MS, "created_at is backfilled in ms");
+    }
+
+    #[test]
+    fn derived_source_columns_arrive_null_on_an_archive_at_0063() {
+        fn columns(conn: &Connection, table: &str) -> Vec<(String, String, i64)> {
+            let mut statement = conn
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .expect("prepare table_info");
+            statement
+                .query_map([], |row| Ok((row.get(1)?, row.get(2)?, row.get(3)?)))
+                .expect("query table_info")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect table_info")
+        }
+
+        let mut conn = test_connection();
+        let index = registry_index_after("0063_collection_ai_context");
+        apply_migrations_with(&mut conn, &REGISTRY[..=index], &fixed_clock())
+            .expect("build the archive at 0063");
+        conn.execute_batch(
+            "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('collection-1', 'Collection', 0, 0);
+             INSERT INTO items (id, title, collection_id, created_at, updated_at) VALUES ('item-1', 'Item', 'collection-1', 0, 0);
+             INSERT INTO assets (id, item_id, path, type, created_at) VALUES ('asset-1', 'item-1', 'assets/a.jpg', 'image', 0);
+             INSERT INTO layouts (id, asset_id, regions, blocks, model, image_width, image_height, created_at)
+               VALUES ('lay-asset-1', 'asset-1', '[]', '[]', 'glm_ocr', 30, 40, 5);
+             INSERT INTO extractions (id, asset_id, text_content, method, confidence, created_at)
+               VALUES ('ext-asset-1', 'asset-1', 'texto', 'ocr', 0.5, 6);",
+        )
+        .expect("seed a layout and an extraction from before 0064");
+
+        let report =
+            apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("apply 0064");
+        assert_eq!(report.applied, vec!["0064_derived_source_path"]);
+
+        let source_columns = [
+            ("source_path".to_string(), "TEXT".to_string(), 0),
+            ("source_sha256".to_string(), "TEXT".to_string(), 0),
+        ];
+        for table in ["layouts", "extractions"] {
+            let all = columns(&conn, table);
+            assert_eq!(
+                all[all.len() - 2..],
+                source_columns[..],
+                "{table} must end with the two nullable source columns"
+            );
+        }
+
+        let layout: (String, i64, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT model, image_width, source_path, source_sha256 FROM layouts WHERE id = 'lay-asset-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read the layout from before 0064");
+        assert_eq!(layout, ("glm_ocr".to_string(), 30, None, None));
+        let extraction: (String, String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT text_content, method, source_path, source_sha256 FROM extractions WHERE id = 'ext-asset-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read the extraction from before 0064");
+        assert_eq!(
+            extraction,
+            ("texto".to_string(), "ocr".to_string(), None, None)
+        );
+
+        // A writer that does not name the columns keeps working and leaves
+        // the source unknown.
+        conn.execute(
+            "INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
+             VALUES ('ext-other', 'asset-1', 'texto nuevo', 'ocr', NULL, 7)
+             ON CONFLICT(asset_id) DO UPDATE SET
+               text_content = excluded.text_content,
+               created_at = excluded.created_at",
+            [],
+        )
+        .expect("upsert with the column list from before 0064");
+        let rewritten: (String, Option<String>) = conn
+            .query_row(
+                "SELECT text_content, source_path FROM extractions WHERE asset_id = 'asset-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read the rewritten extraction");
+        assert_eq!(rewritten, ("texto nuevo".to_string(), None));
+
+        let second =
+            apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("second run");
+        assert!(
+            second.applied.is_empty(),
+            "0064 must be skipped once its registry row exists"
+        );
     }
 
     #[test]

@@ -1,0 +1,146 @@
+[
+  {
+    "name": "stamped layout, the file has the same hash",
+    "assetType": "image",
+    "layout": { "sourceSha256": "aaa", "imageWidth": 747, "imageHeight": 1169 },
+    "file": { "orientation": 1, "width": 747, "height": 1169, "sha256": "aaa" },
+    "needs": "facts_with_sha",
+    "verdict": "matches"
+  },
+  {
+    "name": "stamped layout, the file has another hash and another size",
+    "assetType": "image",
+    "layout": { "sourceSha256": "aaa", "imageWidth": 747, "imageHeight": 1169 },
+    "file": { "orientation": 1, "width": 3456, "height": 4608, "sha256": "bbb" },
+    "needs": "facts_with_sha",
+    "verdict": "other_version"
+  },
+  {
+    "name": "same path on two machines, different bytes: the path proves nothing",
+    "assetType": "image",
+    "layout": { "sourceSha256": "aaa", "imageWidth": 747, "imageHeight": 1169 },
+    "file": { "orientation": 1, "width": 747, "height": 1169, "sha256": "ccc" },
+    "needs": "facts_with_sha",
+    "verdict": "other_version"
+  },
+  {
+    "name": "a 180 degree rotation keeps the size and is caught by the hash",
+    "assetType": "image",
+    "layout": { "sourceSha256": "aaa", "imageWidth": 1000, "imageHeight": 1400 },
+    "file": { "orientation": 1, "width": 1000, "height": 1400, "sha256": "rotated" },
+    "needs": "facts_with_sha",
+    "verdict": "other_version"
+  },
+  {
+    "name": "stamped layout of a camera photo: the hash decides, the tag does not matter",
+    "assetType": "image",
+    "layout": { "sourceSha256": "aaa", "imageWidth": 3000, "imageHeight": 4000 },
+    "file": { "orientation": 6, "width": 3000, "height": 4000, "sha256": "aaa" },
+    "needs": "facts_with_sha",
+    "verdict": "matches"
+  },
+  {
+    "name": "stamped layout, the hash of the file was not read",
+    "assetType": "image",
+    "layout": { "sourceSha256": "aaa", "imageWidth": 747, "imageHeight": 1169 },
+    "file": { "orientation": 1, "width": 747, "height": 1169, "sha256": null },
+    "needs": "facts_with_sha",
+    "verdict": "other_version"
+  },
+  {
+    "name": "unstamped layout, untagged file of the same size",
+    "assetType": "image",
+    "layout": { "sourceSha256": null, "imageWidth": 747, "imageHeight": 1169 },
+    "file": { "orientation": 1, "width": 747, "height": 1169, "sha256": null },
+    "needs": "facts",
+    "verdict": "matches"
+  },
+  {
+    "name": "an empty stamp is no stamp",
+    "assetType": "image",
+    "layout": { "sourceSha256": "", "imageWidth": 747, "imageHeight": 1169 },
+    "file": { "orientation": 1, "width": 747, "height": 1169, "sha256": null },
+    "needs": "facts",
+    "verdict": "matches"
+  },
+  {
+    "name": "unstamped layout, the file has another size",
+    "assetType": "image",
+    "layout": { "sourceSha256": null, "imageWidth": 747, "imageHeight": 1169 },
+    "file": { "orientation": 1, "width": 3456, "height": 4608, "sha256": null },
+    "needs": "facts",
+    "verdict": "other_version"
+  },
+  {
+    "name": "unstamped layout, only the width differs",
+    "assetType": "image",
+    "layout": { "sourceSha256": null, "imageWidth": 747, "imageHeight": 1169 },
+    "file": { "orientation": 1, "width": 748, "height": 1169, "sha256": null },
+    "needs": "facts",
+    "verdict": "other_version"
+  },
+  {
+    "name": "unstamped layout, only the height differs",
+    "assetType": "image",
+    "layout": { "sourceSha256": null, "imageWidth": 747, "imageHeight": 1169 },
+    "file": { "orientation": 1, "width": 747, "height": 1170, "sha256": null },
+    "needs": "facts",
+    "verdict": "other_version"
+  },
+  {
+    "name": "unstamped layout of a photo tagged 6: computed in the sideways system",
+    "assetType": "image",
+    "layout": { "sourceSha256": null, "imageWidth": 4000, "imageHeight": 3000 },
+    "file": { "orientation": 6, "width": 3000, "height": 4000, "sha256": null },
+    "needs": "facts",
+    "verdict": "other_version"
+  },
+  {
+    "name": "unstamped layout of a square photo tagged 6: same size, still another system",
+    "assetType": "image",
+    "layout": { "sourceSha256": null, "imageWidth": 2000, "imageHeight": 2000 },
+    "file": { "orientation": 6, "width": 2000, "height": 2000, "sha256": null },
+    "needs": "facts",
+    "verdict": "other_version"
+  },
+  {
+    "name": "unstamped layout of a photo tagged 3: same size, upside down",
+    "assetType": "image",
+    "layout": { "sourceSha256": null, "imageWidth": 4000, "imageHeight": 3000 },
+    "file": { "orientation": 3, "width": 4000, "height": 3000, "sha256": null },
+    "needs": "facts",
+    "verdict": "other_version"
+  },
+  {
+    "name": "unstamped layout, the file is not an image the reader can open",
+    "assetType": "image",
+    "layout": { "sourceSha256": null, "imageWidth": 747, "imageHeight": 1169 },
+    "file": { "orientation": 1, "width": null, "height": null, "sha256": null },
+    "needs": "facts",
+    "verdict": "other_version"
+  },
+  {
+    "name": "PDF asset with a stamp: never checked, nothing is read",
+    "assetType": "pdf",
+    "layout": { "sourceSha256": "aaa", "imageWidth": 595, "imageHeight": 842 },
+    "file": null,
+    "needs": "nothing",
+    "verdict": "matches"
+  },
+  {
+    "name": "PDF asset without a stamp: never checked, nothing is read",
+    "assetType": "pdf",
+    "layout": { "sourceSha256": null, "imageWidth": 595, "imageHeight": 842 },
+    "file": null,
+    "needs": "nothing",
+    "verdict": "matches"
+  },
+  {
+    "name": "PDF asset whose file facts disagree: still usable",
+    "assetType": "pdf",
+    "layout": { "sourceSha256": "aaa", "imageWidth": 595, "imageHeight": 842 },
+    "file": { "orientation": 1, "width": null, "height": null, "sha256": "zzz" },
+    "needs": "nothing",
+    "verdict": "matches"
+  }
+]

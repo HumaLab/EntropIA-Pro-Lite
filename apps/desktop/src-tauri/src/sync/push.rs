@@ -925,6 +925,34 @@ mod tests {
     }
 
     #[test]
+    fn payload_carries_the_source_columns_of_layouts_and_extractions() {
+        let conn = capturing_db();
+        seed_collection(&conn);
+        conn.execute_batch(
+            "INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1);
+             INSERT INTO assets(id,item_id,path,type,created_at) VALUES('a1','i1','assets/a_v3.jpg','image',1);
+             INSERT INTO layouts(id,asset_id,regions,blocks,model,image_width,image_height,created_at,source_path,source_sha256)
+               VALUES('lay-a1','a1','[]','[]','glm_ocr',30,40,1,'assets/a_v3.jpg','abc');
+             INSERT INTO extractions(id,asset_id,text_content,method,created_at)
+               VALUES('ext-a1','a1','t','ocr',1);",
+        )
+        .expect("seed a stamped layout and an unstamped extraction");
+
+        let layout = read_row_payload(&conn, "layouts", "lay-a1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(layout["source_path"], "assets/a_v3.jpg");
+        assert_eq!(layout["source_sha256"], "abc");
+
+        let extraction = read_row_payload(&conn, "extractions", "ext-a1")
+            .unwrap()
+            .unwrap();
+        let extraction = extraction.as_object().unwrap();
+        assert_eq!(extraction.get("source_path"), Some(&Value::Null));
+        assert_eq!(extraction.get("source_sha256"), Some(&Value::Null));
+    }
+
+    #[test]
     fn base_seq_is_zero_until_versioned_then_reads_back() {
         let conn = capturing_db();
         assert_eq!(base_seq(&conn, "items", "i1").unwrap(), 0);

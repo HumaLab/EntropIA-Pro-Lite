@@ -129,6 +129,7 @@
   import AssistantsTab from './AssistantsTab.svelte'
   import VercelFallbackCard from './VercelFallbackCard.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
+  import MaintenanceSettingsCard from './MaintenanceSettingsCard.svelte'
   import { onSettingsTabRequest } from '$lib/settings-tab-request'
   import AgentParametersTab from '../components/settings/AgentParametersTab.svelte'
   import {
@@ -166,6 +167,7 @@
     | 'batch'
     | 'logs'
     | 'backup'
+    | 'maintenance'
     | 'appearance'
   let activeTab = $state<SettingsTab>(isCriticalMissing() ? 'dependencias' : 'api')
 
@@ -1712,6 +1714,9 @@
         <TabButton active={activeTab === 'backup'} onclick={() => (activeTab = 'backup')}>
           {t('settings.backupTab')}
         </TabButton>
+        <TabButton active={activeTab === 'maintenance'} onclick={() => (activeTab = 'maintenance')}>
+          {t('settings.maintenanceTab')}
+        </TabButton>
         <TabButton active={activeTab === 'appearance'} onclick={() => (activeTab = 'appearance')}>
           {t('settings.appearanceTab')}
         </TabButton>
@@ -3086,6 +3091,8 @@
       <BatchProcessingTab />
     {:else if activeTab === 'backup'}
       <BackupTab />
+    {:else if activeTab === 'maintenance'}
+      <MaintenanceSettingsCard />
     {:else if activeTab === 'appearance'}
       <AppearanceTab />
     {/if}

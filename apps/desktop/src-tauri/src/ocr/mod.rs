@@ -30,6 +30,7 @@ pub(crate) fn render_pdf_first_page_for_ocr_correction(bytes: &[u8]) -> Result<V
 #[cfg(debug_assertions)]
 mod debug_viz;
 
+use crate::derived_source::SourceStamp;
 #[cfg(feature = "paddle-ocr")]
 use crate::runtime::{managed_resource_path, RuntimeManager};
 use base64::Engine;
@@ -917,9 +918,9 @@ where
     true
 }
 
-#[cfg(feature = "paddle-ocr")]
+#[cfg(any(feature = "paddle-ocr", test))]
 fn detect_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    image::load_from_memory(bytes)
+    crate::image_orient::decode_oriented_bytes(bytes)
         .map(|img| (img.width(), img.height()))
         .ok()
 }
@@ -969,7 +970,6 @@ fn rescale_paddlevl_output_to_dimensions(
 #[cfg_attr(not(feature = "paddle-ocr"), allow(dead_code))]
 pub struct OcrJob {
     pub asset_id: String,
-    pub asset_path: String,
     pub asset_type: String, // "pdf" | "image"
     pub mode: OcrMode,
 }
@@ -1029,11 +1029,16 @@ fn resolve_paddle_model_dir_from_roots(
 /// call [`crate::llm::ocr_correction::clear_asset_state`] afterwards.
 ///
 /// Uses SQLite `ON CONFLICT(asset_id) DO UPDATE` semantics.
+///
+/// `source` is the file the text was read from. It replaces whatever stamp the
+/// row had: `None` (origin unknown) writes `NULL`, so new text never keeps the
+/// stamp of the text it replaces.
 pub(crate) fn save_extraction_row(
     conn: &rusqlite::Connection,
     asset_id: &str,
     text_content: &str,
     method: &str,
+    source: Option<&SourceStamp>,
 ) -> Result<(), String> {
     // Deterministic id: one extraction per asset (UNIQUE index on
     // extractions.asset_id), so derive the id from asset_id to converge
@@ -1046,16 +1051,29 @@ pub(crate) fn save_extraction_row(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
+    let (source_path, source_sha256) = crate::derived_source::stamp_columns(source);
     conn.execute(
-        "INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at,
+                                 source_path, source_sha256)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(asset_id) DO UPDATE SET
            id = excluded.id,
            text_content = excluded.text_content,
            method = excluded.method,
            confidence = excluded.confidence,
-           created_at = excluded.created_at",
-        rusqlite::params![id, asset_id, text_content, method, None::<f64>, now],
+           created_at = excluded.created_at,
+           source_path = excluded.source_path,
+           source_sha256 = excluded.source_sha256",
+        rusqlite::params![
+            id,
+            asset_id,
+            text_content,
+            method,
+            None::<f64>,
+            now,
+            source_path,
+            source_sha256
+        ],
     )
     .map_err(|e| format!("Failed to upsert extraction: {e}"))?;
 
@@ -1073,7 +1091,7 @@ fn save_extraction(
     text_content: &str,
     method: &str,
 ) -> Result<(), String> {
-    save_extraction_row(conn, asset_id, text_content, method)?;
+    save_extraction_row(conn, asset_id, text_content, method, None)?;
     crate::llm::ocr_correction::clear_asset_state(conn, asset_id)?;
 
     Ok(())
@@ -1082,6 +1100,11 @@ fn save_extraction(
 /// Upserts one layout row from pre-serialized region/block JSON. The queue's
 /// commit path publishes through here so canonical rows and the task receipt
 /// share one transaction.
+///
+/// `source` is the file the layout was computed from; like the extraction's,
+/// it always replaces the stamp of the row, with `NULL` when it is `None`.
+// One argument per column of the row; grouping them would only move the list.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn save_layout_rows(
     conn: &rusqlite::Connection,
     asset_id: &str,
@@ -1090,10 +1113,13 @@ pub(crate) fn save_layout_rows(
     model: &str,
     image_width: u32,
     image_height: u32,
+    source: Option<&SourceStamp>,
 ) -> Result<(), String> {
+    let (source_path, source_sha256) = crate::derived_source::stamp_columns(source);
     conn.execute(
-        "INSERT INTO layouts(id, asset_id, regions, blocks, model, image_width, image_height, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO layouts(id, asset_id, regions, blocks, model, image_width, image_height, created_at,
+                             source_path, source_sha256)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(asset_id) DO UPDATE SET
            id = excluded.id,
            regions = excluded.regions,
@@ -1101,7 +1127,9 @@ pub(crate) fn save_layout_rows(
            model = excluded.model,
            image_width = excluded.image_width,
            image_height = excluded.image_height,
-           created_at = excluded.created_at",
+           created_at = excluded.created_at,
+           source_path = excluded.source_path,
+           source_sha256 = excluded.source_sha256",
         rusqlite::params![
             format!("lay-{asset_id}"),
             asset_id,
@@ -1114,6 +1142,8 @@ pub(crate) fn save_layout_rows(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0),
+            source_path,
+            source_sha256,
         ],
     )
     .map_err(|e| format!("Failed to upsert layout: {e}"))?;
@@ -1142,34 +1172,56 @@ pub(crate) fn delete_layout(conn: &rusqlite::Connection, asset_id: &str) -> Resu
     Ok(())
 }
 
+/// The latest extraction of an asset, if it has one.
+fn latest_extraction_id(conn: &rusqlite::Connection, asset_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT id FROM extractions WHERE asset_id = ?1 ORDER BY created_at DESC LIMIT 1",
+        [asset_id],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
 /// Update only the text_content of the latest extraction for an asset.
-/// Preserves id, created_at, method, and confidence.
+/// Preserves id, created_at, method, and confidence, and the stamp of the
+/// file the text was read from: a hand correction is still text of that file.
 /// Returns `Ok(())` even if no extraction exists (no-op).
 fn update_extraction_text(
     conn: &rusqlite::Connection,
     asset_id: &str,
     text_content: &str,
 ) -> Result<(), String> {
-    // Find the latest extraction for this asset
-    let mut stmt = conn
-        .prepare("SELECT id FROM extractions WHERE asset_id = ?1 ORDER BY created_at DESC LIMIT 1")
-        .map_err(|e| format!("Failed to prepare query: {e}"))?;
+    let Some(id) = latest_extraction_id(conn, asset_id) else {
+        return Ok(()); // no extraction exists — no-op
+    };
+    conn.execute(
+        "UPDATE extractions SET text_content = ?1 WHERE id = ?2",
+        rusqlite::params![text_content, id],
+    )
+    .map_err(|e| format!("Failed to update extraction text: {e}"))?;
+    Ok(())
+}
 
-    let extraction_id: Result<String, _> = stmt.query_row([asset_id], |row| row.get(0));
-
-    drop(stmt); // release borrow before execute
-
-    match extraction_id {
-        Ok(id) => {
-            conn.execute(
-                "UPDATE extractions SET text_content = ?1 WHERE id = ?2",
-                rusqlite::params![text_content, id],
-            )
-            .map_err(|e| format!("Failed to update extraction text: {e}"))?;
-            Ok(())
-        }
-        Err(_) => Ok(()), // no extraction exists — no-op
-    }
+/// [`update_extraction_text`] for text that was read again from a file: the
+/// row takes the stamp of that read (`NULL` twice when `source` is `None`)
+/// instead of keeping the one it had.
+fn replace_extraction_text(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    text_content: &str,
+    source: Option<&SourceStamp>,
+) -> Result<(), String> {
+    let Some(id) = latest_extraction_id(conn, asset_id) else {
+        return Ok(()); // no extraction exists — no-op
+    };
+    let (source_path, source_sha256) = crate::derived_source::stamp_columns(source);
+    conn.execute(
+        "UPDATE extractions SET text_content = ?1, source_path = ?2, source_sha256 = ?3
+         WHERE id = ?4",
+        rusqlite::params![text_content, source_path, source_sha256, id],
+    )
+    .map_err(|e| format!("Failed to update extraction text: {e}"))?;
+    Ok(())
 }
 
 // ── Layout-Aware Text Formatting ──────────────────────────────────────────
@@ -1399,11 +1451,17 @@ fn crop_region(
 ///
 /// Layout engine parameter removed — layout-aware Light mode is not used in
 /// production. PaddleVL handles layout in High mode.
+///
+/// `file_bytes` is what the caller read for this job, already through the
+/// single ingress (`image_orient::upright_asset_bytes`): an image is upright
+/// and carries no orientation tag. The file is not read again here, so the
+/// engines consume exactly the bytes the caller stamped the result with.
 #[cfg(feature = "paddle-ocr")]
 pub(crate) async fn process_job(
     provider: &Arc<dyn OcrProvider>,
     conn: &rusqlite::Connection,
     job: &OcrJob,
+    file_bytes: &[u8],
     app_handle: &AppHandle,
     paddle_vl_engine: Option<&PaddleVlEngine>,
 ) -> Result<ProcessedOcrOutput, String> {
@@ -1412,16 +1470,12 @@ pub(crate) async fn process_job(
     // Stage 1 — reading file (25 %)
     emit_progress(app_handle, &asset_id, 25, "reading");
 
-    let file_bytes = tokio::fs::read(&job.asset_path)
-        .await
-        .map_err(|e| format!("Failed to read {}: {e}", job.asset_path))?;
-
     match job.asset_type.as_str() {
         "pdf" => {
             process_pdf(
                 provider,
                 conn,
-                &file_bytes,
+                file_bytes,
                 &asset_id,
                 app_handle,
                 paddle_vl_engine,
@@ -1433,7 +1487,7 @@ pub(crate) async fn process_job(
             process_image(
                 provider,
                 conn,
-                &file_bytes,
+                file_bytes,
                 &asset_id,
                 app_handle,
                 paddle_vl_engine,
@@ -1990,6 +2044,18 @@ mod tests {
     use std::cell::RefCell;
     use std::path::PathBuf;
 
+    #[test]
+    fn layout_dimensions_of_a_camera_photo_are_the_upright_ones() {
+        use crate::image_orient::test_support::{camera_jpeg, encode_jpeg, upright_quadrants};
+        // What the person sees is 64 wide and 32 tall; the file stores 32x64.
+        let photo = camera_jpeg(&upright_quadrants(64, 32), 6);
+        assert_eq!(detect_image_dimensions(&photo), Some((64, 32)));
+
+        let scan = encode_jpeg(upright_quadrants(64, 32));
+        assert_eq!(detect_image_dimensions(&scan), Some((64, 32)));
+        assert_eq!(detect_image_dimensions(b"not an image"), None);
+    }
+
     fn atomic_ocr_layout(content: &str) -> LayoutPersistencePayload {
         LayoutPersistencePayload {
             model: "test-layout".to_string(),
@@ -2032,6 +2098,7 @@ mod tests {
             provider: "test".to_string(),
             page_count: 1,
             page_methods: Vec::new(),
+            source: None,
         }
     }
 
@@ -2064,10 +2131,30 @@ mod tests {
         .unwrap();
         let (regions, blocks) =
             serialize_layout_payload(&atomic_ocr_layout("layout anterior")).unwrap();
-        save_layout_rows(&conn, "asset-1", &regions, &blocks, "test-layout", 100, 200).unwrap();
+        save_layout_rows(
+            &conn,
+            "asset-1",
+            &regions,
+            &blocks,
+            "test-layout",
+            100,
+            200,
+            None,
+        )
+        .unwrap();
         let (regions, blocks) =
             serialize_layout_payload(&atomic_ocr_layout("layout ajeno")).unwrap();
-        save_layout_rows(&conn, "asset-2", &regions, &blocks, "test-layout", 100, 200).unwrap();
+        save_layout_rows(
+            &conn,
+            "asset-2",
+            &regions,
+            &blocks,
+            "test-layout",
+            100,
+            200,
+            None,
+        )
+        .unwrap();
         conn
     }
 
@@ -2471,7 +2558,9 @@ mod tests {
                 model TEXT NOT NULL,
                 image_width INTEGER NOT NULL,
                 image_height INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                source_path TEXT,
+                source_sha256 TEXT
              );
              CREATE UNIQUE INDEX idx_layouts_asset_id_unique ON layouts(asset_id);",
         )
@@ -2520,6 +2609,7 @@ mod tests {
             &payload.model,
             payload.image_width,
             payload.image_height,
+            None,
         )
         .expect("first upsert");
         save_layout_rows(
@@ -2530,6 +2620,7 @@ mod tests {
             &payload.model,
             payload.image_width,
             payload.image_height,
+            None,
         )
         .expect("second upsert");
 

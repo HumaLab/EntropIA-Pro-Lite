@@ -65,6 +65,8 @@ describe('getLayoutByAsset', () => {
       imageWidth: 1000,
       imageHeight: 1400,
       createdAt: 1,
+      sourcePath: null,
+      sourceSha256: null,
       regions: [],
       blocks: [],
     }
@@ -84,6 +86,8 @@ describe('buildLayoutBlockViews', () => {
       imageWidth: 1200,
       imageHeight: 1800,
       createdAt: 1,
+      sourcePath: null,
+      sourceSha256: null,
       regions: [
         {
           category: 'doc_title',
@@ -164,6 +168,8 @@ describe('buildLayoutBlockViews', () => {
       imageWidth: 1000,
       imageHeight: 1500,
       createdAt: 1,
+      sourcePath: null,
+      sourceSha256: null,
       regions: [
         {
           category: 'table',
@@ -347,6 +353,8 @@ describe('multi-page layout helpers', () => {
       imageWidth: 1000,
       imageHeight: 1500,
       createdAt: 1,
+      sourcePath: null,
+      sourceSha256: null,
       regions: [
         {
           category: 'text',
