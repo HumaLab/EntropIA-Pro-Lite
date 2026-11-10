@@ -94,9 +94,14 @@ function fileLabel(document: CollectionOcrDocument): string {
 
 function buildMarkdown(collectionName: string, documents: CollectionOcrDocument[]): string {
   const sections = documents.map((document) =>
-    [`## ${document.itemTitle}`, '', `*${fileLabel(document)}*`, '', plainSource(document), ''].join(
-      '\n'
-    )
+    [
+      `## ${document.itemTitle}`,
+      '',
+      `*${fileLabel(document)}*`,
+      '',
+      plainSource(document),
+      '',
+    ].join('\n')
   )
   return [`# ${collectionName}`, '', ...sections].join('\n')
 }

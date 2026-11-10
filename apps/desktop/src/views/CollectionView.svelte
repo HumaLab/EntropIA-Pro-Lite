@@ -886,11 +886,7 @@
 
   function handleTextExportWindowPointerdown(event: PointerEvent) {
     const target = event.target
-    if (
-      textExportMenuOpen &&
-      target instanceof Node &&
-      !textExportContainerEl?.contains(target)
-    ) {
+    if (textExportMenuOpen && target instanceof Node && !textExportContainerEl?.contains(target)) {
       textExportMenuOpen = false
     }
   }

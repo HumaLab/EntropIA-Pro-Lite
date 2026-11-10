@@ -40,7 +40,9 @@ function fakeStore(data: FakeData): StoreApi {
     collections: { findById: vi.fn(async () => data.collection ?? null) },
     items: { findByCollection: vi.fn(async () => data.items) },
     assets: { findByItem: vi.fn(async (itemId: string) => data.assets[itemId] ?? []) },
-    extractions: { findByAsset: vi.fn(async (assetId: string) => data.extractions[assetId] ?? null) },
+    extractions: {
+      findByAsset: vi.fn(async (assetId: string) => data.extractions[assetId] ?? null),
+    },
   } as unknown as StoreApi
 }
 
