@@ -31,8 +31,10 @@
   {#if heading}
     <h3>{heading}</h3>
   {/if}
-  <p class="notice" role="status">{message}</p>
-  <div class="actions">
+  <!-- One line whatever the width: the message gives way and the action never
+       wraps or shrinks. The full message stays in the tooltip. -->
+  <div class="notice" role="status">
+    <span class="notice__message" title={message}>{message}</span>
     <Button
       variant="secondary"
       size="sm"
@@ -65,8 +67,11 @@
   }
 
   .notice {
-    margin: 0;
-    padding: var(--space-2);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-1) var(--space-2);
     border: 1px solid color-mix(in srgb, var(--color-warning) 35%, transparent);
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--color-warning) 12%, var(--surface-card));
@@ -75,9 +80,16 @@
     line-height: 1.4;
   }
 
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
+  .notice__message {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .notice :global(button) {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 </style>
