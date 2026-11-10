@@ -29,18 +29,31 @@
     /** An edit of this image is in progress: no version can be chosen now. */
     busy?: boolean
     translate: (key: I18nKey, params?: I18nParams) => string
-    onUseVersion: (version: ImageVersion) => void
+    /** `assetId` is the image the version was listed for. */
+    onUseVersion: (version: ImageVersion, assetId: string) => void
   } = $props()
 
-  let versions = $state<ImageVersion[]>([])
+  /**
+   * A listing with the image it was read for. A version is a file path to
+   * write into that image's `assets.path`: it must never be offered under
+   * another image, so the list is only shown while it is this one's.
+   */
+  let listing = $state.raw<{ assetId: string; versions: ImageVersion[] } | null>(null)
   let loading = $state(false)
-  let loadError = $state<string | null>(null)
+  let failure = $state.raw<{ assetId: string; message: string } | null>(null)
   let loadToken = 0
+
+  // The panel outlives the image it was opened on. What was listed for the
+  // previous one disappears the moment the asset changes, not when the new
+  // listing answers (it may hash every file of the family first).
+  const versions = $derived(listing?.assetId === asset.id ? listing.versions : [])
+  const loadError = $derived(failure?.assetId === asset.id ? failure.message : null)
+  const awaitingList = $derived(loading || (visible && listing?.assetId !== asset.id))
 
   async function load(assetId: string) {
     const token = ++loadToken
     loading = true
-    loadError = null
+    failure = null
     try {
       const [layout, extraction] = await Promise.all([
         getLayoutByAsset(assetId),
@@ -51,11 +64,11 @@
         extraction: extraction ?? null,
       })
       if (token !== loadToken) return
-      versions = loaded
+      listing = { assetId, versions: loaded }
     } catch (error) {
       if (token !== loadToken) return
-      versions = []
-      loadError = error instanceof Error ? error.message : String(error)
+      listing = { assetId, versions: [] }
+      failure = { assetId, message: error instanceof Error ? error.message : String(error) }
     } finally {
       if (token === loadToken) loading = false
     }
@@ -69,6 +82,13 @@
     if (!visible) return
     void load(assetId)
   })
+
+  function useVersion(version: ImageVersion) {
+    // Only a row of the list read for the image on screen can be chosen.
+    const listedFor = listing?.assetId
+    if (listedFor === undefined || listedFor !== asset.id) return
+    onUseVersion(version, listedFor)
+  }
 
   function versionLabel(version: ImageVersion) {
     return version.version === 0
@@ -91,7 +111,7 @@
     </p>
   {:else if versions.length === 0}
     <p class="versions-help" role="status">
-      {translate(loading ? 'item.imageVersionsLoading' : 'item.imageVersionsEmpty')}
+      {translate(awaitingList ? 'item.imageVersionsLoading' : 'item.imageVersionsEmpty')}
     </p>
   {:else}
     <ol class="versions-list">
@@ -149,7 +169,7 @@
                 size="sm"
                 type="button"
                 disabled={version.current || busy}
-                onclick={() => onUseVersion(version)}
+                onclick={() => useVersion(version)}
               >
                 {translate('item.imageVersionUse')}
               </Button>

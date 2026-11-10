@@ -1928,9 +1928,12 @@
    * the ones on screen, unchanged; the version guard then decides by itself
    * whether the layout and the text belong to the file now shown.
    */
-  async function useImageVersion(version: ImageVersion) {
+  async function useImageVersion(version: ImageVersion, listedForAssetId: string) {
     const asset = selectedAsset
-    if (!asset || !assetHasImageVersions(asset) || version.path === asset.path) return
+    // A version is a file of ONE image's family: it is only ever written into
+    // the path of the image it was listed for.
+    if (!asset || asset.id !== listedForAssetId) return
+    if (!assetHasImageVersions(asset) || version.path === asset.path) return
     await runEditOperation(
       async (_asset, previous) =>
         createImageEditUndoEntry({
@@ -1947,21 +1950,26 @@
    * Annotations do not record which version they were drawn on, so they are
    * kept as they are and the person is told first that they may not match.
    */
-  function requestUseImageVersion(version: ImageVersion): void | Promise<void> {
+  function requestUseImageVersion(
+    version: ImageVersion,
+    listedForAssetId: string
+  ): void | Promise<void> {
     const asset = selectedAsset
-    if (!asset || !assetHasImageVersions(asset)) return
+    // The panel may still hold the list of the image shown before.
+    if (!asset || asset.id !== listedForAssetId) return
+    if (!assetHasImageVersions(asset)) return
     if (annotations.length > 0) {
-      pendingVersionSwitch = { assetId: asset.id, version }
+      pendingVersionSwitch = { assetId: listedForAssetId, version }
       return
     }
-    return useImageVersion(version)
+    return useImageVersion(version, listedForAssetId)
   }
 
   async function confirmUseImageVersion() {
     const pending = pendingVersionSwitch
     pendingVersionSwitch = null
     if (!pending || pending.assetId !== selectedAssetId) return
-    await useImageVersion(pending.version)
+    await useImageVersion(pending.version, pending.assetId)
   }
 
   async function handleRedo() {

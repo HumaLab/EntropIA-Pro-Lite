@@ -535,6 +535,25 @@ vi.mock('@entropia/ui/components/MapViewer', async () => ({
   MapViewer: (await import('./__mocks__/MockMapViewer.svelte')).default,
 }))
 
+// The real panel, with the props the view gives it kept at hand: a test can
+// then report a version the way a panel would, whatever the panel shows.
+const imageVersionsPanelProps = vi.hoisted(() => ({
+  current: null as {
+    onUseVersion: (version: unknown, assetId: string) => void | Promise<void>
+  } | null,
+}))
+vi.mock('../components/ImageVersionsPanel.svelte', async (importOriginal) => {
+  const actual = await importOriginal<{
+    default: (anchor: unknown, props: unknown) => unknown
+  }>()
+  return {
+    default: (anchor: unknown, props: unknown) => {
+      imageVersionsPanelProps.current = props as typeof imageVersionsPanelProps.current
+      return actual.default(anchor, props)
+    },
+  }
+})
+
 beforeEach(() => {
   workspace.activeNavigation.resetToPath([{ name: 'collections' }])
   Object.defineProperty(globalThis.navigator, 'clipboard', {
@@ -4647,6 +4666,92 @@ describe('ItemView image annotations', () => {
         ],
       ])
       expect(viewerAnnotations()).toBe(annotationsBefore)
+    })
+
+    describe('with a second image in the document', () => {
+      const otherImage = {
+        id: 'asset-image-2',
+        itemId: 'item-1',
+        path: 'docs/photo-b.jpg',
+        type: 'image' as const,
+        createdAt: 2,
+      }
+      const otherFilesOnDisk = [
+        { path: 'docs/photo-b.jpg', version: 0, current: true },
+        { path: 'docs/photo-b_v4.jpg', version: 4, current: false },
+      ].map((file) => ({
+        ...file,
+        width: 800,
+        height: 600,
+        sha256: null,
+        orientation: 1,
+        modifiedMs: 1_700_000_000_000,
+        size: 2048,
+      }))
+      const rowPaths = () =>
+        screen.queryAllByTestId('image-version').map((row) => row.getAttribute('data-path'))
+
+      async function showOtherImage() {
+        await fireEvent.click(screen.getByRole('button', { name: 'Página siguiente' }))
+        await waitFor(() => {
+          expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+            'data-path',
+            'docs/photo-b.jpg'
+          )
+        })
+      }
+
+      it('offers no version of the previous image while the list of the new one loads', async () => {
+        const otherListing = deferred<typeof otherFilesOnDisk>()
+        const listVersions = invokeMock.getMockImplementation()!
+        invokeMock.mockImplementation(async (command: string, args?: unknown) =>
+          command === 'list_image_versions' &&
+          (args as { assetId: string }).assetId === otherImage.id
+            ? otherListing.promise
+            : listVersions(command, args)
+        )
+        await openVersions({ assetsRows: [imageAsset, otherImage] })
+
+        await showOtherImage()
+
+        expect(panel()).toBeInTheDocument()
+        expect(rowPaths()).toEqual([])
+        expect(screen.queryByRole('button', { name: 'Usar esta versión' })).not.toBeInTheDocument()
+
+        otherListing.resolve(otherFilesOnDisk)
+        await waitFor(() => {
+          expect(rowPaths()).toEqual(['docs/photo-b.jpg', 'docs/photo-b_v4.jpg'])
+        })
+        expect(storeRef.current.assets.updatePath).not.toHaveBeenCalled()
+      })
+
+      it('refuses a version that was listed for another image', async () => {
+        const listVersions = invokeMock.getMockImplementation()!
+        invokeMock.mockImplementation(async (command: string, args?: unknown) =>
+          command === 'list_image_versions' &&
+          (args as { assetId: string }).assetId === otherImage.id
+            ? otherFilesOnDisk
+            : listVersions(command, args)
+        )
+        await openVersions({ assetsRows: [imageAsset, otherImage] })
+        const original = filesOnDisk[0]
+        await showOtherImage()
+
+        // A late click on a row of the first image, as a panel would report it.
+        await imageVersionsPanelProps.current!.onUseVersion(
+          { ...original, current: false, matchesLayout: true, matchesText: false },
+          imageAsset.id
+        )
+        await vi.advanceTimersByTimeAsync(1000)
+
+        expect(storeRef.current.assets.updatePath).not.toHaveBeenCalled()
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+        expect(commandsInvoked()).not.toContain('asset_history_record')
+        expect(screen.getByTestId('mock-document-viewer')).toHaveAttribute(
+          'data-path',
+          'docs/photo-b.jpg'
+        )
+      })
     })
   })
 
