@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { tick } from 'svelte'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import ItemView from './ItemView.svelte'
@@ -6867,10 +6868,15 @@ describe('ItemView text of another version of the image', () => {
     await openReadingPane({ textContent: 'Texto sin origen' })
 
     // The check is asynchronous: let it settle before reading the absence.
+    // Past the store reads it runs on promises alone, no timers, so one
+    // macrotask after they resolve drains it whatever the runner's speed.
+    const findByAsset = vi.mocked(storeRef.current.extractions.findByAsset)
     await waitFor(() => {
-      expect(storeRef.current.extractions.findByAsset).toHaveBeenCalledWith('asset-image-1')
+      expect(findByAsset).toHaveBeenCalledWith('asset-image-1')
     })
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await Promise.allSettled(findByAsset.mock.results.map((result) => result.value))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tick()
     expect(readingNotice()).not.toBeInTheDocument()
     // An unstamped text has no origin to compare: the file is never hashed for it.
     expect(assetFileFactsMock).not.toHaveBeenCalledWith('asset-image-1', { withSha: true })
