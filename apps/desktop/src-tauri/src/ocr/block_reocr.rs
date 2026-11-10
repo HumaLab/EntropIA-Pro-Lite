@@ -480,6 +480,7 @@ fn load_block(
     db: &AppDbState,
     request: &LayoutBlockReocrRequest,
 ) -> Result<(LoadedBlock, String), String> {
+    // An empty key is refused by `cut_block`, after the version check.
     let api_key = crate::settings::read_settings_unlocked(
         &db.ui_conn,
         &[super::OCRH_SETTING_GLM_OCR_API_KEY],
@@ -491,12 +492,6 @@ fn load_block(
     .unwrap_or_default()
     .trim()
     .to_string();
-    if api_key.is_empty() {
-        return Err(
-            "GLM-OCR no está configurado. Andá a Configuración > OCRH y cargá una API key para reconocer cajas del layout."
-                .to_string(),
-        );
-    }
 
     let conn = db
         .ui_conn
@@ -545,6 +540,24 @@ fn load_block(
         },
         stored_path,
     ))
+}
+
+const GLM_KEY_MISSING: &str =
+    "GLM-OCR no está configurado. Andá a Configuración > OCRH y cargá una API key para reconocer cajas del layout.";
+
+/// The PNG of the box to send to GLM-OCR, and the stamp of the file it was
+/// cut from. A layout of another version is refused before a missing key, so
+/// the person learns what is wrong with the layout even without a key.
+fn cut_block(
+    loaded: &LoadedBlock,
+    bbox: &LayoutBoxInput,
+) -> Result<(Vec<u8>, SourceStamp), String> {
+    let (page, source) = render_page(loaded)?;
+    if loaded.api_key.is_empty() {
+        return Err(GLM_KEY_MISSING.to_string());
+    }
+    let png = crop_to_png(&page, bbox, loaded.layout_w, loaded.layout_h)?;
+    Ok((png, source))
 }
 
 fn ensure_expected_bbox(block: &Value, expected: &LayoutBoxInput) -> Result<(), String> {
@@ -742,8 +755,7 @@ pub async fn reocr_layout_block(
         if loaded.asset_type == "pdf" {
             super::pdf::init_pdfium_path(&render_app);
         }
-        let (page, source) = render_page(&loaded)?;
-        let png = crop_to_png(&page, &bbox, loaded.layout_w, loaded.layout_h)?;
+        let (png, source) = cut_block(&loaded, &bbox)?;
         Ok::<_, String>((png, loaded.api_key, source))
     })
     .await
@@ -1077,6 +1089,36 @@ mod tests {
             image_block(&photo_path, 400, 200),
             "no stamp on a tagged photo: computed in the sideways system",
         );
+    }
+
+    /// Without a GLM key, a layout of another version is still reported as
+    /// such: the key only matters once there is a box worth sending.
+    #[test]
+    fn the_version_is_checked_before_the_glm_key() {
+        use crate::image_orient::test_support::{encode_jpeg, upright_quadrants};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scan_path = write_fixture(&dir, "scan.jpg", &encode_jpeg(upright_quadrants(400, 200)));
+        let whole = bx(0.0, 0.0, 200.0, 100.0);
+
+        let other_version = cut_block(&image_block(&scan_path, 747, 1169), &whole);
+        assert_eq!(
+            other_version.err().as_deref(),
+            Some(LAYOUT_FROM_OTHER_VERSION)
+        );
+
+        let no_key = cut_block(&image_block(&scan_path, 400, 200), &whole);
+        assert_eq!(no_key.err().as_deref(), Some(GLM_KEY_MISSING));
+
+        let (png, _) = cut_block(
+            &LoadedBlock {
+                api_key: "key".to_string(),
+                ..image_block(&scan_path, 400, 200)
+            },
+            &whole,
+        )
+        .expect("a block of the current file, with a key");
+        assert!(png.starts_with(b"\x89PNG"));
     }
 
     #[test]
