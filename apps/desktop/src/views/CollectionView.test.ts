@@ -7,6 +7,7 @@ import {
   DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT,
 } from '$lib/document-explorer'
 import { exportCollectionById } from '$lib/export'
+import { exportCollectionOcrText } from '$lib/collection-ocr-export'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 // Real module (not mocked): CollectionView.svelte's Task 3.5 pane-targeting
@@ -181,6 +182,14 @@ vi.mock('$lib/file-import', () => ({
   resolveStoredAssetPath: (path: string) => path,
 }))
 
+vi.mock('$lib/collection-ocr-export', () => {
+  class CollectionOcrExportEmptyError extends Error {}
+  return {
+    CollectionOcrExportEmptyError,
+    exportCollectionOcrText: vi.fn().mockResolvedValue(null),
+  }
+})
+
 vi.mock('$lib/export', () => ({
   exportCollectionById: vi.fn().mockResolvedValue(undefined),
 }))
@@ -301,6 +310,67 @@ describe('CollectionView consumer compatibility', () => {
 
     await fireEvent.click(exportAction)
     expect(exportCollectionById).toHaveBeenCalledWith(storeRef.current, 'col-1')
+  })
+
+  it('downloads the collection text in the chosen format from the text export menu', async () => {
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const trigger = screen.getByRole('button', { name: 'Descargar el texto de la colección' })
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('menu')).toBeNull()
+
+    await fireEvent.click(trigger)
+    const items = screen.getAllByRole('menuitem').map((item) => item.textContent?.trim())
+    expect(items).toEqual([
+      'Texto (.txt)',
+      'Markdown (.md)',
+      'PDF (.pdf)',
+      'Word (.docx)',
+      'CSV (.csv)',
+    ])
+
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'CSV (.csv)' }))
+    expect(exportCollectionOcrText).toHaveBeenCalledWith(storeRef.current, 'col-1', 'csv')
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('tells the user when the collection has no extracted text to export', async () => {
+    const { CollectionOcrExportEmptyError } = await import('$lib/collection-ocr-export')
+    vi.mocked(exportCollectionOcrText).mockRejectedValueOnce(new CollectionOcrExportEmptyError())
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Descargar el texto de la colección' })
+    )
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Texto (.txt)' }))
+
+    expect(
+      await screen.findByText('Ningún documento de esta colección tiene texto extraído.')
+    ).toBeInTheDocument()
+  })
+
+  it('closes the text export menu with Escape', async () => {
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Descargar el texto de la colección' })
+    )
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    const callsBefore = vi.mocked(exportCollectionOcrText).mock.calls.length
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(vi.mocked(exportCollectionOcrText).mock.calls.length).toBe(callsBefore)
   })
 
   it('shows the empty-state guidance when there are no items', async () => {
