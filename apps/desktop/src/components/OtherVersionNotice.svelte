@@ -4,7 +4,7 @@
   What it is about is kept either way; running it again replaces it.
 -->
 <script lang="ts">
-  import { Button } from '@entropia/ui'
+  import { Button, tooltip } from '@entropia/ui'
 
   let {
     heading,
@@ -32,9 +32,9 @@
     <h3>{heading}</h3>
   {/if}
   <!-- One line whatever the width: the message gives way and the action never
-       wraps or shrinks. The full message stays in the tooltip. -->
+       wraps or shrinks. The full message stays in the tooltip (the app's own, not a native title). -->
   <div class="notice">
-    <span class="notice__message" role="status" title={message}>{message}</span>
+    <span class="notice__message" role="status" use:tooltip={message}>{message}</span>
     <Button
       variant="secondary"
       size="sm"
