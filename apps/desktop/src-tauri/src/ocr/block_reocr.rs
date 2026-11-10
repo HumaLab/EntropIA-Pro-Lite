@@ -22,6 +22,7 @@
 use super::glm_ocr::{GlmOcrClient, GlmOcrResponse};
 use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
+use crate::derived_source::SourceStamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
@@ -428,6 +429,8 @@ fn crop_to_png(
 // ── Command ─────────────────────────────────────────────────────────────────
 
 struct LoadedBlock {
+    /// `assets.path` as the row held it when the block was loaded.
+    stored_path: String,
     asset_path: String,
     asset_type: String,
     page: i64,
@@ -487,6 +490,7 @@ fn load_block(
     let layout_h = int_field(block, "image_height").unwrap_or(layout_h) as f64;
     Ok((
         LoadedBlock {
+            stored_path: stored_path.clone(),
             asset_path: String::new(),
             asset_type,
             page: page_of(block),
@@ -508,20 +512,25 @@ fn ensure_expected_bbox(block: &Value, expected: &LayoutBoxInput) -> Result<(), 
     }
 }
 
-fn render_page(loaded: &LoadedBlock) -> Result<image::DynamicImage, String> {
+/// The page the box is cut from, and the stamp of the file it was read from.
+/// The stamp is taken over the bytes as read, before anything decodes them.
+fn render_page(loaded: &LoadedBlock) -> Result<(image::DynamicImage, SourceStamp), String> {
     let bytes = std::fs::read(&loaded.asset_path)
         .map_err(|e| format!("Failed to read {}: {e}", loaded.asset_path))?;
-    if loaded.asset_type == "pdf" || bytes.starts_with(b"%PDF-") {
+    let source = SourceStamp::of(&loaded.stored_path, &bytes);
+    let page = if loaded.asset_type == "pdf" || bytes.starts_with(b"%PDF-") {
         let page_index = usize::try_from(loaded.page - 1).unwrap_or(0);
-        super::pdf::render_pdf_page_to_unrotated_image(&bytes, page_index)
+        super::pdf::render_pdf_page_to_unrotated_image(&bytes, page_index)?
     } else {
         // Upright, as the viewer draws it: the layout box is in that system.
         crate::image_orient::decode_oriented_bytes(&bytes)
-            .map_err(|e| format!("No pude abrir la imagen: {e}"))
-    }
+            .map_err(|e| format!("No pude abrir la imagen: {e}"))?
+    };
+    Ok((page, source))
 }
 
-/// Writes the new layout and extraction text in one transaction.
+/// Writes the new layout and extraction text in one transaction. Both rows
+/// take `source`, the stamp of the file the box was cut from.
 fn persist_edit(
     db: &AppDbState,
     request: &LayoutBlockReocrRequest,
@@ -529,6 +538,7 @@ fn persist_edit(
     block_content: &str,
     text_piece: &str,
     detected_label: Option<&str>,
+    source: &SourceStamp,
 ) -> Result<LayoutBlockReocrResult, String> {
     let conn = db
         .ui_conn
@@ -598,11 +608,18 @@ fn persist_edit(
     let regions_json = serde_json::to_string(&regions)
         .map_err(|e| format!("Failed to serialize layout regions: {e}"))?;
     tx.execute(
-        "UPDATE layouts SET blocks = ?1, regions = ?2 WHERE asset_id = ?3",
-        rusqlite::params![blocks_json, regions_json, request.asset_id],
+        "UPDATE layouts SET blocks = ?1, regions = ?2, source_path = ?3, source_sha256 = ?4
+         WHERE asset_id = ?5",
+        rusqlite::params![
+            blocks_json,
+            regions_json,
+            source.path,
+            source.sha256,
+            request.asset_id
+        ],
     )
     .map_err(|e| format!("Failed to update layout: {e}"))?;
-    super::update_extraction_text(&tx, &request.asset_id, &text_content)?;
+    super::replace_extraction_text(&tx, &request.asset_id, &text_content, Some(source))?;
     crate::asset_history::record_best_effort(
         &tx,
         &crate::asset_history::ProcessEvent::new(
@@ -661,13 +678,13 @@ pub async fn reocr_layout_block(
         if loaded.asset_type == "pdf" {
             super::pdf::init_pdfium_path(&render_app);
         }
-        let page = render_page(&loaded)?;
+        let (page, source) = render_page(&loaded)?;
         let png = crop_to_png(&page, &bbox, loaded.layout_w, loaded.layout_h)?;
-        Ok::<_, String>((png, loaded.api_key))
+        Ok::<_, String>((png, loaded.api_key, source))
     })
     .await
     .map_err(|e| format!("Layout crop task failed: {e}"))?;
-    let (png, api_key) = crop_png?;
+    let (png, api_key, source) = crop_png?;
 
     let payload = super::encode_bytes_for_glm_ocr(&png)?;
     let response = GlmOcrClient::new(api_key).parse_file(&payload).await?;
@@ -684,6 +701,7 @@ pub async fn reocr_layout_block(
             &block_content,
             &text_piece,
             detected_label.as_deref(),
+            &source,
         )
     })
     .await
@@ -911,6 +929,7 @@ mod tests {
         let path = dir.path().join("photo.jpg");
         std::fs::write(&path, camera_jpeg(&upright_quadrants(400, 200), 6)).expect("fixture");
         let loaded = LoadedBlock {
+            stored_path: "assets/c1/photo_v3.jpg".to_string(),
             asset_path: path.to_string_lossy().into_owned(),
             asset_type: "image".to_string(),
             page: 1,
@@ -919,7 +938,13 @@ mod tests {
             api_key: String::new(),
         };
 
-        let page = render_page(&loaded).expect("page");
+        let (page, source) = render_page(&loaded).expect("page");
+        // The stamp is the file on disk, whatever was done to decode it.
+        assert_eq!(source.path, "assets/c1/photo_v3.jpg");
+        assert_eq!(
+            source.sha256,
+            crate::sync::blobs::hash_file(&path).expect("hash").0
+        );
         // A box well inside the top-left quadrant, which is red.
         let png = crop_to_png(&page, &bx(20.0, 20.0, 100.0, 50.0), 400.0, 200.0).expect("png");
 
@@ -930,5 +955,76 @@ mod tests {
             "the crop shows {centre:?}, expected the red quadrant"
         );
         assert_eq!((page.width(), page.height()), (400, 200));
+    }
+
+    #[test]
+    fn a_block_re_ocr_stamps_the_layout_and_the_text_with_the_file_it_read() {
+        use crate::sync::test_support::new_synced_test_db;
+
+        let conn = new_synced_test_db();
+        let blocks = serde_json::to_string(&vec![
+            block(1, 1, "Uno.", (10, 10, 100, 50)),
+            block(1, 2, "Dos cortado", (10, 80, 100, 50)),
+        ])
+        .expect("blocks");
+        conn.execute_batch(
+            "INSERT INTO collections(id,name,created_at,updated_at) VALUES('c1','C',1,1);
+             INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','I','c1',1,1);
+             INSERT INTO assets(id,item_id,path,type,created_at)
+             VALUES('a1','i1','assets/c1/photo_v4.jpg','image',1);
+             INSERT INTO extractions(id,asset_id,text_content,method,created_at,source_path,source_sha256)
+             VALUES('ext-a1','a1','Uno.\n\nDos cortado','glm_ocr',1,'assets/c1/photo_v3.jpg','old-sha');",
+        )
+        .expect("seed");
+        conn.execute(
+            "INSERT INTO layouts(id,asset_id,regions,blocks,model,image_width,image_height,created_at,source_path,source_sha256)
+             VALUES('lay-a1','a1','[]',?1,'glm_ocr',1000,2000,1,'assets/c1/photo_v3.jpg','old-sha')",
+            [&blocks],
+        )
+        .expect("seed layout");
+        let db = AppDbState::new(
+            conn,
+            rusqlite::Connection::open_in_memory().expect("worker conn"),
+            std::path::PathBuf::new(),
+        );
+        let request = LayoutBlockReocrRequest {
+            asset_id: "a1".to_string(),
+            block_index: 1,
+            expected_bbox: bx(10.0, 80.0, 100.0, 50.0),
+            bbox: bx(10.0, 80.0, 100.0, 120.0),
+            mode: LayoutBlockEditMode::Replace,
+            current_text: "Uno.\n\nDos cortado".to_string(),
+        };
+        let read = SourceStamp::of("assets/c1/photo_v4.jpg", b"the file the box was cut from");
+
+        let result = persist_edit(
+            &db,
+            &request,
+            &request.bbox,
+            "Dos cortado y su final.",
+            "Dos cortado y su final.",
+            Some("text"),
+            &read,
+        )
+        .expect("persist");
+
+        assert_eq!(result.text_content, "Uno.\n\nDos cortado y su final.");
+        let conn = db.ui_conn.lock().expect("conn");
+        for table in ["layouts", "extractions"] {
+            let stored: (Option<String>, Option<String>) = conn
+                .query_row(
+                    &format!(
+                        "SELECT source_path, source_sha256 FROM {table} WHERE asset_id = 'a1'"
+                    ),
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("stamp");
+            assert_eq!(
+                stored,
+                (Some(read.path.clone()), Some(read.sha256.clone())),
+                "{table}"
+            );
+        }
     }
 }

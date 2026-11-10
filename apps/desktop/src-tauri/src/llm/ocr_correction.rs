@@ -1400,6 +1400,39 @@ mod tests {
     }
 
     #[test]
+    fn a_correction_and_its_restore_keep_the_stamp_of_the_file_the_text_came_from() {
+        let original = "Texto original";
+        let conn = correction_db(original);
+        conn.execute_batch(
+            "ALTER TABLE extractions ADD COLUMN source_path TEXT;
+             ALTER TABLE extractions ADD COLUMN source_sha256 TEXT;
+             UPDATE extractions SET source_path = 'assets/c1/photo_v3.jpg', source_sha256 = 'abc123'
+             WHERE asset_id = 'asset-1';",
+        )
+        .expect("stamped extraction");
+        let stamp = |conn: &Connection| -> (Option<String>, Option<String>) {
+            conn.query_row(
+                "SELECT source_path, source_sha256 FROM extractions WHERE asset_id = 'asset-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("stamp")
+        };
+        let expected = (
+            Some("assets/c1/photo_v3.jpg".to_string()),
+            Some("abc123".to_string()),
+        );
+
+        commit_asset_correction_if_current(&conn, "asset-1", "Texto corregido", original)
+            .expect("commit correction");
+        assert_eq!(extraction_text(&conn), "Texto corregido");
+        assert_eq!(stamp(&conn), expected);
+
+        restore_original(&conn, "asset-1").expect("restore original");
+        assert_eq!(stamp(&conn), expected);
+    }
+
+    #[test]
     fn commit_is_atomic_and_restore_is_one_level() {
         let original = format!("# Documento\n\n{MARKDOWN_IMAGE}\n\nTexto original");
         let conn = correction_db(&original);

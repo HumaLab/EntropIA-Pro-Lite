@@ -25,6 +25,7 @@ pub mod deps;
 #[cfg(not(feature = "local-ml"))]
 #[path = "deps/mod_lite.rs"]
 pub mod deps;
+mod derived_source;
 mod geo;
 mod image_edit;
 mod image_orient;
@@ -1599,6 +1600,7 @@ pub fn run() {
             ocr::commands::test_glm_ocr_connection,
             ocr::commands::update_extraction_text_cmd,
             ocr::block_reocr::reocr_layout_block,
+            derived_source::asset_file_facts,
             asset_history::asset_history_record,
             ocr::commands::generate_pdf_thumbnail,
             ocr::commands::generate_image_thumbnail,

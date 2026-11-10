@@ -109,6 +109,7 @@ const APP_COMMANDS: &[&str] = &[
     "test_glm_ocr_connection",
     "update_extraction_text_cmd",
     "reocr_layout_block",
+    "asset_file_facts",
     "asset_history_record",
     "generate_pdf_thumbnail",
     "generate_image_thumbnail",

@@ -85,6 +85,22 @@ pub(crate) fn exif_orientation(path: impl AsRef<Path>) -> u8 {
         .to_exif()
 }
 
+/// EXIF orientation (`1..=8`) and pixel size of the image at `path` as a person
+/// sees it: `(orientation, width, height)`, with the two sides swapped for the
+/// orientations that lay the picture on its side (5 to 8). Only the header is
+/// read, no pixel is decoded. `None` when the file is not an image the crate
+/// can open.
+pub(crate) fn upright_header(path: impl AsRef<Path>) -> Option<(u8, u32, u32)> {
+    let mut decoder = open_reader(path.as_ref()).ok()?.into_decoder().ok()?;
+    let orientation = orientation_of(&mut decoder).to_exif();
+    let (stored_width, stored_height) = decoder.dimensions();
+    Some(if orientation >= 5 {
+        (orientation, stored_height, stored_width)
+    } else {
+        (orientation, stored_width, stored_height)
+    })
+}
+
 /// EXIF orientation of an in-memory image, `1..=8`. `1` when the bytes carry no
 /// tag or cannot be read.
 pub(crate) fn exif_orientation_bytes(bytes: &[u8]) -> u8 {
@@ -360,6 +376,27 @@ mod tests {
         std::fs::write(&path, camera_jpeg(&upright, 8)).expect("write fixture");
         assert_eq!(exif_orientation(&path), 8);
         assert_eq!(exif_orientation(dir.path().join("missing.jpg")), 1);
+    }
+
+    #[test]
+    fn the_header_gives_the_upright_size_for_every_orientation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let upright = upright_quadrants(W, H);
+        for orientation in 1..=8u8 {
+            let path = dir.path().join(format!("photo-{orientation}.jpg"));
+            std::fs::write(&path, camera_jpeg(&upright, orientation)).expect("write fixture");
+
+            assert_eq!(
+                upright_header(&path),
+                Some((orientation, W, H)),
+                "orientation {orientation}"
+            );
+        }
+
+        let pdf = dir.path().join("doc.pdf");
+        std::fs::write(&pdf, b"%PDF-1.7\n%%EOF\n").expect("write pdf");
+        assert_eq!(upright_header(&pdf), None);
+        assert_eq!(upright_header(dir.path().join("missing.jpg")), None);
     }
 
     #[test]
