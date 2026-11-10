@@ -15,6 +15,7 @@ import type {
   Topic,
   AssetLayout,
 } from '@entropia/store'
+import { checkLayoutVersion } from './layout-version'
 
 type JsonRecord = Record<string, unknown>
 
@@ -131,6 +132,22 @@ function byKey<T extends Record<string, unknown>>(rows: T[], key: keyof T): Reco
 
 function normalizeLayout(layout: AssetLayout | null): AssetLayout | null {
   return layout ?? null
+}
+
+/**
+ * The layout as it may be exported: only when it belongs to the file the asset
+ * shows now. One computed on another version of the image has its boxes in
+ * that version's coordinates, and so has one nobody can vouch for because the
+ * file cannot be read: both are left out. The check hashes a file only when
+ * its layout carries a hash, and never reads the file of a PDF.
+ */
+async function layoutOfCurrentFile(
+  asset: Asset,
+  layout: AssetLayout | null
+): Promise<AssetLayout | null> {
+  if (!layout) return null
+  const check = await checkLayoutVersion(asset, layout)
+  return check.status === 'matches' ? layout : null
 }
 
 async function selectRows<T extends JsonRecord>(sql: string, params: unknown[]): Promise<T[]> {
@@ -303,7 +320,7 @@ export async function exportCollectionById(
       extractionsByAssetId[asset.id] = extraction
       annotationsByAssetId[asset.id] = assetAnnotations
       transcriptionsByAssetId[asset.id] = transcription
-      layoutsByAssetId[asset.id] = layout
+      layoutsByAssetId[asset.id] = await layoutOfCurrentFile(asset, layout)
     }
   }
 

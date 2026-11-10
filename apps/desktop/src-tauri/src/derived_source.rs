@@ -6,6 +6,7 @@
 //! the facts of the asset's current file ([`file_facts`]). Both hashes are
 //! taken over the file exactly as it is on disk, before any orientation is
 //! applied, so they are equal when, and only when, it is the same file.
+//! [`layout_version`] is that check for a layout.
 
 use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
@@ -155,6 +156,68 @@ pub(crate) fn file_facts(path: &Path, with_sha: bool) -> Result<AssetFileFacts, 
     file_facts_with(&SHA_CACHE, path, with_sha)
 }
 
+/// `assets.type` of the only assets the version check applies to.
+const IMAGE_ASSET_TYPE: &str = "image";
+
+/// What a `layouts` row records about the file it was computed from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LayoutSource<'a> {
+    /// `layouts.source_sha256`. `None` on a row written before the stamps.
+    pub source_sha256: Option<&'a str>,
+    /// `layouts.image_width` and `layouts.image_height`.
+    pub image_width: i64,
+    pub image_height: i64,
+}
+
+/// Whether a stored layout belongs to the file its asset shows right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutVersion {
+    Matches,
+    OtherVersion,
+}
+
+/// The version check: does `layout` belong to the file `facts` describes?
+///
+/// The one rule, for every reader of a layout. The frontend applies the same
+/// one in `lib/layout-version.ts`, and both are tested against the same case
+/// table, `lib/layout-version.cases.json`.
+///
+/// - Only image assets are checked. Anything else always matches, and `facts`
+///   is not looked at.
+/// - A layout stamped with `source_sha256` belongs to the file with that hash.
+/// - A layout without a stamp predates the stamps. It belongs to the file only
+///   when the file carries no EXIF orientation (such a layout was computed in
+///   the sideways system of a tagged photo) and has the size the layout was
+///   computed on.
+///
+/// An image layout with nothing to compare with is not vouched for.
+pub(crate) fn layout_version(
+    asset_type: &str,
+    layout: &LayoutSource<'_>,
+    facts: Option<&AssetFileFacts>,
+) -> LayoutVersion {
+    if asset_type != IMAGE_ASSET_TYPE {
+        return LayoutVersion::Matches;
+    }
+    let Some(facts) = facts else {
+        return LayoutVersion::OtherVersion;
+    };
+
+    let matches = match layout.source_sha256.filter(|stamp| !stamp.is_empty()) {
+        Some(stamp) => facts.sha256.as_deref() == Some(stamp),
+        None => {
+            facts.orientation == 1
+                && facts.width.map(i64::from) == Some(layout.image_width)
+                && facts.height.map(i64::from) == Some(layout.image_height)
+        }
+    };
+    if matches {
+        LayoutVersion::Matches
+    } else {
+        LayoutVersion::OtherVersion
+    }
+}
+
 fn stored_asset_path(db: &AppDbState, asset_id: &str) -> Result<String, String> {
     let conn = db
         .ui_conn
@@ -213,6 +276,83 @@ mod tests {
             .expect("mtime");
         file.set_modified(current + std::time::Duration::from_secs(seconds))
             .expect("set mtime");
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RuleCaseLayout {
+        source_sha256: Option<String>,
+        image_width: i64,
+        image_height: i64,
+    }
+
+    #[derive(Deserialize)]
+    struct RuleCaseFile {
+        orientation: u8,
+        width: Option<u32>,
+        height: Option<u32>,
+        sha256: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RuleCase {
+        name: String,
+        asset_type: String,
+        layout: RuleCaseLayout,
+        file: Option<RuleCaseFile>,
+        verdict: String,
+    }
+
+    /// The case table of the frontend rule (`lib/layout-version.ts`), the very
+    /// file its own test reads: both implementations answer it the same way or
+    /// one of the two suites fails.
+    const RULE_CASES: &str = include_str!("../../src/lib/layout-version.cases.json");
+
+    #[test]
+    fn the_layout_version_rule_answers_the_table_shared_with_the_frontend() {
+        let cases: Vec<RuleCase> = serde_json::from_str(RULE_CASES).expect("case table");
+        assert!(cases.len() >= 15, "the table lost cases: {}", cases.len());
+
+        for case in cases {
+            let layout = LayoutSource {
+                source_sha256: case.layout.source_sha256.as_deref(),
+                image_width: case.layout.image_width,
+                image_height: case.layout.image_height,
+            };
+            let facts = case.file.map(|file| AssetFileFacts {
+                orientation: file.orientation,
+                width: file.width,
+                height: file.height,
+                sha256: file.sha256,
+            });
+            let expected = match case.verdict.as_str() {
+                "matches" => LayoutVersion::Matches,
+                "other_version" => LayoutVersion::OtherVersion,
+                other => panic!("{}: unknown verdict {other}", case.name),
+            };
+
+            assert_eq!(
+                layout_version(&case.asset_type, &layout, facts.as_ref()),
+                expected,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn an_image_layout_with_no_facts_to_compare_with_is_not_vouched_for() {
+        let layout = LayoutSource {
+            source_sha256: None,
+            image_width: 747,
+            image_height: 1169,
+        };
+        assert_eq!(
+            layout_version("image", &layout, None),
+            LayoutVersion::OtherVersion
+        );
+        assert_eq!(layout_version("pdf", &layout, None), LayoutVersion::Matches);
     }
 
     #[test]

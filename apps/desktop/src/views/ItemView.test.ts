@@ -25,6 +25,7 @@ const {
   similarAssetsMock,
   extractTextMock,
   getLayoutByAssetMock,
+  assetFileFactsMock,
   clipboardWriteTextMock,
   llmIsAvailableMock,
   llmOcrCorrectionIsAvailableMock,
@@ -64,6 +65,11 @@ const {
   >(),
   extractTextMock: vi.fn(),
   getLayoutByAssetMock: vi.fn(),
+  // The current file of every image asset is, unless a test says otherwise, the
+  // untagged 1000×1400 file the layout fixture was computed on.
+  assetFileFactsMock: vi.fn<(_assetId: string, _options?: { withSha?: boolean }) => unknown>(
+    async () => ({ orientation: 1, width: 1000, height: 1400, sha256: null })
+  ),
   clipboardWriteTextMock: vi.fn<(_: string) => Promise<void>>(),
   llmIsAvailableMock: vi.fn<() => Promise<boolean>>(),
   llmOcrCorrectionIsAvailableMock: vi.fn<() => Promise<boolean>>(),
@@ -355,6 +361,10 @@ vi.mock('$lib/layouts', async () => {
     getLayoutByAsset: getLayoutByAssetMock,
   }
 })
+
+vi.mock('$lib/asset-file-facts', () => ({
+  assetFileFacts: assetFileFactsMock,
+}))
 
 vi.mock('$lib/ocr', async () => {
   const actual = await vi.importActual<typeof import('$lib/ocr')>('$lib/ocr')
@@ -2996,6 +3006,9 @@ describe('ItemView image annotations', () => {
     similarAssetsMock.mockReset().mockResolvedValue([])
     extractTextMock.mockReset().mockResolvedValue(undefined)
     getLayoutByAssetMock.mockReset().mockResolvedValue(null)
+    assetFileFactsMock
+      .mockReset()
+      .mockResolvedValue({ orientation: 1, width: 1000, height: 1400, sha256: null })
   })
 
   it('loads annotations per asset and rehydrates when switching assets', async () => {
@@ -4009,6 +4022,308 @@ describe('ItemView image annotations', () => {
     expect(screen.getByText(/paddle_vl · 5 bloques · 5 regiones/i)).toBeInTheDocument()
   })
 
+  describe('layout of another version of the image', () => {
+    const imageAsset = {
+      id: 'asset-image-1',
+      itemId: 'item-1',
+      path: 'docs/photo-a.jpg',
+      type: 'image' as const,
+      createdAt: 1,
+    }
+    const tauriDefaults = (command: string) => {
+      if (command === 'llm_get_results') return []
+      if (command === 'llm_is_available') return true
+      if (command === 'db_select') return []
+      return null
+    }
+    const notice = () => screen.queryByTestId('layout-version-notice')
+    const drawnBoxes = () => screen.getByTestId('viewer-layout-region-count').textContent
+
+    it('keeps the layout through a crop and a rotation without drawing it, and undo brings it back', async () => {
+      storeRef.current = createStore({ assetsRows: [imageAsset] })
+      getLayoutByAssetMock.mockResolvedValue({
+        ...layoutFixture,
+        sourcePath: 'docs/photo-a.jpg',
+        sourceSha256: 'sha-original',
+      })
+      // The backend reads the file `assets.path` names: the last path written.
+      const filesByPath: Record<string, object> = {
+        'docs/photo-a.jpg': { orientation: 1, width: 1000, height: 1400, sha256: 'sha-original' },
+        'docs/photo-a_v2.jpg': { orientation: 1, width: 500, height: 560, sha256: 'sha-v2' },
+        'docs/photo-a_v3.jpg': { orientation: 1, width: 560, height: 500, sha256: 'sha-v3' },
+      }
+      const currentPath = () =>
+        (storeRef.current.assets.updatePath.mock.calls.at(-1)?.[1] as string | undefined) ??
+        imageAsset.path
+      assetFileFactsMock.mockImplementation(async () => filesByPath[currentPath()])
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'crop_image') {
+          return { path: 'docs/photo-a_v2.jpg', width: 500, height: 560 }
+        }
+        if (command === 'rotate_image') {
+          return { path: 'docs/photo-a_v3.jpg', width: 560, height: 500 }
+        }
+        return tauriDefaults(command)
+      })
+
+      render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+      await screen.findByTestId('mock-document-viewer')
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /mostrar overlay/i })).toBeEnabled()
+      })
+      await fireEvent.click(screen.getByRole('button', { name: /mostrar overlay/i }))
+      expect(drawnBoxes()).toBe('5')
+      expect(notice()).not.toBeInTheDocument()
+      expect(assetFileFactsMock).toHaveBeenLastCalledWith('asset-image-1', { withSha: true })
+
+      await fireEvent.click(screen.getByRole('button', { name: /report image dimensions/i }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Crop tool' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
+      await waitFor(() => {
+        expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+          'asset-image-1',
+          'docs/photo-a_v2.jpg'
+        )
+        expect(notice()).toHaveTextContent(
+          'Este layout corresponde a otra versión de la imagen (1000×1400); la actual mide 500×560. Volvé a correr el layout.'
+        )
+      })
+      expect(drawnBoxes()).toBe('0')
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /undo edit/i })).toBeEnabled()
+      })
+      await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+      await waitFor(() => {
+        expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+          'asset-image-1',
+          'docs/photo-a_v3.jpg'
+        )
+        expect(notice()).toHaveTextContent('la actual mide 560×500')
+      })
+      expect(drawnBoxes()).toBe('0')
+
+      // Editing never deletes the row: the guard alone keeps it off the screen.
+      expect(storeRef.current.layouts.deleteByAssetId).not.toHaveBeenCalled()
+      expect(storeRef.current.extractions.deleteByAsset).not.toHaveBeenCalled()
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /undo edit/i })).toBeEnabled()
+      })
+      await fireEvent.click(screen.getByRole('button', { name: /undo edit/i }))
+      await waitFor(() => {
+        expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+          'asset-image-1',
+          'docs/photo-a_v2.jpg'
+        )
+        expect(notice()).toHaveTextContent('la actual mide 500×560')
+        expect(screen.getByRole('button', { name: /undo edit/i })).toBeEnabled()
+      })
+      expect(drawnBoxes()).toBe('0')
+
+      // Back on the file the layout was computed on: drawn again, as it was.
+      await fireEvent.click(screen.getByRole('button', { name: /undo edit/i }))
+      await waitFor(() => {
+        expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+          'asset-image-1',
+          'docs/photo-a.jpg'
+        )
+        expect(notice()).not.toBeInTheDocument()
+        expect(drawnBoxes()).toBe('5')
+      })
+      expect(extractTextMock).not.toHaveBeenCalled()
+      expect(storeRef.current.layouts.deleteByAssetId).not.toHaveBeenCalled()
+    })
+
+    it('keeps the layout through an erase and a redo, which change the image and not its size', async () => {
+      storeRef.current = createStore({ assetsRows: [imageAsset] })
+      getLayoutByAssetMock.mockResolvedValue({
+        ...layoutFixture,
+        sourcePath: 'docs/photo-a.jpg',
+        sourceSha256: 'sha-original',
+      })
+      const currentPath = () =>
+        (storeRef.current.assets.updatePath.mock.calls.at(-1)?.[1] as string | undefined) ??
+        imageAsset.path
+      assetFileFactsMock.mockImplementation(async () => ({
+        orientation: 1,
+        width: 1000,
+        height: 1400,
+        sha256: currentPath() === imageAsset.path ? 'sha-original' : 'sha-erased',
+      }))
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'erase_region') {
+          return { path: 'docs/photo-a_v2.jpg', width: 1000, height: 1400 }
+        }
+        return tauriDefaults(command)
+      })
+      const sizeless =
+        'Este layout corresponde a otra versión de la imagen. Volvé a correr el layout.'
+
+      render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+      await screen.findByTestId('mock-document-viewer')
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /mostrar overlay/i })).toBeEnabled()
+      })
+      await fireEvent.click(screen.getByRole('button', { name: /mostrar overlay/i }))
+      expect(drawnBoxes()).toBe('5')
+
+      await fireEvent.click(screen.getByRole('button', { name: /report image dimensions/i }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Erase tool' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
+      await waitFor(() => {
+        expect(notice()).toHaveTextContent(sizeless)
+        expect(screen.getByRole('button', { name: /undo edit/i })).toBeEnabled()
+      })
+      expect(drawnBoxes()).toBe('0')
+
+      await fireEvent.click(screen.getByRole('button', { name: /undo edit/i }))
+      await waitFor(() => {
+        expect(notice()).not.toBeInTheDocument()
+        expect(drawnBoxes()).toBe('5')
+        expect(screen.getByRole('button', { name: /redo edit/i })).toBeEnabled()
+      })
+
+      await fireEvent.click(screen.getByRole('button', { name: /redo edit/i }))
+      await waitFor(() => {
+        expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
+          'asset-image-1',
+          'docs/photo-a_v2.jpg'
+        )
+        expect(notice()).toHaveTextContent(sizeless)
+      })
+      expect(drawnBoxes()).toBe('0')
+      expect(storeRef.current.layouts.deleteByAssetId).not.toHaveBeenCalled()
+      expect(storeRef.current.extractions.deleteByAsset).not.toHaveBeenCalled()
+      expect(extractTextMock).not.toHaveBeenCalled()
+    })
+
+    it('offers to run the layout again and shows the new one when it arrives', async () => {
+      storeRef.current = createStore({ assetsRows: [imageAsset] })
+      getLayoutByAssetMock.mockResolvedValue(layoutFixture)
+      assetFileFactsMock.mockResolvedValue({
+        orientation: 1,
+        width: 3456,
+        height: 4608,
+        sha256: null,
+      })
+
+      render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+      await screen.findByTestId('mock-document-viewer')
+
+      await waitFor(() => {
+        expect(notice()).toHaveTextContent(
+          'Este layout corresponde a otra versión de la imagen (1000×1400); la actual mide 3456×4608. Volvé a correr el layout.'
+        )
+      })
+      expect(drawnBoxes()).toBe('0')
+      // An unstamped row has no hash to compare with: the file is not hashed.
+      expect(assetFileFactsMock).toHaveBeenLastCalledWith('asset-image-1', { withSha: false })
+
+      await fireEvent.click(
+        within(notice()!).getByRole('button', { name: 'Volver a correr el layout' })
+      )
+      // The engine that computed the stale layout, when this build has it.
+      expect(extractTextMock).toHaveBeenCalledWith(
+        'asset-image-1',
+        'docs/photo-a.jpg',
+        'image',
+        LOCAL_ML ? 'light' : 'high'
+      )
+
+      getLayoutByAssetMock.mockResolvedValue({
+        ...layoutFixture,
+        sourcePath: 'docs/photo-a.jpg',
+        sourceSha256: 'sha-current',
+      })
+      assetFileFactsMock.mockResolvedValue({
+        orientation: 1,
+        width: 3456,
+        height: 4608,
+        sha256: 'sha-current',
+      })
+      nlpEventHandlers.get('ocr:complete')?.({
+        payload: {
+          asset_id: 'asset-image-1',
+          method: 'paddle_vl',
+          text_length: 9,
+          text_content: 'OCR nuevo',
+        },
+      })
+
+      await waitFor(() => {
+        expect(notice()).not.toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /mostrar overlay/i })).toBeEnabled()
+      })
+    })
+
+    it('leaves the sizes out of the notice when only the content changed', async () => {
+      storeRef.current = createStore({ assetsRows: [imageAsset] })
+      getLayoutByAssetMock.mockResolvedValue({
+        ...layoutFixture,
+        sourcePath: 'docs/photo-a.jpg',
+        sourceSha256: 'sha-before-the-erase',
+      })
+      assetFileFactsMock.mockResolvedValue({
+        orientation: 1,
+        width: 1000,
+        height: 1400,
+        sha256: 'sha-after-the-erase',
+      })
+
+      render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+      await screen.findByTestId('mock-document-viewer')
+
+      await waitFor(() => {
+        expect(notice()).toHaveTextContent(
+          'Este layout corresponde a otra versión de la imagen. Volvé a correr el layout.'
+        )
+      })
+      expect(notice()).not.toHaveTextContent('1000×1400')
+      expect(drawnBoxes()).toBe('0')
+    })
+
+    it('draws no boxes it cannot vouch for when the file cannot be read, and keeps the image', async () => {
+      storeRef.current = createStore({ assetsRows: [imageAsset] })
+      getLayoutByAssetMock.mockResolvedValue(layoutFixture)
+      assetFileFactsMock.mockRejectedValue(new Error('Failed to read docs/photo-a.jpg'))
+
+      render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+      const viewer = await screen.findByTestId('mock-document-viewer')
+
+      expect(
+        await screen.findByText(
+          'No se pudo cargar el layout: no se pudo leer el archivo de la imagen para comprobar a qué versión corresponde.'
+        )
+      ).toBeInTheDocument()
+      expect(viewer).toHaveAttribute('data-path', 'docs/photo-a.jpg')
+      expect(drawnBoxes()).toBe('0')
+      expect(notice()).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /mostrar overlay/i })).toBeDisabled()
+    })
+
+    it('never checks the layout of a PDF asset', async () => {
+      storeRef.current = createStore({
+        assetsRows: [{ ...imageAsset, id: 'asset-pdf-1', path: 'docs/acta.pdf', type: 'pdf' }],
+      })
+      getLayoutByAssetMock.mockResolvedValue({
+        ...layoutFixture,
+        assetId: 'asset-pdf-1',
+        sourcePath: 'docs/acta.pdf',
+        sourceSha256: 'sha-of-some-other-file',
+      })
+
+      render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+      await screen.findByTestId('mock-document-viewer')
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /mostrar overlay/i })).toBeEnabled()
+      })
+      expect(notice()).not.toBeInTheDocument()
+      expect(assetFileFactsMock).not.toHaveBeenCalled()
+    })
+  })
+
   it('does not run NER for duplicate OCR completion events', async () => {
     storeRef.current = createStore({
       assetsRows: [
@@ -4402,7 +4717,8 @@ describe('ItemView image annotations', () => {
     render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
 
     await screen.findByTestId('mock-document-viewer')
-    expect(screen.getByTestId('layout-inspector-empty')).toBeInTheDocument()
+    // The layout arrives after its version check, one step later than the viewer.
+    expect(await screen.findByTestId('layout-inspector-empty')).toBeInTheDocument()
 
     await fireEvent.click(await screen.findByTestId('layout-block-item-layout-block-0'))
 

@@ -92,6 +92,13 @@
     type LayoutBlockFilterId,
     type LayoutBoxDraft,
   } from '$lib/layouts'
+  import {
+    checkLayoutVersion,
+    layoutRerunMode,
+    type LayoutVersionCheck,
+    type LayoutVersionVerdict,
+  } from '$lib/layout-version'
+  import LayoutVersionNotice from '../components/LayoutVersionNotice.svelte'
   import { runPendingAssetJob } from '$lib/item-view-media-jobs'
   import { recordAssetProcess, type RendererProcess } from '$lib/asset-history'
   import { OcrStore, extractText, type OcrMode } from '$lib/ocr'
@@ -265,7 +272,17 @@
   let annotationSaveError = $state<string | null>(null)
   let editError = $state<string | null>(null)
 
+  // Only a layout that belongs to the file on screen is ever held here: the
+  // boxes, the block list and the box editor all read it. A stored layout that
+  // was computed on another version of the image stays in the database and is
+  // described by `staleLayout` instead.
   let assetLayout = $state<Awaited<ReturnType<typeof getLayoutByAsset>>>(null)
+  let staleLayout = $state<{
+    assetId: string
+    /** `layouts.model`: the engine to run again. */
+    model: string
+    verdict: Extract<LayoutVersionVerdict, { status: 'other_version' }>
+  } | null>(null)
   let layoutLoading = $state(false)
   let layoutError = $state<string | null>(null)
   let showLayout = $state(false)
@@ -1183,6 +1200,9 @@
       0
   )
   let hasLayoutData = $derived(Boolean(assetLayout && layoutBlocks.length > 0))
+  let layoutOtherVersion = $derived(
+    staleLayout && staleLayout.assetId === selectedAssetId ? staleLayout : null
+  )
   let textPanelOcrState = $derived(
     selectedAsset && selectedAsset.type !== 'audio' ? getOcrState(selectedAsset.id) : null
   )
@@ -1500,6 +1520,11 @@
       selectedAnnotationId = null
       annotationSaveError = null
       imageVersion++
+      // The image on screen is another file from here on. Its layout is not
+      // deleted: it is taken off the screen now, and the reload this path
+      // change triggers puts it back if it belongs to the new file (an undo
+      // back to the version it was computed on).
+      if (asset.type === 'image' && previous.path !== next.path) assetLayout = null
     }
     return true
   }
@@ -1814,6 +1839,17 @@
       execute: () => extractText(asset.id, asset.path, asset.type, mode),
       fallbackError: 'Extraction failed',
     })
+  }
+
+  /**
+   * Computes the layout of the image on screen again, with the same OCR
+   * action the Text tab offers. The new layout replaces the stale one.
+   */
+  function rerunStaleLayout() {
+    const asset = selectedAsset
+    const stale = layoutOtherVersion
+    if (!asset || !stale) return
+    void handleExtractText(asset, layoutRerunMode(stale.model, LOCAL_ML))
   }
 
   async function handleTranscribeAudio(asset: Asset) {
@@ -2709,6 +2745,7 @@
 
     if (!asset || asset.type === 'audio') {
       assetLayout = null
+      staleLayout = null
       layoutLoading = false
       layoutError = null
       return
@@ -2723,8 +2760,33 @@
         return
       }
 
-      assetLayout = layout
+      // The backend answers for the file `assets.path` names right now, so the
+      // check is always about the image on screen. It never throws.
+      const check: LayoutVersionCheck = layout
+        ? await checkLayoutVersion(asset, layout)
+        : { status: 'matches' }
+      if (!layoutLoadGuard.isCurrent(requestToken) || selectedAsset?.id !== asset.id) {
+        return
+      }
+
       if (!layoutBoxBusy) layoutBoxDraft = null
+      if (layout && check.status === 'other_version') {
+        // `showLayout` is left alone: the overlay comes back by itself when
+        // the image returns to the version of this layout.
+        assetLayout = null
+        staleLayout = { assetId: asset.id, model: layout.model, verdict: check }
+        return
+      }
+      staleLayout = null
+      if (check.status === 'unknown') {
+        // The file could not be read: boxes nobody can vouch for are not drawn.
+        assetLayout = null
+        layoutError = translate('item.layoutVersionUnknown')
+        showLayout = false
+        return
+      }
+
+      assetLayout = layout
       if (!layout || layout.blocks.length === 0) {
         showLayout = false
       }
@@ -2734,6 +2796,7 @@
       }
 
       assetLayout = null
+      staleLayout = null
       layoutError = e instanceof Error ? e.message : 'Failed to load layout'
       showLayout = false
     } finally {
@@ -3470,47 +3533,57 @@
           </div>
 
           <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'layout'}>
-            <ItemLayoutPanel
-              selectedAssetType={selectedAsset?.type ?? null}
-              {viewerType}
-              {assetLayout}
-              {layoutLoading}
-              {layoutError}
-              {showLayout}
-              {layoutActivePage}
-              {layoutBlockCountsByPage}
-              {layoutBlocks}
-              layoutPageRegionCount={layoutPageRegions.length}
-              layoutRegionCount={assetLayout?.regions.length ?? 0}
-              {layoutPageOptions}
-              {layoutTypeFilter}
-              {layoutFilterLabels}
-              {layoutFilterCounts}
-              {layoutPageBlocks}
-              {visibleLayoutBlocks}
-              {layoutHoveredBlockId}
-              {layoutSelectedBlockId}
-              {selectedLayoutBlock}
-              {hasLayoutData}
-              {translate}
-              onToggleLayout={(nextShowLayout) => {
-                showLayout = nextShowLayout
-              }}
-              onPageChange={(page) => {
-                viewerPage = page
-              }}
-              onFilterChange={(filter) => {
-                layoutTypeFilter = filter
-              }}
-              onHoverBlock={syncLayoutHoverFromBlock}
-              onSelectBlock={setSelectedLayoutBlock}
-              {layoutBoxDraft}
-              {layoutBoxBusy}
-              {layoutBoxMessage}
-              onStartBoxEdit={startLayoutBoxEdit}
-              onCancelBoxEdit={cancelLayoutBoxEdit}
-              onApplyBoxEdit={applyLayoutBoxEdit}
-            />
+            {#if layoutOtherVersion}
+              <LayoutVersionNotice
+                verdict={layoutOtherVersion.verdict}
+                busy={textPanelOcrState?.status === 'pending' ||
+                  textPanelOcrState?.status === 'running'}
+                {translate}
+                onRerun={rerunStaleLayout}
+              />
+            {:else}
+              <ItemLayoutPanel
+                selectedAssetType={selectedAsset?.type ?? null}
+                {viewerType}
+                {assetLayout}
+                {layoutLoading}
+                {layoutError}
+                {showLayout}
+                {layoutActivePage}
+                {layoutBlockCountsByPage}
+                {layoutBlocks}
+                layoutPageRegionCount={layoutPageRegions.length}
+                layoutRegionCount={assetLayout?.regions.length ?? 0}
+                {layoutPageOptions}
+                {layoutTypeFilter}
+                {layoutFilterLabels}
+                {layoutFilterCounts}
+                {layoutPageBlocks}
+                {visibleLayoutBlocks}
+                {layoutHoveredBlockId}
+                {layoutSelectedBlockId}
+                {selectedLayoutBlock}
+                {hasLayoutData}
+                {translate}
+                onToggleLayout={(nextShowLayout) => {
+                  showLayout = nextShowLayout
+                }}
+                onPageChange={(page) => {
+                  viewerPage = page
+                }}
+                onFilterChange={(filter) => {
+                  layoutTypeFilter = filter
+                }}
+                onHoverBlock={syncLayoutHoverFromBlock}
+                onSelectBlock={setSelectedLayoutBlock}
+                {layoutBoxDraft}
+                {layoutBoxBusy}
+                {layoutBoxMessage}
+                onStartBoxEdit={startLayoutBoxEdit}
+                onCancelBoxEdit={cancelLayoutBoxEdit}
+                onApplyBoxEdit={applyLayoutBoxEdit}
+              />
+            {/if}
           </div>
 
           <div class="right-panel-pane" class:is-hidden={rightPanelTab !== 'text'}>

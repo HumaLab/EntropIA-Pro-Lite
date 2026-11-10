@@ -2224,6 +2224,13 @@ const es = {
   'item.layoutLoadError': 'No se pudo cargar el layout: {error}',
   'item.layoutMissing': 'Esta página todavía no tiene layout persistido.',
   'item.layoutNoBlocks': 'Hay layout guardado, pero no trae bloques navegables.',
+  'item.layoutOtherVersionSized':
+    'Este layout corresponde a otra versión de la imagen ({width}×{height}); la actual mide {currentWidth}×{currentHeight}. Volvé a correr el layout.',
+  'item.layoutOtherVersion':
+    'Este layout corresponde a otra versión de la imagen. Volvé a correr el layout.',
+  'item.layoutRerun': 'Volver a correr el layout',
+  'item.layoutVersionUnknown':
+    'no se pudo leer el archivo de la imagen para comprobar a qué versión corresponde.',
   'item.layoutHelp': 'Tocá o pasá el mouse sobre un bloque para resaltarlo en el viewer.',
   'item.layoutPageSelect': 'Seleccionar página del layout',
   'item.layoutShowing': 'Mostrando {visible} de {total} bloques.',
@@ -5348,6 +5355,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.saving': 'Saving...',
   'item.layoutLoading': 'Loading layout…',
   'item.layoutLoadError': 'Could not load layout: {error}',
+  'item.layoutOtherVersionSized':
+    'This layout belongs to another version of the image ({width}×{height}); the current one is {currentWidth}×{currentHeight}. Run the layout again.',
+  'item.layoutOtherVersion':
+    'This layout belongs to another version of the image. Run the layout again.',
+  'item.layoutRerun': 'Run the layout again',
+  'item.layoutVersionUnknown':
+    'the image file could not be read to check which version it belongs to.',
   'item.layoutMissing': 'This page does not have persisted layout yet.',
   'item.layoutNoBlocks': 'Layout data exists, but it has no navigable blocks.',
   'item.layoutHelp': 'Tap or hover a block to highlight it in the viewer.',
