@@ -515,7 +515,9 @@ fn render_page(loaded: &LoadedBlock) -> Result<image::DynamicImage, String> {
         let page_index = usize::try_from(loaded.page - 1).unwrap_or(0);
         super::pdf::render_pdf_page_to_unrotated_image(&bytes, page_index)
     } else {
-        image::load_from_memory(&bytes).map_err(|e| format!("No pude abrir la imagen: {e}"))
+        // Upright, as the viewer draws it: the layout box is in that system.
+        crate::image_orient::decode_oriented_bytes(&bytes)
+            .map_err(|e| format!("No pude abrir la imagen: {e}"))
     }
 }
 
@@ -897,5 +899,36 @@ mod tests {
         let png = crop_to_png(&page, &bx(10.0, 10.0, 100.0, 8.0), 400.0, 400.0).expect("png");
         let decoded = image::load_from_memory(&png).expect("decode");
         assert!(decoded.height() >= MIN_CROP_SIDE_PX);
+    }
+
+    #[test]
+    fn the_crop_of_a_camera_photo_is_cut_from_the_upright_image() {
+        use crate::image_orient::test_support::{camera_jpeg, close_to, upright_quadrants, RED};
+
+        // What the person sees is 400×200, and so is the layout space. The
+        // file holds it sideways (200×400) with orientation 6.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("photo.jpg");
+        std::fs::write(&path, camera_jpeg(&upright_quadrants(400, 200), 6)).expect("fixture");
+        let loaded = LoadedBlock {
+            asset_path: path.to_string_lossy().into_owned(),
+            asset_type: "image".to_string(),
+            page: 1,
+            layout_w: 400.0,
+            layout_h: 200.0,
+            api_key: String::new(),
+        };
+
+        let page = render_page(&loaded).expect("page");
+        // A box well inside the top-left quadrant, which is red.
+        let png = crop_to_png(&page, &bx(20.0, 20.0, 100.0, 50.0), 400.0, 200.0).expect("png");
+
+        let crop = image::load_from_memory(&png).expect("decode").to_rgb8();
+        let centre = *crop.get_pixel(crop.width() / 2, crop.height() / 2);
+        assert!(
+            close_to(centre, RED),
+            "the crop shows {centre:?}, expected the red quadrant"
+        );
+        assert_eq!((page.width(), page.height()), (400, 200));
     }
 }

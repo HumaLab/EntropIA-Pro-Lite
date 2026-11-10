@@ -68,9 +68,6 @@ pub(crate) fn decode_oriented(path: impl AsRef<Path>) -> Result<DynamicImage, St
 
 /// Decode an in-memory image with its EXIF orientation applied. The format is
 /// guessed from the content.
-// The Lite build has no consumer yet: the layout dimensions are Pro-only, and
-// the per-block re-OCR and the thumbnail are wired by the next tasks.
-#[cfg_attr(not(feature = "paddle-ocr"), allow(dead_code))]
 pub(crate) fn decode_oriented_bytes(bytes: &[u8]) -> Result<DynamicImage, String> {
     let reader = bytes_reader(bytes).map_err(|e| format!("Failed to decode image: {e}"))?;
     decode_upright(reader)
