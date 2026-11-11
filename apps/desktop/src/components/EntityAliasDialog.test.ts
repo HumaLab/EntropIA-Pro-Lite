@@ -17,10 +17,10 @@ vi.mock('$lib/db', () => ({
 
 function openDialog(overrides: Record<string, unknown> = {}) {
   return render(EntityAliasDialog, {
-    onclose: vi.fn(),
-    ...overrides,
     alias: 'Mdme. Cuevas',
     suggestions: ['Carmela Cuevas', 'Cuevas'],
+    onclose: vi.fn(),
+    ...overrides,
   })
 }
 
@@ -89,6 +89,31 @@ describe('EntityAliasDialog', () => {
     })
     expect(onsaved).toHaveBeenCalledOnce()
     expect(onclose).toHaveBeenCalledOnce()
+  })
+
+  it('explains what to do when the canonical is the mention itself, without saving', async () => {
+    // T6, S9: the owner opened the dialog on «Fernando Solá» and picked the
+    // same name because it is the right one. Nothing is saved (S6) and the
+    // dialog stays open with the message telling them to start from the
+    // other mention instead.
+    const onclose = vi.fn()
+    openDialog({
+      onclose,
+      alias: 'Fernando Solá',
+      suggestions: ['Buenos Aires', 'Anselmo Marini', 'Fernando Solá'],
+    })
+
+    await fireEvent.input(screen.getByLabelText('Nombre canónico'), {
+      target: { value: '  fernando   solá ' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar' }))
+
+    expect(await screen.findByText(/ya es el nombre correcto/)).toBeInTheDocument()
+    expect(screen.getByText(/desde esa otra mención/)).toBeInTheDocument()
+    expect(upsertMock).not.toHaveBeenCalled()
+    expect(onclose).not.toHaveBeenCalled()
+    expect(listMock).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Nombre canónico')).toHaveValue('  fernando   solá ')
   })
 
   it('shows a readable message on a repo validation error and saves nothing', async () => {

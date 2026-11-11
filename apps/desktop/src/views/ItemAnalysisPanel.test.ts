@@ -663,6 +663,82 @@ describe('ItemAnalysisPanel entity aliases dialog (T3)', () => {
     expect(within(dialog).getByRole('button', { name: 'Carmela Cuevas' })).toBeInTheDocument()
   })
 
+  it('only offers mentions of the same entity type, never the mention itself', async () => {
+    // T6, S9: the owner opened the dialog on a person and was offered places
+    // and organizations. Same-type only, deduplicated, without the mention.
+    const person = {
+      id: 'e1',
+      itemId: 'item-1',
+      entityType: 'person' as const,
+      value: 'Fernando Solá',
+      startOffset: 0,
+      endOffset: 12,
+      confidence: 1,
+      createdAt: 1,
+    }
+    render(
+      ItemAnalysisPanel,
+      makeProps(vi.fn(), {
+        entities: [
+          person,
+          {
+            id: 'e2',
+            itemId: 'item-1',
+            entityType: 'person' as const,
+            value: 'Anselmo Marini',
+            startOffset: 20,
+            endOffset: 34,
+            confidence: 1,
+            createdAt: 2,
+          },
+          {
+            id: 'e3',
+            itemId: 'item-1',
+            entityType: 'person' as const,
+            value: 'Anselmo Marini',
+            startOffset: 40,
+            endOffset: 54,
+            confidence: 1,
+            createdAt: 3,
+          },
+          {
+            id: 'e4',
+            itemId: 'item-1',
+            entityType: 'place' as const,
+            value: 'Buenos Aires',
+            startOffset: 60,
+            endOffset: 72,
+            confidence: 1,
+            createdAt: 4,
+          },
+          {
+            id: 'e5',
+            itemId: 'item-1',
+            entityType: 'organization' as const,
+            value: 'Confederación General del Trabajo',
+            startOffset: 80,
+            endOffset: 114,
+            confidence: 1,
+            createdAt: 5,
+          },
+        ],
+      })
+    )
+
+    await fireEvent.click(screen.getByTestId('mock-entity-alias-e1'))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('button', { name: 'Anselmo Marini' })).toBeInTheDocument()
+    // The duplicate collapses to one suggestion; other types and the
+    // mention itself are never offered.
+    expect(within(dialog).getAllByRole('button', { name: 'Anselmo Marini' })).toHaveLength(1)
+    expect(within(dialog).queryByRole('button', { name: 'Buenos Aires' })).toBeNull()
+    expect(
+      within(dialog).queryByRole('button', { name: 'Confederación General del Trabajo' })
+    ).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Fernando Solá' })).toBeNull()
+  })
+
   it('saves the alias and shows the canonical name without restarting', async () => {
     aliasListMock.mockResolvedValue([
       {

@@ -2679,7 +2679,7 @@ const es = {
   'entityAliases.error.emptyAlias': 'El alias no puede estar vacío.',
   'entityAliases.error.emptyCanonical': 'El nombre canónico no puede estar vacío.',
   'entityAliases.error.sameValue':
-    'El alias y el nombre canónico son el mismo: elegí un nombre canónico distinto.',
+    '«{alias}» ya es el nombre correcto, así que no hace falta un alias. Para unificar otra forma de este nombre, abrí «Es la misma persona que…» desde esa otra mención y elegí «{alias}» como nombre canónico.',
   'entityAliases.error.chainCanonical':
     '«{canonical}» ya es un alias de otro nombre: elegí el nombre canónico final directamente.',
   'entityAliases.error.chainAlias':
@@ -5943,7 +5943,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'entityAliases.error.emptyAlias': 'The alias must not be empty.',
   'entityAliases.error.emptyCanonical': 'The canonical name must not be empty.',
   'entityAliases.error.sameValue':
-    'Alias and canonical name are the same: pick a different canonical name.',
+    '"{alias}" is already the correct name, so no alias is needed. To unify another form of this name, open “Same as…” from that other mention and choose "{alias}" as the canonical name.',
   'entityAliases.error.chainCanonical':
     '“{canonical}” is already an alias of another name: pick the final canonical name directly.',
   'entityAliases.error.chainAlias':

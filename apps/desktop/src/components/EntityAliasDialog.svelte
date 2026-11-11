@@ -46,6 +46,17 @@
 
   async function save(): Promise<void> {
     if (saving) return
+    // T6, S9: the owner picked the mention's own name because it is the
+    // right one. Refuse before touching the repo (S6): nothing is saved and
+    // the dialog stays open with the message explaining to start from the
+    // other mention. The repo's own refusal stays mapped as a fallback.
+    if (
+      canonical.trim() &&
+      normalizeEntityAliasKey(canonical.trim()) === normalizeEntityAliasKey(alias)
+    ) {
+      error = t('entityAliases.error.sameValue', { alias })
+      return
+    }
     saving = true
     error = null
     try {

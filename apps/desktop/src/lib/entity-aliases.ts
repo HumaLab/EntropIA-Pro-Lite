@@ -92,7 +92,7 @@ export function describeEntityAliasError(
     return translate('entityAliases.error.emptyCanonical')
   }
   if (message.includes('normalize to the same value')) {
-    return translate('entityAliases.error.sameValue')
+    return translate('entityAliases.error.sameValue', { alias })
   }
   if (message.includes('is itself an alias')) {
     return translate('entityAliases.error.chainCanonical', { canonical })

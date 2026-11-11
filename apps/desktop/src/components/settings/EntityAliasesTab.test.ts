@@ -107,7 +107,8 @@ describe('EntityAliasesTab', () => {
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar' }))
 
-    expect(await screen.findByText(/son el mismo/)).toBeInTheDocument()
+    expect(await screen.findByText(/ya es el nombre correcto/)).toBeInTheDocument()
+    expect(screen.getByText(/desde esa otra mención/)).toBeInTheDocument()
     expect(screen.queryByText(/normalize to the same value/)).toBeNull()
     // The edit stays open with the typed value; the list is not reloaded.
     expect(screen.getByLabelText('Nombre canónico')).toHaveValue('Mdme. Cuevas')
@@ -225,7 +226,8 @@ describe('EntityAliasesTab suggestions (T5)', () => {
 
     await fireEvent.click(screen.getByTestId('entity-alias-suggestion-accept-0'))
 
-    expect(await screen.findByText(/son el mismo/)).toBeInTheDocument()
+    expect(await screen.findByText(/ya es el nombre correcto/)).toBeInTheDocument()
+    expect(screen.getByText(/desde esa otra mención/)).toBeInTheDocument()
     expect(screen.queryByText(/normalize to the same value/)).toBeNull()
     expect(screen.getByTestId('entity-alias-suggestion-0')).toBeInTheDocument()
   })

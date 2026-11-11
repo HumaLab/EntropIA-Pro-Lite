@@ -10,6 +10,7 @@
     type StatusBadgeVariant,
   } from '@entropia/ui'
   import type { Entity } from '@entropia/ui'
+  import { normalizeEntityAliasKey } from '@entropia/store'
   import {
     getEntityAliasResolver,
     identityEntityAliasResolver,
@@ -118,6 +119,21 @@
   // the alias dialog asks for the canonical name. Saving writes only to
   // entity_aliases (S2) and refreshes the shared resolver below.
   let aliasTarget: Entity | null = $state(null)
+  // Same-type suggestions only (T6, S9): a person is never offered a place
+  // or an organization, and the mention itself is excluded here too (the
+  // dialog keeps its own normalized exclusion as a fallback).
+  const aliasSuggestions = $derived.by<string[]>(() => {
+    const target = aliasTarget
+    if (!target) return []
+    const targetKey = normalizeEntityAliasKey(target.value)
+    return entities
+      .filter(
+        (entity) =>
+          entity.entityType === target.entityType &&
+          normalizeEntityAliasKey(entity.value) !== targetKey
+      )
+      .map((entity) => entity.value)
+  })
   $effect(() => {
     let cancelled = false
     void loadEntityAliasResolver().then((resolver) => {
@@ -457,7 +473,7 @@
         {#if aliasTarget}
           <EntityAliasDialog
             alias={aliasTarget.value}
-            suggestions={entities.map((entity) => entity.value)}
+            suggestions={aliasSuggestions}
             onclose={() => (aliasTarget = null)}
             onsaved={() => {
               resolveAlias = getEntityAliasResolver()

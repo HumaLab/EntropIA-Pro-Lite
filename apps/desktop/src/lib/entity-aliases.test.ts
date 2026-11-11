@@ -123,7 +123,7 @@ describe('describeEntityAliasError (T3)', () => {
         'Mdme. Cuevas',
         at
       )
-    ).toBe('entityAliases.error.sameValue')
+    ).toBe('entityAliases.error.sameValue {"alias":"Mdme. Cuevas"}')
     expect(
       describeEntityAliasError(
         new Error('Cannot point "Mdme. Cuevas" at "Cuevas": "Cuevas" is itself an alias.'),
