@@ -686,6 +686,12 @@
     },
     {
       "type": "table",
+      "name": "entity_aliases",
+      "tbl_name": "entity_aliases",
+      "sql": "CREATE TABLE entity_aliases (\n  id TEXT PRIMARY KEY,\n  alias_key TEXT NOT NULL UNIQUE,\n  alias TEXT NOT NULL,\n  canonical TEXT NOT NULL,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL\n)"
+    },
+    {
+      "type": "table",
       "name": "extraction_records",
       "tbl_name": "extraction_records",
       "sql": "CREATE TABLE extraction_records (\n  id TEXT PRIMARY KEY,\n  schema_id TEXT NOT NULL REFERENCES extraction_schemas(id) ON DELETE CASCADE,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  item_id TEXT NOT NULL,\n  record_json TEXT NOT NULL,\n  created_at INTEGER NOT NULL\n)"
@@ -3332,6 +3338,68 @@
           "match": "NONE"
         }
       ],
+      "columns_error": null,
+      "foreign_keys_error": null
+    },
+    {
+      "name": "entity_aliases",
+      "columns": [
+        {
+          "cid": 0,
+          "name": "id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1,
+          "hidden": 0
+        },
+        {
+          "cid": 1,
+          "name": "alias_key",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 2,
+          "name": "alias",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 3,
+          "name": "canonical",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 4,
+          "name": "created_at",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 5,
+          "name": "updated_at",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        }
+      ],
+      "foreign_keys": [],
       "columns_error": null,
       "foreign_keys_error": null
     },
@@ -11525,6 +11593,7 @@
     "0061_asset_process_events",
     "0062_triple_evidence",
     "0063_collection_ai_context",
-    "0064_derived_source_path"
+    "0064_derived_source_path",
+    "0065_entity_aliases"
   ]
 }

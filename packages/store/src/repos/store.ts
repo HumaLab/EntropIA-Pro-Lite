@@ -9,6 +9,7 @@ import { AnnotationRepo } from './annotation.repo'
 import { ExtractionRepo } from './extraction.repo'
 import { LayoutRepo } from './layout.repo'
 import { AssetProcessEventRepo } from './asset-process-event.repo'
+import { EntityAliasRepo } from './entity-alias.repo'
 import { EntityRepo } from './entity.repo'
 import { FtsRepo } from './fts.repo'
 import { TripleRepo } from './triple.repo'
@@ -26,6 +27,7 @@ export interface StoreApi {
   layouts: LayoutRepo
   assetProcessEvents: AssetProcessEventRepo
   entities: EntityRepo
+  entityAliases: EntityAliasRepo
   fts: FtsRepo
   triples: TripleRepo
   transcriptions: TranscriptionRepo
@@ -46,6 +48,7 @@ export async function initStore(client: DbClient): Promise<StoreApi> {
     layouts: new LayoutRepo(db),
     assetProcessEvents: new AssetProcessEventRepo(db),
     entities: new EntityRepo(db),
+    entityAliases: new EntityAliasRepo(db),
     fts: new FtsRepo(client),
     triples: new TripleRepo(db),
     transcriptions: new TranscriptionRepo(db),

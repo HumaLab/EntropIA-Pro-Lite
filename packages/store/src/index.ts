@@ -16,6 +16,7 @@ export {
   triples,
   annotations,
   transcriptions,
+  entityAliases,
   topics,
   itemTopics,
   processingBatches,
@@ -45,6 +46,12 @@ export { AnnotationRepo } from './repos/annotation.repo'
 export { ExtractionRepo } from './repos/extraction.repo'
 export { LayoutRepo } from './repos/layout.repo'
 export { AssetProcessEventRepo } from './repos/asset-process-event.repo'
+export {
+  EntityAliasRepo,
+  buildAliasResolver,
+  normalizeEntityAliasKey,
+} from './repos/entity-alias.repo'
+export type { EntityAlias, AliasResolverRow } from './repos/entity-alias.repo'
 export { EntityRepo } from './repos/entity.repo'
 export { FtsRepo, sanitizeFts5Query } from './repos/fts.repo'
 export { TripleRepo } from './repos/triple.repo'

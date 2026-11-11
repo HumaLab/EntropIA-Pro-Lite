@@ -206,6 +206,7 @@ static REGISTRY: &[Migration] = &[
     migration!("0062_triple_evidence", Atomic),
     migration!("0063_collection_ai_context", Atomic),
     migration!("0064_derived_source_path", Atomic),
+    migration!("0065_entity_aliases", Atomic),
 ];
 
 // ---------------------------------------------------------------------------
@@ -695,8 +696,8 @@ mod tests {
         );
         assert_eq!(
             from_registry.len(),
-            64,
-            "the Phase 4 shell must keep all 64 migrations"
+            65,
+            "the Phase 4 shell must keep all 65 migrations"
         );
     }
 
@@ -719,7 +720,7 @@ mod tests {
         );
         assert_eq!(
             expected.len(),
-            33,
+            34,
             "the TS atomic condition changed shape; re-check the extractor"
         );
     }
@@ -731,7 +732,7 @@ mod tests {
             apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("apply everything");
         assert_eq!(
             report.applied.len(),
-            64,
+            65,
             "every registry migration must run once"
         );
         assert_matches_canonical_fixture(
@@ -861,7 +862,10 @@ mod tests {
 
         let report =
             apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("apply 0064");
-        assert_eq!(report.applied, vec!["0064_derived_source_path"]);
+        assert_eq!(
+            report.applied,
+            vec!["0064_derived_source_path", "0065_entity_aliases"]
+        );
 
         let source_columns = [
             ("source_path".to_string(), "TEXT".to_string(), 0),
@@ -921,6 +925,82 @@ mod tests {
         assert!(
             second.applied.is_empty(),
             "0064 must be skipped once its registry row exists"
+        );
+    }
+
+    #[test]
+    fn entity_aliases_arrive_global_on_an_archive_at_0064() {
+        let mut conn = test_connection();
+        let index = registry_index_after("0064_derived_source_path");
+        apply_migrations_with(&mut conn, &REGISTRY[..=index], &fixed_clock())
+            .expect("build the archive at 0064");
+        assert!(
+            !table_exists(&conn, "entity_aliases"),
+            "0064 must not know the alias table"
+        );
+
+        let report =
+            apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("apply 0065");
+        assert_eq!(report.applied, vec!["0065_entity_aliases"]);
+        assert!(table_exists(&conn, "entity_aliases"));
+
+        // S1: global list — the table carries no collection column.
+        let columns: Vec<String> = {
+            let mut statement = conn
+                .prepare("PRAGMA table_info(entity_aliases)")
+                .expect("prepare table_info");
+            statement
+                .query_map([], |row| row.get(1))
+                .expect("query table_info")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect table_info")
+        };
+        assert_eq!(
+            columns,
+            vec![
+                "id",
+                "alias_key",
+                "alias",
+                "canonical",
+                "created_at",
+                "updated_at"
+            ],
+        );
+
+        // One canonical per surface form: the key is UNIQUE.
+        let key_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entity_aliases'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read the entity_aliases DDL");
+        assert!(
+            key_sql.contains("alias_key TEXT NOT NULL UNIQUE"),
+            "unexpected DDL: {key_sql}"
+        );
+
+        conn.execute(
+            "INSERT INTO entity_aliases (id, alias_key, alias, canonical, created_at, updated_at)
+             VALUES ('alias-1', 'mdme. cuevas', 'Mdme. Cuevas', 'Carmela Cuevas', 1, 1)",
+            [],
+        )
+        .expect("insert an alias");
+        let duplicate = conn.execute(
+            "INSERT INTO entity_aliases (id, alias_key, alias, canonical, created_at, updated_at)
+             VALUES ('alias-2', 'mdme. cuevas', 'Mdme. Cuevas', 'Carmela Vidal', 2, 2)",
+            [],
+        );
+        assert!(
+            duplicate.is_err(),
+            "a second row for the same normalized key must fail"
+        );
+
+        let second =
+            apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("second run");
+        assert!(
+            second.applied.is_empty(),
+            "0065 must be skipped once its registry row exists"
         );
     }
 
