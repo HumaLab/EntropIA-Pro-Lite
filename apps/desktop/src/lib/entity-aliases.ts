@@ -12,6 +12,7 @@
  */
 import { buildAliasResolver } from '@entropia/store'
 import { getStore } from './db'
+import type { I18nKey, I18nParams } from './i18n'
 
 /** Canonical name for a mention's surface form; identity when it has no alias. */
 export type EntityAliasResolver = (value: string) => string
@@ -69,4 +70,35 @@ export function invalidateEntityAliases(): void {
 export function refreshEntityAliases(): Promise<EntityAliasResolver> {
   invalidateEntityAliases()
   return loadEntityAliasResolver()
+}
+
+/**
+ * Plain-language mapping of the repo validation errors (T3, S1/S6): the
+ * dialog and the settings tab show these through i18n, never the raw
+ * exception. The repo throws before writing anything, so a mapped error
+ * always means nothing was saved.
+ */
+export function describeEntityAliasError(
+  error: unknown,
+  alias: string,
+  canonical: string,
+  translate: (key: I18nKey, params?: I18nParams) => string
+): string {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  if (message.includes('the alias must not be empty')) {
+    return translate('entityAliases.error.emptyAlias')
+  }
+  if (message.includes('the canonical name must not be empty')) {
+    return translate('entityAliases.error.emptyCanonical')
+  }
+  if (message.includes('normalize to the same value')) {
+    return translate('entityAliases.error.sameValue')
+  }
+  if (message.includes('is itself an alias')) {
+    return translate('entityAliases.error.chainCanonical', { canonical })
+  }
+  if (message.includes('already used as a canonical name')) {
+    return translate('entityAliases.error.chainAlias', { alias })
+  }
+  return translate('entityAliases.error.generic')
 }

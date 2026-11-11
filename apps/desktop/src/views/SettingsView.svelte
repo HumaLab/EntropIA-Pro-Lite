@@ -132,6 +132,7 @@
   import MaintenanceSettingsCard from './MaintenanceSettingsCard.svelte'
   import { onSettingsTabRequest } from '$lib/settings-tab-request'
   import AgentParametersTab from '../components/settings/AgentParametersTab.svelte'
+  import EntityAliasesTab from '../components/settings/EntityAliasesTab.svelte'
   import {
     agentParametersForm,
     agentParametersJson,
@@ -165,6 +166,7 @@
     | 'assistants'
     | 'dependencias'
     | 'batch'
+    | 'aliases'
     | 'logs'
     | 'backup'
     | 'maintenance'
@@ -1708,6 +1710,9 @@
         <TabButton active={activeTab === 'batch'} onclick={() => (activeTab = 'batch')}>
           {t('settings.batchTab')}
         </TabButton>
+        <TabButton active={activeTab === 'aliases'} onclick={() => (activeTab = 'aliases')}>
+          {t('settings.aliasesTab')}
+        </TabButton>
         <TabButton active={activeTab === 'logs'} onclick={() => (activeTab = 'logs')}>
           {t('settings.logsTab')}
         </TabButton>
@@ -3089,6 +3094,8 @@
       <LogsTab />
     {:else if activeTab === 'batch'}
       <BatchProcessingTab />
+    {:else if activeTab === 'aliases'}
+      <EntityAliasesTab />
     {:else if activeTab === 'backup'}
       <BackupTab />
     {:else if activeTab === 'maintenance'}

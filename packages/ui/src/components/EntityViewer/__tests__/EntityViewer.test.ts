@@ -655,6 +655,54 @@ describe('EntityViewer', () => {
   })
 })
 
+describe('entity alias action (T3)', () => {
+  const resolveAlias = (value: string) =>
+    value.trim().replace(/\s+/g, ' ').toLowerCase() === 'mdme. cuevas' ? 'Carmela Cuevas' : value
+
+  const aliasLabels = {
+    aliasEntityAria: (value: string) => `Same as ${value}`,
+    aliasEntityTitle: 'Same as…',
+  }
+
+  it('shows the alias action next to the mention actions only when the callback is set', async () => {
+    const onaliasentity = vi.fn()
+    const { container } = render(EntityViewer, {
+      props: {
+        entities: [makeEntity({ id: 'e1', value: 'Mdme. Cuevas' })],
+        resolveAlias,
+        onaliasentity,
+        labels: aliasLabels,
+      },
+    })
+
+    expect(container.querySelector('[data-testid="entity-alias-e1"]')).toBeNull()
+    await fireEvent.mouseEnter(screen.getByTestId('entity-chip-e1'))
+
+    const action = await screen.findByTestId('entity-alias-e1')
+    expect(action).toHaveAccessibleName('Same as Mdme. Cuevas')
+    expect(action).toHaveAttribute('data-tooltip', 'Same as…')
+    await fireEvent.click(action)
+    // The stored mention travels, never the canonical name (S2).
+    expect(onaliasentity).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'e1', value: 'Mdme. Cuevas' })
+    )
+  })
+
+  it('renders no alias action without the callback, leaving the chip unchanged', async () => {
+    const { container } = render(EntityViewer, {
+      props: {
+        entities: [makeEntity({ id: 'e1', value: 'Mdme. Cuevas' })],
+        resolveAlias,
+      },
+    })
+
+    await fireEvent.mouseEnter(screen.getByTestId('entity-chip-e1'))
+    // Hover still reveals the existing actions, but no alias one.
+    expect(await screen.findByTestId('entity-edit-e1')).toBeInTheDocument()
+    expect(container.querySelector('[data-testid^="entity-alias-"]')).toBeNull()
+  })
+})
+
 describe('entity aliases (T2)', () => {
   // Same fixture as S1/S3: "Mdme. Cuevas = Carmela Cuevas".
   const resolveAlias = (value: string) =>

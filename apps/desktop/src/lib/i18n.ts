@@ -230,6 +230,7 @@ const es = {
   'settings.syncTab': 'Sincronización',
   'settings.assistantsTab': 'Asistentes',
   'settings.batchTab': 'Lotes',
+  'settings.aliasesTab': 'Alias',
   'settings.appearanceTab': 'Apariencia',
   'settings.backupTab': 'Copias',
   'settings.backup.hint':
@@ -2648,6 +2649,42 @@ const es = {
   'item.entityDeleteTitle': 'Eliminar entidad',
   'item.entityConfirmDeleteTitle': 'Presioná otra vez para confirmar eliminación',
   'item.entityDeletePrompt': '¿Eliminar?',
+  'item.entityAliasAria': 'Es la misma persona que {value}',
+  'item.entityAliasTitle': 'Es la misma persona que…',
+  'entityAliases.title': 'Alias de entidades',
+  'entityAliases.description':
+    'Cada alias une una forma alternativa con su nombre canónico en todo el archivo.',
+  'entityAliases.empty':
+    'Todavía no hay alias: cuando dos menciones nombran a la misma persona, unificalas con «Es la misma persona que…».',
+  'entityAliases.loading': 'Cargando alias…',
+  'entityAliases.loadError': 'No se pudieron cargar los alias: {error}',
+  'entityAliases.editAria': 'Editar el alias {alias}',
+  'entityAliases.deleteAria': 'Eliminar el alias {alias}',
+  'entityAliases.save': 'Guardar',
+  'entityAliases.cancel': 'Cancelar',
+  'entityAliases.deleteTitle': '¿Eliminar el alias?',
+  'entityAliases.deleteMessage':
+    '«{alias}» dejará de resolverse como «{canonical}». Las menciones no cambian.',
+  'entityAliases.deleteConfirm': 'Eliminar',
+  'entityAliases.dialog.title': 'Es la misma persona que…',
+  'entityAliases.dialog.message':
+    'La mención no se modifica: solo se guarda el alias y todas las vistas lo leen sin reescribir nada.',
+  'entityAliases.dialog.aliasLabel': 'Mención original (alias)',
+  'entityAliases.dialog.canonicalLabel': 'Nombre canónico',
+  'entityAliases.dialog.canonicalPlaceholder': 'Ej.: Carmela Cuevas',
+  'entityAliases.dialog.suggestionsLabel': 'Otras menciones de este documento',
+  'entityAliases.dialog.suggestionsHint': 'Elegí una para usarla como nombre canónico.',
+  'entityAliases.dialog.save': 'Guardar',
+  'entityAliases.dialog.cancel': 'Cancelar',
+  'entityAliases.error.emptyAlias': 'El alias no puede estar vacío.',
+  'entityAliases.error.emptyCanonical': 'El nombre canónico no puede estar vacío.',
+  'entityAliases.error.sameValue':
+    'El alias y el nombre canónico son el mismo: elegí un nombre canónico distinto.',
+  'entityAliases.error.chainCanonical':
+    '«{canonical}» ya es un alias de otro nombre: elegí el nombre canónico final directamente.',
+  'entityAliases.error.chainAlias':
+    '«{alias}» ya se usa como nombre canónico de otra entrada: cada unión se decide por separado.',
+  'entityAliases.error.generic': 'No se pudo guardar el alias.',
   'item.entityType.person': 'Persona',
   'item.entityType.place': 'Lugar',
   'item.entityType.date': 'Fecha',
@@ -3994,6 +4031,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.syncTab': 'Sync',
   'settings.assistantsTab': 'Assistants',
   'settings.batchTab': 'Batches',
+  'settings.aliasesTab': 'Aliases',
   'settings.appearanceTab': 'Appearance',
   'settings.backupTab': 'Backups',
   'settings.backup.hint':
@@ -5862,6 +5900,42 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.entityDeleteTitle': 'Delete entity',
   'item.entityConfirmDeleteTitle': 'Press again to confirm delete',
   'item.entityDeletePrompt': 'Delete?',
+  'item.entityAliasAria': 'Same as {value}',
+  'item.entityAliasTitle': 'Same as…',
+  'entityAliases.title': 'Entity aliases',
+  'entityAliases.description':
+    'Each alias joins an alternate form to its canonical name across the whole archive.',
+  'entityAliases.empty':
+    'No aliases yet: when two mentions name the same person, unify them with “Same as…”.',
+  'entityAliases.loading': 'Loading aliases…',
+  'entityAliases.loadError': 'Could not load the aliases: {error}',
+  'entityAliases.editAria': 'Edit the alias {alias}',
+  'entityAliases.deleteAria': 'Delete the alias {alias}',
+  'entityAliases.save': 'Save',
+  'entityAliases.cancel': 'Cancel',
+  'entityAliases.deleteTitle': 'Delete the alias?',
+  'entityAliases.deleteMessage':
+    '“{alias}” will no longer resolve to “{canonical}”. Mentions are unchanged.',
+  'entityAliases.deleteConfirm': 'Delete',
+  'entityAliases.dialog.title': 'Same as…',
+  'entityAliases.dialog.message':
+    'The mention is not modified: only the alias is saved, and every view reads it without rewriting anything.',
+  'entityAliases.dialog.aliasLabel': 'Original mention (alias)',
+  'entityAliases.dialog.canonicalLabel': 'Canonical name',
+  'entityAliases.dialog.canonicalPlaceholder': 'E.g.: Carmela Cuevas',
+  'entityAliases.dialog.suggestionsLabel': 'Other mentions in this document',
+  'entityAliases.dialog.suggestionsHint': 'Pick one to use as the canonical name.',
+  'entityAliases.dialog.save': 'Save',
+  'entityAliases.dialog.cancel': 'Cancel',
+  'entityAliases.error.emptyAlias': 'The alias must not be empty.',
+  'entityAliases.error.emptyCanonical': 'The canonical name must not be empty.',
+  'entityAliases.error.sameValue':
+    'Alias and canonical name are the same: pick a different canonical name.',
+  'entityAliases.error.chainCanonical':
+    '“{canonical}” is already an alias of another name: pick the final canonical name directly.',
+  'entityAliases.error.chainAlias':
+    '“{alias}” is already used as the canonical name of another entry: each merge is decided separately.',
+  'entityAliases.error.generic': 'Could not save the alias.',
   'item.entityType.person': 'Person',
   'item.entityType.place': 'Place',
   'item.entityType.date': 'Date',

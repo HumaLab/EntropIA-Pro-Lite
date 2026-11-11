@@ -30,6 +30,12 @@ export interface EntityViewerProps {
    * rendering, exactly as before.
    */
   resolveAlias?: (value: string) => string
+  /**
+   * Alias action for a mention (entity aliases, T3, S8): "Es la misma
+   * persona que…" next to the existing mention actions. Omitted means no
+   * alias action, exactly as before.
+   */
+  onaliasentity?: (entity: Entity) => void
   onhighlight?: (detail: { startOffset: number; endOffset: number }) => void
   onentityclick?: (entity: Entity) => void
   oneditvaluechange?: (value: string) => void
@@ -58,6 +64,8 @@ export interface EntityViewerLabels {
   deleteEntityTitle: string
   confirmDeleteEntityTitle: string
   deletePrompt: string
+  aliasEntityAria: (value: string) => string
+  aliasEntityTitle: string
   addEntity: string
   newEntityTypeAria: string
   newEntityValueAria: string

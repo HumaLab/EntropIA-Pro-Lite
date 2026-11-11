@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AliasResolverRow } from '@entropia/store'
 import {
+  describeEntityAliasError,
   getEntityAliasResolver,
   identityEntityAliasResolver,
   invalidateEntityAliases,
   loadEntityAliasResolver,
   refreshEntityAliases,
 } from './entity-aliases'
+import { t } from './i18n'
+import type { I18nKey, I18nParams } from './i18n'
 
 const { listMock, storeState } = vi.hoisted(() => ({
   listMock: vi.fn(),
@@ -87,5 +90,70 @@ describe('entity aliases resolver loading (T2)', () => {
     const refreshed = await refreshEntityAliases()
     expect(refreshed('Sra. Gómez')).toBe('Juana Gómez')
     expect(getEntityAliasResolver()('Mdme. Cuevas')).toBe('Mdme. Cuevas')
+  })
+})
+
+describe('describeEntityAliasError (T3)', () => {
+  const at = (key: I18nKey, params?: I18nParams) =>
+    `${key}${params ? ` ${JSON.stringify(params)}` : ''}`
+
+  it('maps every repo validation error to its message key, never the raw text', () => {
+    expect(
+      describeEntityAliasError(
+        new Error('Cannot save entity alias: the alias must not be empty.'),
+        '',
+        'Carmela Cuevas',
+        at
+      )
+    ).toBe('entityAliases.error.emptyAlias')
+    expect(
+      describeEntityAliasError(
+        new Error('Cannot save entity alias: the canonical name must not be empty.'),
+        'Mdme. Cuevas',
+        '',
+        at
+      )
+    ).toBe('entityAliases.error.emptyCanonical')
+    expect(
+      describeEntityAliasError(
+        new Error(
+          'Cannot alias "Mdme. Cuevas" to itself: alias and canonical normalize to the same value.'
+        ),
+        'Mdme. Cuevas',
+        'Mdme. Cuevas',
+        at
+      )
+    ).toBe('entityAliases.error.sameValue')
+    expect(
+      describeEntityAliasError(
+        new Error('Cannot point "Mdme. Cuevas" at "Cuevas": "Cuevas" is itself an alias.'),
+        'Mdme. Cuevas',
+        'Cuevas',
+        at
+      )
+    ).toBe('entityAliases.error.chainCanonical {"canonical":"Cuevas"}')
+    expect(
+      describeEntityAliasError(
+        new Error(
+          'Cannot alias "Cuevas": it is already used as a canonical name by another entry.'
+        ),
+        'Cuevas',
+        'Carmen Cuevas',
+        at
+      )
+    ).toBe('entityAliases.error.chainAlias {"alias":"Cuevas"}')
+  })
+
+  it('falls back to the generic message for unknown failures', () => {
+    expect(describeEntityAliasError(new Error('database is locked'), 'a', 'b', at)).toBe(
+      'entityAliases.error.generic'
+    )
+    expect(describeEntityAliasError('a plain string failure', 'a', 'b', at)).toBe(
+      'entityAliases.error.generic'
+    )
+  })
+
+  it('resolves the mapped keys through i18n in both locales', () => {
+    expect(t('entityAliases.error.emptyAlias')).toBe('El alias no puede estar vacío.')
   })
 })

@@ -11,12 +11,14 @@
   } from '@entropia/ui'
   import type { Entity } from '@entropia/ui'
   import {
+    getEntityAliasResolver,
     identityEntityAliasResolver,
     loadEntityAliasResolver,
     type EntityAliasResolver,
   } from '$lib/entity-aliases'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { ItemNlpState } from '$lib/nlp'
+  import EntityAliasDialog from '../components/EntityAliasDialog.svelte'
   import ItemMapViewer from './ItemMapViewer.svelte'
 
   type EditableEntityType = 'person' | 'organization' | 'place' | 'misc' | 'date'
@@ -112,6 +114,10 @@
   // Nombre canónico de cada mención (alias de entidades, T2): se lee una vez
   // de la lista global; si la carga falla, cada valor se muestra tal cual.
   let resolveAlias: EntityAliasResolver = $state(identityEntityAliasResolver)
+  // The mention the owner is unifying (entity aliases, T3, S8): while set,
+  // the alias dialog asks for the canonical name. Saving writes only to
+  // entity_aliases (S2) and refreshes the shared resolver below.
+  let aliasTarget: Entity | null = $state(null)
   $effect(() => {
     let cancelled = false
     void loadEntityAliasResolver().then((resolver) => {
@@ -424,6 +430,8 @@
             deleteEntityTitle: translate('item.entityDeleteTitle'),
             confirmDeleteEntityTitle: translate('item.entityConfirmDeleteTitle'),
             deletePrompt: translate('item.entityDeletePrompt'),
+            aliasEntityAria: (value: string) => translate('item.entityAliasAria', { value }),
+            aliasEntityTitle: translate('item.entityAliasTitle'),
             addEntity: translate('item.addEntity'),
             newEntityTypeAria: translate('item.newEntityType'),
             newEntityValueAria: translate('item.newEntityValue'),
@@ -432,6 +440,7 @@
             cancelNewEntityAria: translate('item.newEntityCancelAria'),
           }}
           onentityclick={onEntityClick}
+          onaliasentity={(entity) => (aliasTarget = entity)}
           oneditvaluechange={onEditValueChange}
           onsaveentity={onSaveEntity}
           oncancelentityedit={onCancelEntityEdit}
@@ -443,6 +452,17 @@
 
         {#if entityActionError}
           <p class="error">{entityActionError}</p>
+        {/if}
+
+        {#if aliasTarget}
+          <EntityAliasDialog
+            alias={aliasTarget.value}
+            suggestions={entities.map((entity) => entity.value)}
+            onclose={() => (aliasTarget = null)}
+            onsaved={() => {
+              resolveAlias = getEntityAliasResolver()
+            }}
+          />
         {/if}
       </div>
 

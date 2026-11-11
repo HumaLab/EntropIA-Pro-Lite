@@ -20,6 +20,13 @@
      * rendering, exactly as before.
      */
     resolveAlias?: (value: string) => string
+    /**
+     * Alias action for a mention (entity aliases, T3, S8): "Es la misma
+     * persona que…" next to the existing mention actions. Omitted means
+     * no alias action, exactly as before — the owner opens the dialog
+     * from here and confirms the canonical name.
+     */
+    onaliasentity?: (entity: Entity) => void
     onhighlight?: (detail: { startOffset: number; endOffset: number }) => void
     onentityclick?: (entity: Entity) => void
     oneditvaluechange?: (value: string) => void
@@ -40,6 +47,7 @@
     newEntityType,
     newEntityValue = '',
     resolveAlias,
+    onaliasentity,
     onhighlight,
     onentityclick,
     oneditvaluechange,
@@ -66,6 +74,8 @@
     confirmDeleteEntityAria: (value: string) => `Confirm delete entity ${value}`,
     deleteEntityTitle: 'Delete entity',
     confirmDeleteEntityTitle: 'Press again to confirm delete',
+    aliasEntityAria: (value: string) => `Same as ${value}`,
+    aliasEntityTitle: 'Same as…',
     deletePrompt: 'Delete?',
     addEntity: 'Add entity',
     newEntityTypeAria: 'New entity type',
@@ -444,6 +454,21 @@
 
           {#if hoveredEntityId === entity.id || focusedEntityId === entity.id || pendingDeleteEntityId === entity.id}
             <div class="entity-viewer__actions">
+              {#if onaliasentity}
+                <button
+                  type="button"
+                  class="entity-viewer__action"
+                  aria-label={labels.aliasEntityAria(entity.value)}
+                  use:tooltip={labels.aliasEntityTitle}
+                  data-testid={`entity-alias-${entity.id}`}
+                  onclick={(event) => {
+                    event.stopPropagation()
+                    onaliasentity?.(entity)
+                  }}
+                >
+                  <ActionIcon name="link" size={12} />
+                </button>
+              {/if}
               <button
                 type="button"
                 class="entity-viewer__action"
