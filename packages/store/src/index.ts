@@ -16,6 +16,7 @@ export {
   triples,
   annotations,
   transcriptions,
+  entityAliases,
   topics,
   itemTopics,
   processingBatches,
@@ -45,6 +46,12 @@ export { AnnotationRepo } from './repos/annotation.repo'
 export { ExtractionRepo } from './repos/extraction.repo'
 export { LayoutRepo } from './repos/layout.repo'
 export { AssetProcessEventRepo } from './repos/asset-process-event.repo'
+export {
+  EntityAliasRepo,
+  buildAliasResolver,
+  normalizeEntityAliasKey,
+} from './repos/entity-alias.repo'
+export type { EntityAlias, AliasResolverRow } from './repos/entity-alias.repo'
 export { EntityRepo } from './repos/entity.repo'
 export { FtsRepo, sanitizeFts5Query } from './repos/fts.repo'
 export { TripleRepo } from './repos/triple.repo'
@@ -93,6 +100,6 @@ export type {
   NewAnnotation,
 } from './repos/annotation.repo'
 export type { Extraction, NewExtraction } from './repos/extraction.repo'
-export type { Entity, NewEntity, EntityType } from './repos/entity.repo'
+export type { Entity, NewEntity, EntityType, DistinctEntityValue } from './repos/entity.repo'
 export type { Triple, NewTriple } from './repos/triple.repo'
 export type { CardSearchPlan, FtsResult, FtsSearchOptions } from './repos/fts.repo'

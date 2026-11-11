@@ -1,4 +1,4 @@
-//! Capture triggers (DESIGN §4.1, §6.1). 54 triggers (18 synced tables × 3 ops)
+//! Capture triggers (DESIGN §4.1, §6.1). 57 triggers (19 synced tables × 3 ops)
 //! mark dirty rows in `sync_oplog`. Capture is gated by session: each trigger
 //! only fires when `capture_enabled='1'` and `applying<>'1'` (echo suppression
 //! during pull apply). `ensure_capture` is self-healing across schema rebuilds.
@@ -12,7 +12,7 @@ use crate::sync::schema::ensure_sync_schema;
 /// DROP-all-then-create upgrade (DESIGN §6.1.2).
 pub const TRIGGERS_VERSION: &str = "2";
 
-/// The 18 synced tables (DESIGN §5). Allowlist enforced on both ends.
+/// The 19 synced tables (DESIGN §5). Allowlist enforced on both ends.
 pub const SYNCED_TABLES: &[&str] = &[
     "collections",
     "items",
@@ -34,9 +34,12 @@ pub const SYNCED_TABLES: &[&str] = &[
     // on `id`, no generated columns. See `sync::web_capture` for the gating.
     "web_sources",
     "web_captures",
+    // Global entity alias list (capability `entity-aliases-v1`): a root table,
+    // no FKs, keyed on `id`. See `sync::entity_aliases` for the gating.
+    "entity_aliases",
 ];
 
-/// The 18 synced tables ordered parents-before-children along the FK graph
+/// The 19 synced tables ordered parents-before-children along the FK graph
 /// (DESIGN §4.10), for use by the pull-apply path (upserts in this order,
 /// deletes in reverse). Same set as [`SYNCED_TABLES`], different order.
 /// Consumed by the apply slice (push/pull); only tests reference it in C1.
@@ -65,6 +68,8 @@ pub const SYNCED_TABLES_FK_ORDER: &[&str] = &[
     // Web captures: the source first, its captures after.
     "web_sources",
     "web_captures",
+    // Entity aliases: a root (no FKs), carried last.
+    "entity_aliases",
 ];
 
 /// Returns true when `table` is in the synced allowlist (DESIGN §5). Used by
@@ -219,10 +224,10 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Ensures the sync schema and all 54 capture triggers, with self-healing
+/// Ensures the sync schema and all 57 capture triggers, with self-healing
 /// semantics (DESIGN §6.1):
 ///
-/// 1. ALWAYS run 54 `CREATE TRIGGER IF NOT EXISTS` (auto-cure after `DROP+RENAME`
+/// 1. ALWAYS run 57 `CREATE TRIGGER IF NOT EXISTS` (auto-cure after `DROP+RENAME`
 ///    rebuilds that destroy triggers, e.g. migrations 0010/0019).
 /// 2. If `sync_meta['triggers_version']` differs from [`TRIGGERS_VERSION`]:
 ///    DROP every `trg_sync_*` then CREATE (template upgrade).
@@ -346,8 +351,8 @@ mod tests {
 
     #[test]
     fn synced_table_sets_match() {
-        assert_eq!(SYNCED_TABLES.len(), 18);
-        assert_eq!(SYNCED_TABLES_FK_ORDER.len(), 18);
+        assert_eq!(SYNCED_TABLES.len(), 19);
+        assert_eq!(SYNCED_TABLES_FK_ORDER.len(), 19);
         let mut a: Vec<&str> = SYNCED_TABLES.to_vec();
         let mut b: Vec<&str> = SYNCED_TABLES_FK_ORDER.to_vec();
         a.sort_unstable();
@@ -367,6 +372,11 @@ mod tests {
         assert!(pos("assets") < pos("annotations"));
         assert!(pos("items") < pos("entities"));
         assert!(pos("web_sources") < pos("web_captures"));
+        assert!(
+            is_synced_table("entity_aliases"),
+            "entity_aliases must be synced"
+        );
+        assert_eq!(pk_column("entity_aliases"), "id");
     }
 
     #[test]
@@ -431,6 +441,66 @@ mod tests {
     }
 
     #[test]
+    fn capture_records_entity_alias_writes_with_session() {
+        let conn = new_synced_test_db();
+        ensure_capture(&conn).expect("ensure capture");
+        set_session_with_capture(&conn);
+
+        conn.execute(
+            "INSERT INTO entity_aliases(id, alias_key, alias, canonical, created_at, updated_at)
+             VALUES ('alias:mdme. cuevas', 'mdme. cuevas', 'Mdme. Cuevas', 'Carmela Cuevas', 1, 1)",
+            [],
+        )
+        .expect("insert alias");
+        conn.execute(
+            "UPDATE entity_aliases SET canonical = 'Carmela Vidal' WHERE id = 'alias:mdme. cuevas'",
+            [],
+        )
+        .expect("update alias");
+        assert_eq!(oplog_count_for(&conn, "entity_aliases"), 2);
+
+        conn.execute(
+            "DELETE FROM entity_aliases WHERE id = 'alias:mdme. cuevas'",
+            [],
+        )
+        .expect("delete alias");
+        assert_eq!(oplog_count_for(&conn, "entity_aliases"), 3);
+    }
+
+    #[test]
+    fn rebuild_reseeds_pre_existing_entity_alias_rows() {
+        let conn = new_synced_test_db();
+        ensure_capture(&conn).expect("ensure capture");
+        set_session(&conn);
+
+        // A pre-existing alias written while capture was off.
+        conn.execute(
+            "INSERT INTO entity_aliases(id, alias_key, alias, canonical, created_at, updated_at)
+             VALUES ('alias:ana', 'ana', 'Ana', 'Ana Beltrán', 1, 1)",
+            [],
+        )
+        .expect("seed alias");
+        set_session_with_capture(&conn);
+
+        // Simulate a rebuild destroying only this table's triggers.
+        conn.execute_batch(
+            "DROP TRIGGER trg_sync_entity_aliases_i;
+             DROP TRIGGER trg_sync_entity_aliases_u;
+             DROP TRIGGER trg_sync_entity_aliases_d;",
+        )
+        .expect("drop alias triggers");
+        assert_eq!(trg_sync_count(&conn), 54);
+
+        ensure_capture(&conn).expect("self-heal ensure");
+        assert_eq!(trg_sync_count(&conn), 57, "triggers restored");
+        assert_eq!(
+            oplog_count_for(&conn, "entity_aliases"),
+            1,
+            "pre-existing alias re-seeded with one 'U' entry"
+        );
+    }
+
+    #[test]
     fn create_trigger_sql_matches_design_template() {
         let sql = create_trigger_sql("items", 'U', "UPDATE", "NEW");
         assert!(sql.contains("CREATE TRIGGER IF NOT EXISTS trg_sync_items_u AFTER UPDATE ON items"));
@@ -445,10 +515,10 @@ mod tests {
     }
 
     #[test]
-    fn ensure_capture_installs_exactly_54_triggers() {
+    fn ensure_capture_installs_exactly_57_triggers() {
         let conn = new_synced_test_db();
         ensure_capture(&conn).expect("ensure capture");
-        assert_eq!(trg_sync_count(&conn), 54);
+        assert_eq!(trg_sync_count(&conn), 57);
     }
 
     #[test]
@@ -514,12 +584,12 @@ mod tests {
              DROP TRIGGER trg_sync_collections_d;",
         )
         .expect("drop triggers");
-        assert_eq!(trg_sync_count(&conn), 51);
+        assert_eq!(trg_sync_count(&conn), 54);
 
         // Re-run with UNCHANGED version: IF NOT EXISTS restores the 3 triggers
         // and re-seeds the table's oplog ('U' for each row).
         ensure_capture(&conn).expect("self-heal ensure");
-        assert_eq!(trg_sync_count(&conn), 54, "triggers restored");
+        assert_eq!(trg_sync_count(&conn), 57, "triggers restored");
         assert_eq!(
             oplog_count_for(&conn, "collections"),
             1,
@@ -550,7 +620,7 @@ mod tests {
         ensure_capture(&conn).expect("upgrade ensure");
 
         // Triggers are recreated from the new template...
-        assert_eq!(trg_sync_count(&conn), 54);
+        assert_eq!(trg_sync_count(&conn), 57);
         // ...but tables that were ALREADY capturing are NOT re-seeded: a template
         // upgrade must not mass-re-push already-synced rows (which would lose them
         // all to LWW). The oplog stays empty.

@@ -313,3 +313,95 @@ describe('stored triple evidence', () => {
     })
   })
 })
+
+describe('entity aliases (T2)', () => {
+  // Same fixture as S1/S3: "Mdme. Cuevas = Carmela Cuevas".
+  const resolveAlias = (value: string) =>
+    value.trim().replace(/\s+/g, ' ').toLowerCase() === 'mdme. cuevas' ? 'Carmela Cuevas' : value
+
+  it('groups the NER rows of every alias form under the unified node', () => {
+    const entityRows = [
+      { itemId: 'i', assetId: 'a', value: 'Mdme. Cuevas', startOffset: 0, endOffset: 12 },
+      { itemId: 'i', assetId: 'a', value: 'Carmela Cuevas', startOffset: 20, endOffset: 33 },
+    ]
+
+    const targets = buildNodeTargets('Carmela Cuevas', entityRows, [], () => context, resolveAlias)
+
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toMatchObject({
+      kind: 'entity',
+      value: 'Carmela Cuevas',
+      offsets: [
+        { start: 0, end: 12 },
+        { start: 20, end: 33 },
+      ],
+    })
+    const first = targets[0]
+    expect(first?.kind).toBe('entity')
+    if (first?.kind !== 'entity') throw new Error('expected an entity target')
+    expect(first.surfaceForms).toEqual(['Mdme. Cuevas'])
+  })
+
+  it('reaches the documents whose triple endpoints use an alias form', () => {
+    const tripleRows = [
+      {
+        id: '1',
+        itemId: 'k',
+        assetId: null,
+        subject: 'Mdme. Cuevas',
+        predicate: 've',
+        object: 'Lima',
+      },
+    ]
+
+    const targets = buildNodeTargets('Carmela Cuevas', [], tripleRows, () => context, resolveAlias)
+
+    expect(targets.map(({ itemId, assetId }) => [itemId, assetId])).toEqual([['k', null]])
+    expect(targets[0]).toMatchObject({ kind: 'entity', value: 'Carmela Cuevas' })
+  })
+
+  it('matches relation endpoints through alias forms, keeping rows as written', () => {
+    const rows = [
+      {
+        id: '1',
+        itemId: 'i',
+        assetId: 'a',
+        subject: 'Mdme. Cuevas',
+        predicate: 'visita',
+        object: 'Lima',
+      },
+    ]
+
+    const targets = buildRelationTargets(
+      'Carmela Cuevas',
+      'Lima',
+      rows,
+      () => context,
+      resolveAlias
+    )
+
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toMatchObject({
+      kind: 'relation',
+      subject: 'Mdme. Cuevas',
+      predicate: 'visita',
+      object: 'Lima',
+    })
+    // Without a resolver nothing changes: the alias form does not match.
+    expect(buildRelationTargets('Carmela Cuevas', 'Lima', rows, () => context)).toEqual([])
+  })
+
+  it('locates the mentions of every alias form, each with its own offsets', () => {
+    const found = locateOccurrences('Mdme. Cuevas y Carmela Cuevas', {
+      ...entity,
+      value: 'Carmela Cuevas',
+      offsets: [{ start: 0, end: 12 }],
+      surfaceForms: ['Mdme. Cuevas'],
+    })
+
+    expect(found.map(({ start, end }) => [start, end])).toEqual([
+      [0, 12],
+      [15, 29],
+    ])
+  })
+})

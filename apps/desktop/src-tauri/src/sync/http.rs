@@ -10,8 +10,8 @@
 //!   ([`validate_server_url`]) AND at use-time (inside [`HttpSyncApi::new`]).
 //! - The Bearer token and the `X-Schema-Tag` header are attached to every
 //!   authenticated request; the token is NEVER logged (DESIGN §8).
-//! - `X-Sync-Capabilities` carries `web-capture-v1` on ordinary push/pull
-//!   requests (web captures are ordinary rows) and the aggregate token on the
+//! - `X-Sync-Capabilities` carries `web-capture-v1,entity-aliases-v1` on ordinary push/pull
+//!   requests (web captures and entity aliases are ordinary rows) and the aggregate token on the
 //!   explicit writing-envelope-v1 / research-envelope-v1 methods, which send
 //!   only their own token.
 //!
@@ -44,8 +44,18 @@ pub const WRITING_ENVELOPE_V1_CAPABILITY: &str = "writing-envelope-v1";
 /// Exact, case-sensitive capability token for research aggregate envelopes.
 pub const RESEARCH_ENVELOPE_V1_CAPABILITY: &str = "research-envelope-v1";
 /// Exact, case-sensitive capability token for saved web captures. Unlike the
-/// aggregates above, these are ordinary rows: every ordinary push/pull sends it.
+/// aggregates above, these are ordinary rows: every ordinary push/pull sends
+/// it (together with `entity-aliases-v1`, comma-separated).
 pub const WEB_CAPTURE_V1_CAPABILITY: &str = "web-capture-v1";
+/// Exact, case-sensitive capability token for the global entity alias list.
+/// Like web captures, these are ordinary rows: every ordinary push/pull sends
+/// it (together with `web-capture-v1`, comma-separated). The server
+/// allowlists the table only when it advertises this token (the last entry of
+/// its `capabilities` response field).
+pub const ENTITY_ALIASES_V1_CAPABILITY: &str = "entity-aliases-v1";
+/// The exact `X-Sync-Capabilities` value sent on every ordinary push/pull:
+/// both ordinary-row tokens, comma-separated.
+pub const ORDINARY_SYNC_CAPABILITIES: &str = "web-capture-v1,entity-aliases-v1";
 /// Exact, case-sensitive capability token for the derived Bibliography cache
 /// (`bibliography-derived-v1`). A dedicated channel like the aggregates above:
 /// only its own push/pull methods send it (`sync/derived_protocol.md`).
@@ -447,6 +457,11 @@ impl PushResponse {
     pub fn supports_bibliography_derived_v1(&self) -> bool {
         supports_bibliography_derived_v1(&self.capabilities)
     }
+
+    /// Whether the server advertised the exact entity-aliases-v1 token.
+    pub fn supports_entity_aliases_v1(&self) -> bool {
+        supports_entity_aliases_v1(&self.capabilities)
+    }
 }
 
 /// One row returned by a pull page (PROTOCOL `GET /v1/sync/pull`). Also reused
@@ -506,6 +521,11 @@ impl PullResponse {
     pub fn supports_bibliography_derived_v1(&self) -> bool {
         supports_bibliography_derived_v1(&self.capabilities)
     }
+
+    /// Whether the server advertised the exact entity-aliases-v1 token.
+    pub fn supports_entity_aliases_v1(&self) -> bool {
+        supports_entity_aliases_v1(&self.capabilities)
+    }
 }
 
 /// One shared Escritura document (PROTOCOL "Documentos compartidos de Escritura").
@@ -556,6 +576,13 @@ pub fn supports_bibliography_derived_v1(capabilities: &[String]) -> bool {
         .any(|capability| capability == BIBLIOGRAPHY_DERIVED_V1_CAPABILITY)
 }
 
+/// Checks the entity alias token exactly, case-sensitively.
+pub fn supports_entity_aliases_v1(capabilities: &[String]) -> bool {
+    capabilities
+        .iter()
+        .any(|capability| capability == ENTITY_ALIASES_V1_CAPABILITY)
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct HealthLimits {
     #[serde(default)]
@@ -595,7 +622,7 @@ pub type BlobExists = bool;
 /// Auth: every method except [`SyncApi::register`], [`SyncApi::login`] and
 /// [`SyncApi::health`] attaches the device Bearer token. The `/sync/*` methods
 /// also attach `X-Schema-Tag`. Ordinary [`SyncApi::push`] and [`SyncApi::pull`]
-/// send only the `web-capture-v1` header; the aggregates opt in through the
+/// send the combined ordinary-row header (`web-capture-v1,entity-aliases-v1`); the aggregates opt in through the
 /// dedicated writing-envelope-v1 or research-envelope-v1 methods.
 #[allow(dead_code)]
 pub trait SyncApi {
@@ -1201,7 +1228,7 @@ impl SyncApi for HttpSyncApi {
         schema_tag: &str,
         req: PushRequest,
     ) -> Result<PushResponse, SyncError> {
-        self.push_request(token, schema_tag, req, Some(WEB_CAPTURE_V1_CAPABILITY))
+        self.push_request(token, schema_tag, req, Some(ORDINARY_SYNC_CAPABILITIES))
             .await
     }
 
@@ -1242,7 +1269,7 @@ impl SyncApi for HttpSyncApi {
             schema_tag,
             since,
             limit,
-            Some(WEB_CAPTURE_V1_CAPABILITY),
+            Some(ORDINARY_SYNC_CAPABILITIES),
         )
         .await
     }
@@ -1804,7 +1831,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ordinary_push_sends_only_the_web_capture_capability_and_preserves_request() {
+    async fn ordinary_push_sends_both_ordinary_capabilities_and_preserves_request() {
         let (server_url, request_rx, handle) = spawn_loopback_server(
             200,
             r#"{"results":[],"max_server_seq":7,"server_epoch":"epoch","server_now_ms":43}"#,
@@ -1822,13 +1849,13 @@ mod tests {
         assert_auth_and_schema_headers(&request);
         assert_eq!(
             header_values(&request, SYNC_CAPABILITIES_HEADER),
-            vec![WEB_CAPTURE_V1_CAPABILITY]
+            vec![ORDINARY_SYNC_CAPABILITIES]
         );
         assert_push_body(&request, "items");
     }
 
     #[tokio::test]
-    async fn ordinary_pull_sends_only_the_web_capture_capability_and_preserves_query() {
+    async fn ordinary_pull_sends_both_ordinary_capabilities_and_preserves_query() {
         let (server_url, request_rx, handle) = spawn_loopback_server(
             200,
             r#"{"rows":[],"next_since":41,"has_more":false,"schema_tag":"0023_sync_ids","server_epoch":"epoch","server_now_ms":43,"capabilities":[]}"#,
@@ -1850,7 +1877,7 @@ mod tests {
         assert_auth_and_schema_headers(&request);
         assert_eq!(
             header_values(&request, SYNC_CAPABILITIES_HEADER),
-            vec![WEB_CAPTURE_V1_CAPABILITY]
+            vec![ORDINARY_SYNC_CAPABILITIES]
         );
         assert!(request.body.is_empty());
     }

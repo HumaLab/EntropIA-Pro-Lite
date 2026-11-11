@@ -460,6 +460,43 @@ describe('schema fixture export', () => {
   })
 })
 
+describe('entity alias tables', () => {
+  it('declares the drizzle table with exactly the columns the migration creates', async () => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec(buildSchemaFixture())
+      const declared = getTableConfig(schema.entityAliases).columns.map((column) => column.name)
+      const created = (
+        db.prepare('PRAGMA table_info(entity_aliases)').all() as { name: string }[]
+      ).map((row) => row.name)
+      expect(declared.sort(), 'entity_aliases').toEqual(created.sort())
+    } finally {
+      db.close()
+    }
+  })
+
+  it('creates one global table keyed by the normalized surface form', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    expect(normalized).toContain(
+      'CREATE TABLE IF NOT EXISTS entity_aliases ( id TEXT PRIMARY KEY, alias_key TEXT NOT NULL UNIQUE'
+    )
+    for (const fragment of [
+      'alias TEXT NOT NULL',
+      'canonical TEXT NOT NULL',
+      'created_at INTEGER NOT NULL',
+      'updated_at INTEGER NOT NULL',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    // S1: global list — no collection column.
+    expect(normalized).not.toContain('entity_aliases (collection_id')
+    expect(sql).not.toMatch(/entity_aliases[^;]*collection_id/)
+    expect(schema).toHaveProperty('entityAliases')
+  })
+})
+
 describe('web capture tables', () => {
   it('declares the drizzle tables with exactly the columns the migration creates', async () => {
     const { DatabaseSync } = await import('node:sqlite')

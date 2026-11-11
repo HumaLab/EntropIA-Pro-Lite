@@ -703,6 +703,8 @@ pub async fn run_cycle<A: SyncApi>(
     // 2-5. Push (snapshot → coalesce → blobs-before-rows → batched POST → reconcile).
     let web_known_before = crate::sync::web_capture::supports_web_capture(conn)
         .map_err(|e| CycleError::Fatal { message: e })?;
+    let aliases_known_before = crate::sync::entity_aliases::supports_entity_aliases(conn)
+        .map_err(|e| CycleError::Fatal { message: e })?;
     push_cycle(api, token, &schema_tag, conn, app_data_dir, warn).await?;
 
     // 6-8. Pull loop (paginated apply + parked-row retries + blob/FTS drains).
@@ -718,6 +720,19 @@ pub async fn run_cycle<A: SyncApi>(
         .map_err(classify_error)?;
     if !web_known_before
         && crate::sync::web_capture::supports_web_capture(conn)
+            .map_err(|e| CycleError::Fatal { message: e })?
+    {
+        push_cycle(api, token, &schema_tag, conn, app_data_dir, warn).await?;
+    }
+
+    // 8a'. Entity aliases: the one-time since-zero catch-up for rows a legacy
+    // pull never showed, and, the first time the capability is seen, the push
+    // of the alias rows that were held back above.
+    crate::sync::entity_aliases::run_catchup(api, token, &schema_tag, conn, app_data_dir)
+        .await
+        .map_err(classify_error)?;
+    if !aliases_known_before
+        && crate::sync::entity_aliases::supports_entity_aliases(conn)
             .map_err(|e| CycleError::Fatal { message: e })?
     {
         push_cycle(api, token, &schema_tag, conn, app_data_dir, warn).await?;
@@ -801,6 +816,15 @@ async fn push_cycle<A: SyncApi>(
         .map_err(|e| CycleError::Fatal { message: e })?
     {
         ops.retain(|op| !crate::sync::web_capture::is_web_table(&op.table));
+    }
+    // Entity alias rows travel only once the server advertised
+    // `entity-aliases-v1` for this epoch: a legacy server rejects the whole
+    // batch (and with it the corpus rows). Held rows keep their oplog entries
+    // and go out later.
+    if !crate::sync::entity_aliases::supports_entity_aliases(conn)
+        .map_err(|e| CycleError::Fatal { message: e })?
+    {
+        ops.retain(|op| !crate::sync::entity_aliases::is_entity_alias_table(&op.table));
     }
     let offset = clock_offset(conn).map_err(|e| CycleError::Fatal { message: e })?;
     let mut changes =

@@ -1,6 +1,7 @@
-import { eq, and, asc, ne, or, isNull } from 'drizzle-orm'
+import { eq, and, asc, ne, or, isNull, inArray, sql } from 'drizzle-orm'
 import type { DrizzleClient } from '../types'
 import { entities } from '../schema'
+import { normalizeEntityAliasKey } from './entity-alias.repo'
 
 export type Entity = typeof entities.$inferSelect
 export type NewEntity = {
@@ -18,6 +19,12 @@ export type NewEntity = {
 
 export type EntityType =
   'person' | 'place' | 'date' | 'institution' | 'organization' | 'misc' | 'custom'
+
+/** A distinct entity surface form with its mention count across the archive. */
+export interface DistinctEntityValue {
+  value: string
+  mentions: number
+}
 
 function assertCoordinates(latitude: number, longitude: number) {
   if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
@@ -155,5 +162,60 @@ export class EntityRepo {
 
   async deleteByItemId(itemId: string): Promise<void> {
     await this.db.delete(entities).where(eq(entities.itemId, itemId))
+  }
+
+  /**
+   * Distinct entity values of the given types with mention counts across
+   * the whole archive (T5 suggestions, S5). Rows are grouped in JS by the
+   * alias key (`normalizeEntityAliasKey`), so values that differ only in
+   * case or whitespace count as one; the display form is the one with most
+   * mentions (ties: longest, then alphabetical). Manually deleted mentions
+   * (`source = 'manual_deleted'`) are excluded, like every other read.
+   */
+  async listDistinctValues(input: { types: string[] }): Promise<DistinctEntityValue[]> {
+    if (input.types.length === 0) return []
+    const rows = await this.db
+      .select({ value: entities.value, mentions: sql<number>`count(*)` })
+      .from(entities)
+      .where(
+        and(
+          inArray(entities.entityType, input.types),
+          or(isNull(entities.source), ne(entities.source, 'manual_deleted'))
+        )
+      )
+      .groupBy(entities.value)
+
+    const perRaw = new Map<string, Map<string, number>>()
+    for (const row of rows) {
+      const key = normalizeEntityAliasKey(row.value)
+      if (!key) continue
+      let counts = perRaw.get(key)
+      if (!counts) {
+        counts = new Map()
+        perRaw.set(key, counts)
+      }
+      counts.set(row.value, (counts.get(row.value) ?? 0) + Number(row.mentions))
+    }
+
+    const distinct: DistinctEntityValue[] = []
+    for (const counts of perRaw.values()) {
+      let display = ''
+      let displayMentions = -1
+      let total = 0
+      for (const [raw, count] of counts) {
+        total += count
+        if (
+          count > displayMentions ||
+          (count === displayMentions &&
+            (raw.length > display.length || (raw.length === display.length && raw < display)))
+        ) {
+          display = raw
+          displayMentions = count
+        }
+      }
+      distinct.push({ value: display, mentions: total })
+    }
+    distinct.sort((a, b) => b.mentions - a.mentions || (a.value < b.value ? -1 : 1))
+    return distinct
   }
 }

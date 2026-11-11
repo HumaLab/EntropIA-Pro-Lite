@@ -1,4 +1,4 @@
-//! Static `ON DELETE CASCADE` graph for the 18 synced tables (DESIGN §4.4), plus
+//! Static `ON DELETE CASCADE` graph for the 19 synced tables (DESIGN §4.4), plus
 //! the RESTRICT (plain `REFERENCES`, no cascade) edges among them.
 //!
 //! When a remote tombstone (delete) is applied, the apply path must FIRST check

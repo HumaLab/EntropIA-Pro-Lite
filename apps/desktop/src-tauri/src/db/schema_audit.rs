@@ -446,7 +446,7 @@ mod tests {
             Some(expected.as_str()),
             "sqlite_master.sql must be the canonical definition"
         );
-        assert_eq!(trg_sync_count(&conn), 54, "every sync trigger is back");
+        assert_eq!(trg_sync_count(&conn), 57, "every sync trigger is back");
         assert!(audit_and_repair(&mut conn, dir.path())
             .expect("second audit")
             .is_clean());
@@ -509,7 +509,7 @@ mod tests {
             .recreated
             .iter()
             .any(|name| name == "trg_sync_items_i"));
-        assert_eq!(trg_sync_count(&conn), 54, "every sync trigger is installed");
+        assert_eq!(trg_sync_count(&conn), 57, "every sync trigger is installed");
         let canonical = build_canonical(dir.path()).expect("build canonical");
         for name in [
             "trg_assets_path_must_be_relative",
@@ -714,7 +714,7 @@ mod tests {
         // d) sync triggers exist and the oplog reseed is bounded: neither the
         // versioned rows nor the unversioned c-raw row are re-enqueued, so
         // the oplog delta is exactly zero.
-        assert_eq!(trg_sync_count(&conn), 54, "every sync trigger is back");
+        assert_eq!(trg_sync_count(&conn), 57, "every sync trigger is back");
         assert_eq!(
             oplog_count(&conn),
             oplog_before,

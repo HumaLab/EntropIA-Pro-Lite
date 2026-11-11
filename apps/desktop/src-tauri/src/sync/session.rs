@@ -304,6 +304,8 @@ pub fn clear_sync_state(conn: &Connection) -> Result<(), String> {
 
     crate::sync::web_capture::clear_account_metadata(&tx_guard)?;
 
+    crate::sync::entity_aliases::clear_account_metadata(&tx_guard)?;
+
     // §2.9: the derived cache keeps its rows (they are paid content) but resets
     // `pushed` and drops this channel's account metadata (capability, catch-up
     // epoch, cursor, last pull start, wait verdict). The `derived_backfill:*`
