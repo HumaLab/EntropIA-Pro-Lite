@@ -93,3 +93,11 @@ Findings fixed: F1 the left "Texto extraído" pane showed stale text with no not
 Findings left open: F3 per-block re-OCR checks the GLM key before the layout version, so without a key the rejection cannot be seen in the app (nothing is written either way; covered by unit tests). F4 Svelte `derived_inert` warning in the console when using the split view, no visible effect. F5 a click on a "recent activity" row in Home did not open the document (not confirmed as a defect). F6 (fixed afterwards) the reading-pane notice also showed above the "Documento" tab; it now lives inside the text tab through a `textNotice` snippet of `ItemAssetPanel`, checked in the app (hidden on "Documento", visible on "Texto extraído"). The no-stamp test now waits for the check to settle and asserts the file is never hashed for an unstamped text; mutation-checked afterwards: making the rule check unstamped image texts fails exactly that test (file restored). It still uses a fixed 50 ms wait, a known weakness on a slow runner.
 
 Not tested: real OCR (no key), export (native save dialog), Pro, light theme.
+
+## Follow-ups after the merge (2026-11-10, branch `fix/image-versions-followups`)
+
+- F3 fixed in 2e01cbd3: `cut_block` reads the file and applies the version rule before requiring the GLM key; RED observed (test did not compile), GREEN 18/18 in `ocr::block_reocr`.
+- Fixed 50 ms wait removed in 1b6401c9: the test awaits the store reads and drains one macrotask; mutation-checked again.
+- Notice tooltip not reachable by keyboard/touch: user decided «dejalo así» (screen readers already read the full message through `role="status"`).
+- F5 is not a defect: in the running app a "recent activity" row opens its document by click ("plana") and by Enter on the focused row ("camara_ori6"). The first attempt had clicked outside a row.
+- F4 not reproducible: with `console.warn` hooked in the page (so replayed messages are not counted), none of these steps logs `derived_inert`: split view on/off, opening a document in the right pane, rotating in the left pane, "Usar esta versión" with its confirmation, undo. `Runtime.enable` replays the console buffer, which is why one old warning kept showing up; its likely origin is a Vite hot reload while components were edited during the first test (not confirmed).
