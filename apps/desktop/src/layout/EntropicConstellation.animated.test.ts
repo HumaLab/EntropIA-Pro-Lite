@@ -1,6 +1,35 @@
 import { cleanup, render } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import EntropicConstellation from './EntropicConstellation.svelte'
+import { stepMotionPoint } from './constellation-motion'
+
+const minimizedWatchers: Array<(minimized: boolean) => void> = []
+const stopWatchingMinimized = vi.fn()
+
+vi.mock('$lib/window-minimized', () => ({
+  watchWindowMinimized: vi.fn((onChange: (minimized: boolean) => void) => {
+    minimizedWatchers.push(onChange)
+    return stopWatchingMinimized
+  }),
+}))
+
+vi.mock('./constellation-motion', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./constellation-motion')>()
+  return { ...actual, stepMotionPoint: vi.fn(actual.stepMotionPoint) }
+})
+
+/** Runs the most recently scheduled frame callback at `timestamp` ms. */
+function runScheduledFrame(timestamp: number) {
+  const calls = vi.mocked(window.requestAnimationFrame).mock.calls
+  const callback = calls[calls.length - 1]?.[0]
+  if (!callback) throw new Error('no frame scheduled')
+  callback(timestamp)
+}
+
+/** Runs `count` frames spaced like a 60 Hz display, starting at `from` ms. */
+function runFramesAt60Hz(count: number, from = 0) {
+  for (let index = 0; index < count; index++) runScheduledFrame(from + index * (1000 / 60))
+}
 
 /**
  * Behavior tests for the animated-on-Inicio-only constellation (home-view.md
@@ -53,6 +82,10 @@ describe('EntropicConstellation animated mode (Inicio only)', () => {
     cleanup()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    vi.mocked(stepMotionPoint).mockClear()
+    stopWatchingMinimized.mockClear()
+    minimizedWatchers.length = 0
+    delete document.documentElement.dataset.theme
   })
 
   it('never schedules a frame when animated is false (default)', () => {
@@ -126,5 +159,92 @@ describe('EntropicConstellation animated mode (Inicio only)', () => {
 
     expect(window.cancelAnimationFrame).toHaveBeenCalled()
     expect(removeEventListenerSpy).toHaveBeenCalledWith('pointermove', expect.any(Function))
+    expect(stopWatchingMinimized).toHaveBeenCalledTimes(1)
+  })
+
+  // Measured on the Store build 1.6.0: minimizing the window does not mark the
+  // WebView2 document hidden, so the loop kept running at ~1.2 cores.
+  it('pauses the loop while the window is minimized and resumes on restore', () => {
+    render(EntropicConstellation, { animated: true })
+    expect(minimizedWatchers).toHaveLength(1)
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(1)
+
+    minimizedWatchers[0]!(true)
+    expect(window.cancelAnimationFrame).toHaveBeenCalledTimes(1)
+
+    minimizedWatchers[0]!(false)
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(2)
+  })
+
+  it('stays paused on a visible visibilitychange while the window is minimized', () => {
+    render(EntropicConstellation, { animated: true })
+    minimizedWatchers[0]!(true)
+    vi.mocked(window.requestAnimationFrame).mockClear()
+
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+    document.dispatchEvent(new Event('visibilitychange'))
+
+    expect(window.requestAnimationFrame).not.toHaveBeenCalled()
+  })
+
+  it('stops watching the window when the animated mode turns off', async () => {
+    const { rerender } = render(EntropicConstellation, { animated: true })
+    await rerender({ animated: false })
+
+    expect(stopWatchingMinimized).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads the theme colors once, not on every frame', () => {
+    const computedStyle = vi.spyOn(window, 'getComputedStyle')
+    render(EntropicConstellation, { animated: true })
+    runFramesAt60Hz(2)
+    const afterWarmUp = computedStyle.mock.calls.length
+
+    runFramesAt60Hz(60, 1000)
+
+    expect(computedStyle.mock.calls.length).toBe(afterWarmUp)
+  })
+
+  it('reads the theme colors again after the theme changes', async () => {
+    const computedStyle = vi.spyOn(window, 'getComputedStyle')
+    render(EntropicConstellation, { animated: true })
+    runFramesAt60Hz(2)
+    const beforeThemeChange = computedStyle.mock.calls.length
+
+    document.documentElement.dataset.theme = 'light'
+    let clock = 2000
+    await vi.waitFor(() => {
+      runFramesAt60Hz(2, clock)
+      clock += 1000
+      expect(computedStyle.mock.calls.length).toBeGreaterThan(beforeThemeChange)
+    })
+  })
+
+  it('draws at most 30 frames per second on a 60 Hz display', () => {
+    const context = mockContext()
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(
+      context as unknown as CanvasRenderingContext2D
+    )
+    render(EntropicConstellation, { animated: true })
+    context.fillRect.mockClear()
+
+    runFramesAt60Hz(60)
+
+    // Every drawn frame paints the two background layers.
+    const drawnFrames = context.fillRect.mock.calls.length / 2
+    expect(drawnFrames).toBeGreaterThan(0)
+    expect(drawnFrames).toBeLessThanOrEqual(31)
+  })
+
+  it('keeps the drift speed of the original 60 Hz loop while drawing fewer frames', () => {
+    render(EntropicConstellation, { animated: true })
+    vi.mocked(stepMotionPoint).mockClear()
+
+    runFramesAt60Hz(61)
+
+    // One physics step per 60 Hz frame for each of the 60 points: one second.
+    const steps = vi.mocked(stepMotionPoint).mock.calls.length
+    expect(steps).toBeGreaterThanOrEqual(59 * 60)
+    expect(steps).toBeLessThanOrEqual(61 * 60)
   })
 })

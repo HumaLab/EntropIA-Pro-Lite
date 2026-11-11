@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { watchWindowMinimized } from '$lib/window-minimized'
   import {
     MOTION_POINT_COUNT,
     cancelScheduledFrame,
@@ -42,6 +43,14 @@
   // strength follows the page: see linkAlphaForPage.
   const MOTION_POINT_ALPHA = 0.35
 
+  // The physics in constellation-motion.ts is tuned per 60 Hz frame. The field
+  // is drawn at half that rate and steps the physics once per elapsed 60 Hz
+  // frame, so it drifts at the same speed for half the paint cost.
+  const MOTION_STEP_MS = 1000 / 60
+  const MOTION_DRAW_INTERVAL_MS = 1000 / 30
+  // A long gap (sleep, a stalled tab) resumes the drift instead of replaying it.
+  const MOTION_MAX_STEPS_PER_FRAME = 4
+
   let { animated = false }: { animated?: boolean } = $props()
 
   let canvas: HTMLCanvasElement
@@ -63,6 +72,16 @@
   let motionProjected: MotionProjection[] = []
   let motionCamera: MotionCamera = { x: 0, y: 0 }
   let pointerTarget = { x: 0, y: 0 }
+  let windowMinimized = false
+  let stopWatchingWindow: (() => void) | null = null
+  let lastDrawAt: number | null = null
+  let lastStepAt: number | null = null
+
+  // Theme colors only change with the theme, so they are read from the
+  // computed style once and reused: reading them per frame cost 18
+  // getComputedStyle calls (and style recalcs) per animated frame.
+  const themeColorCache = new Map<string, string>()
+  let themeObserver: MutationObserver | null = null
 
   function clamp(value: number, min: number, max: number) {
     return Math.min(max, Math.max(min, value))
@@ -73,6 +92,16 @@
   }
 
   function readThemeColor(localVariable: string, ...tokenFallbacks: string[]) {
+    const cacheKey = [localVariable, ...tokenFallbacks].join('|')
+    const cached = themeColorCache.get(cacheKey)
+    if (cached !== undefined) return cached
+
+    const color = resolveThemeColor(localVariable, tokenFallbacks)
+    themeColorCache.set(cacheKey, color)
+    return color
+  }
+
+  function resolveThemeColor(localVariable: string, tokenFallbacks: string[]) {
     const elementStyle = getComputedStyle(canvas)
     const rootStyle = getComputedStyle(document.documentElement)
 
@@ -83,6 +112,16 @@
     }
 
     return 'Canvas'
+  }
+
+  /** Drops the cached colors and repaints, after the theme attribute changes. */
+  function handleThemeChange() {
+    themeColorCache.clear()
+    if (motionMode) {
+      if (reducedMotion) drawMotionFrame()
+    } else {
+      renderConstellation()
+    }
   }
 
   function colorWithAlpha(color: string, alpha: number) {
@@ -329,11 +368,49 @@
     }
   }
 
-  function motionTick() {
+  function stepMotion() {
     for (const p of motionPoints) stepMotionPoint(p)
     easeCamera(motionCamera, pointerTarget.x, pointerTarget.y)
-    drawMotionFrame()
+  }
+
+  function motionTick(now: number) {
+    if (lastStepAt === null || lastDrawAt === null) {
+      // First frame after (re)starting: draw it, and count time from here.
+      lastStepAt = now
+      lastDrawAt = now
+      stepMotion()
+      drawMotionFrame()
+    } else if (now - lastDrawAt >= MOTION_DRAW_INTERVAL_MS - 1) {
+      const elapsedSteps = Math.round((now - lastStepAt) / MOTION_STEP_MS)
+      const steps = Math.min(Math.max(elapsedSteps, 1), MOTION_MAX_STEPS_PER_FRAME)
+      for (let step = 0; step < steps; step++) stepMotion()
+      lastStepAt = now
+      lastDrawAt = now
+      drawMotionFrame()
+    }
     motionFrame = scheduleFrame(motionTick)
+  }
+
+  /** Schedules the loop when the field should move and nothing is scheduled yet. */
+  function resumeMotion() {
+    if (!motionMode || reducedMotion || motionFrame !== null) return
+    if (document.hidden || windowMinimized) return
+    lastStepAt = null
+    lastDrawAt = null
+    motionFrame = scheduleFrame(motionTick)
+  }
+
+  function pauseMotion() {
+    if (motionFrame !== null) {
+      cancelScheduledFrame(motionFrame)
+      motionFrame = null
+    }
+  }
+
+  function handleWindowMinimized(minimized: boolean) {
+    windowMinimized = minimized
+    if (minimized) pauseMotion()
+    else resumeMotion()
   }
 
   function handlePointerMove(event: PointerEvent) {
@@ -348,17 +425,8 @@
   }
 
   function handleVisibilityChange() {
-    if (document.hidden) {
-      if (motionFrame !== null) {
-        cancelScheduledFrame(motionFrame)
-        motionFrame = null
-      }
-      return
-    }
-
-    if (motionMode && motionFrame === null) {
-      motionFrame = scheduleFrame(motionTick)
-    }
+    if (document.hidden) pauseMotion()
+    else resumeMotion()
   }
 
   /** Starts the animated field: Inicio only, per the user's 2026-09-23 decision. */
@@ -377,18 +445,19 @@
 
     window.addEventListener('pointermove', handlePointerMove)
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    motionFrame = scheduleFrame(motionTick)
+    windowMinimized = false
+    stopWatchingWindow = watchWindowMinimized(handleWindowMinimized)
+    resumeMotion()
   }
 
   /** Stops the animated field and leaves the canvas ready for the static one. */
   function stopMotion() {
     motionMode = false
-    if (motionFrame !== null) {
-      cancelScheduledFrame(motionFrame)
-      motionFrame = null
-    }
+    pauseMotion()
     window.removeEventListener('pointermove', handlePointerMove)
     document.removeEventListener('visibilitychange', handleVisibilityChange)
+    stopWatchingWindow?.()
+    stopWatchingWindow = null
   }
 
   /** Applies the `animated` prop: starts/stops the loop, restores the static field on exit. */
@@ -408,6 +477,11 @@
     reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
     resizeCanvas()
     window.addEventListener('resize', scheduleResize)
+    themeObserver = new MutationObserver(handleThemeChange)
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    })
     mounted = true
     applyMode()
 
@@ -415,6 +489,8 @@
       mounted = false
       if (resizeTimer) clearTimeout(resizeTimer)
       window.removeEventListener('resize', scheduleResize)
+      themeObserver?.disconnect()
+      themeObserver = null
       stopMotion()
     }
   })
