@@ -56,7 +56,7 @@ Branch `feat/batch-ocr-correction-summary`.
   `extractions.text_content`, backup, `llm_results llr-asset-{id}-correct_ocr`), `force_remote_ocr_correction`
   (`llm/mod.rs:1581`); per-page summary `llm/commands.rs:252` → `persist_result` `llm_results summarize`; assistant
   ops `automation/jobs.rs:200,216`, `automation/mcp.rs:247-256`.
-- L5 — T1 backend done (route: done, commit pending). New kinds `ocr_correction` and `summary`:
+- L5 — T1 backend done (route: done, committed as `28c69149`). New kinds `ocr_correction` and `summary`:
   `packages/store/src/migrations/0060_processing_ocr_correction_summary_tasks.sql` widens the kind CHECK on
   `processing_tasks`/`processing_batch_tasks` (0058 rebuild shape, nothing else; mirror `include_str!` in
   `processing/repository.rs`); `migrations.generated.ts` regenerated with
@@ -79,7 +79,7 @@ Branch `feat/batch-ocr-correction-summary`.
   per-document command. Tests: `cargo test --lib processing::` 200 passed (RED first: 11 failures, including the
   "correction is not an embedding" claim pin), `llm::` 89, `sync::` 499, `db::` 121 (2 ignored), clippy/fmt clean,
   `pnpm --filter @entropia/store test` 457.
-- L6 — T2 frontend done (route: done, commit pending). `BatchProcessingTab.svelte` gained `runOcrCorrection`/
+- L6 — T2 frontend done (route: done, committed as `885ef8c8`). `BatchProcessingTab.svelte` gained `runOcrCorrection`/
   `runSummary` (both off by default), two hinted toggles after Tripletes in that order («Corrección OCR»,
   «Resúmenes»), `'ocr_correction'`/`'summary'` in the `operations` array (after triples, before `schema:<id>`) and in
   both "at least one op" guards; `missingOpenrouterKey` includes both, so under Lite they block «Analizar selección»
@@ -95,7 +95,7 @@ Branch `feat/batch-ocr-correction-summary`.
   .test.ts` +6 (order and ids, tooltip hints, key gate, flow save/restore, legacy flow, kind names in the task list).
   Desktop suite 275 files / 3865 passed (10 skipped), Lite tab 44 passed, lint and both typechecks clean,
   `pnpm format:check` clean.
-- L7 — T3 assistants and manual done (route: done, commit pending). S9: `automation/jobs.rs:201` `needs_openrouter` and
+- L7 — T3 assistants and manual done (route: done, committed as `51994d09`). S9: `automation/jobs.rs:201` `needs_openrouter` and
   `:219` `is_known_operation` take `ocr_correction` and `summary` (the exact strings the tab sends); the unknown-op
   refusal (`:287`), the `provider_not_configured` gate (`:304`) and the `costNote` (`:323`) name them, the note saying
   each is one paid call per page; `automation/mcp.rs:255` documents the param, `:236` adds the two task kinds to

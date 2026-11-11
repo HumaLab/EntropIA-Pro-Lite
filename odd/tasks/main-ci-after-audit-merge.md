@@ -17,7 +17,7 @@ Branch: `fix/main-ci-after-audit-merge` (from `origin/main` 42c60e8d).
 - [x] 2. Measure the impact: does pdf-extract 0.12 change the OCR candidate list for the recovered-page fixture and for real Form XObject pages?
 - [x] 3. Fix the test or the candidacy code, per the decision from task 2.
 - [x] 4. Open the PR to `main`, get CI green (including Windows), merge.
-- [ ] 5. Rebase-free update of #44 onto the repaired `main`, CI green, merge.
+- [x] 5. Rebase-free update of #44 onto the repaired `main`, CI green, merge.
 
 ## Evidence
 
@@ -39,3 +39,4 @@ Branch: `fix/main-ci-after-audit-merge` (from `origin/main` 42c60e8d).
 - Task 5: merged `origin/main` into `fix/s05-asset-protocol-scope` (`da134be4`); #44 also
   carries `f67a7335` (asset scope tests moved to `tests/asset_scope.rs`, fixing the
   0xc0000139 lib-harness launch failure).
+- 2026-11-10, task 5: PR #44 MERGED 2026-10-11 (`gh pr view 44 --json state`); box checked.
