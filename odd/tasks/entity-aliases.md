@@ -30,6 +30,10 @@ the owner 2026-11-05; scope decided 2026-11-11 (see Log L2). Mirror in Engram:
   No LLM pass.
 - **S6 — No silent automatic merging.** "Cuevas" alone can be a different
   relative; a wrong merge corrupts research data without anyone noticing.
+- **S8 — Where aliases are managed.** «¿Dónde creás y administrás los alias? —
+  Ambos (Recomendado)»: from an item's entity list («Es la misma persona que…»
+  on a mention) and a full list in Configuración to review, edit and delete
+  every alias.
 - **S7 — Safe development.** The new migration is irreversible and raises the
   account `schema_tag` (all devices must update). Develop and check only with
   `ENTROPIA_DEV_PROFILE`, never on the real archive.
@@ -38,11 +42,11 @@ the owner 2026-11-05; scope decided 2026-11-11 (see Log L2). Mirror in Engram:
 
 | ID | Specs | What | Route | Commit |
 |---|---|---|---|---|
-| T1 | S1, S2, S7 | Migration `0065_entity_aliases` (alias key normalized like `normalize_entity_value`, alias, canonical, timestamps), Drizzle schema, Rust registry entry, `EntityAliasRepo` (list, upsert, delete, resolve), schema fixture | worker | |
-| T2 | S2, S3 | Read-time resolution: item entity list shows the canonical name plus the original form; Relaciones 3D groups triple endpoints and NER rows through the alias list | worker | |
-| T3 | S1, S6 | UI to create, edit and delete aliases (owner decides where; see open question) | pending decision | |
+| T1 ✅ | S1, S2, S7 | Migration `0065_entity_aliases` (alias key normalized like `normalize_entity_value`, alias, canonical, timestamps), Drizzle schema, Rust registry entry, `EntityAliasRepo` (list, upsert, delete, resolve), schema fixture | worker | `87cf3973` |
+| T2 ✅ | S2, S3 | Read-time resolution: item entity list shows the canonical name plus the original form; Relaciones 3D groups triple endpoints and NER rows through the alias list | worker | `845249c6` |
+| T3 ✅ | S1, S6, S8 | UI: «Es la misma persona que…» from the item entity list, plus an alias list in Configuración to review, edit and delete | worker | `2ff52172` |
 | T4 | S4 | Sync: `entity_aliases` in the desktop synced tables after the server accepts it; EntropIA-Cloud change and deploy | needs access to EntropIA-Cloud | |
-| T5 | S5, S6 | Stage 2: rule-based group suggestions, approve/reject each | later | |
+| T5 ✅ | S5, S6 | Stage 2: rule-based group suggestions, approve/reject each | worker | `ad674828` |
 
 ## Background
 
@@ -81,8 +85,6 @@ endpoints.
 
 ## Open questions
 
-- T3: where the owner manages aliases (from the item's entity list, a
-  Settings tab, or both).
 - hlab-platform parity (out of scope for now).
 
 ## Log
@@ -98,3 +100,8 @@ endpoints.
   candidatos? — Solo reglas (Recomendado)»; «¿Los alias también unifican los
   nodos de Relaciones 3D (los extremos de las relaciones extraídas)? — Sí
   (Recomendado)».
+- L3 (2026-11-11): T1 done in `87cf3973`: store 23 files / 494 tests (16 new, RED first: module missing), Rust `db::` 123 tests incl. 0065 on top of 0064, typecheck, prettier and cargo fmt clean. Not synced (T4).
+- L4 (2026-11-11, owner answer, verbatim): «¿Dónde creás y administrás los alias? — Ambos (Recomendado)».
+- L5 (2026-11-11): T2 done in `845249c6`: optional `resolveAlias` prop on the ui EntityViewer (a first desktop fork of the component was replaced by the prop to avoid duplicating it), alias resolution in relation-graph and relation-occurrences (identity by default). ui 959 tests, desktop 297 files / 4140 tests, both typechecks, eslint and format:check clean.
+- L6 (2026-11-11): T3 done in `2ff52172`: optional `onaliasentity` action on the ui EntityViewer, EntityAliasDialog (suggestions from the item, owner confirms), Configuración › Alias tab (edit canonical, delete with confirmation, empty state), resolver refresh on every change. ui 961 tests, desktop 299 files / 4156 tests, both typechecks, eslint and format:check clean. Relaciones 3D picks up a change on its next render.
+- L7 (2026-11-11): T5 done in `ad674828`: pure rule-based suggester (honorifics, surname + compatible given names or initials, bare surname only with a single fuller name, already-aliased variants skipped), EntityRepo.listDistinctValues, «Sugerencias» in Configuración › Alias with accept/discard. store 498 tests, desktop 300 files / 4190 tests, both typechecks, eslint and format:check clean.
