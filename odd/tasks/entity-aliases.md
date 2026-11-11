@@ -1,6 +1,6 @@
 # Entity aliases: unify variants of the same person
 
-**Status:** in progress (2026-11-11), branch `feat/entity-aliases`. Requested by
+**Status:** done (2026-11-11), branch `feat/entity-aliases`, PR #279; server deployed. Requested by
 the owner 2026-11-05; scope decided 2026-11-11 (see Log L2). Mirror in Engram:
 `odd/entity-aliases/tasks`.
 
@@ -117,3 +117,4 @@ endpoints.
 - L10 (2026-11-11): EntropIA-Cloud PR #2 merged (`b8c6d31f`) after review and a local full `cargo test` (19 suites) + fmt. Coolify auto-deployed it: production container runs image `idhit0wuzbld1u4ee83akvr6:b8c6d31f…`, 0 errors in the logs, /v1/health ok, epoch `1cb97727` unchanged. Still to do: owner check in the running app with `ENTROPIA_DEV_PROFILE`, and a live two-device sync check once a desktop build with migration 0065 is installed.
 - L11 (2026-11-11, owner in the dev app, verbatim): «no me deja guardar cuando opto pro el msimo nombre proqiue es el correcto!!!!» — dialog on «Fernando Solá», suggestions «Buenos Aires, Anselmo Marini, Confederación General del Trabajo, Norberto Oscar Centeno, Movimiento de Acción Sindical, Marino Contino, Instituto Tecnológico Pesquero, Puerto», message «El alias y el nombre canónico son el mismo: elegí un nombre canónico distinto.» Decision: «Mensaje claro (Recomendado), Solo mismo tipo (Recomendado)»; the reverse-direction dialog was not chosen.
 - L12 (2026-11-11): T6 done in `ef18a3cf`: same-name refusal explains what to do (es/en), dialog suggestions limited to the mention's entity type and never its own value. desktop 300 files / 4192 tests, typecheck, eslint and format:check clean.
+- L13 (2026-11-11, owner, verbatim): «ya hice todo, funciona» — checked in the dev app (profile `alias`, sync off): the same-name message, same-type suggestions, saving an alias (canonical shown with the original form), the unified node in Relaciones 3D, and editing and deleting in Configuración › Alias. Not checkable in a dev profile: sync between two devices (needs an installed build with migration 0065 on both).
