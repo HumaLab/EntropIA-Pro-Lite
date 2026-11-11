@@ -34,6 +34,12 @@ the owner 2026-11-05; scope decided 2026-11-11 (see Log L2). Mirror in Engram:
   Ambos (Recomendado)»: from an item's entity list («Es la misma persona que…»
   on a mention) and a full list in Configuración to review, edit and delete
   every alias.
+- **S9 — Dialog clarity (owner app check, 2026-11-11).** When the owner picks
+  the mention's own name as canonical, the refusal explains that this name is
+  already the right one and that an alias is created from the other form,
+  choosing this one as canonical. The dialog's suggestions list only mentions
+  of the same entity type («Solo mismo tipo»): a person is never offered a
+  place or an organization.
 - **S7 — Safe development.** The new migration is irreversible and raises the
   account `schema_tag` (all devices must update). Develop and check only with
   `ENTROPIA_DEV_PROFILE`, never on the real archive.
@@ -46,6 +52,7 @@ the owner 2026-11-05; scope decided 2026-11-11 (see Log L2). Mirror in Engram:
 | T2 ✅ | S2, S3 | Read-time resolution: item entity list shows the canonical name plus the original form; Relaciones 3D groups triple endpoints and NER rows through the alias list | worker | `845249c6` |
 | T3 ✅ | S1, S6, S8 | UI: «Es la misma persona que…» from the item entity list, plus an alias list in Configuración to review, edit and delete | worker | `2ff52172` |
 | T4 ✅ | S4 | Sync: `entity_aliases` in the desktop synced tables after the server accepts it; EntropIA-Cloud change and deploy | worker (both repos) | `722b9af7` (desktop), EntropIA-Cloud `7b018d7` |
+| T6 ✅ | S6, S8, S9 | Dialog fixes from the owner's app check: a clear message when the chosen canonical equals the mention, and suggestions limited to the mention's entity type | worker | `ef18a3cf` |
 | T5 ✅ | S5, S6 | Stage 2: rule-based group suggestions, approve/reject each | worker | `ad674828` |
 
 ## Background
@@ -108,3 +115,5 @@ endpoints.
 - L8 (2026-11-11, owner, verbatim): «Pusheá la rama y abrí el PR, aunque sea como borrador hasta que esté la T4. Te autorizo a trabajar en EntropIA-Cloud para la sincronización».
 - L9 (2026-11-11): T4 code done. Server (EntropIA-Cloud `7b018d7`, branch `feat/entity-aliases-v1`): `entity_aliases` in the allowlist (21) behind capability `entity-aliases-v1`, advertised last; rows stay opaque, no server schema change; full cargo test green. Desktop (`722b9af7`): table synced (19), alias ops held in the oplog until an ordinary pull advertises `entity-aliases-v1` for the epoch, one since-zero catch-up, logout clears the verdict; ids are now deterministic (`alias:` + normalized key) so the same alias on two devices converges instead of colliding on the UNIQUE key. sync 511 / db 123 / store 500 tests green. Pending: deploy the server (owner, RUNBOOK §1) and a live two-device check.
 - L10 (2026-11-11): EntropIA-Cloud PR #2 merged (`b8c6d31f`) after review and a local full `cargo test` (19 suites) + fmt. Coolify auto-deployed it: production container runs image `idhit0wuzbld1u4ee83akvr6:b8c6d31f…`, 0 errors in the logs, /v1/health ok, epoch `1cb97727` unchanged. Still to do: owner check in the running app with `ENTROPIA_DEV_PROFILE`, and a live two-device sync check once a desktop build with migration 0065 is installed.
+- L11 (2026-11-11, owner in the dev app, verbatim): «no me deja guardar cuando opto pro el msimo nombre proqiue es el correcto!!!!» — dialog on «Fernando Solá», suggestions «Buenos Aires, Anselmo Marini, Confederación General del Trabajo, Norberto Oscar Centeno, Movimiento de Acción Sindical, Marino Contino, Instituto Tecnológico Pesquero, Puerto», message «El alias y el nombre canónico son el mismo: elegí un nombre canónico distinto.» Decision: «Mensaje claro (Recomendado), Solo mismo tipo (Recomendado)»; the reverse-direction dialog was not chosen.
+- L12 (2026-11-11): T6 done in `ef18a3cf`: same-name refusal explains what to do (es/en), dialog suggestions limited to the mention's entity type and never its own value. desktop 300 files / 4192 tests, typecheck, eslint and format:check clean.
