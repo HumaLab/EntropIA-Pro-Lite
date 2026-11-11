@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/svelte'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ItemAnalysisPanel from './ItemAnalysisPanel.svelte'
 import itemAnalysisPanelSource from './ItemAnalysisPanel.svelte?raw'
 import type { ItemNlpState } from '$lib/nlp'
@@ -44,6 +44,19 @@ vi.mock('@entropia/ui', async () => {
 vi.mock('@entropia/ui/components/MapViewer', async () => ({
   MapViewer: (await import('./__mocks__/MockMapViewer.svelte')).default,
 }))
+
+// The entity viewer loads the alias list itself; these tests drive that seam
+// directly: the default is identity, each alias test resolves its own list.
+const { loadAliasesMock } = vi.hoisted(() => ({ loadAliasesMock: vi.fn() }))
+vi.mock('$lib/entity-aliases', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('$lib/entity-aliases')
+  return { ...actual, loadEntityAliasResolver: loadAliasesMock }
+})
+
+beforeEach(() => {
+  loadAliasesMock.mockReset()
+  loadAliasesMock.mockResolvedValue((value: string) => value)
+})
 
 const idleNlpState: ItemNlpState = { fts: 'idle', embed: 'idle', ner: 'idle', triples: 'idle' }
 
@@ -550,5 +563,37 @@ describe('ItemAnalysisPanel', () => {
     expect(screen.queryByRole('combobox', { name: 'item.newEntityType' })).not.toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'item.newEntityValue' })).not.toBeInTheDocument()
     expect(itemAnalysisPanelSource).not.toContain('entity-editor__create')
+  })
+})
+
+describe('ItemAnalysisPanel entity aliases (T2)', () => {
+  // Same fixture as S1/S3: "Mdme. Cuevas = Carmela Cuevas".
+  const resolveAlias = (value: string) =>
+    value.trim().replace(/\s+/g, ' ').toLowerCase() === 'mdme. cuevas' ? 'Carmela Cuevas' : value
+
+  const aliasedEntity = {
+    id: 'e1',
+    itemId: 'item-1',
+    entityType: 'person' as const,
+    value: 'Mdme. Cuevas',
+    startOffset: 0,
+    endOffset: 12,
+    confidence: 1,
+    createdAt: 1,
+  }
+
+  it('shows the canonical name with the original form for an aliased mention', async () => {
+    loadAliasesMock.mockResolvedValue(resolveAlias)
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { entities: [aliasedEntity] }))
+
+    expect(await screen.findByText('Carmela Cuevas')).toBeInTheDocument()
+    expect(screen.getByText('Mdme. Cuevas')).toBeInTheDocument()
+  })
+
+  it('renders mentions unchanged when the alias list resolves to identity', () => {
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { entities: [aliasedEntity] }))
+
+    expect(screen.getByText('Mdme. Cuevas')).toBeInTheDocument()
+    expect(screen.queryByText('Carmela Cuevas')).toBeNull()
   })
 })

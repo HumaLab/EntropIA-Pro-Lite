@@ -10,6 +10,11 @@
     type StatusBadgeVariant,
   } from '@entropia/ui'
   import type { Entity } from '@entropia/ui'
+  import {
+    identityEntityAliasResolver,
+    loadEntityAliasResolver,
+    type EntityAliasResolver,
+  } from '$lib/entity-aliases'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { ItemNlpState } from '$lib/nlp'
   import ItemMapViewer from './ItemMapViewer.svelte'
@@ -103,6 +108,19 @@
     ) => void | Promise<void>
     onResetMapLocation: (entityId: string) => void | Promise<void>
   } = $props()
+
+  // Nombre canónico de cada mención (alias de entidades, T2): se lee una vez
+  // de la lista global; si la carga falla, cada valor se muestra tal cual.
+  let resolveAlias: EntityAliasResolver = $state(identityEntityAliasResolver)
+  $effect(() => {
+    let cancelled = false
+    void loadEntityAliasResolver().then((resolver) => {
+      if (!cancelled) resolveAlias = resolver
+    })
+    return () => {
+      cancelled = true
+    }
+  })
 
   // Sesión de edición de tripletas. Vive acá y no en ItemView porque es estado
   // de UI puramente transitorio: solo el guardado y el borrado cruzan hacia la
@@ -385,6 +403,7 @@
         <h4>{translate('item.entities')}</h4>
         <EntityViewer
           {entities}
+          {resolveAlias}
           {editingEntityId}
           {newEntityType}
           {newEntityValue}

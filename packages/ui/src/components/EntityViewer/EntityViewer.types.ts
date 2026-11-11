@@ -23,6 +23,13 @@ export interface EntityViewerProps {
   creatableTypes?: EntityType[]
   newEntityType?: EntityType
   newEntityValue?: string
+  /**
+   * Read-time canonical name for a mention (entity aliases, T2): when it
+   * returns a different name, the pill shows the canonical name with the
+   * original surface form as secondary text. Omitted means current
+   * rendering, exactly as before.
+   */
+  resolveAlias?: (value: string) => string
   onhighlight?: (detail: { startOffset: number; endOffset: number }) => void
   onentityclick?: (entity: Entity) => void
   oneditvaluechange?: (value: string) => void

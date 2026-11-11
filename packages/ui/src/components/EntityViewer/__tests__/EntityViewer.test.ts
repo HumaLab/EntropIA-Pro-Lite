@@ -654,3 +654,82 @@ describe('EntityViewer', () => {
     expect(onsaveentity).not.toHaveBeenCalled()
   })
 })
+
+describe('entity aliases (T2)', () => {
+  // Same fixture as S1/S3: "Mdme. Cuevas = Carmela Cuevas".
+  const resolveAlias = (value: string) =>
+    value.trim().replace(/\s+/g, ' ').toLowerCase() === 'mdme. cuevas' ? 'Carmela Cuevas' : value
+
+  it('shows the canonical name with the original form as secondary text', () => {
+    const { container } = render(EntityViewer, {
+      props: {
+        entities: [
+          makeEntity({ id: 'e1', value: 'Mdme. Cuevas' }),
+          makeEntity({ id: 'e2', entityType: 'place', value: 'Lima' }),
+        ],
+        resolveAlias,
+      },
+    })
+
+    const chip = screen.getByTestId('entity-chip-e1')
+    expect(chip).toHaveTextContent('Carmela Cuevas')
+    expect(chip).toHaveTextContent('Mdme. Cuevas')
+    const originals = container.querySelectorAll('.entity-viewer__original')
+    expect(originals).toHaveLength(1)
+    expect(originals[0]).toHaveTextContent('Mdme. Cuevas')
+    expect(screen.getByTestId('entity-chip-e2')).toHaveTextContent('Lima')
+  })
+
+  it('renders mentions unchanged without the prop', () => {
+    const { container } = render(EntityViewer, {
+      props: { entities: [makeEntity({ id: 'e1', value: 'Mdme. Cuevas' })] },
+    })
+
+    expect(container.querySelectorAll('.entity-viewer__original')).toHaveLength(0)
+    expect(screen.getByTestId('entity-chip-e1')).toHaveTextContent('Mdme. Cuevas')
+  })
+
+  it('renders mentions unchanged with the identity resolver', () => {
+    const { container } = render(EntityViewer, {
+      props: {
+        entities: [makeEntity({ id: 'e1', value: 'Mdme. Cuevas' })],
+        resolveAlias: (value: string) => value,
+      },
+    })
+
+    expect(container.querySelectorAll('.entity-viewer__original')).toHaveLength(0)
+    expect(screen.getByTestId('entity-chip-e1')).toHaveTextContent('Mdme. Cuevas')
+  })
+
+  it('keeps click-to-highlight and edit on the stored row, never the canonical', async () => {
+    const onentityclick = vi.fn()
+    const onhighlight = vi.fn()
+    render(EntityViewer, {
+      props: {
+        entities: [makeEntity({ id: 'e1', value: 'Mdme. Cuevas', startOffset: 0, endOffset: 12 })],
+        resolveAlias,
+        onentityclick,
+        onhighlight,
+      },
+    })
+
+    const pill = screen.getByTestId('entity-chip-e1').querySelector('button')!
+    await fireEvent.click(pill)
+
+    expect(onhighlight).toHaveBeenCalledWith({ startOffset: 0, endOffset: 12 })
+    expect(onentityclick).toHaveBeenCalledWith(expect.objectContaining({ value: 'Mdme. Cuevas' }))
+  })
+
+  it('edits the stored surface form, not the canonical name', () => {
+    render(EntityViewer, {
+      props: {
+        entities: [makeEntity({ id: 'e1', value: 'Mdme. Cuevas' })],
+        editingEntityId: 'e1',
+        editingValue: 'Mdme. Cuevas',
+        resolveAlias,
+      },
+    })
+
+    expect(screen.getByDisplayValue('Mdme. Cuevas')).toBeInTheDocument()
+  })
+})
