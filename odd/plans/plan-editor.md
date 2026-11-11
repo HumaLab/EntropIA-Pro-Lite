@@ -1328,7 +1328,7 @@ Orden obligatorio 0→1→2→3→4→5→6→7→8→9. La Unidad 0 no es opcio
 - [x] Implementar barra de herramientas, undo, redo, búsqueda y reemplazo, atajos convencionales y modo concentrado con ambos laterales plegados. La búsqueda aplana el documento antes de comparar, porque un recorrido por nodos de texto no encuentra una frase partida por una negrita; usa decoraciones y no marcas, porque buscar no puede dejar rastro en el JSON canónico; y reemplazar todo va de atrás hacia adelante en una sola transacción.
 - [x] Respetar los dos guardias de estética: iconos exclusivamente por `ActionIcon` y escala de control de `design-tokens.test.ts`. No replicar los botones a mano de `NoteEditor`. El guard rechazó un `input type="search"` escrito a mano y obligó a usar `SearchBar`: tenía razón.
 - [x] Implementar los estados visibles de §16.2. Un error de guardado no desaparece solo y ofrece reintento. **El reintento se retiene ante `revision_conflict`**: otra ventana avanzó la revisión, así que la misma revisión esperada solo puede volver a fallar y forzarla pisaría trabajo ajeno. Ahí el mensaje explica y apunta al journal.
-- [ ] Verificar visualmente con la aplicación real, en Pro y en Lite. **Parcial:** verificado en Lite a lo largo de la unidad. Falta Pro.
+- [ ] Owner check: verificar visualmente con la aplicación real, en Pro y en Lite. **Parcial:** verificado en Lite a lo largo de la unidad. Falta Pro.
 
 **Criterio de aceptación:** se crea, abre, edita y guarda un documento con JSON canónico; el esquema navega correctamente; ningún guardia de estética falla. Commit sugerido: `feat(writing): add the writing workspace and its editor`.
 
@@ -1463,7 +1463,7 @@ Los tres archivos del documento patrón se reescriben en `docs/escritura-export-
   **Ordenada por riesgo medido, no alfabéticamente.** De todo lo que la Unidad tocó, solo dos archivos viven fuera del módulo de escritura: `ItemView.svelte`, al que se le cambió la lista de assets, y `AppShell.svelte`, cuya barra de estado se ve en todas las pantallas. El resto —`settings.ts`, `i18n.ts`, los `index.ts` de `@entropia/ui`— son agregados. Así que el recorrido empezó por visor, OCR y notas, y el resto se confirmó después.
 
   **Verificado:** visor de un PDF de varias páginas sin páginas fantasma ni faltantes, texto extraído y OCR por página, una nota creada desde el visor que queda en su página; importación y navegación de colecciones; búsqueda textual y semántica; NER y tripletas; Chat/RAG; y la exportación OCR a DOCX, que era el único punto con alguna sombra: la Unidad 8 agregó `docx` al proyecto y esa exportación usa `html-docx-js`. `ocr-export.ts` no tiene un solo cambio y `html-docx-js` sigue instalado, así que en teoría no se tocan — y una regresión existe precisamente para no quedarse en la teoría.
-- [ ] Apertura del mismo documento en Pro y Lite, con y sin Zotero y capacidades de IA.
+- [ ] Owner check: apertura del mismo documento en Pro y Lite, con y sin Zotero y capacidades de IA.
 - [x] Migraciones desde versiones de desarrollo y documentación de usuario.
 
   **Migraciones.** La versión del esquema no era el riesgo: nunca se incrementó, así que todo documento de desarrollo se lee como versión 1 y el guard de `validateCanonical` jamás dispara. El riesgo eran **las formas debajo** — una cita que guardaba una obra antes de guardar un clúster, un manuscrito anterior a los nodos de nota al pie, un vínculo a nota con su fragmento todavía en HTML — y sobre eso el número de versión no dice nada.

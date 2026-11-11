@@ -181,7 +181,7 @@ Entregar archivos/cambios, dependencias/features, comandos/resultados, evidencia
 
 El cambio local está listo para revisión cuando cumple el alcance Windows Lite, filtrado, caché, deduplicación, descarte, arranque no bloqueante y apertura restringida; pasan las verificaciones ejecutadas y se identifican las no ejecutadas. No declarar otros targets aprobados sin evidencia.
 
-**La integración Store solo queda validada con una instalación distribuida por Store o un Package Flight autorizado.** Un MSIX firmado cualquiera, mocks o `tauri dev` no bastan.
+**Owner check: la integración Store solo queda validada con una instalación distribuida por Store o un Package Flight autorizado.** Un MSIX firmado cualquiera, mocks o `tauri dev` no bastan.
 
 En esa prueba: instalar una versión anterior desde el canal pertinente; ofrecer una superior en ese canal y esperar su disponibilidad; verificar detección/ficha; cerrar y reabrir para comprobar caché/descarte; actualizar desde Store y confirmar que no reaparece el aviso anterior. Considerar propagación y caché de Microsoft.
 

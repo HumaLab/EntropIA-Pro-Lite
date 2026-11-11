@@ -14,7 +14,7 @@ Judgment Day rounds). Branch `feat/pdf-image-decoder`, worktree
   `DocumentViewer` prop suppresses renders while the container is 0×0 and renders once on re-show.
 - [x] T4 — Visual safeguard: pixel-compare pages rendered with and without the option on a sample of the
   owner's real PDFs (incl. corpus, custom colour profile JPEG, masked/JPX pages); report differences.
-- [ ] T5 — CI green (frontend), merge, owner measures section 6 targets in the app.
+- [ ] Owner check: T5 — CI green (frontend), merge, owner measures section 6 targets in the app. (PR #17 merged 2026-10-08, CI green; remaining is the in-app §6 measurement.)
 
 ## Progress
 

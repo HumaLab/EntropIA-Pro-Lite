@@ -307,7 +307,7 @@ the background to drain the queue.
   - Provenance: the copy row (source, capture, library) -> Zotero item key,
     plus `written` (what we wrote) in its detail JSON. A second request answers
     from the row; a second device finds the item by URL.
-- [ ] P5b - Built; automated checks observed, unchecked until the user's run. Commits
+- [x] P5b - Built; automated checks observed; user's real-Zotero run passed 2026-10-02 (recorded below). Commits
   `e5d570ed` (queue, plan, port, run, launch), `2452a2e1` (five commands, ACL),
   `0893cde6` (dialog), `48a656b3` (drawer). Commands: `navegador_zotero_copy_
   request|list|run|cancel`, `navegador_zotero_launch`.
@@ -333,7 +333,7 @@ the background to drain the queue.
      "Copiar", and lists the fields it could not fill or update and the ones the
      user edited. A PDF for an existing page says it cannot be attached. A record
      of an item the user deleted in Zotero is dropped, so it can be copied again.
-- [ ] P5c - User verification with a real Zotero (a test group library); first run
+- [ ] Owner check: P5c - User verification with a real Zotero (a test group library); first run
   above, rerun pending for the two fixes (groups listed; already-in-Zotero dialog).
   Checklist (dev profile `ENTROPIA_DEV_PROFILE=navegador`):
   1. Zotero CLOSED: save a page, open it in Fuentes guardadas, "Copiar a Zotero"
@@ -360,7 +360,7 @@ the background to drain the queue.
 
 ## Open items to decide before merging with the Zotero branch
 
-- [ ] Schema-tag ordering (found in P2a). The client's `X-Schema-Tag` is the
+- [x] Schema-tag ordering (found in P2a; SUPERSEDED 2026-11-10: the migration was renumbered to `0057_web_captures`, above the Zotero range, so the 426 lockout premise no longer holds). The client's `X-Schema-Tag` is the
   LAST APPLIED migration, not the highest name: `read_schema_tag`
   (`apps/desktop/src-tauri/src/sync/engine.rs:793-800`, `SELECT name FROM
   _migrations ORDER BY id DESC LIMIT 1`), read fresh each cycle

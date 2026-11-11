@@ -118,3 +118,4 @@ including Pro, and the owner's visual check in the dev app.
   sort (5ea072c); opened works first (7158814) stored in a bounded local-only
   app_settings list instead of a migration, because any new migration raises
   the sync schema_tag and the server answers 426 to older devices.
+- 2026-11-10: P1–P3 merged (`1d1ea222`, CI green incl. Pro); Owner check pending: visual check of P1–P3 in the dev app.
