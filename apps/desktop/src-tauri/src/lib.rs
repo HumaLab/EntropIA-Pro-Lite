@@ -5,6 +5,7 @@ mod asset_integrity;
 pub mod asset_scope;
 mod asset_sweep;
 mod audio_preview;
+mod exit_watchdog;
 // `pub` so the assistant endpoint's surface is real crate API between tasks
 // instead of dead code: T3 adds tools to it and T4's commands drive its state
 // (the same reason `sync` and `writing` are `pub`).
@@ -636,6 +637,7 @@ fn attach_close_orchestration(app_handle: &tauri::AppHandle) {
                 CLOSE_LOG_SOURCE,
                 "Cierre repetido: destrucción inmediata (orden del usuario)",
             );
+            arm_exit_watchdog(&handler_handle);
             let _ = handler_window.destroy();
             return;
         }
@@ -729,12 +731,34 @@ async fn run_close_sequence(app_handle: &tauri::AppHandle) {
         CLOSE_LOG_SOURCE,
         "Cierre: se destruye la ventana principal",
     );
+    // Armed before anything that talks to WebView2: with its browser process
+    // hung, the window never reports `Destroyed` and the loop never exits.
+    arm_exit_watchdog(app_handle);
     // With a child webview open Tauri no longer reports `main` as a webview
     // window, so the browser has to go first.
     navegador::shutdown(app_handle);
     if let Some(window) = app_handle.get_webview_window("main") {
         let _ = window.destroy();
     }
+}
+
+/// Starts the exit countdown (exit_watchdog.rs). Armed when the close sequence
+/// destroys the main window and again on its `Destroyed` event, whichever comes
+/// first: only the first call counts.
+fn arm_exit_watchdog(app_handle: &tauri::AppHandle) {
+    let Some(watchdog) = app_handle.try_state::<exit_watchdog::ExitWatchdog>() else {
+        return;
+    };
+    let handle = app_handle.clone();
+    watchdog.arm(exit_watchdog::EXIT_GRACE, move || {
+        app_logs::warn(
+            &handle,
+            CLOSE_LOG_SOURCE,
+            "Salida forzada: WebView2 no respondió tras cerrar la ventana",
+        );
+        stop_background_services(&handle);
+        std::process::exit(0);
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1468,6 +1492,7 @@ pub fn run() {
                 closing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 flush_acked: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             });
+            app.manage(exit_watchdog::ExitWatchdog::new());
             attach_close_orchestration(app.handle());
 
             // On Linux, WebKitGTK denies media-device permission requests by default.
@@ -1789,22 +1814,39 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
-            // Signal the sync engine to tear down cleanly on app exit (DESIGN
-            // §3.1) instead of being killed mid-cycle.
-            if let tauri::RunEvent::Exit = event {
-                if let Some(engine) = app_handle.try_state::<sync::engine::SyncEngine>() {
-                    engine.shutdown();
+        .run(|app_handle, event| match event {
+            // The main window is gone: the process must end even if WebView2
+            // never lets the event loop reach `Exit` (exit_watchdog.rs).
+            tauri::RunEvent::WindowEvent {
+                ref label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } if label == "main" => arm_exit_watchdog(app_handle),
+            tauri::RunEvent::Exit => {
+                if let Some(watchdog) = app_handle.try_state::<exit_watchdog::ExitWatchdog>() {
+                    watchdog.mark_exited();
                 }
-                // Stop serving and drop the discovery file: a file left behind
-                // would point the connector at a port nobody listens on.
-                if let Some(endpoint) = app_handle
-                    .try_state::<std::sync::Arc<automation::server::AgentEndpointState>>()
-                {
-                    endpoint.stop();
-                }
+                stop_background_services(app_handle);
             }
+            _ => {}
         });
+}
+
+/// What has to happen before the process ends, on the normal `Exit` and on the
+/// watchdog's forced one alike.
+fn stop_background_services(app_handle: &tauri::AppHandle) {
+    // Signal the sync engine to tear down cleanly on app exit (DESIGN §3.1)
+    // instead of being killed mid-cycle.
+    if let Some(engine) = app_handle.try_state::<sync::engine::SyncEngine>() {
+        engine.shutdown();
+    }
+    // Stop serving and drop the discovery file: a file left behind would point
+    // the connector at a port nobody listens on.
+    if let Some(endpoint) =
+        app_handle.try_state::<std::sync::Arc<automation::server::AgentEndpointState>>()
+    {
+        endpoint.stop();
+    }
 }
 
 /// Every directory a previous EntropIA build may have written to, in the order
