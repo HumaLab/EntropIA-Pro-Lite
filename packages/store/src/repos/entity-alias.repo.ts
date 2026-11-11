@@ -88,10 +88,13 @@ export class EntityAliasRepo {
     }
 
     const now = Date.now()
+    // Deterministic row id from the normalized key (S6): the same alias
+    // created on two devices gets the same id, so the pulled row converges
+    // on apply instead of colliding forever on the UNIQUE(alias_key).
     const created = await this.db
       .insert(entityAliases)
       .values({
-        id: crypto.randomUUID(),
+        id: `alias:${key}`,
         aliasKey: key,
         alias: input.alias,
         canonical,

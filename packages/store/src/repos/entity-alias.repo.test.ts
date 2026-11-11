@@ -81,6 +81,21 @@ describe('EntityAliasRepo', () => {
     expect(row.updatedAt).toBe(row.createdAt)
   })
 
+  it('new rows get a deterministic id from the normalized key (S6 convergence)', async () => {
+    const row = await repo.upsert({ alias: 'Mdme. Cuevas', canonical: 'Carmela Cuevas' })
+
+    expect(row.id).toBe('alias:mdme. cuevas')
+  })
+
+  it('two independent upserts of the same alias (different spacing/case) produce the same id', async () => {
+    const first = await repo.upsert({ alias: 'Mdme. Cuevas', canonical: 'Carmela Cuevas' })
+    const second = await repo.upsert({ alias: '  MDME.   cuevas', canonical: 'Carmela Vidal' })
+
+    expect(second.id).toBe(first.id)
+    expect(second.id).toBe('alias:mdme. cuevas')
+    expect(await rowCount()).toBe(1)
+  })
+
   it('upserting an existing alias key updates its canonical and updated_at', async () => {
     const first = await repo.upsert({ alias: 'Mdme. Cuevas', canonical: 'Carmela Cuevas' })
     const second = await repo.upsert({ alias: '  mdme. cuevas', canonical: 'Carmela Vidal' })
