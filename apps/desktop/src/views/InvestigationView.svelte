@@ -39,6 +39,7 @@
     type ResearchSourcePath,
     type ResearchSourceSummary,
   } from '$lib/research'
+  import { describeRoleWarnings, type ReadableDegradation } from '$lib/research-degradations'
   import {
     citationLocation,
     isBibliographyCitation,
@@ -623,19 +624,22 @@
   const coverageWarning = $derived(
     reportContent?.coverage_warning?.sufficient === false ? reportContent.coverage_warning : null
   )
-  const reportLimitations = $derived.by(() => {
+  const reportLimitations = $derived.by((): ReadableDegradation[] => {
+    // Read so the role names follow a language change.
+    void $currentLocale
     const limitaciones = (reportContent?.archive_limitations ?? [])
       .map((l) => (l.reason ? `${l.text} (${l.reason})` : l.text))
       .filter((t): t is string => Boolean(t && t.trim()))
-    const degradaciones = (reportContent?.role_warnings ?? [])
-      .filter((w) => w.error?.trim())
-      .map((w) => {
-        const veces = (w.times ?? 1) > 1 ? `, ${w.times} veces` : ''
-        return `Degradación del pipeline: ${w.error} (${w.role ?? 'rol desconocido'}${veces}).`
-      })
+      .map((message) => ({ message, detail: null }))
+    const degradaciones = describeRoleWarnings(reportContent?.role_warnings ?? [])
     // Las limitaciones llegan por lote y se repiten: el investigador no
     // necesita leer tres veces la misma ausencia.
-    return [...new Set([...limitaciones, ...degradaciones])]
+    const vistas = new Set<string>()
+    return [...limitaciones, ...degradaciones].filter((linea) => {
+      if (vistas.has(linea.message)) return false
+      vistas.add(linea.message)
+      return true
+    })
   })
 
   const totalCoverage = $derived.by(() => {
@@ -1639,7 +1643,19 @@
               <section class="report__section">
                 <h3>{$currentLocale && t('investigation.report.limitations')}</h3>
                 <ul>
-                  {#each reportLimitations as limitacion (limitacion)}<li>{limitacion}</li>{/each}
+                  {#each reportLimitations as limitacion (limitacion.message)}
+                    <li>
+                      {limitacion.message}
+                      {#if limitacion.detail}
+                        <details class="report__technical-detail">
+                          <summary
+                            >{$currentLocale && t('investigation.report.technicalDetail')}</summary
+                          >
+                          <code>{limitacion.detail}</code>
+                        </details>
+                      {/if}
+                    </li>
+                  {/each}
                 </ul>
               </section>
             {/if}
@@ -2086,6 +2102,23 @@
 
   .report__section {
     margin-bottom: var(--space-5, 1.5rem);
+  }
+
+  .report__technical-detail {
+    margin-top: var(--space-1);
+    font-size: var(--font-size-xs, 0.75rem);
+    color: var(--color-text-muted, inherit);
+  }
+
+  .report__technical-detail summary {
+    cursor: pointer;
+  }
+
+  .report__technical-detail code {
+    display: block;
+    margin-top: var(--space-1);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .report__section-mark {
