@@ -1,6 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { DatabaseSync } from 'node:sqlite'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EntityRepo } from './entity.repo'
-import type { DrizzleClient } from '../types'
+import { applyMigrations } from '../runner'
+import { createDrizzleClient } from '../client'
+import type { DbClient, DrizzleClient } from '../types'
 
 // Helper: create a chainable mock that resolves with the given value
 function createChainMock(resolveValue: unknown = []) {
@@ -247,6 +250,98 @@ describe('EntityRepo', () => {
 
       await repo.deleteByItemId('item-1')
       expect(deleteSpy).toHaveBeenCalled()
+    })
+  })
+
+  describe('listDistinctValues (T5 suggestions)', () => {
+    let sqlite: DatabaseSync
+    let realRepo: EntityRepo
+
+    function shim(source: DatabaseSync): DbClient {
+      return {
+        async execute(sql, params = []) {
+          return {
+            rowsAffected: Number(source.prepare(sql).run(...(params as never[])).changes),
+          }
+        },
+        async executeBatch(sql) {
+          source.exec(sql)
+        },
+        async select<T>(sql: string, params: unknown[] = []) {
+          return source.prepare(sql).all(...(params as never[])) as T[]
+        },
+        async selectRows(sql, params = []) {
+          return source
+            .prepare(sql)
+            .all(...(params as never[]))
+            .map(Object.values)
+        },
+      }
+    }
+
+    beforeEach(async () => {
+      sqlite = new DatabaseSync(':memory:')
+      sqlite.exec('PRAGMA foreign_keys = ON;')
+      await applyMigrations(shim(sqlite))
+      sqlite.exec(
+        `INSERT INTO collections (id, name, created_at, updated_at) VALUES ('col-1', 'One', 0, 0)`
+      )
+      sqlite.exec(
+        `INSERT INTO items (id, title, collection_id, metadata, created_at, updated_at)
+         VALUES ('item-1', 'Doc', 'col-1', NULL, 0, 0)`
+      )
+      realRepo = new EntityRepo(createDrizzleClient(shim(sqlite)) as DrizzleClient)
+    })
+
+    afterEach(() => {
+      sqlite.close()
+    })
+
+    function seed(value: string, type: string, source: string | null, count: number): void {
+      const insert = sqlite.prepare(
+        `INSERT INTO entities (id, item_id, entity_type, value, source, created_at)
+         VALUES (?, 'item-1', ?, ?, ?, 0)`
+      )
+      for (let index = 0; index < count; index += 1) {
+        insert.run(`${value}-${type}-${source ?? 'live'}-${index}`, type, value, source)
+      }
+    }
+
+    it('returns distinct person values with mention counts across the archive', async () => {
+      seed('Carmela Cuevas', 'person', null, 2)
+      seed('Mdme. Cuevas', 'person', null, 3)
+      seed('Buenos Aires', 'place', null, 5)
+
+      expect(await realRepo.listDistinctValues({ types: ['person'] })).toEqual([
+        { value: 'Mdme. Cuevas', mentions: 3 },
+        { value: 'Carmela Cuevas', mentions: 2 },
+      ])
+    })
+
+    it('merges rows that normalize to the same alias key', async () => {
+      seed('Carmela Cuevas', 'person', null, 2)
+      seed('  carmela   cuevas ', 'person', null, 1)
+
+      expect(await realRepo.listDistinctValues({ types: ['person'] })).toEqual([
+        { value: 'Carmela Cuevas', mentions: 3 },
+      ])
+    })
+
+    it('excludes manually deleted mentions', async () => {
+      seed('Carmela Cuevas', 'person', null, 2)
+      seed('Carmela Cuevas', 'person', 'manual_deleted', 4)
+      seed('Juan Cuevas', 'person', 'manual', 1)
+
+      expect(await realRepo.listDistinctValues({ types: ['person'] })).toEqual([
+        { value: 'Carmela Cuevas', mentions: 2 },
+        { value: 'Juan Cuevas', mentions: 1 },
+      ])
+    })
+
+    it('returns nothing for an empty type filter', async () => {
+      seed('Carmela Cuevas', 'person', null, 1)
+
+      await expect(realRepo.listDistinctValues({ types: [] })).resolves.toEqual([])
     })
   })
 })

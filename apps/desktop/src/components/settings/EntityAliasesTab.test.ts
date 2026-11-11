@@ -3,15 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import EntityAliasesTab from './EntityAliasesTab.svelte'
 import { locale } from '$lib/i18n'
 
-const { listMock, upsertMock, deleteMock } = vi.hoisted(() => ({
+const { listMock, upsertMock, deleteMock, distinctValuesMock } = vi.hoisted(() => ({
   listMock: vi.fn(),
   upsertMock: vi.fn(),
   deleteMock: vi.fn(),
+  distinctValuesMock: vi.fn(),
 }))
 
 vi.mock('$lib/db', () => ({
   getStore: () => ({
     entityAliases: { list: listMock, upsert: upsertMock, delete: deleteMock },
+    entities: { listDistinctValues: distinctValuesMock },
   }),
 }))
 
@@ -43,6 +45,7 @@ beforeEach(() => {
   locale.set('es')
   vi.clearAllMocks()
   listMock.mockResolvedValue(ROWS)
+  distinctValuesMock.mockResolvedValue([])
   upsertMock.mockImplementation(
     async ({ alias, canonical }: { alias: string; canonical: string }) =>
       row('a9', alias, canonical)
@@ -145,5 +148,95 @@ describe('EntityAliasesTab', () => {
 
     expect(await screen.findByText(/Todavía no hay alias/)).toBeInTheDocument()
     expect(screen.queryByTestId(/^entity-alias-row-/)).toBeNull()
+  })
+})
+
+describe('EntityAliasesTab suggestions (T5)', () => {
+  const VALUES = [
+    { value: 'Carmela Cuevas', mentions: 5 },
+    { value: 'Mdme. Cuevas', mentions: 3 },
+    { value: 'C. Cuevas', mentions: 2 },
+  ]
+
+  beforeEach(() => {
+    listMock.mockResolvedValue([])
+    distinctValuesMock.mockResolvedValue(VALUES)
+  })
+
+  it('lists each suggestion as canonical ← variants', async () => {
+    render(EntityAliasesTab)
+
+    const suggestion = await screen.findByTestId('entity-alias-suggestion-0')
+    expect(within(suggestion).getByText('Carmela Cuevas')).toBeInTheDocument()
+    expect(within(suggestion).getByText(/Mdme\. Cuevas/)).toBeInTheDocument()
+    expect(within(suggestion).getByText(/C\. Cuevas/)).toBeInTheDocument()
+    expect(distinctValuesMock).toHaveBeenCalledWith({ types: ['person'] })
+  })
+
+  it('accept creates one alias per variant, refreshes and removes the suggestion', async () => {
+    render(EntityAliasesTab)
+    await screen.findByTestId('entity-alias-suggestion-0')
+    const before = listMock.mock.calls.length
+    // After the accept the store lists the two new rows, so the recomputed
+    // suggestions no longer include the accepted group.
+    listMock.mockResolvedValue([
+      {
+        id: 'n1',
+        aliasKey: 'c. cuevas',
+        alias: 'C. Cuevas',
+        canonical: 'Carmela Cuevas',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: 'n2',
+        aliasKey: 'mdme. cuevas',
+        alias: 'Mdme. Cuevas',
+        canonical: 'Carmela Cuevas',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ])
+
+    await fireEvent.click(screen.getByTestId('entity-alias-suggestion-accept-0'))
+
+    await waitFor(() => expect(upsertMock).toHaveBeenCalledTimes(2))
+    expect(upsertMock).toHaveBeenNthCalledWith(1, {
+      alias: 'C. Cuevas',
+      canonical: 'Carmela Cuevas',
+    })
+    expect(upsertMock).toHaveBeenNthCalledWith(2, {
+      alias: 'Mdme. Cuevas',
+      canonical: 'Carmela Cuevas',
+    })
+    // The accept refreshes the shared resolver and reloads the alias list.
+    await waitFor(() => expect(listMock.mock.calls.length).toBeGreaterThan(before))
+    await waitFor(() => expect(screen.queryByTestId('entity-alias-suggestion-0')).toBeNull())
+  })
+
+  it('a refusal shows the readable message and keeps the suggestion', async () => {
+    upsertMock.mockRejectedValue(
+      new Error(
+        'Cannot alias "Mdme. Cuevas" to itself: alias and canonical normalize to the same value.'
+      )
+    )
+    render(EntityAliasesTab)
+    await screen.findByTestId('entity-alias-suggestion-0')
+
+    await fireEvent.click(screen.getByTestId('entity-alias-suggestion-accept-0'))
+
+    expect(await screen.findByText(/son el mismo/)).toBeInTheDocument()
+    expect(screen.queryByText(/normalize to the same value/)).toBeNull()
+    expect(screen.getByTestId('entity-alias-suggestion-0')).toBeInTheDocument()
+  })
+
+  it('discard hides the suggestion for the session', async () => {
+    render(EntityAliasesTab)
+    await screen.findByTestId('entity-alias-suggestion-0')
+
+    await fireEvent.click(screen.getByTestId('entity-alias-suggestion-discard-0'))
+
+    await waitFor(() => expect(screen.queryByTestId('entity-alias-suggestion-0')).toBeNull())
+    expect(upsertMock).not.toHaveBeenCalled()
   })
 })

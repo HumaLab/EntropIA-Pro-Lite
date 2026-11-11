@@ -2685,6 +2685,19 @@ const es = {
   'entityAliases.error.chainAlias':
     '«{alias}» ya se usa como nombre canónico de otra entrada: cada unión se decide por separado.',
   'entityAliases.error.generic': 'No se pudo guardar el alias.',
+  'entityAliases.suggestions.title': 'Sugerencias',
+  'entityAliases.suggestions.description':
+    'Grupos que parecen la misma persona (mismo apellido, iniciales, tratamientos). Nada se une solo: cada grupo se acepta o se descarta.',
+  'entityAliases.suggestions.empty':
+    'Sin sugerencias por ahora: no hay grupos de menciones parecidas entre las personas del archivo.',
+  'entityAliases.suggestions.loading': 'Buscando sugerencias…',
+  'entityAliases.suggestions.loadError': 'No se pudieron cargar las sugerencias: {error}',
+  'entityAliases.suggestions.mentions': '{count} menciones',
+  'entityAliases.suggestions.accept': 'Aceptar',
+  'entityAliases.suggestions.acceptAria': 'Aceptar la sugerencia {canonical}',
+  'entityAliases.suggestions.accepting': 'Aceptando…',
+  'entityAliases.suggestions.discard': 'Descartar',
+  'entityAliases.suggestions.discardAria': 'Descartar la sugerencia {canonical}',
   'item.entityType.person': 'Persona',
   'item.entityType.place': 'Lugar',
   'item.entityType.date': 'Fecha',
@@ -5936,6 +5949,19 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'entityAliases.error.chainAlias':
     '“{alias}” is already used as the canonical name of another entry: each merge is decided separately.',
   'entityAliases.error.generic': 'Could not save the alias.',
+  'entityAliases.suggestions.title': 'Suggestions',
+  'entityAliases.suggestions.description':
+    'Groups that look like the same person (shared surname, initials, honorifics). Nothing is merged automatically: each group is accepted or dismissed.',
+  'entityAliases.suggestions.empty':
+    'No suggestions right now: there are no similar mention groups among the people in the archive.',
+  'entityAliases.suggestions.loading': 'Looking for suggestions…',
+  'entityAliases.suggestions.loadError': 'Could not load the suggestions: {error}',
+  'entityAliases.suggestions.mentions': '{count} mentions',
+  'entityAliases.suggestions.accept': 'Accept',
+  'entityAliases.suggestions.acceptAria': 'Accept the suggestion {canonical}',
+  'entityAliases.suggestions.accepting': 'Accepting…',
+  'entityAliases.suggestions.discard': 'Dismiss',
+  'entityAliases.suggestions.discardAria': 'Dismiss the suggestion {canonical}',
   'item.entityType.person': 'Person',
   'item.entityType.place': 'Place',
   'item.entityType.date': 'Date',
