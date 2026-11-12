@@ -38,7 +38,7 @@ pub use item::{
     MAX_PDFS_PER_ITEM,
 };
 pub use kind::FileKind;
-pub use name::display_file_name;
+pub use name::{display_file_name, display_file_name_for};
 pub use policy::{is_public_ip, FetchPolicy};
 pub use provenance::{
     build_provenance, parse_provenance, ItemSnapshot, ProvenanceError, ProvenanceRecordParts,
@@ -47,8 +47,8 @@ pub use provenance::{
 pub use resolve::resolve_identifier;
 pub use search::{Endpoints, SearchItem, SearchPage, SearchQuery};
 pub use verify::{
-    verify_staged_pdf, ExpectedRemote, PageLimits, VerifiedPdf, ABSOLUTE_MAX_PAGES,
-    DEFAULT_MAX_PAGES,
+    verify_staged_image, verify_staged_pdf, ExpectedRemote, PageLimits, VerifiedPdf,
+    ABSOLUTE_MAX_PAGES, DEFAULT_MAX_PAGES,
 };
 
 /// Cap for item metadata payloads.

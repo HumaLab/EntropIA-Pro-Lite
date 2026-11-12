@@ -121,10 +121,12 @@ pub(crate) fn existing_import(
     })
 }
 
-/// True when `item_id` holds exactly one parent PDF asset (no parent of its
-/// own) whose children carry page numbers exactly `1..=page_count` — no
-/// duplicates, no extras — with every one of those files present on disk
-/// after [`resolve_asset_path`]. Anything else is a remnant, not an import.
+/// True when `item_id` holds exactly one parent asset (no parent of its
+/// own) and either it is a PDF whose children carry page numbers exactly
+/// `1..=page_count` — no duplicates, no extras — or it is an image with no
+/// children and `page_count == 1`; every one of those files must be present
+/// on disk after [`resolve_asset_path`]. Anything else is a remnant, not an
+/// import.
 fn is_complete(
     conn: &rusqlite::Connection,
     data_dir: &Path,
@@ -132,16 +134,19 @@ fn is_complete(
     page_count: u32,
 ) -> rusqlite::Result<bool> {
     let mut stmt = conn.prepare(
-        "SELECT id, path FROM assets \
-         WHERE item_id = ?1 AND type = 'pdf' AND parent_asset_id IS NULL",
+        "SELECT id, path, type FROM assets \
+         WHERE item_id = ?1 AND type IN ('pdf', 'image') AND parent_asset_id IS NULL",
     )?;
-    let parents: Vec<(String, String)> = stmt
-        .query_map([item_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+    let parents: Vec<(String, String, String)> = stmt
+        .query_map([item_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<Result<_, _>>()?;
     if parents.len() != 1 {
         return Ok(false);
     }
-    let (parent_id, parent_path) = &parents[0];
+    let (parent_id, parent_path, parent_type) = &parents[0];
+    if parent_type == "image" && page_count != 1 {
+        return Ok(false);
+    }
     if !resolve_asset_path(parent_path, data_dir).is_file() {
         return Ok(false);
     }
@@ -150,6 +155,9 @@ fn is_complete(
     let children: Vec<(Option<i64>, String)> = stmt
         .query_map([parent_id], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<_, _>>()?;
+    if parent_type == "image" {
+        return Ok(children.is_empty());
+    }
     if children.len() != page_count as usize {
         return Ok(false);
     }
@@ -1250,6 +1258,60 @@ mod tests {
         let conn = ctx.ui.lock().unwrap();
         assert_eq!(
             existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
+                .expect("classifies"),
+            Existing::Partial {
+                item_id: "item-1".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn existing_image_is_complete_with_one_image_asset_and_no_pages() {
+        let ctx = ctx();
+        {
+            let conn = ctx.ui.lock().unwrap();
+            insert_item(&conn, "item-1", "col-1", Some(&prov_meta(IDENT, FILE, SHA)));
+            let path = "assets/col-1/item-1/plate.png";
+            insert_asset(&conn, "a1", "item-1", path, "image", None, None);
+            touch(&ctx.data_dir, path);
+        }
+        let conn = ctx.ui.lock().unwrap();
+        assert_eq!(
+            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, 1)
+                .expect("classifies"),
+            Existing::Complete {
+                item_id: "item-1".to_string(),
+            },
+        );
+        // An image never stands in for a multi-page document.
+        assert_eq!(
+            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
+                .expect("classifies"),
+            Existing::Partial {
+                item_id: "item-1".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn existing_image_with_its_file_gone_is_partial() {
+        let ctx = ctx();
+        {
+            let conn = ctx.ui.lock().unwrap();
+            insert_item(&conn, "item-1", "col-1", Some(&prov_meta(IDENT, FILE, SHA)));
+            insert_asset(
+                &conn,
+                "a1",
+                "item-1",
+                "assets/col-1/item-1/plate.png",
+                "image",
+                None,
+                None,
+            );
+        }
+        let conn = ctx.ui.lock().unwrap();
+        assert_eq!(
+            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, 1)
                 .expect("classifies"),
             Existing::Partial {
                 item_id: "item-1".to_string(),

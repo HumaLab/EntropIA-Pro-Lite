@@ -656,7 +656,9 @@ mod tests {
             all
         );
         assert_eq!(
-            with_kinds(&[FileKind::Image, FileKind::Pdf]).to_lucene().unwrap(),
+            with_kinds(&[FileKind::Image, FileKind::Pdf])
+                .to_lucene()
+                .unwrap(),
             all,
             "order of the requested kinds must not change the query"
         );

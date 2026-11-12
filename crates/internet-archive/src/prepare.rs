@@ -11,6 +11,7 @@
 
 use crate::item::{Availability, PdfFile};
 use crate::job::{ImportTarget, JobFile};
+use crate::kind::FileKind;
 
 /// Remote version fingerprint, strongest available signal first.
 ///
@@ -343,6 +344,8 @@ pub fn classify(
 pub struct PrepareEntry {
     pub identifier: String,
     pub file_name: String,
+    /// User-facing kind; images are not split into pages.
+    pub kind: FileKind,
     pub availability: Availability,
     pub size: Option<u64>,
     /// `None` for restricted files (never classified, never counted).
@@ -367,8 +370,9 @@ pub struct PrepareSummary {
 }
 
 impl PrepareSummary {
-    /// Synced-volume estimate (plan §5 "Volumen sincronizado"): the original
-    /// plus its split pages, so known bytes times two, saturating.
+    /// Synced-volume estimate (plan §5 "Volumen sincronizado"): a PDF is the
+    /// original plus its split pages, so its known bytes count twice; an
+    /// image is stored once. Saturating.
     ///
     /// Counts only files that would actually be imported (`New` and
     /// `NewVersion`); restricted, already-imported and undecided
@@ -383,10 +387,10 @@ impl PrepareSummary {
                 Some(DuplicateStatus::New) | Some(DuplicateStatus::NewVersion { .. })
             );
             if counted {
-                total = total.saturating_add(entry.size.unwrap_or(0));
+                total = total.saturating_add(synced_bytes(entry));
             }
         }
-        total.saturating_mul(2)
+        total
     }
 
     /// Same doubling estimate restricted to the `InOtherCollection` pile,
@@ -399,10 +403,20 @@ impl PrepareSummary {
                 entry.duplicate,
                 Some(DuplicateStatus::InOtherCollection { .. })
             ) {
-                total = total.saturating_add(entry.size.unwrap_or(0));
+                total = total.saturating_add(synced_bytes(entry));
             }
         }
-        total.saturating_mul(2)
+        total
+    }
+}
+
+/// Bytes one entry adds once imported: twice its size for a PDF (original
+/// plus split pages), its size for an image.
+fn synced_bytes(entry: &PrepareEntry) -> u64 {
+    let size = entry.size.unwrap_or(0);
+    match entry.kind {
+        FileKind::Image => size,
+        FileKind::Pdf | FileKind::PdfText => size.saturating_mul(2),
     }
 }
 
@@ -434,6 +448,7 @@ pub fn summarize(
             summary.entries.push(PrepareEntry {
                 identifier: identifier.clone(),
                 file_name: pdf.name.clone(),
+                kind: pdf.kind(),
                 availability: pdf.availability.clone(),
                 size: pdf.size,
                 duplicate: None,
@@ -459,6 +474,7 @@ pub fn summarize(
         summary.entries.push(PrepareEntry {
             identifier: identifier.clone(),
             file_name: pdf.name.clone(),
+            kind: pdf.kind(),
             availability: pdf.availability.clone(),
             size: pdf.size,
             duplicate: Some(status),
@@ -472,6 +488,7 @@ mod tests {
     use super::*;
     use crate::item::{FileSource, RestrictedReason};
     use crate::job::JobFile;
+    use crate::kind::FileKind;
 
     fn avail_pdf(
         name: &str,
@@ -1144,6 +1161,24 @@ mod tests {
             names,
             vec!["a.pdf", "b.pdf", "c.pdf", "c2.pdf", "d.pdf", "e.pdf", "f.pdf"]
         );
+    }
+
+    #[test]
+    fn estimate_counts_images_once_and_pdfs_twice() {
+        let lookup = MemLookup(vec![]);
+        let target = existing("c1");
+        let mut image = avail_pdf("plate.png", Some("ii"), None, Some(50), Some(1));
+        image.format = Some("PNG".to_string());
+        let files = vec![
+            (
+                "i1".to_string(),
+                avail_pdf("a.pdf", Some("aa"), None, Some(100), Some(1)),
+            ),
+            ("i2".to_string(), image),
+        ];
+        let summary = summarize(&files, &target, &lookup);
+        assert_eq!(summary.entries[1].kind, FileKind::Image);
+        assert_eq!(summary.estimated_sync_bytes(), 250);
     }
 
     #[test]
