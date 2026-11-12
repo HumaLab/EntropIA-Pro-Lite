@@ -12,7 +12,7 @@
     "./components/MapViewer": "./src/components/MapViewer/index.ts"
   },
   "dependencies": {
-    "@tabler/icons-svelte-runes": "^3.50.0",
+    "@tabler/icons-svelte-runes": "^3.51.0",
     "@tiptap/core": "catalog:",
     "@tiptap/extension-document": "catalog:",
     "@tiptap/extension-gapcursor": "catalog:",

@@ -49,7 +49,7 @@
     "leaflet": "catalog:",
     "markdown-it": "^15.0.3",
     "pdfjs-dist": "^4",
-    "pdfmake": "^0.3.13",
+    "pdfmake": "^0.3.14",
     "tiptap-footnotes": "^3.0.1"
   },
   "devDependencies": {
