@@ -46,7 +46,9 @@ export async function pickFiles(): Promise<string[]> {
     return Array.isArray(selected) ? selected : [selected]
   } catch (e) {
     console.error('[file-import] pickFiles error:', e)
-    throw new Error(`Failed to open file dialog: ${e instanceof Error ? e.message : String(e)}`)
+    throw new Error(`Failed to open file dialog: ${e instanceof Error ? e.message : String(e)}`, {
+      cause: e,
+    })
   }
 }
 
@@ -208,7 +210,7 @@ export async function deleteAssetFile(storedPath: string): Promise<void> {
       return
     }
     // Permission error or other FS error — abort
-    throw new Error(`Failed to delete asset file: ${message}`)
+    throw new Error(`Failed to delete asset file: ${message}`, { cause: e })
   }
 }
 
@@ -305,7 +307,7 @@ export async function loadAudioPreviewBlob(assetPath: string): Promise<Blob> {
     return new Blob([bytes], { type: 'audio/wav' })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`Audio preview preparation failed: ${message}`)
+    throw new Error(`Audio preview preparation failed: ${message}`, { cause: error })
   }
 }
 

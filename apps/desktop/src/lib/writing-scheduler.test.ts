@@ -19,9 +19,9 @@ describe('writing scheduler — nothing pending', () => {
   })
 
   it('goes quiet again once persistence acknowledged a revision', () => {
-    let s = onEdit(CLEAN_STATE, 0)
-    s = onJournalled(s, 300)
-    s = onSaved()
+    // An edit, then its journal entry; the save acknowledges both.
+    onJournalled(onEdit(CLEAN_STATE, 0), 300)
+    const s = onSaved()
     expect(decide(s, 5000, cfg).nextCheckInMs).toBeNull()
   })
 })

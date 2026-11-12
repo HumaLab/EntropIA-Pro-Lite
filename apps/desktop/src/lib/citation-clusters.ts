@@ -156,7 +156,7 @@ export function citedWorks(clusters: ClusterItem[][]): string[] {
 
   for (const cluster of clusters) {
     for (const item of cluster) {
-      let id: unknown = null
+      let id: unknown
       try {
         id = (JSON.parse(item.csl_json) as { id?: unknown }).id
       } catch {
