@@ -1,6 +1,6 @@
 # OCR over native text, and native text at import
 
-**Status:** in progress (2026-11-12), branch `fix/ocr-include-native`, PR #282. Refs issue #250.
+**Status:** done (2026-11-12), PR #282 merged (`8806fe2a`), ships in 1.7.1. Issue #250 commented and closed. Refs issue #250.
 Forcing OCR over a PDF's text layer (batch option and the item's OCRH button), and storing that text layer when the PDF is imported.
 
 ## Specs
@@ -15,7 +15,7 @@ Forcing OCR over a PDF's text layer (batch option and the item's OCRH button), a
 - [x] T1 (S1, S2, S3) Executor and Pro local pipeline read past the text layer when an active request is manual or has `ocr_include_native` — inline — `ca57006d`.
 - [x] T2 (CI) Pro clippy: `process_pdf` has 8 arguments — inline — `155dc629`.
 - [x] T3 (S4) Store native text at PDF import — worker — `cb1edee0`.
-- [ ] Owner check: import a native-text PDF in the dev profile `ocrnativo`: its pages show native text at once; OCRH on one of them returns GLM-OCR text; the batch keeps S2.
+- [x] Owner check: import a native-text PDF in the dev profile `ocrnativo`: its pages show native text at once; OCRH on one of them returns GLM-OCR text; the batch keeps S2.
 
 ## Log
 
@@ -24,3 +24,4 @@ Forcing OCR over a PDF's text layer (batch option and the item's OCRH button), a
 - L3 (2026-11-12, owner, verbatim, choosing over "OCRH forces only when native text is already stored; import as a separate task"): «prefiero que en el #282 OCRH fuerce GLM-OCR siempre, y que la importación con texto nativo se haga ya, en el mismo PR»
 - L4 (2026-11-12): CI on `ca57006d` failed Rust Pro (Linux) and Windows Rust Feature Contract: clippy `too_many_arguments` (8/7) on `ocr::process_pdf` (`paddle-ocr` only). Lite checks passed.
 - L5 (2026-11-12): T3 verified by the parent: `cargo fmt --check` clean, `cargo test --lib corpus::` 51 passed (4 new import tests), clippy lean clean; the worker also ran processing:: 219 and ocr:: 240 passed. Pro (`paddle-ocr`) compile left to CI.
+- L6 (2026-11-12, owner, verbatim): «Lote y Botón funcionan  bien!!!» — the parent read the profile archive read-only: 32 pages stored as `native` within ~15 s of one import (S4), 12 pages read by GLM-OCR from OCRH and the batch with the option (S2, S3); no GLM-OCR or text-layer errors in the app log.
