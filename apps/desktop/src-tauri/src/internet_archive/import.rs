@@ -1794,16 +1794,7 @@ mod tests {
         {
             let conn = ctx.ui.lock().unwrap();
             for item in ["item-a", "item-b"] {
-                insert_complete_item(
-                    &conn,
-                    &ctx.data_dir,
-                    item,
-                    "col-1",
-                    IDENT,
-                    FILE,
-                    SHA,
-                    PAGES,
-                );
+                insert_complete_item(&conn, &ctx.data_dir, item, "col-1", IDENT, FILE, SHA, PAGES);
             }
         }
         confirm_file_imported(

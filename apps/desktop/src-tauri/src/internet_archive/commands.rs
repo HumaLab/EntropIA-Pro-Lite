@@ -492,6 +492,9 @@ pub struct PrepareEntryDto {
     /// Availability tag (`available` here: only importable files are listed).
     pub availability: String,
     pub size: Option<u64>,
+    /// File kind tag (`pdf`, `pdf_text` or `image`): an image is synced once,
+    /// a PDF about twice (original plus its pages).
+    pub kind: String,
     /// Duplicate classification against the local provenance.
     pub duplicate: Option<DuplicateStatusDto>,
 }
@@ -503,6 +506,7 @@ impl From<&internet_archive::prepare::PrepareEntry> for PrepareEntryDto {
             file_name: entry.file_name.clone(),
             availability: availability_tag(&entry.availability).to_string(),
             size: entry.size,
+            kind: file_kind_tag(entry.kind).to_string(),
             duplicate: entry.duplicate.as_ref().map(DuplicateStatusDto::from),
         }
     }
@@ -1389,6 +1393,20 @@ mod tests {
     }
 
     #[test]
+    fn prepare_entry_dto_carries_the_file_kind() {
+        let entry = |kind| internet_archive::prepare::PrepareEntry {
+            identifier: "some-id".to_string(),
+            file_name: "plate.png".to_string(),
+            kind,
+            availability: internet_archive::Availability::Available,
+            size: Some(10),
+            duplicate: None,
+        };
+        assert_eq!(PrepareEntryDto::from(&entry(FileKind::Image)).kind, "image");
+        assert_eq!(PrepareEntryDto::from(&entry(FileKind::Pdf)).kind, "pdf");
+    }
+
+    #[test]
     fn verified_image_keeps_its_extension_in_names() {
         use internet_archive::job::{FileState, ImportTarget, Job, JobFile, JobState};
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1648,6 +1666,7 @@ mod tests {
                     file_name: "a.pdf".to_string(),
                     availability: "available".to_string(),
                     size: Some(10),
+                    kind: "pdf".to_string(),
                     duplicate: Some(DuplicateStatusDto::from(
                         &DuplicateStatus::AlreadyInTarget {
                             item_id: "item-1".to_string(),

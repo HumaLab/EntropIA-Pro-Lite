@@ -3091,7 +3091,7 @@ const es = {
   'internetArchive.link.resolving': 'Resolviendo…',
   'internetArchive.link.hint': 'Pega un identificador o una dirección de archive.org/details/….',
   'internetArchive.item.loading': 'Leyendo la ficha…',
-  'internetArchive.item.files': 'Archivos PDF',
+  'internetArchive.item.files': 'Archivos',
   'internetArchive.item.noPdfs': 'Sin PDF: esta ficha no ofrece ningún PDF descargable.',
   'internetArchive.item.truncated': 'Se muestran los primeros PDF; la lista está truncada.',
   'internetArchive.item.isCollection':
@@ -3112,7 +3112,7 @@ const es = {
     'Nombre no válido: el nombre del archivo no es seguro.',
   'internetArchive.selection.title': 'Selección',
   'internetArchive.selection.empty':
-    'Todavía no elegiste ningún archivo. Marca los PDF que quieras importar.',
+    'Todavía no elegiste ningún archivo. Marca los archivos que quieras importar.',
   'internetArchive.selection.count': 'Seleccionados: {count}',
   'internetArchive.selection.remove': 'Quitar {name}',
   'internetArchive.destination.title': 'Destino',
@@ -6386,7 +6386,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'internetArchive.link.resolving': 'Resolving…',
   'internetArchive.link.hint': 'Paste an identifier or an archive.org/details/… address.',
   'internetArchive.item.loading': 'Reading the record…',
-  'internetArchive.item.files': 'PDF files',
+  'internetArchive.item.files': 'Files',
   'internetArchive.item.noPdfs': 'No PDF: this record offers no downloadable PDF.',
   'internetArchive.item.truncated': 'Showing the first PDFs; the list is truncated.',
   'internetArchive.item.isCollection':
@@ -6406,7 +6406,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'internetArchive.availability.unsafe_name': 'Invalid name: the file name is not safe.',
   'internetArchive.selection.title': 'Selection',
   'internetArchive.selection.empty':
-    'You have not chosen any file yet. Tick the PDFs you want to import.',
+    'You have not chosen any file yet. Tick the files you want to import.',
   'internetArchive.selection.count': 'Selected: {count}',
   'internetArchive.selection.remove': 'Remove {name}',
   'internetArchive.destination.title': 'Destination',

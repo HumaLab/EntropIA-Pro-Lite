@@ -118,6 +118,7 @@ const prepareEntry = (patch: Record<string, unknown> = {}) => ({
   fileName: 'doc_text.pdf',
   availability: 'available',
   size: 1024,
+  kind: 'pdf',
   duplicate: { status: 'new' },
   ...patch,
 })
@@ -211,7 +212,7 @@ async function openItem(
   await searchForResults(props)
   iaRef.iaGetItem.mockResolvedValue(itemDetails(details))
   await fireEvent.click(screen.getAllByRole('button', { name: 'Ver archivos' })[0]!)
-  await screen.findByText('Archivos PDF')
+  await screen.findByText('Archivos')
 }
 
 async function selectFirstPdf(props: Record<string, unknown> = {}) {
@@ -364,7 +365,7 @@ describe('InternetArchiveDialog discovery', () => {
     await fireEvent.click(within(kinds).getByRole('button', { name: 'PDF + texto' }))
     await fireEvent.click(within(kinds).getByRole('button', { name: 'PDF' }))
     await fireEvent.click(screen.getAllByRole('button', { name: 'Ver archivos' })[0]!)
-    await screen.findByText('Archivos PDF')
+    await screen.findByText('Archivos')
 
     expect(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' })).toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: 'Seleccionar scan.pdf' })).toBeNull()
@@ -441,7 +442,7 @@ describe('InternetArchiveDialog discovery', () => {
       target: { value: 'https://archive.org/details/some-id' },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Abrir' }))
-    expect(await screen.findByText('Archivos PDF')).toBeInTheDocument()
+    expect(await screen.findByText('Archivos')).toBeInTheDocument()
 
     expect(iaRef.iaResolveIdentifier).toHaveBeenCalledWith('https://archive.org/details/some-id')
     expect(iaRef.iaGetItem).toHaveBeenCalledWith('some-id')
@@ -476,7 +477,7 @@ describe('InternetArchiveDialog item and selection', () => {
       })
     )
     await fireEvent.click(screen.getAllByRole('button', { name: 'Ver archivos' })[0]!)
-    await screen.findByText('Archivos PDF')
+    await screen.findByText('Archivos')
 
     expect(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' })).toBeEnabled()
     expect(screen.getByRole('checkbox', { name: 'Seleccionar locked.pdf' })).toBeDisabled()
@@ -515,7 +516,7 @@ describe('InternetArchiveDialog item and selection', () => {
     open()
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Ver archivos' }))
-    await screen.findByText('Archivos PDF')
+    await screen.findByText('Archivos')
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' }))
     await screen.findByText('Seleccionados: 1')
 
@@ -564,6 +565,43 @@ describe('InternetArchiveDialog destination and preparation', () => {
     await fireEvent.click(screen.getByRole('radio', { name: /Nueva colección/ }))
 
     expect(screen.getByRole('button', { name: 'Preparar importación' })).toBeDisabled()
+  })
+
+  it('counts a PDF twice and an image once in the synced volume', async () => {
+    await goToDestination()
+    iaRef.iaPrepareImport.mockResolvedValue(
+      prepareResult({
+        summary: {
+          totalFiles: 2,
+          availableFiles: 2,
+          restrictedFiles: 0,
+          knownBytes: 2 * 1024 * 1024,
+          unknownSizeFiles: 0,
+          newFiles: 2,
+          alreadyInTarget: 0,
+          inOtherCollection: 0,
+          newVersion: 0,
+          entries: [
+            prepareEntry({ fileName: 'doc.pdf', size: 1024 * 1024 }),
+            prepareEntry({ fileName: 'plate.png', size: 1024 * 1024, kind: 'image' }),
+          ],
+        },
+      })
+    )
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Preparar importación' }))
+    await screen.findByText('Revisa la preparación')
+
+    expect(screen.getByText('Volumen sincronizado estimado: 3 MB')).toBeInTheDocument()
+  })
+
+  it('asks to tick files, not only PDFs, while nothing is selected', async () => {
+    open()
+    expect(
+      await screen.findByText(
+        'Todavía no elegiste ningún archivo. Marca los archivos que quieras importar.'
+      )
+    ).toBeInTheDocument()
   })
 
   it('shows duplicate statuses, rejected files and the synced-volume warning', async () => {
@@ -773,7 +811,7 @@ describe('InternetArchiveDialog running and done', () => {
     open()
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Ver archivos' }))
-    await screen.findByText('Archivos PDF')
+    await screen.findByText('Archivos')
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' }))
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar elsewhere.pdf' }))
     await screen.findByText('Seleccionados: 2')
@@ -880,7 +918,7 @@ describe('InternetArchiveDialog running and done', () => {
     open()
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Ver archivos' }))
-    await screen.findByText('Archivos PDF')
+    await screen.findByText('Archivos')
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' }))
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar elsewhere.pdf' }))
     await screen.findByText('Seleccionados: 2')
