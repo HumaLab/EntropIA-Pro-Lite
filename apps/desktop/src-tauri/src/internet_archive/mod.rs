@@ -9,6 +9,7 @@
 pub mod commands;
 pub mod import;
 pub mod provenance_db;
+pub mod queue;
 pub mod runner;
 
 use std::path::{Path, PathBuf};

@@ -261,6 +261,21 @@ export function iaCancelImport(jobId: string): Promise<void> {
   return invoke<void>('ia_cancel_import', { jobId })
 }
 
+/** The saved "import every result" queue (a JSON object), if any. */
+export function iaQueueLoad(): Promise<string | null> {
+  return invoke<string | null>('ia_queue_load')
+}
+
+/** Save the "import every result" queue so it resumes after a close. */
+export function iaQueueSave(content: string): Promise<void> {
+  return invoke<void>('ia_queue_save', { content })
+}
+
+/** Forget the "import every result" queue. */
+export function iaQueueClear(): Promise<void> {
+  return invoke<void>('ia_queue_clear')
+}
+
 /**
  * Discard an abandoned preparation draft. Only a job that was never started
  * goes away; anything else is refused. Never call after `iaStartImport`

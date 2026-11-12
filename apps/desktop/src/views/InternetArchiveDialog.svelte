@@ -37,6 +37,9 @@
     iaListCollection,
     iaListJobs,
     iaPrepareImport,
+    iaQueueClear,
+    iaQueueLoad,
+    iaQueueSave,
     iaResolveIdentifier,
     iaSearch,
     iaStartImport,
@@ -52,6 +55,14 @@
     type IaSearchPage,
     type IaSelection,
   } from '$lib/internet-archive'
+  import {
+    buildBatch,
+    createQueue,
+    finishBatch,
+    parseQueue,
+    queueProgress,
+    type IaQueue,
+  } from '$lib/internet-archive-queue'
   import {
     IaImportError,
     importVerifiedFiles,
@@ -197,6 +208,12 @@
    * are discarded on close, so offering them would resume nothing.
    */
   let resumableJobs = $state<IaJobSummary[]>([])
+  /** Started jobs that are not the current batch of a saved queue. */
+  const looseJobs = $derived(
+    resumableJobs.filter(
+      (job) => job.id !== savedQueue?.currentJobId && job.id !== queue?.currentJobId
+    )
+  )
 
   async function loadResumableJobs(): Promise<void> {
     try {
@@ -237,6 +254,7 @@
   onMount(() => {
     void loadCollections()
     void loadResumableJobs()
+    void loadSavedQueue()
     onIaJobUpdated(handleJobEvent)
       .then((stop) => {
         stopListening = stop
@@ -366,21 +384,26 @@
     void selectRecords(records.filter((hit) => !isRecordSelected(hit.identifier)))
   }
 
-  // "Select all N results": every page of the last search or listing, up
-  // to MAX_BULK_RECORDS records, fetched BULK_ROWS at a time.
-  const MAX_BULK_RECORDS = 500
+  // "Select all N results": every page of the last search or listing (up to
+  // what Advanced Search returns), fetched BULK_ROWS at a time, becomes a
+  // queue imported in batches; files are looked up batch by batch.
   const BULK_ROWS = 100
   type PageFetcher = (page: number, rows: number) => Promise<IaSearchPage>
   let searchFetcher = $state<PageFetcher | null>(null)
   let collectionFetcher = $state<PageFetcher | null>(null)
+  let searchLabel = $state('')
+  let collectionLabel = $state('')
   let loadingAll = $state(0)
+  /** Results queued for import; they take the place of the file selection. */
+  let queuedAll = $state<{ label: string; records: PageRecord[] } | null>(null)
 
   function bulkCount(numFound: number): number {
-    return Math.min(numFound, MAX_BULK_RECORDS, MAX_RESULT_OFFSET)
+    return Math.min(numFound, MAX_RESULT_OFFSET)
   }
 
-  async function selectAllResults(numFound: number, fetcher: PageFetcher | null): Promise<void> {
+  async function queueAllResults(numFound: number, fetcher: PageFetcher | null): Promise<void> {
     if (!fetcher || loadingAll > 0) return
+    const label = fetcher === collectionFetcher ? collectionLabel : searchLabel
     const count = bulkCount(numFound)
     loadingAll = count
     problem = null
@@ -391,14 +414,166 @@
         records.push(...result.items.slice(0, count - records.length))
         if (result.items.length < BULK_ROWS) break
       }
+      queuedAll = { label, records: selectableRecords(records) }
+      selection = []
     } catch (reason) {
       problem = describeError(reason)
     } finally {
       loadingAll = 0
     }
-    await selectRecords(
-      selectableRecords(records).filter((hit) => !isRecordSelected(hit.identifier))
-    )
+  }
+
+  // The queue being imported, as last saved, and a saved one offered to
+  // resume when the dialog opens.
+  let queue = $state<IaQueue | null>(null)
+  let savedQueue = $state<IaQueue | null>(null)
+  let queueBusy = $state(false)
+  let queueEnd = $state<{ kind: 'finished' | 'paused'; count: number } | null>(null)
+  let queueTotals = $state({ imported: 0, present: 0, failed: 0 })
+  /** Selections behind the prepared job (the file selection or a batch). */
+  let preparedSelections = $state<IaSelection[]>([])
+
+  async function loadSavedQueue(): Promise<void> {
+    try {
+      savedQueue = parseQueue(await iaQueueLoad())
+    } catch {
+      // Best effort: a failed read hides the notice, never the dialog.
+      savedQueue = null
+    }
+  }
+
+  async function storeQueue(next: IaQueue): Promise<void> {
+    queue = next
+    await iaQueueSave(JSON.stringify(next))
+  }
+
+  async function resolveQueueFiles(identifier: string): Promise<string[]> {
+    let details = recordCache.get(identifier)
+    if (!details) {
+      details = await iaGetItem(identifier)
+      recordCache.set(identifier, details)
+    }
+    return selectableFiles(details).map((file) => file.name)
+  }
+
+  /** Prepare the queue's next batch; `null` once nothing is left. */
+  async function prepareQueueBatch(current: IaQueue): Promise<IaPrepareResult | null> {
+    const built = await buildBatch(current, resolveQueueFiles)
+    if (built.selections.length === 0) {
+      await storeQueue(built.queue)
+      return null
+    }
+    preparedSelections = built.selections
+    const result = await iaPrepareImport(built.queue.collectionId, built.selections)
+    await storeQueue({ ...built.queue, currentJobId: result.jobId })
+    return result
+  }
+
+  /** Prepare and start batches until one has something to download. */
+  async function runNextQueueBatch(current: IaQueue): Promise<void> {
+    let next = current
+    for (;;) {
+      const result = await prepareQueueBatch(next)
+      if (!result) {
+        await finishQueue()
+        return
+      }
+      applyPrepareResult(result)
+      if (await launchPrepared()) return
+      next = finishBatch(queue ?? next, 'done')
+      await storeQueue(next)
+    }
+  }
+
+  async function finishQueue(): Promise<void> {
+    const total = queue?.records.length ?? 0
+    await iaQueueClear()
+    queue = null
+    queueEnd = { kind: 'finished', count: total }
+    phase = 'done'
+  }
+
+  /** Close the current batch, then pause (cancelled) or run the next one. */
+  async function advanceQueue(cancelled: boolean): Promise<void> {
+    if (!queue || queueBusy) return
+    queueBusy = true
+    try {
+      queueTotals = {
+        imported: queueTotals.imported + outcome.imported.length,
+        present: queueTotals.present + outcome.confirmedExisting.length,
+        failed:
+          queueTotals.failed +
+          (jobStatus?.files.filter((file) =>
+            ['failed', 'unavailable', 'cancelled'].includes(file.state)
+          ).length ?? 0),
+      }
+      const closed = finishBatch(queue, cancelled ? 'requeue' : 'done')
+      await storeQueue(closed)
+      if (cancelled) {
+        queueEnd = { kind: 'paused', count: queueProgress(closed).pending }
+        phase = 'done'
+        return
+      }
+      await runNextQueueBatch(closed)
+    } catch (reason) {
+      problem = describeError(reason)
+      queueEnd = { kind: 'paused', count: queue ? queueProgress(queue).pending : 0 }
+      phase = 'done'
+    } finally {
+      queueBusy = false
+    }
+  }
+
+  async function continueSavedQueue(): Promise<void> {
+    const saved = savedQueue
+    if (!saved || queueBusy) return
+    savedQueue = null
+    problem = null
+    queue = saved
+    kinds = [...saved.kinds]
+    targetCollectionId = saved.collectionId
+    queueTotals = { imported: 0, present: 0, failed: 0 }
+    queueEnd = null
+    // A batch whose job finished while the dialog was closed counts as
+    // done; a draft, a cancelled job or one that is gone goes back to the queue.
+    let how: 'done' | 'requeue' = 'requeue'
+    if (saved.currentJobId) {
+      let status: IaJobStatus | null = null
+      try {
+        status = await iaGetImportStatus(saved.currentJobId)
+      } catch {
+        status = null
+      }
+      if (status && status.state !== 'draft' && !TERMINAL_STATES.has(status.state)) {
+        await resumeJob(saved.currentJobId)
+        return
+      }
+      if (status && TERMINAL_STATES.has(status.state) && status.state !== 'cancelled') {
+        how = 'done'
+      }
+    }
+    queueBusy = true
+    try {
+      const closed = finishBatch(saved, how)
+      await storeQueue(closed)
+      await runNextQueueBatch(closed)
+    } catch (reason) {
+      problem = describeError(reason)
+      savedQueue = queue
+      queue = null
+      phase = 'discover'
+    } finally {
+      queueBusy = false
+    }
+  }
+
+  async function discardSavedQueue(): Promise<void> {
+    try {
+      await iaQueueClear()
+      savedQueue = null
+    } catch (reason) {
+      problem = describeError(reason)
+    }
   }
 
   function removeSelection(identifier: string, fileName: string): void {
@@ -553,6 +728,7 @@
       searchPage = page
       searchResult = await iaSearch(query, page, rows)
       searchFetcher = (fetchPage, fetchRows) => iaSearch(query, fetchPage, fetchRows)
+      searchLabel = [query.text, query.title, query.creator].filter(Boolean).join(' · ')
     } catch (reason) {
       problem = describeError(reason)
     } finally {
@@ -573,6 +749,7 @@
       collectionPage = page
       const listKinds = [...kinds]
       collectionResult = await iaListCollection(identifier, page, rows, listKinds)
+      collectionLabel = identifier
       collectionFetcher = (fetchPage, fetchRows) =>
         iaListCollection(identifier, fetchPage, fetchRows, listKinds)
     } catch (reason) {
@@ -631,7 +808,7 @@
   }
 
   function goDestination(): void {
-    if (selection.length === 0) return
+    if (selection.length === 0 && !queuedAll) return
     phase = 'destination'
     problem = null
     if (
@@ -667,13 +844,38 @@
         createdId = created.id
         collectionId = created.id
       }
-      const result = await iaPrepareImport(collectionId, groupedSelections)
+      let result: IaPrepareResult | null
+      if (queuedAll) {
+        queueTotals = { imported: 0, present: 0, failed: 0 }
+        queueEnd = null
+        await storeQueue(
+          createQueue({
+            collectionId,
+            label: queuedAll.label,
+            kinds,
+            records: queuedAll.records,
+          })
+        )
+        result = await prepareQueueBatch(queue!)
+      } else {
+        preparedSelections = groupedSelections
+        result = await iaPrepareImport(collectionId, groupedSelections)
+      }
       // A collection made only for this import must not outlive its failure.
       createdId = null
       targetCollectionId = collectionId
+      queuedAll = null
+      if (!result) {
+        await finishQueue()
+        return
+      }
       applyPrepareResult(result)
       phase = 'summary'
     } catch (reason) {
+      if (queue) {
+        queue = null
+        await iaQueueClear().catch(() => {})
+      }
       if (createdId) {
         await getStore()
           .collections.deleteIfEmpty(createdId)
@@ -748,15 +950,22 @@
   const showSyncWarning = $derived(syncEstimate > SYNC_WARN_BYTES)
   const canStart = $derived(willImportEntries.length > 0 || alreadyEntries.length > 0)
 
-  function filteredSelections(): IaSelection[] {
-    const omitted = new Set(
-      summaryEntries
-        .filter((entry) => isChoosable(entry) && !importChosen.has(entryKey(entry)))
-        .map(entryKey)
+  /** Left out of the job: duplicates not chosen and, in a queue, files the
+   *  collection already holds (no need to download them again). */
+  function isOmitted(entry: IaPrepareEntry): boolean {
+    if (isChoosable(entry)) return !importChosen.has(entryKey(entry))
+    return (
+      queue !== null &&
+      entry.availability === 'available' &&
+      entry.duplicate?.status === 'already_in_target'
     )
-    if (omitted.size === 0) return groupedSelections
+  }
+
+  function filteredSelections(): IaSelection[] {
+    const omitted = new Set(summaryEntries.filter(isOmitted).map(entryKey))
+    if (omitted.size === 0) return preparedSelections
     const filtered: IaSelection[] = []
-    for (const group of groupedSelections) {
+    for (const group of preparedSelections) {
       const fileNames = group.fileNames.filter(
         (fileName) => !omitted.has(selectionKey(group.identifier, fileName))
       )
@@ -765,27 +974,43 @@
     return filtered
   }
 
+  /**
+   * Start the prepared job. The job already contains the omitted files and
+   * no command drops them, so it is prepared again without them first. A
+   * queue batch left with nothing to download is not started (`false`).
+   */
+  async function launchPrepared(): Promise<boolean> {
+    if (!prepareResult) return false
+    if (summaryEntries.some(isOmitted)) {
+      const abandonedId = prepareResult.jobId
+      const selections = filteredSelections()
+      // Best effort: a leftover draft is harmless, so a failed discard
+      // stays silent instead of blocking the import.
+      if (selections.length === 0) {
+        void iaDiscardDraft(abandonedId).catch(() => {})
+        return false
+      }
+      const again = await iaPrepareImport(targetCollectionId, selections)
+      applyPrepareResult(again)
+      void iaDiscardDraft(abandonedId).catch(() => {})
+    }
+    jobId = prepareResult.jobId
+    if (queue) await storeQueue({ ...queue, currentJobId: jobId })
+    await iaStartImport(jobId)
+    enterRunning()
+    return true
+  }
+
   async function startImport(): Promise<void> {
     if (!canStart || starting || !prepareResult) return
     starting = true
     problem = null
     try {
-      const omitted = summaryEntries.filter(
-        (entry) => isChoosable(entry) && !importChosen.has(entryKey(entry))
-      )
-      if (omitted.length > 0) {
-        // The prepared job already contains the omitted files and no command
-        // drops them, so prepare again without them and start that job.
-        const abandonedId = prepareResult.jobId
-        const again = await iaPrepareImport(targetCollectionId, filteredSelections())
-        applyPrepareResult(again)
-        // Best effort: a leftover draft is harmless, so a failed discard
-        // stays silent instead of blocking the import.
-        void iaDiscardDraft(abandonedId).catch(() => {})
+      if (!(await launchPrepared()) && queue) {
+        const closed = finishBatch(queue, 'done')
+        await storeQueue(closed)
+        await runNextQueueBatch(closed)
       }
-      jobId = prepareResult.jobId
-      await iaStartImport(jobId)
-      enterRunning()
     } catch (reason) {
       problem = describeError(reason)
     } finally {
@@ -880,6 +1105,10 @@
     if (outcome.imported.length + outcome.confirmedExisting.length > 0) {
       notifyDocumentExplorerCollectionChanged(targetCollectionId)
     }
+    if (queue) {
+      void advanceQueue(jobStatus.state === 'cancelled' || cancelRequested)
+      return
+    }
     phase = 'done'
   }
 
@@ -955,7 +1184,7 @@
 
   const confirmDisabled = $derived(
     phase === 'discover'
-      ? selection.length === 0
+      ? selection.length === 0 && !queuedAll
       : phase === 'destination'
         ? !validDestination || collectionsLoading
         : phase === 'summary'
@@ -1033,11 +1262,42 @@
     onconfirm={handleDialogConfirm}
   >
     {#if phase === 'discover'}
-      {#if resumableJobs.length > 0}
+      {#if savedQueue}
+        {@const progress = queueProgress(savedQueue)}
+        <div class="ia-resume" role="status">
+          <p class="ia-resume__title">{t('internetArchive.queue.resumeTitle')}</p>
+          <div class="ia-resume__item">
+            <span class="ia-resume__label">
+              {t('internetArchive.queue.resumeDetail', {
+                label: savedQueue.label,
+                finished: formatCount(progress.finished),
+                total: formatCount(progress.total),
+              })}
+            </span>
+            <button
+              type="button"
+              class="ia-results__action"
+              disabled={queueBusy}
+              onclick={() => void continueSavedQueue()}
+            >
+              {t('internetArchive.queue.resume')}
+            </button>
+            <button
+              type="button"
+              class="ia-results__action"
+              disabled={queueBusy}
+              onclick={() => void discardSavedQueue()}
+            >
+              {t('internetArchive.queue.discard')}
+            </button>
+          </div>
+        </div>
+      {/if}
+      {#if looseJobs.length > 0}
         <div class="ia-resume" role="status">
           <p class="ia-resume__title">{t('internetArchive.resume.title')}</p>
           <ul class="ia-resume__list">
-            {#each resumableJobs as job (job.id)}
+            {#each looseJobs as job (job.id)}
               <li class="ia-resume__item">
                 <span class="ia-resume__label">
                   {t('internetArchive.resume.job', {
@@ -1300,6 +1560,7 @@
       </fieldset>
     {:else if phase === 'summary' && prepareResult}
       <h4 class="ia-heading">{t('internetArchive.summary.heading')}</h4>
+      {@render queueBatchLine()}
       <p class="ia-status" role="status">
         {t('internetArchive.summary.toImport', { count: formatCount(willImportEntries.length) })}
       </p>
@@ -1395,6 +1656,10 @@
       {/if}
     {:else if phase === 'running'}
       <h4 class="ia-heading">{t('internetArchive.running.heading')}</h4>
+      {@render queueBatchLine()}
+      {#if queueBusy}
+        <p class="ia-status" role="status">{t('internetArchive.queue.preparing')}</p>
+      {/if}
       {#if runningProgress}
         <div class="ia-progress" role="status" aria-live="polite">
           <progress
@@ -1443,17 +1708,28 @@
       {#if doneCancelled}
         <p class="ia-status" role="status">{t('internetArchive.done.cancelledNote')}</p>
       {/if}
+      {#if queueEnd}
+        <p class="ia-status" role="status">
+          {queueEnd.kind === 'finished'
+            ? t('internetArchive.queue.finished', { total: formatCount(queueEnd.count) })
+            : t('internetArchive.queue.paused', { count: formatCount(queueEnd.count) })}
+        </p>
+      {/if}
       <div class="ia-counts" role="status">
         <p class="ia-status">
-          {t('internetArchive.done.imported', { count: formatCount(outcome.imported.length) })}
-        </p>
-        <p class="ia-status">
-          {t('internetArchive.done.present', {
-            count: formatCount(outcome.confirmedExisting.length),
+          {t('internetArchive.done.imported', {
+            count: formatCount(queueEnd ? queueTotals.imported : outcome.imported.length),
           })}
         </p>
         <p class="ia-status">
-          {t('internetArchive.done.failed', { count: formatCount(doneFailed.length) })}
+          {t('internetArchive.done.present', {
+            count: formatCount(queueEnd ? queueTotals.present : outcome.confirmedExisting.length),
+          })}
+        </p>
+        <p class="ia-status">
+          {t('internetArchive.done.failed', {
+            count: formatCount(queueEnd ? queueTotals.failed : doneFailed.length),
+          })}
         </p>
         {#if omittedPairs.length > 0}
           <p class="ia-status">
@@ -1536,7 +1812,7 @@
         type="button"
         class="ia-results__action"
         disabled={loadingAll > 0 || resolvingRecords > 0}
-        onclick={() => void selectAllResults(result.numFound, fetcher)}
+        onclick={() => void queueAllResults(result.numFound, fetcher)}
       >
         {t('internetArchive.record.selectAll', { count: formatCount(count) })}
       </button>
@@ -1699,10 +1975,30 @@
   {/if}
 {/snippet}
 
+{#snippet queueBatchLine()}
+  {#if queue}
+    {@const progress = queueProgress(queue)}
+    <p class="ia-status" role="status">
+      {t('internetArchive.queue.batch', {
+        count: formatCount(queue.records.filter((record) => record.state === 'batched').length),
+        finished: formatCount(progress.finished),
+        total: formatCount(progress.total),
+      })}
+    </p>
+  {/if}
+{/snippet}
+
 {#snippet selectionPanel()}
   <div class="ia-selection">
     <div class="ia-selection__bar">
-      {#if selection.length === 0}
+      {#if queuedAll}
+        <p class="ia-status ia-selection__summary" role="status">
+          {t('internetArchive.queue.selected', { count: formatCount(queuedAll.records.length) })}
+        </p>
+        <button type="button" class="ia-results__action" onclick={() => (queuedAll = null)}>
+          {t('internetArchive.queue.unselect')}
+        </button>
+      {:else if selection.length === 0}
         <p class="ia-status ia-selection__summary">{t('internetArchive.selection.empty')}</p>
       {:else}
         <p class="ia-status ia-selection__summary" role="status">
