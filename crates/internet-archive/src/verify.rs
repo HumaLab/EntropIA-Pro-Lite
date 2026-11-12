@@ -129,7 +129,10 @@ pub fn verify_staged_image(
     let signature_ok = match extension {
         "jpg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
         "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "tif" => bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*"),
+        // Classic TIFF (42) and BigTIFF (43), little- and big-endian.
+        "tif" => [b"II*\0", b"MM\0*", b"II+\0", b"MM\0+"]
+            .iter()
+            .any(|magic| bytes.starts_with(*magic)),
         _ => false,
     };
     if !signature_ok {
@@ -551,6 +554,8 @@ mod tests {
     const JPEG: &[u8] = b"\xff\xd8\xff\xe0\0\x10JFIF\0";
     const TIFF_LE: &[u8] = b"II*\0\x08\0\0\0";
     const TIFF_BE: &[u8] = b"MM\0*\0\0\0\x08";
+    const BIGTIFF_LE: &[u8] = b"II+\0\x08\0\0\0";
+    const BIGTIFF_BE: &[u8] = b"MM\0+\0\x08\0\0";
 
     fn staged(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> std::path::PathBuf {
         let path = dir.path().join(name);
@@ -574,6 +579,8 @@ mod tests {
             ("jpg", JPEG),
             ("tif", TIFF_LE),
             ("tif", TIFF_BE),
+            ("tif", BIGTIFF_LE),
+            ("tif", BIGTIFF_BE),
         ] {
             let path = staged(&dir, &format!("a.{ext}"), bytes);
             let verified = verify_staged_image(&path, &no_remote(), ext).unwrap();
