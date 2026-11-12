@@ -56,6 +56,14 @@ describe('read commands', () => {
       rows: 50,
     })
 
+    await iaListCollection('opensource', 1, 50, ['pdf_text', 'image'])
+    expect(invoke).toHaveBeenLastCalledWith('ia_list_collection', {
+      collection: 'opensource',
+      page: 1,
+      rows: 50,
+      kinds: ['pdf_text', 'image'],
+    })
+
     await iaGetItem('some-id')
     expect(invoke).toHaveBeenCalledWith('ia_get_item', { identifier: 'some-id' })
   })

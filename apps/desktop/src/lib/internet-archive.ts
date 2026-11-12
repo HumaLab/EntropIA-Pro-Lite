@@ -45,6 +45,12 @@ export type IaDuplicateStatus =
   | { status: 'new_version'; previousItemId: string }
   | { status: 'in_other_collection'; itemId: string; collectionId: string }
 
+/**
+ * Mirrors `FileKindDto`: `pdf` is any PDF, `pdf_text` only Internet Archive
+ * `Text PDF` files (OCR text layer), `image` JPEG/PNG/TIFF images.
+ */
+export type IaFileKind = 'pdf' | 'pdf_text' | 'image'
+
 /** Mirrors `SearchQueryDto`. Blank filters are no filter on the Rust side. */
 export type IaSearchQuery = {
   text?: string
@@ -55,6 +61,8 @@ export type IaSearchQuery = {
   yearFrom?: number
   yearTo?: number
   textsOnly?: boolean
+  /** File kinds to look for; omitted or empty keeps `textsOnly`. */
+  kinds?: IaFileKind[]
 }
 
 /** Mirrors `SearchItemDto`. */
@@ -77,6 +85,7 @@ export type IaSearchPage = {
 export type IaPdfFile = {
   name: string
   format: string | null
+  kind: IaFileKind
   source: string
   size: number | null
   mtime: number | null
@@ -219,9 +228,13 @@ export function iaSearch(query: IaSearchQuery, page: number, rows: number): Prom
 export function iaListCollection(
   collection: string,
   page: number,
-  rows: number
+  rows: number,
+  kinds?: IaFileKind[]
 ): Promise<IaSearchPage> {
-  return invoke<IaSearchPage>('ia_list_collection', { collection, page, rows })
+  return invoke<IaSearchPage>(
+    'ia_list_collection',
+    kinds ? { collection, page, rows, kinds } : { collection, page, rows }
+  )
 }
 
 /** Fetch tolerant item metadata with its PDF availability. */

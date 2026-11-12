@@ -10,6 +10,7 @@ use serde_json::Value;
 use url::Url;
 
 use crate::error::IaError;
+use crate::kind::FileKind;
 
 /// Where to send API requests.
 #[derive(Debug, Clone)]
@@ -55,7 +56,12 @@ pub struct SearchQuery {
     /// Inclusive upper year bound, rendered into a `date:[A TO B]` range.
     pub year_to: Option<u16>,
     /// When true (default), the query also requires `mediatype:texts`.
+    /// Ignored when `kinds` is not empty: each kind carries its own
+    /// mediatype.
     pub texts_only: bool,
+    /// File kinds to look for; empty means "no kind filter". Each kind adds
+    /// a `mediatype` + `format` group and the groups combine with `OR`.
+    pub kinds: Vec<FileKind>,
 }
 
 impl Default for SearchQuery {
@@ -69,7 +75,34 @@ impl Default for SearchQuery {
             year_from: None,
             year_to: None,
             texts_only: true,
+            kinds: Vec::new(),
         }
+    }
+}
+
+/// Lucene group for PDFs of any flavour.
+const PDF_GROUP: &str = "(mediatype:texts AND format:(PDF))";
+/// Lucene group for PDFs Internet Archive publishes as `Text PDF`.
+const PDF_TEXT_GROUP: &str = "(mediatype:texts AND format:(\"Text PDF\"))";
+/// Lucene group for image records in a format EntropIA imports.
+const IMAGE_GROUP: &str = "(mediatype:image AND format:(JPEG OR PNG OR TIFF))";
+
+/// The `OR` of the requested kinds' groups, or `None` without kinds. `Pdf`
+/// already covers every `Text PDF`, so asking for both sends only `Pdf`.
+fn kinds_clause(kinds: &[FileKind]) -> Option<String> {
+    let mut groups: Vec<&str> = Vec::new();
+    if kinds.contains(&FileKind::Pdf) {
+        groups.push(PDF_GROUP);
+    } else if kinds.contains(&FileKind::PdfText) {
+        groups.push(PDF_TEXT_GROUP);
+    }
+    if kinds.contains(&FileKind::Image) {
+        groups.push(IMAGE_GROUP);
+    }
+    match groups.as_slice() {
+        [] => None,
+        [single] => Some((*single).to_string()),
+        many => Some(format!("({})", many.join(" OR "))),
     }
 }
 
@@ -109,7 +142,9 @@ impl SearchQuery {
                     .to_string(),
             });
         }
-        if self.texts_only {
+        if let Some(kinds) = kinds_clause(&self.kinds) {
+            clauses.push(kinds);
+        } else if self.texts_only {
             clauses.push("mediatype:texts".to_string());
         }
         Ok(clauses.join(" AND "))
@@ -362,7 +397,7 @@ fn num_found_in(body: &Value) -> u64 {
 mod tests {
     use crate::policy::FetchPolicy;
     use crate::test_support::TestServer;
-    use crate::{Endpoints, IaClient, IaError, SearchQuery};
+    use crate::{Endpoints, FileKind, IaClient, IaError, SearchQuery};
     use url::Url;
 
     const FIXTURE: &str = include_str!("../tests/fixtures/advancedsearch-mar-del-plata.json");
@@ -576,6 +611,78 @@ mod tests {
         let mut q = query(&[("title", "Mar del Plata")]);
         q.texts_only = false;
         assert_eq!(q.to_lucene().unwrap(), "title:(\"Mar del Plata\")");
+    }
+
+    // ---- file kinds ----
+
+    fn with_kinds(kinds: &[FileKind]) -> SearchQuery {
+        let mut q = query(&[("text", "x")]);
+        q.kinds = kinds.to_vec();
+        q
+    }
+
+    #[test]
+    fn kinds_pdf_asks_for_any_pdf_in_texts() {
+        assert_eq!(
+            with_kinds(&[FileKind::Pdf]).to_lucene().unwrap(),
+            "\"x\" AND (mediatype:texts AND format:(PDF))"
+        );
+    }
+
+    #[test]
+    fn kinds_pdf_text_asks_only_for_text_pdf() {
+        assert_eq!(
+            with_kinds(&[FileKind::PdfText]).to_lucene().unwrap(),
+            "\"x\" AND (mediatype:texts AND format:(\"Text PDF\"))"
+        );
+    }
+
+    #[test]
+    fn kinds_image_asks_for_image_records_with_supported_formats() {
+        assert_eq!(
+            with_kinds(&[FileKind::Image]).to_lucene().unwrap(),
+            "\"x\" AND (mediatype:image AND format:(JPEG OR PNG OR TIFF))"
+        );
+    }
+
+    #[test]
+    fn kinds_combine_with_or_and_pdf_covers_text_pdf() {
+        let all = "\"x\" AND ((mediatype:texts AND format:(PDF)) OR \
+                   (mediatype:image AND format:(JPEG OR PNG OR TIFF)))";
+        assert_eq!(
+            with_kinds(&[FileKind::Pdf, FileKind::PdfText, FileKind::Image])
+                .to_lucene()
+                .unwrap(),
+            all
+        );
+        assert_eq!(
+            with_kinds(&[FileKind::Image, FileKind::Pdf]).to_lucene().unwrap(),
+            all,
+            "order of the requested kinds must not change the query"
+        );
+        assert_eq!(
+            with_kinds(&[FileKind::PdfText, FileKind::Image])
+                .to_lucene()
+                .unwrap(),
+            "\"x\" AND ((mediatype:texts AND format:(\"Text PDF\")) OR \
+             (mediatype:image AND format:(JPEG OR PNG OR TIFF)))"
+        );
+    }
+
+    #[test]
+    fn kinds_replace_texts_only_and_are_not_a_search_clause() {
+        // The kinds carry their own mediatype, so texts_only adds nothing.
+        let mut q = with_kinds(&[FileKind::Pdf]);
+        q.texts_only = true;
+        let lucene = q.to_lucene().unwrap();
+        assert!(!lucene.ends_with(" AND mediatype:texts"), "{lucene}");
+        // A kind alone is a filter, not a search: an unfiltered query is
+        // still refused.
+        let q = SearchQuery {
+            kinds: vec![FileKind::Image],
+            ..SearchQuery::default()
+        };
+        assert!(matches!(q.to_lucene(), Err(IaError::InvalidQuery { .. })));
     }
 
     // ---- request shape ----

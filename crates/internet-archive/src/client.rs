@@ -10,6 +10,7 @@ use url::{Host, Url};
 
 use crate::error::IaError;
 use crate::item::{parse_item_value, ItemDetails};
+use crate::kind::FileKind;
 use crate::policy::FetchPolicy;
 use crate::search::{is_valid_identifier, parse_search_value, Endpoints, SearchPage, SearchQuery};
 use crate::{
@@ -236,6 +237,21 @@ impl IaClient {
         page: u32,
         rows: u32,
     ) -> Result<SearchPage, IaError> {
+        self.list_collection_of_kinds(endpoints, collection, &[], page, rows)
+            .await
+    }
+
+    /// [`IaClient::list_collection`] restricted to the given file kinds
+    /// (see [`SearchQuery::kinds`]); an empty slice behaves exactly like
+    /// `list_collection` (`mediatype:texts`).
+    pub async fn list_collection_of_kinds(
+        &self,
+        endpoints: &Endpoints,
+        collection: &str,
+        kinds: &[FileKind],
+        page: u32,
+        rows: u32,
+    ) -> Result<SearchPage, IaError> {
         if !is_valid_identifier(collection) {
             return Err(IaError::InvalidQuery {
                 reason: format!("invalid collection identifier: {collection:?}"),
@@ -244,6 +260,7 @@ impl IaClient {
         let query = SearchQuery {
             collection: Some(collection.to_string()),
             texts_only: true,
+            kinds: kinds.to_vec(),
             ..SearchQuery::default()
         };
         self.advanced_search(endpoints, &query, page, rows, Some(COLLECTION_SORT))
@@ -405,6 +422,33 @@ mod tests {
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
+    }
+
+    #[tokio::test]
+    async fn list_collection_applies_the_requested_kinds() {
+        let server = TestServer::start(vec![TestServer::json(
+            "/advancedsearch.php",
+            200,
+            r#"{"response":{"numFound":0,"docs":[]}}"#,
+        )]);
+        let endpoints = Endpoints::new(Url::parse(server.base()).unwrap());
+        local_client()
+            .list_collection_of_kinds(&endpoints, "opensource", &[FileKind::Image], 1, 5)
+            .await
+            .unwrap();
+        let targets = server.targets();
+        let url = Url::parse(&format!("http://127.0.0.1{}", targets.last().unwrap())).unwrap();
+        let q = url
+            .query_pairs()
+            .find(|(k, _)| k == "q")
+            .map(|(_, v)| v.into_owned());
+        assert_eq!(
+            q.as_deref(),
+            Some(
+                "collection:(\"opensource\") AND \
+                 (mediatype:image AND format:(JPEG OR PNG OR TIFF))"
+            )
+        );
     }
 
     #[tokio::test]
