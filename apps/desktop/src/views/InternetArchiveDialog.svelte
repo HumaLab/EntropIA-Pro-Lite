@@ -727,7 +727,9 @@
     try {
       searchPage = page
       searchResult = await iaSearch(query, page, rows)
-      searchFetcher = (fetchPage, fetchRows) => iaSearch(query, fetchPage, fetchRows)
+      // Walking every page needs a stable order (see `iaSearch`).
+      searchFetcher = (fetchPage, fetchRows) =>
+        iaSearch(query, fetchPage, fetchRows, { stableOrder: true })
       searchLabel = [query.text, query.title, query.creator].filter(Boolean).join(' · ')
     } catch (reason) {
       problem = describeError(reason)

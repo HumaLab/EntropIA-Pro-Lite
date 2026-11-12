@@ -321,18 +321,25 @@ pub(crate) fn resolve_identifier_logic(input: &str) -> Result<String, String> {
     internet_archive::resolve_identifier(input).map_err(|error| ia_error(&error))
 }
 
-/// Run a structured search over `page` (1-based) with `rows` per page.
+/// Run a structured search over `page` (1-based) with `rows` per page;
+/// `stable_order` sorts by identifier so every page of a walk is distinct.
 pub(crate) async fn search_logic(
     client: &IaClient,
     endpoints: &Endpoints,
     query: &SearchQueryDto,
     page: u32,
     rows: u32,
+    stable_order: bool,
 ) -> Result<SearchPageDto, String> {
-    client
-        .search(endpoints, &query.to_search_query(), page, rows)
-        .await
-        .map(SearchPageDto::from)
+    let query = query.to_search_query();
+    let page = if stable_order {
+        client
+            .search_in_stable_order(endpoints, &query, page, rows)
+            .await
+    } else {
+        client.search(endpoints, &query, page, rows).await
+    };
+    page.map(SearchPageDto::from)
         .map_err(|error| ia_error(&error))
 }
 
@@ -374,14 +381,25 @@ pub async fn ia_resolve_identifier(input: String) -> Result<String, String> {
 }
 
 /// Run a structured search over `page` (1-based) with `rows` per page.
+/// `stable_order` (default off: relevance order) sorts by identifier, for
+/// walking every page of the results.
 #[tauri::command]
 pub async fn ia_search(
     query: SearchQueryDto,
     page: u32,
     rows: u32,
+    stable_order: Option<bool>,
     state: State<'_, IaState>,
 ) -> Result<SearchPageDto, String> {
-    search_logic(&state.client, &state.endpoints, &query, page, rows).await
+    search_logic(
+        &state.client,
+        &state.endpoints,
+        &query,
+        page,
+        rows,
+        stable_order.unwrap_or(false),
+    )
+    .await
 }
 
 /// List one page of a collection (identifier only, never a URL or a path),

@@ -518,10 +518,13 @@ describe('InternetArchiveDialog discovery', () => {
         timeout: 3000,
       })
     ).toBeInTheDocument()
+    // Paged in a stable order: without one, Internet Archive repeats some
+    // records across pages and drops others.
     expect(iaRef.iaSearch).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Chaplin', kinds: ['pdf'] }),
       20,
-      100
+      100,
+      { stableOrder: true }
     )
     // Only the page selection looked files up; the queue resolves them per batch.
     expect(iaRef.iaGetItem).toHaveBeenCalledTimes(50)
