@@ -19,7 +19,8 @@ function parseJsonArray(raw: string, field: string): unknown[] {
     parsed = JSON.parse(raw)
   } catch (error) {
     throw new Error(
-      `Failed to parse layouts.${field}: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to parse layouts.${field}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
     )
   }
 
@@ -84,6 +85,8 @@ function toAssetLayout(row: LayoutRow): AssetLayout {
     imageWidth: row.imageWidth,
     imageHeight: row.imageHeight,
     createdAt: row.createdAt,
+    sourcePath: row.sourcePath,
+    sourceSha256: row.sourceSha256,
     regions: parseJsonArray(row.regions, 'regions').map(parseRegion),
     blocks: parseJsonArray(row.blocks, 'blocks').map(parseBlock),
   }

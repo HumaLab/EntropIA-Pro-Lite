@@ -37,9 +37,9 @@ describe('canonical schema fixture export', () => {
     ).toBe(norm(expected))
   })
 
-  it('records every migration name in order, ending with 0063_collection_ai_context', () => {
-    expect(dump.migrations).toHaveLength(63)
-    expect(dump.migrations.at(-1)).toBe('0063_collection_ai_context')
+  it('records every migration name in order, ending with 0065_entity_aliases', () => {
+    expect(dump.migrations).toHaveLength(65)
+    expect(dump.migrations.at(-1)).toBe('0065_entity_aliases')
   })
 
   it('captures base tables, the FTS virtual table and the collection activity triggers', () => {

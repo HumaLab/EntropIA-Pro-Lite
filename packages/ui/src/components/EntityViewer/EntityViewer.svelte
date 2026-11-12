@@ -12,6 +12,21 @@
     creatableTypes?: EntityType[]
     newEntityType?: EntityType
     newEntityValue?: string
+    /**
+     * Read-time canonical name for a mention (entity aliases, T2): when it
+     * returns a different name, the pill shows the canonical name with the
+     * original surface form as secondary text. Clicks, highlights, edits
+     * and deletes keep using the stored row. Omitted means current
+     * rendering, exactly as before.
+     */
+    resolveAlias?: (value: string) => string
+    /**
+     * Alias action for a mention (entity aliases, T3, S8): "Es la misma
+     * persona que…" next to the existing mention actions. Omitted means
+     * no alias action, exactly as before — the owner opens the dialog
+     * from here and confirms the canonical name.
+     */
+    onaliasentity?: (entity: Entity) => void
     onhighlight?: (detail: { startOffset: number; endOffset: number }) => void
     onentityclick?: (entity: Entity) => void
     oneditvaluechange?: (value: string) => void
@@ -31,6 +46,8 @@
     creatableTypes = [],
     newEntityType,
     newEntityValue = '',
+    resolveAlias,
+    onaliasentity,
     onhighlight,
     onentityclick,
     oneditvaluechange,
@@ -57,6 +74,8 @@
     confirmDeleteEntityAria: (value: string) => `Confirm delete entity ${value}`,
     deleteEntityTitle: 'Delete entity',
     confirmDeleteEntityTitle: 'Press again to confirm delete',
+    aliasEntityAria: (value: string) => `Same as ${value}`,
+    aliasEntityTitle: 'Same as…',
     deletePrompt: 'Delete?',
     addEntity: 'Add entity',
     newEntityTypeAria: 'New entity type',
@@ -342,6 +361,7 @@
 {:else}
   <div class="entity-viewer">
     {#each sortedEntities as entity (entity.id)}
+      {@const canonical = resolveAlias?.(entity.value) ?? entity.value}
       <div
         class="entity-viewer__chip entity-viewer__chip--{entity.entityType}"
         class:entity-viewer__chip--editing={editingEntityId === entity.id}
@@ -424,11 +444,31 @@
             use:tooltip={entity.value}
           >
             <span class="entity-viewer__tag">{ENTITY_TYPE_TAGS[entity.entityType]}</span>
-            <span class="entity-viewer__value">{entity.value}</span>
+            {#if canonical !== entity.value}
+              <span class="entity-viewer__value entity-viewer__value--canonical">{canonical}</span>
+              <span class="entity-viewer__original">{entity.value}</span>
+            {:else}
+              <span class="entity-viewer__value">{entity.value}</span>
+            {/if}
           </button>
 
           {#if hoveredEntityId === entity.id || focusedEntityId === entity.id || pendingDeleteEntityId === entity.id}
             <div class="entity-viewer__actions">
+              {#if onaliasentity}
+                <button
+                  type="button"
+                  class="entity-viewer__action"
+                  aria-label={labels.aliasEntityAria(entity.value)}
+                  use:tooltip={labels.aliasEntityTitle}
+                  data-testid={`entity-alias-${entity.id}`}
+                  onclick={(event) => {
+                    event.stopPropagation()
+                    onaliasentity?.(entity)
+                  }}
+                >
+                  <ActionIcon name="link" size={12} />
+                </button>
+              {/if}
               <button
                 type="button"
                 class="entity-viewer__action"
@@ -899,6 +939,19 @@
   }
 
   .entity-viewer__value {
+    white-space: nowrap;
+  }
+
+  /* Alias (T2): el nombre canónico manda y la forma original queda como texto
+     secundario, atenuado y en menor tamaño, dentro del mismo chip. */
+  .entity-viewer__value--canonical {
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .entity-viewer__original {
+    font-size: var(--font-size-2xs);
+    font-weight: var(--font-weight-normal);
+    color: var(--color-text-muted);
     white-space: nowrap;
   }
 </style>

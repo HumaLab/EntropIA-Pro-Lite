@@ -10,8 +10,16 @@
     type StatusBadgeVariant,
   } from '@entropia/ui'
   import type { Entity } from '@entropia/ui'
+  import { normalizeEntityAliasKey } from '@entropia/store'
+  import {
+    getEntityAliasResolver,
+    identityEntityAliasResolver,
+    loadEntityAliasResolver,
+    type EntityAliasResolver,
+  } from '$lib/entity-aliases'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { ItemNlpState } from '$lib/nlp'
+  import EntityAliasDialog from '../components/EntityAliasDialog.svelte'
   import ItemMapViewer from './ItemMapViewer.svelte'
 
   type EditableEntityType = 'person' | 'organization' | 'place' | 'misc' | 'date'
@@ -103,6 +111,38 @@
     ) => void | Promise<void>
     onResetMapLocation: (entityId: string) => void | Promise<void>
   } = $props()
+
+  // Nombre canónico de cada mención (alias de entidades, T2): se lee una vez
+  // de la lista global; si la carga falla, cada valor se muestra tal cual.
+  let resolveAlias: EntityAliasResolver = $state(identityEntityAliasResolver)
+  // The mention the owner is unifying (entity aliases, T3, S8): while set,
+  // the alias dialog asks for the canonical name. Saving writes only to
+  // entity_aliases (S2) and refreshes the shared resolver below.
+  let aliasTarget: Entity | null = $state(null)
+  // Same-type suggestions only (T6, S9): a person is never offered a place
+  // or an organization, and the mention itself is excluded here too (the
+  // dialog keeps its own normalized exclusion as a fallback).
+  const aliasSuggestions = $derived.by<string[]>(() => {
+    const target = aliasTarget
+    if (!target) return []
+    const targetKey = normalizeEntityAliasKey(target.value)
+    return entities
+      .filter(
+        (entity) =>
+          entity.entityType === target.entityType &&
+          normalizeEntityAliasKey(entity.value) !== targetKey
+      )
+      .map((entity) => entity.value)
+  })
+  $effect(() => {
+    let cancelled = false
+    void loadEntityAliasResolver().then((resolver) => {
+      if (!cancelled) resolveAlias = resolver
+    })
+    return () => {
+      cancelled = true
+    }
+  })
 
   // Sesión de edición de tripletas. Vive acá y no en ItemView porque es estado
   // de UI puramente transitorio: solo el guardado y el borrado cruzan hacia la
@@ -385,6 +425,7 @@
         <h4>{translate('item.entities')}</h4>
         <EntityViewer
           {entities}
+          {resolveAlias}
           {editingEntityId}
           {newEntityType}
           {newEntityValue}
@@ -405,6 +446,8 @@
             deleteEntityTitle: translate('item.entityDeleteTitle'),
             confirmDeleteEntityTitle: translate('item.entityConfirmDeleteTitle'),
             deletePrompt: translate('item.entityDeletePrompt'),
+            aliasEntityAria: (value: string) => translate('item.entityAliasAria', { value }),
+            aliasEntityTitle: translate('item.entityAliasTitle'),
             addEntity: translate('item.addEntity'),
             newEntityTypeAria: translate('item.newEntityType'),
             newEntityValueAria: translate('item.newEntityValue'),
@@ -413,6 +456,7 @@
             cancelNewEntityAria: translate('item.newEntityCancelAria'),
           }}
           onentityclick={onEntityClick}
+          onaliasentity={(entity) => (aliasTarget = entity)}
           oneditvaluechange={onEditValueChange}
           onsaveentity={onSaveEntity}
           oncancelentityedit={onCancelEntityEdit}
@@ -424,6 +468,17 @@
 
         {#if entityActionError}
           <p class="error">{entityActionError}</p>
+        {/if}
+
+        {#if aliasTarget}
+          <EntityAliasDialog
+            alias={aliasTarget.value}
+            suggestions={aliasSuggestions}
+            onclose={() => (aliasTarget = null)}
+            onsaved={() => {
+              resolveAlias = getEntityAliasResolver()
+            }}
+          />
         {/if}
       </div>
 

@@ -177,7 +177,7 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
       longer than 30 s to transfer fails. Downloads must use the connect timeout
       plus an inactivity (read) timeout, per plan §7 point 4; JSON calls keep
       the total timeout.
-- [ ] 22. (Decisions: files download one at a time in the MVP, a deviation
+- [x] 22. (Decisions: files download one at a time in the MVP, a deviation
       from the plan's default of 2, to keep the runner simple and the load on
       Archive low; a cancel interrupts the current download; 429 waits for
       `Retry-After`, capped at 60 s, up to 3 times; a job stays `running` while it
@@ -186,7 +186,7 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
       `ia_get_import_status`, `ia_list_verified_files`; one job at a time;
       download, verify, record `sha256` and `page_count`; `recover_all` at
       startup.
-- [ ] 23. (Decisions: Rust owns the dedup re-check and the completeness rule.
+- [x] 23. (Decisions: Rust owns the dedup re-check and the completeness rule.
       `ia_begin_file_import` answers `import` with the payload,
       `confirm_existing` for a complete same-version item already in the
       target, or `discard_partial` for an incomplete one the frontend must
@@ -232,7 +232,7 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
       cannot lose them; cancel paths clear `staging_name` when they delete
       staging; the startup reconcile retries on failure; the dialog ignores
       stale `iaGetItem` and status responses.
-- [ ] 27. Variant checks: typecheck, lint and desktop tests with
+- [ ] Owner check: 27. Variant checks: typecheck, lint and desktop tests with
       `VITE_LOCAL_ML=0` and `1`; then the user's visual check. Status 2026-10-11: still OPEN. The corrected Lite MSI PASS preserved the IA library (4 collections and 14 documents, existing dummy-pdf_2 readable), but task 27 still needs Pro with Rust Pdfium integration, additional IA cases, and the child-asset DB size follow-up (DB reads 0 vs 1373 bytes on disk).
 
 ## Evidence
@@ -594,3 +594,9 @@ BLOCKED on unnecessary `powershell -enc` module query: reported `Threats found`,
 
 ## W4/task 27 reconciliation 2026-10-11 (CURRENT: native Pdfium subcheck PASS; task 27 still OPEN)
 Passive mirror of `odd/tasks/windows-native-pdfium.md` CURRENT R4 PASS; all history above preserved. R4 unit 630 ONE Run PASS `R4_CORRELATION_PASS` + True (R4.cs 68685 `58e158bc...`, ISO 122880 `a7dc4b9a...`, 444 DVD readonly; V1-V3 preserved, R3 DON'T rerun). Target `83342a03...` -> `40b166ce...` P -> `990dfc88...` Native Rust Pdfium Test 20261011; source 608 B `7f9ffea8...`; NEW PNG 11501 B `B9C87E23...` 300x400 UTC 2026-10-11T18:58:57.1294797Z; old `daedde35...` retained 2/2. LIVE 5/15 (1,1,2,5,6), backup PRE=POST 1339392 `03996561...`, 17/17 bad 0; DB-15 + 2 staging job.json extras = 17. ES: ONE unsubmitted line Escape-cleared, plain commands, no encoding, NEW alert not observed. Console clean; app 10792 last alive prior check. Native app-integration subcheck now PASS (NOT pdf.js/direct-DLL; DLL-0-after not failure). Task 27 stays OPEN: Pro, additional IA cases, child DB size 0. No all-Windows-DONE claim. No commit (Native Doc Git grant required; 615 NOT used).
+
+## Cleanup 2026-11-10 (docs only, no behavior change)
+
+- 22 checked: `c3ad5a48` "download and verify Internet Archive imports in a job runner" (2026-10-10); subject verified against `git log --oneline`.
+- 23 checked: `224dbdbf` "hand verified Internet Archive files to the importer and confirm them"; subject verified against `git log --oneline`.
+- 27 stays OPEN as Owner check (variant + visual: Pro with Rust Pdfium integration, additional IA cases, child-asset DB size follow-up).

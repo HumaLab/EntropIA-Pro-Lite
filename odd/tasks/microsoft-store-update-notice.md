@@ -102,6 +102,7 @@ install or an authorized Package Flight; not claimed here.
   dark theme, Spanish and English, a ~880 px window, and the dismissed state.
 - Not verified: Rust Pro (`local-ml`), macOS, Linux (CI); real Store
   detection (needs a Store install or Package Flight).
+- 2026-11-10: Owner check pending: visual check + real Store install test per plan §8 (needs a publication the user authorizes). Code work merged; T1–T2 boxes stay checked.
 
 ## Next step
 

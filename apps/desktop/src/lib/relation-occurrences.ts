@@ -1,4 +1,12 @@
 import { key } from './relation-graph'
+import type { EntityAliasResolver } from './entity-aliases'
+
+/**
+ * Read-time canonicalization of a mention (entity aliases, T2). The default
+ * keeps every value as written, so existing callers behave exactly as
+ * before; the views pass the store-backed resolver from `./entity-aliases`.
+ */
+const identityAlias: EntityAliasResolver = (value) => value
 
 export interface TextRange {
   start: number
@@ -24,7 +32,17 @@ interface TargetAddress extends OccurrenceContext {
 }
 export type OccurrenceTarget = TargetAddress &
   (
-    | { kind: 'entity'; value: string; offsets?: TextRange[] }
+    | {
+        kind: 'entity'
+        value: string
+        offsets?: TextRange[]
+        /**
+         * Alias surface forms grouped under this node (T2): the raw mention
+         * values that resolve to `value`, so locating also finds their
+         * occurrences, each with its own offsets. Absent without aliases.
+         */
+        surfaceForms?: string[]
+      }
     | {
         kind: 'relation'
         subject: string
@@ -80,8 +98,13 @@ const addressKey = (row: { itemId: string; assetId: string | null }) =>
 export function buildEntityTargets(
   label: string,
   rows: readonly EntityRow[],
-  context: ContextForItem
+  context: ContextForItem,
+  resolveAlias: EntityAliasResolver = identityAlias
 ): OccurrenceTarget[] {
+  // The group reads through the alias list (S3): every form of the unified
+  // node contributes its rows, and the value is the canonical name.
+  const canonical = resolveAlias(label).trim()
+  const canonicalKey = key(canonical)
   const groups = new Map<string, Extract<OccurrenceTarget, { kind: 'entity' }>>()
   const ordered = [...rows].sort(
     (a, b) =>
@@ -91,7 +114,7 @@ export function buildEntityTargets(
       compare(a.value, b.value)
   )
   for (const row of ordered) {
-    if (!key(label) || key(row.value) !== key(label)) continue
+    if (!canonicalKey || key(resolveAlias(row.value)) !== canonicalKey) continue
     const id = addressKey(row)
     let target = groups.get(id)
     if (!target) {
@@ -100,10 +123,17 @@ export function buildEntityTargets(
         itemId: row.itemId,
         assetId: row.assetId,
         kind: 'entity',
-        value: label.trim(),
+        value: canonical,
         offsets: [],
+        surfaceForms: [],
       }
       groups.set(id, target)
+    }
+    // Distinct raw forms naming this node, first-seen: locating searches
+    // each of them, so alias mentions are found with their own offsets.
+    const forms = target.surfaceForms ?? (target.surfaceForms = [])
+    if (key(row.value) !== canonicalKey && !forms.some((form) => key(form) === key(row.value))) {
+      forms.push(row.value)
     }
     const duplicate = target.offsets!.some(
       ({ start, end }) => start === row.startOffset && end === row.endOffset
@@ -125,12 +155,19 @@ export function buildNodeTargets(
   label: string,
   entityRows: readonly EntityRow[],
   tripleRows: readonly TripleRow[],
-  context: ContextForItem
+  context: ContextForItem,
+  resolveAlias: EntityAliasResolver = identityAlias
 ): OccurrenceTarget[] {
-  const targets = buildEntityTargets(label, entityRows, context)
+  const targets = buildEntityTargets(label, entityRows, context, resolveAlias)
+  const canonical = resolveAlias(label).trim()
+  const canonicalKey = key(canonical)
   const seen = new Set(targets.map(addressKey))
   for (const row of tripleRows) {
-    if (!key(label) || (key(row.subject) !== key(label) && key(row.object) !== key(label))) {
+    if (
+      !canonicalKey ||
+      (key(resolveAlias(row.subject)) !== canonicalKey &&
+        key(resolveAlias(row.object)) !== canonicalKey)
+    ) {
       continue
     }
     const id = addressKey(row)
@@ -141,8 +178,9 @@ export function buildNodeTargets(
       itemId: row.itemId,
       assetId: row.assetId,
       kind: 'entity',
-      value: label.trim(),
+      value: canonical,
       offsets: [],
+      surfaceForms: [],
     })
   }
   return targets.sort((a, b) => compare(addressKey(a), addressKey(b)))
@@ -153,18 +191,23 @@ export function buildRelationTargets(
   subject: string,
   object: string,
   rows: readonly TripleRow[],
-  context: ContextForItem
+  context: ContextForItem,
+  resolveAlias: EntityAliasResolver = identityAlias
 ): OccurrenceTarget[] {
   const targets = new Map<string, OccurrenceTarget>()
+  // Endpoints resolve through the alias list (S3): a triple read from an
+  // alias form still belongs to the unified pair. Rows stay as written.
+  const subjectKey = key(resolveAlias(subject))
+  const objectKey = key(resolveAlias(object))
   const ordered = [...rows].sort(
     (a, b) => compare(addressKey(a), addressKey(b)) || compare(a.id, b.id)
   )
   for (const row of ordered) {
     if (
-      !key(subject) ||
-      !key(object) ||
-      key(row.subject) !== key(subject) ||
-      key(row.object) !== key(object)
+      !subjectKey ||
+      !objectKey ||
+      key(resolveAlias(row.subject)) !== subjectKey ||
+      key(resolveAlias(row.object)) !== objectKey
     ) {
       continue
     }
@@ -245,7 +288,20 @@ function matches(raw: string, value: string): TextRange[] {
 /** Empty list means none. All offsets are half-open JS string (UTF-16) coordinates. */
 export function locateOccurrences(raw: string, target: OccurrenceTarget): OccurrencePassage[] {
   if (target.kind === 'entity') {
-    const found = matches(raw, target.value)
+    // The node's alias forms name it too (T2): their mentions count, each
+    // with its own offsets. Without aliases this is exactly one search.
+    const forms = [target.value, ...(target.surfaceForms ?? [])]
+    const formKeys = forms.map((form) => key(form))
+    // Two forms can fold to the same span (case, diacritics): keep each once.
+    const seenSpans = new Set<string>()
+    const found = forms
+      .flatMap((form) => matches(raw, form))
+      .filter((range) => {
+        const span = `${range.start}:${range.end}`
+        if (seenSpans.has(span)) return false
+        seenSpans.add(span)
+        return true
+      })
     for (const hint of target.offsets ?? []) {
       // Stored offsets may be absent or use another coordinate convention; only
       // trust them when the raw slice validates. 0/0 is an absent hint.
@@ -255,7 +311,7 @@ export function locateOccurrences(raw: string, target: OccurrenceTarget): Occurr
         hint.start >= 0 &&
         hint.end > hint.start &&
         hint.end <= raw.length &&
-        key(raw.slice(hint.start, hint.end)) === key(target.value) &&
+        formKeys.includes(key(raw.slice(hint.start, hint.end))) &&
         !found.some(({ start, end }) => start === hint.start && end === hint.end)
       ) {
         found.push(hint)

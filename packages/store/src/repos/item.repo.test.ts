@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { AssetRepo } from './asset.repo'
 import { ItemRepo } from './item.repo'
 import type { ItemCursor, ItemPage } from './item.repo'
 import { FtsRepo, compileCardSearchQuery } from './fts.repo'
@@ -2033,6 +2034,112 @@ describe('keyset pagination against the real schema', () => {
 
       expect(forward).toEqual(order)
       expect(backward).toEqual([...order].reverse())
+    })
+  })
+
+  /**
+   * The card and the viewer must show the same asset of an item. The card asks
+   * SQL (the summary query); the viewer holds the rows `findByItem` returned and
+   * asks `AssetRepo.primaryOf`. Two languages, one rule: each case below runs
+   * both over the same rows and requires the same answer.
+   */
+  describe('the asset a card shows is the asset the viewer opens', () => {
+    type AssetSeed = {
+      id: string
+      path: string
+      type?: string
+      sortIndex?: number
+      createdAt: number
+      parent?: string
+    }
+
+    async function cardAndViewer(assetSeeds: AssetSeed[]) {
+      const { sqlite, rawClient, repo: realRepo } = createRealDb([{ id: 'doc', title: 'Doc' }])
+      sqlite.prepare('DELETE FROM assets').run()
+      const insert = sqlite.prepare(
+        `INSERT INTO assets (id, item_id, path, type, sort_index, parent_asset_id, created_at)
+         VALUES (?, 'doc', ?, ?, ?, ?, ?)`
+      )
+      for (const seed of assetSeeds) {
+        insert.run(
+          seed.id,
+          seed.path,
+          seed.type ?? 'image',
+          seed.sortIndex ?? 0,
+          seed.parent ?? null,
+          seed.createdAt
+        )
+      }
+
+      const page = await realRepo.findCardSummariesPage('col-1', { limit: 5 })
+      const listed = await new AssetRepo({} as unknown as DrizzleClient, rawClient).findByItem(
+        'doc'
+      )
+      return {
+        card: page.items[0]!.primaryAssetId,
+        viewer: AssetRepo.primaryOf(listed)?.id ?? null,
+        listed: listed.map((asset) => asset.id),
+      }
+    }
+
+    it('agrees when path order and import order disagree and no page order was set', async () => {
+      const result = await cardAndViewer([
+        { id: 'first-imported', path: '/p/zeta.jpg', createdAt: 10 },
+        { id: 'second-imported', path: '/p/alpha.jpg', createdAt: 20 },
+      ])
+
+      expect(result.card).toBe('first-imported')
+      expect(result.viewer).toBe('first-imported')
+      // The strip itself keeps its A-Z order; only the opening asset follows the card.
+      expect(result.listed).toEqual(['second-imported', 'first-imported'])
+    })
+
+    it('keeps the explicit page order, and both open its first page', async () => {
+      const result = await cardAndViewer([
+        { id: 'page-10', path: '/p/scan_10.png', sortIndex: 2, createdAt: 10 },
+        { id: 'page-2', path: '/p/scan_2.png', sortIndex: 1, createdAt: 20 },
+        { id: 'page-1', path: '/p/scan_1.png', sortIndex: 0, createdAt: 30 },
+      ])
+
+      expect(result.listed).toEqual(['page-1', 'page-2', 'page-10'])
+      expect(result.card).toBe('page-1')
+      expect(result.viewer).toBe('page-1')
+    })
+
+    it('agrees on the image when a PDF sorts ahead of it', async () => {
+      const result = await cardAndViewer([
+        { id: 'pdf', path: '/p/a.pdf', type: 'pdf', createdAt: 10 },
+        { id: 'photo', path: '/p/b.jpg', createdAt: 20 },
+      ])
+
+      expect(result.listed).toEqual(['pdf', 'photo'])
+      expect(result.card).toBe('photo')
+      expect(result.viewer).toBe('photo')
+    })
+
+    it('never picks a generated page over its container', async () => {
+      const result = await cardAndViewer([
+        { id: 'container', path: '/p/z.pdf', type: 'pdf', createdAt: 20 },
+        { id: 'page', path: '/p/a_page_1.pdf', type: 'pdf', createdAt: 10, parent: 'container' },
+      ])
+
+      expect(result.card).toBe('container')
+      expect(result.viewer).toBe('container')
+    })
+
+    it('settles two assets imported in the same millisecond the same way', async () => {
+      const seeds: AssetSeed[] = [
+        { id: 'b', path: '/p/one.jpg', createdAt: 10 },
+        { id: 'a', path: '/p/two.jpg', createdAt: 10 },
+      ]
+
+      const forward = await cardAndViewer(seeds)
+      const reversed = await cardAndViewer([...seeds].reverse())
+
+      expect(forward.card).toBe('a')
+      expect(forward.viewer).toBe('a')
+      expect(reversed.card).toBe('a')
+      expect(reversed.viewer).toBe('a')
     })
   })
 })

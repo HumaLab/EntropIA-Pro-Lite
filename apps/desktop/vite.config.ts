@@ -102,7 +102,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      $lib: resolve(__dirname, './src/lib'),
+      $lib: resolve(import.meta.dirname, './src/lib'),
     },
   },
   // Tauri expects a fixed port in dev
@@ -116,22 +116,22 @@ export default defineConfig({
   },
   build: {
     target: 'chrome105',
-    minify: isTauriDebug ? false : 'esbuild',
+    minify: isTauriDebug ? false : 'oxc',
     sourcemap: isTauriDebug,
     // Vite's 500 kB warning assumes a network download. Tauri loads from disk,
     // and the heaviest chunks (pdfmake and its fonts) are fetched only when
     // the user exports. The limit sits just above today's largest legitimate
     // chunk, so real growth of the startup chunk still warns.
     chunkSizeWarningLimit: 1024,
-    rollupOptions: {
+    rolldownOptions: {
       // splash.html is a second, dependency-free entry: the Rust `setup()` hook
       // opens it as a transparent window before the main webview boots, so it
       // must exist in frontendDist alongside index.html. It pulls its only asset
       // from public/ (splash-mark.png), which keeps it out of the module graph
       // and preserves the single-entry assumption in optimizeDeps.entries above.
       input: {
-        main: resolve(__dirname, 'index.html'),
-        splash: resolve(__dirname, 'splash.html'),
+        main: resolve(import.meta.dirname, 'index.html'),
+        splash: resolve(import.meta.dirname, 'splash.html'),
       },
     },
   },

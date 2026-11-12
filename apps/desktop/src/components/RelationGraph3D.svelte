@@ -13,6 +13,11 @@
   import { ActionIcon, IconButton, tooltip } from '@entropia/ui'
   import type { Entity, Triple } from '@entropia/store'
   import { getStore } from '$lib/db'
+  import {
+    identityEntityAliasResolver,
+    loadEntityAliasResolver,
+    type EntityAliasResolver,
+  } from '$lib/entity-aliases'
   import { locale, t, type I18nKey } from '$lib/i18n'
   import { getNavigation } from '$lib/pane-context'
   import {
@@ -89,6 +94,13 @@
   let selected = $state<ResolvedSelection | null>(null)
   /** Entities the user asked to see whole, past the caps (view state). */
   let expanded = $state<string[]>([])
+  /**
+   * Read-time canonicalization of triple endpoints and NER rows (entity
+   * aliases, T2): alias forms group into the canonical node. Loading never
+   * throws — on failure every name resolves to itself and the graph builds
+   * exactly as before.
+   */
+  let resolveAlias: EntityAliasResolver = $state(identityEntityAliasResolver)
   /** The detail panel starts at half the view and can take all of it. */
   let panelWide = $state(false)
 
@@ -101,7 +113,7 @@
     expanded = expanded.includes(id) ? expanded.filter((other) => other !== id) : [...expanded, id]
   }
   const nodeDetails = $derived<NodeDetails | null>(
-    selected?.kind === 'node' ? describeNode(selected.node.id, tripleRows) : null
+    selected?.kind === 'node' ? describeNode(selected.node.id, tripleRows, resolveAlias) : null
   )
 
   async function loadRows(): Promise<void> {
@@ -122,7 +134,7 @@
     titles = new Map(items.map((item) => [item.id, item.title]))
     types = new Map()
     for (const entity of entityRows) {
-      const k = nameKey(entity.value)
+      const k = nameKey(resolveAlias(entity.value))
       if (!types.has(k)) types.set(k, entity.entityType)
     }
   }
@@ -240,9 +252,9 @@
 
   function nodeTargets(id: string, labelText: string): OccurrenceTarget[] {
     const rows = tripleRows.filter(
-      (row) => nameKey(row.subject) === id || nameKey(row.object) === id
+      (row) => nameKey(resolveAlias(row.subject)) === id || nameKey(resolveAlias(row.object)) === id
     )
-    return buildNodeTargets(labelText, entityRows, rows, occurrenceContext)
+    return buildNodeTargets(labelText, entityRows, rows, occurrenceContext, resolveAlias)
   }
 
   function relationTargets(
@@ -253,7 +265,7 @@
     const rows = predicate
       ? tripleRows.filter((row) => nameKey(row.predicate) === nameKey(predicate))
       : tripleRows
-    return buildRelationTargets(subject, object, rows, occurrenceContext)
+    return buildRelationTargets(subject, object, rows, occurrenceContext, resolveAlias)
   }
 
   function openOccurrences(kind: 'entity' | 'relation', targets: OccurrenceTarget[]) {
@@ -451,7 +463,7 @@
   }
 
   function rebuild() {
-    graph = buildRelationGraph(tripleRows, settings.structure, expanded)
+    graph = buildRelationGraph(tripleRows, settings.structure, expanded, resolveAlias)
     draw()
   }
 
@@ -466,7 +478,9 @@
       selected = null
       // A restored view brings back the entities the user had expanded.
       expanded = pendingSnapshot?.expanded ?? []
-      graph = buildRelationGraph(tripleRows, settings.structure, expanded)
+      // Alias failures fall back to identity inside the loader.
+      resolveAlias = await loadEntityAliasResolver()
+      graph = buildRelationGraph(tripleRows, settings.structure, expanded, resolveAlias)
       status = 'ready'
       if (!instance) {
         instance = new ForceGraph3D(container, { controlType: 'orbit' })
@@ -704,7 +718,11 @@
             <ActionIcon name="external-link" size={12} />
             {t('collectionAnalysis.graphOpenEntity', { count: targets.length })}
           </button>
-          {@const split = splitRelations(nodeDetails?.relations ?? [], graph ?? { links: [] })}
+          {@const split = splitRelations(
+            nodeDetails?.relations ?? [],
+            graph ?? { links: [] },
+            resolveAlias
+          )}
           <h4>{t('collectionAnalysis.graphRelationsShown', { count: split.shown.length })}</h4>
           <ul>
             {#each split.shown as relation, index (index)}

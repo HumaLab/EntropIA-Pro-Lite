@@ -46,6 +46,11 @@ pub const PROCESS_EMBEDDING: &str = "embedding";
 pub const PROCESS_ENTITIES: &str = "entities";
 pub const PROCESS_TRIPLES: &str = "triples";
 pub const PROCESS_SUMMARY: &str = "summary";
+/// Maintenance pointed the asset back at the image version its layout belongs
+/// to ([`crate::image_version_repair`]). Written by the backend only: it is not
+/// in [`renderer_tool`], so the renderer cannot report it.
+pub const PROCESS_IMAGE_VERSION_REPAIR: &str = "image_version_repair";
+pub const TOOL_IMAGE_VERSION_REPAIR: &str = "EntropIA revisión de versiones de imágenes";
 
 /// One history row before it is written.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -334,6 +339,7 @@ fn renderer_tool(process: &str) -> Option<&'static str> {
         }
         "pdf_crop" | "pdf_erase" | "pdf_rotate" => Some("EntropIA edit_pdf (pdfium + lopdf)"),
         "image_undo" | "image_redo" => Some("EntropIA historial de edición"),
+        "image_use_version" => Some("EntropIA versiones de la imagen"),
         "duplicate" => Some("EntropIA (duplicar asset)"),
         _ => None,
     }

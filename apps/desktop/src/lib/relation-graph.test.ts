@@ -211,3 +211,68 @@ describe('buildRelationGraph', () => {
     })
   })
 })
+
+describe('entity aliases (T2)', () => {
+  // Same fixture as S1/S3: "Mdme. Cuevas = Carmela Cuevas".
+  const resolveAlias = (value: string) =>
+    value.trim().replace(/\s+/g, ' ').toLowerCase() === 'mdme. cuevas' ? 'Carmela Cuevas' : value
+
+  const aliased = [
+    { subject: 'Mdme. Cuevas', predicate: 'fundó', object: 'Biblioteca' },
+    { subject: 'Carmela Cuevas', predicate: 'presidió', object: 'biblioteca' },
+    { subject: 'Carmela Cuevas', predicate: 'fundó', object: 'Biblioteca' },
+  ]
+
+  it('unifies alias forms into one node labelled with the canonical name', () => {
+    const graph = buildRelationGraph(aliased, {}, [], resolveAlias)
+
+    expect(graph.nodes.map((node) => node.id).sort()).toEqual(['biblioteca', 'carmela cuevas'])
+    expect(graph.nodes.find((node) => node.id === 'carmela cuevas')!.label).toBe('Carmela Cuevas')
+    // Both mentions of «fundó» state the same unified relation: counts add up.
+    expect(graph.links).toEqual([
+      {
+        source: 'carmela cuevas',
+        target: 'biblioteca',
+        predicates: ['fundó', 'presidió'],
+        counts: [2, 1],
+      },
+    ])
+    expect(graph.hiddenNodes).toBe(0)
+  })
+
+  it('keeps the forms apart when no resolver is passed', () => {
+    const graph = buildRelationGraph(aliased)
+
+    expect(graph.nodes.map((node) => node.id).sort()).toEqual([
+      'biblioteca',
+      'carmela cuevas',
+      'mdme. cuevas',
+    ])
+    expect(graph.links).toHaveLength(2)
+  })
+
+  it('describes the unified node with its relations, each as written', () => {
+    const triples = [
+      { subject: 'Mdme. Cuevas', predicate: 'fundó', object: 'Biblioteca', itemId: 'd1' },
+      { subject: 'Carmela Cuevas', predicate: 'presidió', object: 'biblioteca', itemId: 'd2' },
+    ]
+
+    expect(describeNode('carmela cuevas', triples, resolveAlias)).toEqual({
+      relations: [
+        { subject: 'Mdme. Cuevas', predicate: 'fundó', object: 'Biblioteca', count: 1 },
+        { subject: 'Carmela Cuevas', predicate: 'presidió', object: 'biblioteca', count: 1 },
+      ],
+      itemIds: ['d1', 'd2'],
+    })
+  })
+
+  it('splits the unified node relations against the unified graph', () => {
+    const graph = buildRelationGraph(aliased, {}, [], resolveAlias)
+    const details = describeNode('carmela cuevas', aliased, resolveAlias)
+
+    const { shown, hidden } = splitRelations(details.relations, graph, resolveAlias)
+
+    expect(shown).toHaveLength(2)
+    expect(hidden).toHaveLength(0)
+  })
+})

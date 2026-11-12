@@ -191,3 +191,11 @@ export async function extractText(
 ): Promise<void> {
   await invoke('extract_text', { assetId, assetPath, assetType, mode })
 }
+
+/**
+ * Whether the asset's OCR text was last written by a manual correction. An OCR
+ * the person asks for replaces the text either way, so the item view asks first.
+ */
+export async function extractionIsEditedByHand(assetId: string): Promise<boolean> {
+  return invoke<boolean>('extraction_is_edited_by_hand', { assetId })
+}

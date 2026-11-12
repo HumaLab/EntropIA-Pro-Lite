@@ -3,7 +3,12 @@
 //! All operations write a NEW versioned file (never in-place) to force
 //! browser cache invalidation and support undo. The previous file is
 //! kept on disk so undo can restore it by pointing the asset path back.
+//!
+//! The viewer sends every coordinate in the upright picture it displays, so
+//! the editors decode through [`decode_oriented`], which applies the EXIF
+//! orientation. The saved version carries no tag: it is upright as stored.
 
+use crate::image_orient::decode_oriented;
 use crate::path_utils::{ensure_within_dir, validate_existing_file};
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, GenericImageView, ImageBuffer, Pixel, Rgb, Rgba, RgbaImage};
@@ -117,7 +122,7 @@ fn store_edit_result(
 /// JPEG quality used when re-encoding edited images. `DynamicImage::save`
 /// uses the image crate's default of 75, which compounds visible generational
 /// loss when edits are chained (each edit re-encodes the previous output).
-const JPEG_QUALITY: u8 = 92;
+pub(crate) const JPEG_QUALITY: u8 = 92;
 
 /// Save an image inferring the format from the path, but encoding JPEG
 /// targets at [`JPEG_QUALITY`] instead of the encoder default of 75.
@@ -164,7 +169,7 @@ fn crop_image_file(
     width: u32,
     height: u32,
 ) -> Result<ImageEditResult, String> {
-    let img = image::open(&path).map_err(|e| format!("Failed to open image: {e}"))?;
+    let img = decode_oriented(&path)?;
     let (orig_w, orig_h) = img.dimensions();
 
     // Clamp crop region to image bounds
@@ -216,7 +221,7 @@ pub async fn rotate_image(
 }
 
 fn rotate_image_file(path: String, direction: String) -> Result<ImageEditResult, String> {
-    let img = image::open(&path).map_err(|e| format!("Failed to open image: {e}"))?;
+    let img = decode_oriented(&path)?;
 
     let rotated = match direction.as_str() {
         "left" => img.rotate270(), // 90° counter-clockwise
@@ -275,7 +280,7 @@ fn rotate_image_degrees_file(path: String, degrees: f32) -> Result<ImageEditResu
         return Err("Rotation degrees must be between -360 and 360".to_string());
     }
 
-    let img = image::open(&path).map_err(|e| format!("Failed to open image: {e}"))?;
+    let img = decode_oriented(&path)?;
 
     // Preserve the source format. Formats without an alpha channel (JPEG, BMP, TIFF)
     // fill the corners exposed by the rotation with opaque white and keep their
@@ -401,7 +406,7 @@ fn erase_region_file(
     height: u32,
     fill: String,
 ) -> Result<ImageEditResult, String> {
-    let img = image::open(&path).map_err(|e| format!("Failed to open image: {e}"))?;
+    let img = decode_oriented(&path)?;
     let (orig_w, orig_h) = img.dimensions();
 
     // Clamp region to image bounds
@@ -704,6 +709,106 @@ mod tests {
         assert!(!result.format_changed);
         let cropped = image::open(&result.path).expect("open cropped");
         assert_eq!(cropped.dimensions(), (8, 8));
+    }
+
+    #[test]
+    fn crop_image_file_cuts_the_displayed_area_of_a_camera_photo() {
+        use crate::image_orient::test_support::{
+            assert_upright_quadrants, camera_jpeg, close_to, upright_quadrants, BLUE, GREEN, RED,
+            WHITE,
+        };
+
+        // A phone photo: the file holds 4000×3000 pixels tagged orientation 6,
+        // and the viewer shows it 3000×4000.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source_path = dir.path().join("photo.jpg");
+        let displayed = upright_quadrants(3000, 4000);
+        std::fs::write(&source_path, camera_jpeg(&displayed, 6)).expect("write fixture");
+        assert_eq!(
+            image::image_dimensions(&source_path).expect("stored dimensions"),
+            (4000, 3000)
+        );
+
+        // The upper half, in the coordinates the viewer works with.
+        let result = crop_image_file(source_path.to_string_lossy().to_string(), 0, 0, 3000, 2000)
+            .expect("crop image");
+
+        assert_eq!((result.width, result.height), (3000, 2000));
+        assert_eq!(crate::image_orient::exif_orientation(&result.path), 1);
+        // Plain decode, on purpose: the saved file itself must be upright.
+        let cropped = image::open(&result.path).expect("open cropped").to_rgb8();
+        assert_eq!(cropped.dimensions(), (3000, 2000));
+        // The displayed upper half is red on the left and green on the right.
+        for (x, y, expected) in [
+            (200, 200, RED),
+            (1300, 1800, RED),
+            (1700, 200, GREEN),
+            (2800, 1800, GREEN),
+        ] {
+            let actual = *cropped.get_pixel(x, y);
+            assert!(
+                close_to(actual, expected),
+                "({x}, {y}) is {actual:?}, expected about {expected:?}"
+            );
+            assert!(!close_to(actual, BLUE) && !close_to(actual, WHITE));
+        }
+
+        // A selection in the lower half used to fall outside the sideways file.
+        let lower = crop_image_file(
+            source_path.to_string_lossy().to_string(),
+            0,
+            2000,
+            3000,
+            2000,
+        )
+        .expect("crop lower half");
+        assert_eq!((lower.width, lower.height), (3000, 2000));
+        let lower_img = image::open(&lower.path).expect("open lower").to_rgb8();
+        assert!(close_to(*lower_img.get_pixel(200, 1800), BLUE));
+        assert!(close_to(*lower_img.get_pixel(2800, 1800), WHITE));
+
+        // The source is still the camera's file.
+        let source = crate::image_orient::decode_oriented(&source_path).expect("decode source");
+        assert_upright_quadrants(&source, 3000, 4000, "source after the edits");
+        assert_eq!(crate::image_orient::exif_orientation(&source_path), 6);
+    }
+
+    #[test]
+    fn rotate_and_erase_work_on_the_displayed_picture_of_a_camera_photo() {
+        use crate::image_orient::test_support::{
+            camera_jpeg, close_to, upright_quadrants, BLUE, GREEN, RED, WHITE,
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source_path = dir.path().join("photo.jpg");
+        // Displayed 48×64; stored 64×48 with orientation 6.
+        std::fs::write(&source_path, camera_jpeg(&upright_quadrants(48, 64), 6))
+            .expect("write fixture");
+        let source = source_path.to_string_lossy().to_string();
+
+        // Rotating right turns the displayed picture, so the left column
+        // (red over blue) becomes the top row (blue, then red).
+        let rotated = rotate_image_file(source.clone(), "right".to_string()).expect("rotate");
+        assert_eq!((rotated.width, rotated.height), (64, 48));
+        let img = image::open(&rotated.path).expect("open rotated").to_rgb8();
+        assert!(close_to(*img.get_pixel(16, 12), BLUE));
+        assert!(close_to(*img.get_pixel(48, 12), RED));
+        assert!(close_to(*img.get_pixel(16, 36), WHITE));
+        assert!(close_to(*img.get_pixel(48, 36), GREEN));
+
+        // A 1° fine rotation keeps the displayed proportions (taller than wide).
+        let fine = rotate_image_degrees_file(source.clone(), 1.0).expect("fine rotate");
+        assert!(fine.height > fine.width);
+
+        // Erasing the displayed top-left quadrant blanks red, nothing else.
+        let erased =
+            erase_region_file(source, 0, 0, 24, 32, "black".to_string()).expect("erase region");
+        assert_eq!((erased.width, erased.height), (48, 64));
+        let img = image::open(&erased.path).expect("open erased").to_rgb8();
+        assert!(close_to(*img.get_pixel(12, 16), Rgb([0, 0, 0])));
+        assert!(close_to(*img.get_pixel(36, 16), GREEN));
+        assert!(close_to(*img.get_pixel(12, 48), BLUE));
+        assert!(close_to(*img.get_pixel(36, 48), WHITE));
     }
 
     #[test]

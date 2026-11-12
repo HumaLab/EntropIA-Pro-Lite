@@ -17,7 +17,7 @@ with one click, without copying a command. Branch `feat/agent-one-click-setup`.
 |---|---|---|---|---|
 | T1 | S1-S4 | worker — backend command (Rust, automation) that installs one assistant + frontend «Conectar» per assistant in AssistantsTab with result state; tests for each case | done (worker: 160 Rust automation + 36 frontend tests, lint, typecheck; parent: prettier) | (T1 commit) |
 | T2 | S3 | verify (Risk item 5: writes other tools' configuration) | done: verifier could not run tests (isolation timeout) but found 2 static issues, both fixed test-first | (fix commit) |
-| T3 | S1 | parent — real check: one click connects Codex (and the others present) on this machine | pending | |
+| T3 | S1 | parent — Owner check: one click connects Codex (and the others present) on this machine; verify the «Conectar» result per assistant, precise error otherwise | pending | |
 
 ## Log
 

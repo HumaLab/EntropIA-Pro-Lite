@@ -1,6 +1,6 @@
 {
   "name": "@entropia-pro/desktop",
-  "version": "1.5.0",
+  "version": "1.7.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,7 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "3d-force-graph": "1.80.1",
+    "3d-force-graph": "1.80.2",
     "@entropia/store": "workspace:*",
     "@entropia/ui": "workspace:*",
     "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
@@ -44,12 +44,12 @@
     "@tiptap/extension-underline": "catalog:",
     "@tiptap/pm": "catalog:",
     "@tiptap/starter-kit": "catalog:",
-    "docx": "9.15.1",
+    "docx": "9.15.3",
     "drizzle-orm": "^0.45.2",
     "leaflet": "catalog:",
     "markdown-it": "^15.0.3",
     "pdfjs-dist": "^4",
-    "pdfmake": "^0.3.13",
+    "pdfmake": "^0.3.14",
     "tiptap-footnotes": "^3.0.1"
   },
   "devDependencies": {
@@ -62,10 +62,10 @@
     "@types/pdfmake": "^0.3.3",
     "fflate": "0.8.3",
     "happy-dom": "^21.0.4",
-    "jsdom": "^30.1.3",
+    "jsdom": "^31.0.0",
     "svelte": "^5.57.3",
     "svelte-check": "^4",
-    "vite": "^6.4.5",
+    "vite": "^8",
     "vitest": "^4.1.11"
   }
 }

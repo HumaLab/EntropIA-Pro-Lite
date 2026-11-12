@@ -80,6 +80,315 @@ impl Fixture {
 /// One asset row: id, path, sort index, parent, page number.
 type AssetRow = (String, String, i64, Option<String>, Option<i64>);
 
+/// A PDF with `count` pages of long, plain-language text: every page passes
+/// the executor's `is_quality_text` rule, so S4 stores it as native text.
+fn pdf_with_rich_pages(count: u32) -> Vec<u8> {
+    use lopdf::{dictionary, Document, Object, Stream};
+    let mut document = Document::with_version("1.5");
+    let font = document.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+    });
+    let resources = document.add_object(dictionary! { "Font" => dictionary! { "F1" => font } });
+    let pages_id = document.new_object_id();
+    let kids: Vec<Object> = (0..count)
+        .map(|index| {
+            let line = format!(
+                "El cabildo de Buenos Aires sesiono en asamblea general el dia veinticinco de mayo MARCADORPAGINA{index} fin del acta capitular"
+            );
+            let content = document.add_object(Stream::new(
+                dictionary! {},
+                format!("BT /F1 12 Tf 20 100 Td ({line}) Tj ET").into_bytes(),
+            ));
+            document
+                .add_object(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages_id,
+                    "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+                    "Resources" => resources,
+                    "Contents" => content,
+                })
+                .into()
+        })
+        .collect();
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages", "Count" => count as i64, "Kids" => kids,
+        }),
+    );
+    let catalog = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    document.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+/// A one-page PDF lopdf splits fine but the text parser cannot read: its font
+/// uses a custom encoding with no ToUnicode map, so decoding the text layer
+/// fails (a panic the parser contains into an error) while the page
+/// structure stays intact.
+fn pdf_with_undecodable_page() -> Vec<u8> {
+    use lopdf::{dictionary, Document, Object, ObjectId, Stream};
+    let mut document = Document::with_version("1.5");
+    let differences: Vec<Object> = vec![42.into()];
+    let font = document.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+        "Encoding" => dictionary! { "BaseEncoding" => "NoSuchEncoding", "Differences" => differences },
+    });
+    let resources = document.add_object(dictionary! { "Font" => dictionary! { "F1" => font } });
+    let pages_id: ObjectId = document.new_object_id();
+    let content = document.add_object(Stream::new(
+        dictionary! {},
+        b"BT /F1 12 Tf 20 100 Td <010203010203> Tj ET".to_vec(),
+    ));
+    let page: Object = document
+        .add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+            "Resources" => resources,
+            "Contents" => content,
+        })
+        .into();
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages", "Count" => 1_i64, "Kids" => vec![page],
+        }),
+    );
+    let catalog = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    document.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+/// S4: a PDF whose text layer is usable stores that text at import, one
+/// native extraction per page, exactly as the OCR executor would publish it.
+#[test]
+fn importing_a_pdf_with_a_usable_text_layer_stores_native_text_at_once() {
+    let f = fixture();
+    let path = f.write("Actas.pdf", &pdf_with_rich_pages(2));
+    let source = f.check(&path).unwrap();
+    let ImportOutcome::Imported {
+        item_id, assets, ..
+    } = import_file(
+        &f.conn,
+        &f.data_dir,
+        BETA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap()
+    else {
+        panic!("expected an import");
+    };
+    assert_eq!(assets, 3, "the original plus two pages");
+
+    let mut statement = f
+        .conn
+        .prepare(
+            "SELECT id, path, page_number FROM assets
+             WHERE item_id = ?1 AND parent_asset_id IS NOT NULL ORDER BY page_number",
+        )
+        .unwrap();
+    let pages: Vec<(String, String, i64)> = statement
+        .query_map([&item_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(pages.len(), 2);
+    for (index, (asset_id, asset_path, page_number)) in pages.iter().enumerate() {
+        assert_eq!(*page_number, index as i64 + 1);
+        let (method, text, source_path, source_sha256): (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ) = f
+            .conn
+            .query_row(
+                "SELECT method, text_content, source_path, source_sha256
+                 FROM extractions WHERE asset_id = ?1",
+                [asset_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(method, "native", "page {page_number}: stored as native");
+        assert!(
+            text.contains(&format!("MARCADORPAGINA{index}")),
+            "page {page_number}: its own text, got {text:?}"
+        );
+        // The stamp is the page file the asset points to, as the executor's
+        // native result stamps the file it read.
+        assert_eq!(source_path.as_deref(), Some(asset_path.as_str()));
+        let on_disk = crate::asset_history::sha256_file(&f.data_dir.join(asset_path)).unwrap();
+        assert_eq!(source_sha256.as_deref(), Some(on_disk.as_str()));
+        let (process, tool): (String, String) = f
+            .conn
+            .query_row(
+                "SELECT process, tool FROM asset_process_events
+                 WHERE asset_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                [asset_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(process, "ocr");
+        assert_eq!(tool, "pdfium (capa de texto del PDF)");
+    }
+    // The container keeps no extraction of its own.
+    let parent: String = f
+        .conn
+        .query_row(
+            "SELECT id FROM assets WHERE item_id = ?1 AND parent_asset_id IS NULL",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let parent_extractions: i64 = f
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM extractions WHERE asset_id = ?1",
+            [&parent],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(parent_extractions, 0);
+}
+
+/// S4: a page without a usable layer (too little text to be quality) imports
+/// exactly as before: no extraction, no failure.
+#[test]
+fn importing_a_pdf_without_a_usable_text_layer_stores_no_text() {
+    let f = fixture();
+    // "Pagina 0" is far below the quality bar, like a scanned page.
+    let path = f.write("Corta.pdf", &pdf_with_pages(1));
+    let source = f.check(&path).unwrap();
+    let ImportOutcome::Imported {
+        item_id, assets, ..
+    } = import_file(
+        &f.conn,
+        &f.data_dir,
+        BETA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap()
+    else {
+        panic!("expected an import");
+    };
+    assert_eq!(assets, 2, "the original plus one page");
+    let page: String = f
+        .conn
+        .query_row(
+            "SELECT id FROM assets WHERE item_id = ?1 AND parent_asset_id IS NOT NULL",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let extractions: i64 = f
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM extractions WHERE asset_id = ?1",
+            [&page],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(extractions, 0, "no usable layer, no extraction");
+}
+
+/// S4: a text layer that cannot be read never fails the import: the page
+/// imports without text, like a scan.
+#[test]
+fn an_unreadable_text_layer_never_fails_the_import() {
+    let bytes = pdf_with_undecodable_page();
+    assert!(
+        crate::ocr::pdf::extract_pdf_text(&bytes).is_err(),
+        "the fixture must actually break the text parser"
+    );
+    // The import reads the split page files, not the source: the broken
+    // encoding must survive the split for this test to exercise the
+    // failure path instead of the empty-layer one.
+    let pages = crate::ocr::pdf::split_pdf_to_single_page_bytes(&bytes).unwrap();
+    assert_eq!(pages.len(), 1);
+    assert!(
+        crate::ocr::pdf::extract_pdf_text(&pages[0].1).is_err(),
+        "the split page must break the text parser too"
+    );
+    let f = fixture();
+    let path = f.write("Danada.pdf", &bytes);
+    let source = f.check(&path).unwrap();
+    let ImportOutcome::Imported { item_id, .. } = import_file(
+        &f.conn,
+        &f.data_dir,
+        BETA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap() else {
+        panic!("expected an import");
+    };
+    let page: String = f
+        .conn
+        .query_row(
+            "SELECT id FROM assets WHERE item_id = ?1 AND parent_asset_id IS NOT NULL",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let extractions: i64 = f
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM extractions WHERE asset_id = ?1",
+            [&page],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(extractions, 0, "the broken layer leaves no text behind");
+}
+
+/// S4: pages stored as native at import read as already done, so a batch
+/// without "Incluir texto nativo" skips them instead of re-running OCR.
+#[test]
+fn imported_native_pages_read_as_already_done() {
+    use crate::processing::eligibility::{ocr_decision, OcrDecision};
+    let f = fixture();
+    let path = f.write("Actas.pdf", &pdf_with_rich_pages(2));
+    let source = f.check(&path).unwrap();
+    let ImportOutcome::Imported { item_id, .. } = import_file(
+        &f.conn,
+        &f.data_dir,
+        BETA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap() else {
+        panic!("expected an import");
+    };
+    let mut statement = f
+        .conn
+        .prepare("SELECT id FROM assets WHERE item_id = ?1 AND parent_asset_id IS NOT NULL")
+        .unwrap();
+    let pages: Vec<String> = statement
+        .query_map([&item_id], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(pages.len(), 2);
+    for page in &pages {
+        assert_eq!(
+            ocr_decision(&f.conn, page).unwrap(),
+            OcrDecision::AlreadyDone {
+                method: "native".to_string()
+            },
+            "{page}: a batch without native inclusion skips it"
+        );
+    }
+}
 /// A PDF with `count` pages of text, built in memory.
 fn pdf_with_pages(count: u32) -> Vec<u8> {
     use lopdf::{dictionary, Document, Object, Stream};

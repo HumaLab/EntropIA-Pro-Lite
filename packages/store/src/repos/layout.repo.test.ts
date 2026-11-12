@@ -81,6 +81,8 @@ describe('LayoutRepo', () => {
       imageWidth: 1200,
       imageHeight: 1800,
       createdAt: 123456,
+      sourcePath: null,
+      sourceSha256: null,
     }
 
     const selectResult = createChainMock([row])
@@ -95,6 +97,8 @@ describe('LayoutRepo', () => {
       imageWidth: 1200,
       imageHeight: 1800,
       createdAt: 123456,
+      sourcePath: null,
+      sourceSha256: null,
       regions: [
         {
           page: 2,
@@ -119,6 +123,29 @@ describe('LayoutRepo', () => {
         },
       ],
     })
+  })
+
+  it('carries the file the layout was computed from', async () => {
+    const selectResult = createChainMock([
+      {
+        id: 'layout-1',
+        assetId: 'asset-1',
+        regions: '[]',
+        blocks: '[]',
+        model: 'glm_ocr',
+        imageWidth: 30,
+        imageHeight: 40,
+        createdAt: 5,
+        sourcePath: 'assets/item-1/a_v3.jpg',
+        sourceSha256: 'ab'.repeat(32),
+      },
+    ])
+    ;(db.db.select as ReturnType<typeof vi.fn>).mockReturnValue(selectResult.proxy)
+
+    const result = await repo.findByAsset('asset-1')
+
+    expect(result?.sourcePath).toBe('assets/item-1/a_v3.jpg')
+    expect(result?.sourceSha256).toBe('ab'.repeat(32))
   })
 
   it('throws a useful error when stored layout JSON is invalid', async () => {

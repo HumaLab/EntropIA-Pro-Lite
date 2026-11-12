@@ -8,6 +8,10 @@ import {
   exportCollectionById,
 } from './export'
 
+const { assetFileFactsMock } = vi.hoisted(() => ({ assetFileFactsMock: vi.fn() }))
+
+vi.mock('./asset-file-facts', () => ({ assetFileFacts: assetFileFactsMock }))
+
 type ExportStoreMock = {
   collections: { findById: ReturnType<typeof vi.fn> }
   items: { findByCollection: ReturnType<typeof vi.fn> }
@@ -16,6 +20,7 @@ type ExportStoreMock = {
   extractions: { findByAsset: ReturnType<typeof vi.fn> }
   annotations: { findByAsset: ReturnType<typeof vi.fn> }
   transcriptions: { findByAsset: ReturnType<typeof vi.fn> }
+  layouts?: { findByAsset: ReturnType<typeof vi.fn> }
 }
 
 type ExportStoreInput = Parameters<typeof exportCollectionById>[0]
@@ -182,6 +187,8 @@ describe('buildCollectionExportData', () => {
           method: 'ocr',
           confidence: 0.95,
           createdAt: 8,
+          sourcePath: null,
+          sourceSha256: null,
         },
       },
       // annotationsByAssetId
@@ -422,6 +429,8 @@ describe('buildCollectionExportData', () => {
           method: 'native',
           confidence: null,
           createdAt: 8,
+          sourcePath: null,
+          sourceSha256: null,
         },
       },
       {}
@@ -513,6 +522,8 @@ describe('buildCollectionExportData', () => {
           method: 'ocr',
           confidence: null,
           createdAt: 8,
+          sourcePath: null,
+          sourceSha256: null,
         },
       },
       {},
@@ -779,6 +790,158 @@ describe('exportCollectionById', () => {
     // asset2 has bboxes but no text
     expect(parsed.items[0].assets[1].text).toBeNull()
     expect(parsed.items[0].assets[1].bboxes).toEqual([{ x: 0.5, y: 0.5, width: 0.2, height: 0.2 }])
+  })
+
+  describe('layouts and the version of the image they were computed on', () => {
+    const collection = { id: 'c1', name: 'Fotos', description: null, createdAt: 1, updatedAt: 2 }
+    const item = {
+      id: 'i1',
+      title: 'Acta',
+      collectionId: 'c1',
+      metadata: null,
+      createdAt: 3,
+      updatedAt: 4,
+    }
+    const asset = (id: string, type: 'image' | 'pdf') => ({
+      id,
+      itemId: 'i1',
+      path: `assets/c1/i1/${id}.${type === 'pdf' ? 'pdf' : 'jpg'}`,
+      type,
+      sortIndex: 0,
+      size: 10,
+      createdAt: 5,
+    })
+    const layout = (assetId: string, sourceSha256: string | null) => ({
+      id: `layout-${assetId}`,
+      assetId,
+      model: 'glm_ocr',
+      imageWidth: 1000,
+      imageHeight: 1400,
+      createdAt: 6,
+      sourcePath: sourceSha256 ? `assets/c1/i1/${assetId}.jpg` : null,
+      sourceSha256,
+      regions: [],
+      blocks: [
+        {
+          label: 'text',
+          content: 'Bloque',
+          bbox: { x: 1, y: 2, width: 3, height: 4 },
+          order: 1,
+          groupId: 1,
+        },
+      ],
+    })
+    const sameFile = { orientation: 1, width: 1000, height: 1400 }
+
+    async function exportWith(
+      layouts: Record<string, ReturnType<typeof layout>>,
+      facts: Record<string, () => Promise<unknown>>
+    ) {
+      vi.mocked(save).mockResolvedValue('/out/fotos.json')
+      vi.mocked(writeFile).mockResolvedValue(undefined)
+      assetFileFactsMock.mockImplementation((assetId: string) => {
+        const answer = facts[assetId]
+        if (!answer) throw new Error(`unexpected file read for ${assetId}`)
+        return answer()
+      })
+      const assets = Object.keys(layouts).map((id) =>
+        asset(id, id.startsWith('pdf') ? 'pdf' : 'image')
+      )
+      const store = {
+        collections: { findById: vi.fn().mockResolvedValue(collection) },
+        items: { findByCollection: vi.fn().mockResolvedValue([item]) },
+        assets: { findByItem: vi.fn().mockResolvedValue(assets) },
+        notes: { findByItem: vi.fn().mockResolvedValue([]) },
+        extractions: {
+          findByAsset: vi.fn().mockImplementation(async (assetId: string) => ({
+            id: `e-${assetId}`,
+            assetId,
+            textContent: `Texto de ${assetId}`,
+            method: 'glm_ocr',
+            confidence: null,
+            createdAt: 7,
+          })),
+        },
+        annotations: { findByAsset: vi.fn().mockResolvedValue([]) },
+        transcriptions: { findByAsset: vi.fn().mockResolvedValue(null) },
+        layouts: {
+          findByAsset: vi.fn().mockImplementation(async (assetId: string) => layouts[assetId]),
+        },
+      }
+
+      await exportCollectionById(asExportStore(store), 'c1')
+
+      const writtenBytes = vi.mocked(writeFile).mock.calls[0]![1] as Uint8Array
+      const parsed = JSON.parse(new TextDecoder().decode(writtenBytes))
+      return Object.fromEntries(
+        (parsed.items[0].assets as Array<{ id: string; layout: unknown; text: string }>).map(
+          (exported) => [exported.id, exported]
+        )
+      )
+    }
+
+    it('keeps a layout that belongs to the current file', async () => {
+      const exported = await exportWith(
+        { stamped: layout('stamped', 'aaa'), old: layout('old', null) },
+        {
+          stamped: async () => ({ ...sameFile, sha256: 'aaa' }),
+          old: async () => ({ ...sameFile, sha256: null }),
+        }
+      )
+
+      expect(exported.stamped!.layout).toEqual(layout('stamped', 'aaa'))
+      expect(exported.old!.layout).toEqual(layout('old', null))
+    })
+
+    it('omits a layout computed on another version and exports the rest as before', async () => {
+      const exported = await exportWith(
+        { edited: layout('edited', 'before-the-crop'), resized: layout('resized', null) },
+        {
+          edited: async () => ({ ...sameFile, sha256: 'after-the-crop' }),
+          resized: async () => ({ orientation: 1, width: 3456, height: 4608, sha256: null }),
+        }
+      )
+
+      expect(exported.edited!.layout).toBeNull()
+      expect(exported.edited!.text).toBe('Texto de edited')
+      expect(exported.resized!.layout).toBeNull()
+      expect(exported.resized!.text).toBe('Texto de resized')
+    })
+
+    it('hashes a file only when its layout carries a hash to compare with', async () => {
+      await exportWith(
+        { stamped: layout('stamped', 'aaa'), old: layout('old', null) },
+        {
+          stamped: async () => ({ ...sameFile, sha256: 'aaa' }),
+          old: async () => ({ ...sameFile, sha256: null }),
+        }
+      )
+
+      expect(assetFileFactsMock).toHaveBeenCalledWith('stamped', { withSha: true })
+      expect(assetFileFactsMock).toHaveBeenCalledWith('old', { withSha: false })
+      expect(assetFileFactsMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('never reads the file of a PDF asset and always keeps its layout', async () => {
+      const exported = await exportWith({ 'pdf-1': layout('pdf-1', 'aaa') }, {})
+
+      expect(exported['pdf-1']!.layout).toEqual(layout('pdf-1', 'aaa'))
+      expect(assetFileFactsMock).not.toHaveBeenCalled()
+    })
+
+    it('omits a layout nobody can vouch for when the file cannot be read', async () => {
+      const exported = await exportWith(
+        { gone: layout('gone', null) },
+        {
+          gone: async () => {
+            throw new Error('Failed to read assets/c1/i1/gone.jpg')
+          },
+        }
+      )
+
+      expect(exported.gone!.layout).toBeNull()
+      expect(exported.gone!.text).toBe('Texto de gone')
+    })
   })
 
   it('exports audio asset with transcription text', async () => {

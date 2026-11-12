@@ -14,6 +14,9 @@ pub(crate) mod derived_transport;
 #[cfg(test)]
 mod derived_transport_tests;
 pub mod engine;
+pub(crate) mod entity_aliases;
+#[cfg(test)]
+mod entity_aliases_tests;
 pub mod http;
 pub mod pull;
 pub mod push;
@@ -79,7 +82,7 @@ pub(crate) fn open_sync_connection(db_path: &std::path::Path) -> Result<Connecti
         .map_err(|e| format!("[sync] failed to open sync connection: {e}"))
 }
 
-/// Ensures the sync schema and the 54 capture triggers on a fresh connection.
+/// Ensures the sync schema and the 57 capture triggers on a fresh connection.
 /// Shared by the Tauri command and the Rust `setup()` bootstrap so both paths
 /// run identical logic.
 pub fn ensure_capture_on_path(db_path: &std::path::Path) -> Result<(), String> {

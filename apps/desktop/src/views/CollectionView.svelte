@@ -5,7 +5,7 @@
   import { workspace } from '$lib/workspace'
   import { resolveDropPaneId } from '$lib/pane-drop-target'
   import { currentPaneRects } from '$lib/pane-rects'
-  import { locale, t } from '$lib/i18n'
+  import { locale, t, type I18nKey } from '$lib/i18n'
   import { pickFiles } from '$lib/file-import'
   import { getAssetUrl, generateImageThumbnail, generatePdfThumbnail } from '$lib/file-import'
   import {
@@ -16,6 +16,11 @@
     type ImportStage,
   } from '$lib/collection-import'
   import { exportCollectionById } from '$lib/export'
+  import {
+    CollectionOcrExportEmptyError,
+    exportCollectionOcrText,
+    type CollectionOcrExportFormat,
+  } from '$lib/collection-ocr-export'
   import { getAssetPathLabel } from '$lib/item-metadata'
   import {
     DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT,
@@ -54,6 +59,7 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview'
   import { listen } from '@tauri-apps/api/event'
+  import { AssetRepo } from '@entropia/store'
   import type { Item, Asset, CollectionItemCardSummary, CollectionStats } from '@entropia/store'
   import type { CollectionAnalysisRestore } from '$lib/relation-graph-view-state'
 
@@ -68,6 +74,16 @@
   let error = $state<string | null>(null)
   let importing = $state(false)
   let exporting = $state(false)
+  let textExportMenuOpen = $state(false)
+  let textExportContainerEl = $state<HTMLDivElement | null>(null)
+  const textExportMenuId = `collection-text-export-${Math.random().toString(36).slice(2)}`
+  const TEXT_EXPORT_FORMATS: Array<{ format: CollectionOcrExportFormat; label: I18nKey }> = [
+    { format: 'txt', label: 'collection.ocrExport.txt' },
+    { format: 'markdown', label: 'collection.ocrExport.markdown' },
+    { format: 'pdf', label: 'collection.ocrExport.pdf' },
+    { format: 'docx', label: 'collection.ocrExport.docx' },
+    { format: 'csv', label: 'collection.ocrExport.csv' },
+  ]
   let showIaDialog = $state(false)
   type ImportSummary = {
     imported: number
@@ -393,10 +409,6 @@
       try {
         const assets: Asset[] = await store.assets.findByItem(itemId)
         if (requestId !== itemAssetsLoadRequestId) return
-        // Generated PDF page images are not independent collection assets. A
-        // parent PDF remains the deletion target even though its children are
-        // also image assets.
-        const rootAssets = assets.filter((asset) => !asset.parentAssetId)
         // The asset count reflects viewable assets (pages/leaves). A parent that
         // owns page children is a container, not a counted asset — its children
         // are. Standalone assets (no children) count themselves.
@@ -411,10 +423,14 @@
         const pdfPageCount = leafAssets.filter((a) => a.type === 'pdf').length
         const imageCount = leafAssets.filter((a) => a.type === 'image').length
         const audioCount = leafAssets.filter((a) => a.type === 'audio').length
-        const imageAsset = rootAssets.find((a) => a.type === 'image')
+        // Same rule as the card summary query and the viewer's opening asset.
+        // It is always a root asset: generated PDF page images are not
+        // independent collection assets.
+        const primaryAsset = AssetRepo.primaryOf(assets)
+        const imageAsset = primaryAsset?.type === 'image' ? primaryAsset : undefined
         // A PDF card shows its first page; ItemCard keeps the PDF icon until the
         // thumbnail arrives, or for good when Pdfium cannot render it.
-        const pdfAsset = rootAssets.find((a) => a.type === 'pdf')
+        const pdfAsset = primaryAsset?.type === 'pdf' ? primaryAsset : undefined
 
         let thumbnailUrl: string | null = null
         let primaryAssetType: string | null = null
@@ -432,7 +448,7 @@
           })
           primaryAssetType = pdfAsset.type
         } else {
-          const thumbAsset = rootAssets[0]
+          const thumbAsset = primaryAsset
           const isAudio = thumbAsset?.type === 'audio'
           thumbnailUrl = !isAudio && thumbAsset ? getAssetUrl(thumbAsset.path) : null
           primaryAssetType = thumbAsset?.type ?? null
@@ -444,8 +460,8 @@
           imageCount,
           audioCount,
           thumbnailUrl,
-          primaryAssetId: imageAsset?.id ?? pdfAsset?.id ?? rootAssets[0]?.id ?? null,
-          primaryAssetPath: imageAsset?.path ?? pdfAsset?.path ?? rootAssets[0]?.path ?? null,
+          primaryAssetId: primaryAsset?.id ?? null,
+          primaryAssetPath: primaryAsset?.path ?? null,
           primaryAssetType,
         })
       } catch (e) {
@@ -848,6 +864,33 @@
     }
   }
 
+  async function handleExportText(format: CollectionOcrExportFormat) {
+    textExportMenuOpen = false
+    try {
+      exporting = true
+      error = null
+      await exportCollectionOcrText(getStore(), collectionId, format)
+    } catch (e) {
+      error =
+        e instanceof CollectionOcrExportEmptyError
+          ? t('collection.ocrExport.empty')
+          : t('collection.ocrExport.error')
+    } finally {
+      exporting = false
+    }
+  }
+
+  function handleTextExportWindowKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && textExportMenuOpen) textExportMenuOpen = false
+  }
+
+  function handleTextExportWindowPointerdown(event: PointerEvent) {
+    const target = event.target
+    if (textExportMenuOpen && target instanceof Node && !textExportContainerEl?.contains(target)) {
+      textExportMenuOpen = false
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Asset deletion flow
   // ---------------------------------------------------------------------------
@@ -1056,6 +1099,11 @@
   })
 </script>
 
+<svelte:window
+  onkeydown={handleTextExportWindowKeydown}
+  onpointerdown={handleTextExportWindowPointerdown}
+/>
+
 <div
   class="collection-shell"
   bind:this={collectionShellEl}
@@ -1120,6 +1168,40 @@
         >
           <ActionIcon name="export" size={20} />
         </Button>
+        <div class="collection-text-export" bind:this={textExportContainerEl}>
+          <Button
+            variant="secondary"
+            iconOnly
+            aria-label={$currentLocale && t('collection.ocrExport.trigger')}
+            title={$currentLocale && t('collection.ocrExport.trigger')}
+            aria-haspopup="menu"
+            aria-expanded={textExportMenuOpen ? 'true' : 'false'}
+            aria-controls={textExportMenuOpen ? textExportMenuId : undefined}
+            onclick={() => (textExportMenuOpen = !textExportMenuOpen)}
+            disabled={exporting}
+          >
+            <ActionIcon name="file-text" size={20} />
+          </Button>
+          {#if textExportMenuOpen}
+            <div
+              id={textExportMenuId}
+              class="collection-text-export__menu"
+              role="menu"
+              aria-label={$currentLocale && t('collection.ocrExport.trigger')}
+            >
+              {#each TEXT_EXPORT_FORMATS as option (option.format)}
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={exporting}
+                  onclick={() => void handleExportText(option.format)}
+                >
+                  {$currentLocale && t(option.label)}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
       </div>
     </section>
 
@@ -1476,6 +1558,56 @@
     align-items: center;
     justify-content: flex-end;
     flex: 1;
+  }
+
+  .collection-text-export {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .collection-text-export__menu {
+    position: absolute;
+    z-index: 5;
+    top: calc(100% + var(--space-1));
+    right: 0;
+    display: grid;
+    min-width: 13rem;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    border: 1px solid var(--border-panel);
+    border-radius: var(--radius-dialog);
+    background: color-mix(in srgb, var(--color-surface-elevated) 96%, var(--color-bg));
+    box-shadow: var(--shadow-lg);
+  }
+
+  .collection-text-export__menu button {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-radius: var(--radius-xs);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+
+  .collection-text-export__menu button:hover:not(:disabled),
+  .collection-text-export__menu button:focus-visible {
+    background: var(--color-accent-faint);
+    color: var(--color-text-primary);
+  }
+
+  .collection-text-export__menu button:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .collection-text-export__menu button:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
   }
 
   .collection-view__pipeline {

@@ -18,10 +18,17 @@
 //! The GLM-OCR call runs with the database released; the write re-checks that
 //! the block still has the geometry the user edited, so a layout that changed
 //! meanwhile (a re-OCR finished) is never overwritten with a stale index.
+//!
+//! A layout of an image that was computed on another version of the file is
+//! refused before anything is cut: its boxes are in the other file's
+//! coordinates, and the write below would stamp it as belonging to this one.
 
 use super::glm_ocr::{GlmOcrClient, GlmOcrResponse};
 use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
+use crate::derived_source::{
+    layout_version, AssetFileFacts, LayoutSource, LayoutVersion, SourceStamp,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
@@ -428,18 +435,52 @@ fn crop_to_png(
 // ── Command ─────────────────────────────────────────────────────────────────
 
 struct LoadedBlock {
+    /// `assets.path` as the row held it when the block was loaded.
+    stored_path: String,
     asset_path: String,
     asset_type: String,
     page: i64,
+    /// The space the block's box is in: the block's own size when it records
+    /// one, the row's otherwise.
     layout_w: f64,
     layout_h: f64,
+    /// `layouts.image_width`, `image_height` and `source_sha256`: what the row
+    /// says about the file it was computed from.
+    layout_row_width: i64,
+    layout_row_height: i64,
+    layout_sha256: Option<String>,
     api_key: String,
+}
+
+/// The layout was computed on another file than the one the asset shows now:
+/// its boxes are in that file's coordinates, and a box cut from the current
+/// one would land somewhere else.
+const LAYOUT_FROM_OTHER_VERSION: &str =
+    "El layout corresponde a otra versión de la imagen; volvé a correr el layout antes de corregir cajas.";
+
+/// Refuses a layout that does not belong to the file that was just read. The
+/// rule is the one every reader of a layout applies:
+/// [`crate::derived_source::layout_version`].
+fn ensure_layout_of_current_file(
+    loaded: &LoadedBlock,
+    facts: &AssetFileFacts,
+) -> Result<(), String> {
+    let layout = LayoutSource {
+        source_sha256: loaded.layout_sha256.as_deref(),
+        image_width: loaded.layout_row_width,
+        image_height: loaded.layout_row_height,
+    };
+    match layout_version(&loaded.asset_type, &layout, Some(facts)) {
+        LayoutVersion::Matches => Ok(()),
+        LayoutVersion::OtherVersion => Err(LAYOUT_FROM_OTHER_VERSION.to_string()),
+    }
 }
 
 fn load_block(
     db: &AppDbState,
     request: &LayoutBlockReocrRequest,
 ) -> Result<(LoadedBlock, String), String> {
+    // An empty key is refused by `cut_block`, after the version check.
     let api_key = crate::settings::read_settings_unlocked(
         &db.ui_conn,
         &[super::OCRH_SETTING_GLM_OCR_API_KEY],
@@ -451,12 +492,6 @@ fn load_block(
     .unwrap_or_default()
     .trim()
     .to_string();
-    if api_key.is_empty() {
-        return Err(
-            "GLM-OCR no está configurado. Andá a Configuración > OCRH y cargá una API key para reconocer cajas del layout."
-                .to_string(),
-        );
-    }
 
     let conn = db
         .ui_conn
@@ -469,11 +504,16 @@ fn load_block(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|e| format!("No encontré el asset {}: {e}", request.asset_id))?;
-    let (blocks_json, layout_w, layout_h): (String, i64, i64) = conn
+    let (blocks_json, layout_row_width, layout_row_height, layout_sha256): (
+        String,
+        i64,
+        i64,
+        Option<String>,
+    ) = conn
         .query_row(
-            "SELECT blocks, image_width, image_height FROM layouts WHERE asset_id = ?1",
+            "SELECT blocks, image_width, image_height, source_sha256 FROM layouts WHERE asset_id = ?1",
             [&request.asset_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(|e| format!("El asset no tiene layout guardado: {e}"))?;
     drop(conn);
@@ -483,19 +523,41 @@ fn load_block(
         .get(request.block_index)
         .ok_or_else(|| "El bloque de layout ya no existe; recargá el layout.".to_string())?;
     ensure_expected_bbox(block, &request.expected_bbox)?;
-    let layout_w = int_field(block, "image_width").unwrap_or(layout_w) as f64;
-    let layout_h = int_field(block, "image_height").unwrap_or(layout_h) as f64;
+    let layout_w = int_field(block, "image_width").unwrap_or(layout_row_width) as f64;
+    let layout_h = int_field(block, "image_height").unwrap_or(layout_row_height) as f64;
     Ok((
         LoadedBlock {
+            stored_path: stored_path.clone(),
             asset_path: String::new(),
             asset_type,
             page: page_of(block),
             layout_w,
             layout_h,
+            layout_row_width,
+            layout_row_height,
+            layout_sha256,
             api_key,
         },
         stored_path,
     ))
+}
+
+const GLM_KEY_MISSING: &str =
+    "GLM-OCR no está configurado. Andá a Configuración > OCRH y cargá una API key para reconocer cajas del layout.";
+
+/// The PNG of the box to send to GLM-OCR, and the stamp of the file it was
+/// cut from. A layout of another version is refused before a missing key, so
+/// the person learns what is wrong with the layout even without a key.
+fn cut_block(
+    loaded: &LoadedBlock,
+    bbox: &LayoutBoxInput,
+) -> Result<(Vec<u8>, SourceStamp), String> {
+    let (page, source) = render_page(loaded)?;
+    if loaded.api_key.is_empty() {
+        return Err(GLM_KEY_MISSING.to_string());
+    }
+    let png = crop_to_png(&page, bbox, loaded.layout_w, loaded.layout_h)?;
+    Ok((png, source))
 }
 
 fn ensure_expected_bbox(block: &Value, expected: &LayoutBoxInput) -> Result<(), String> {
@@ -508,18 +570,44 @@ fn ensure_expected_bbox(block: &Value, expected: &LayoutBoxInput) -> Result<(), 
     }
 }
 
-fn render_page(loaded: &LoadedBlock) -> Result<image::DynamicImage, String> {
+/// The page the box is cut from, and the stamp of the file it was read from.
+/// The stamp is taken over the bytes as read, before anything decodes them.
+///
+/// This is the only place the file is read, and it refuses a layout that was
+/// computed on another file ([`ensure_layout_of_current_file`]): nothing is
+/// sent to GLM-OCR and nothing is written for such a block. The check is made
+/// on the bytes the box would be cut from, not on a second read of the path.
+fn render_page(loaded: &LoadedBlock) -> Result<(image::DynamicImage, SourceStamp), String> {
     let bytes = std::fs::read(&loaded.asset_path)
         .map_err(|e| format!("Failed to read {}: {e}", loaded.asset_path))?;
-    if loaded.asset_type == "pdf" || bytes.starts_with(b"%PDF-") {
+    let source = SourceStamp::of(&loaded.stored_path, &bytes);
+    let is_pdf = loaded.asset_type == "pdf" || bytes.starts_with(b"%PDF-");
+    let page = if is_pdf {
         let page_index = usize::try_from(loaded.page - 1).unwrap_or(0);
-        super::pdf::render_pdf_page_to_unrotated_image(&bytes, page_index)
+        super::pdf::render_pdf_page_to_unrotated_image(&bytes, page_index)?
     } else {
-        image::load_from_memory(&bytes).map_err(|e| format!("No pude abrir la imagen: {e}"))
-    }
+        // Upright, as the viewer draws it: the layout box is in that system.
+        crate::image_orient::decode_oriented_bytes(&bytes)
+            .map_err(|e| format!("No pude abrir la imagen: {e}"))?
+    };
+    // The same facts `derived_source::file_facts` reports for this file: a PDF
+    // has no orientation and no pixel size, whatever its asset row says.
+    let facts = AssetFileFacts {
+        orientation: if is_pdf {
+            1
+        } else {
+            crate::image_orient::exif_orientation_bytes(&bytes)
+        },
+        width: (!is_pdf).then(|| page.width()),
+        height: (!is_pdf).then(|| page.height()),
+        sha256: Some(source.sha256.clone()),
+    };
+    ensure_layout_of_current_file(loaded, &facts)?;
+    Ok((page, source))
 }
 
-/// Writes the new layout and extraction text in one transaction.
+/// Writes the new layout and extraction text in one transaction. Both rows
+/// take `source`, the stamp of the file the box was cut from.
 fn persist_edit(
     db: &AppDbState,
     request: &LayoutBlockReocrRequest,
@@ -527,6 +615,7 @@ fn persist_edit(
     block_content: &str,
     text_piece: &str,
     detected_label: Option<&str>,
+    source: &SourceStamp,
 ) -> Result<LayoutBlockReocrResult, String> {
     let conn = db
         .ui_conn
@@ -596,11 +685,18 @@ fn persist_edit(
     let regions_json = serde_json::to_string(&regions)
         .map_err(|e| format!("Failed to serialize layout regions: {e}"))?;
     tx.execute(
-        "UPDATE layouts SET blocks = ?1, regions = ?2 WHERE asset_id = ?3",
-        rusqlite::params![blocks_json, regions_json, request.asset_id],
+        "UPDATE layouts SET blocks = ?1, regions = ?2, source_path = ?3, source_sha256 = ?4
+         WHERE asset_id = ?5",
+        rusqlite::params![
+            blocks_json,
+            regions_json,
+            source.path,
+            source.sha256,
+            request.asset_id
+        ],
     )
     .map_err(|e| format!("Failed to update layout: {e}"))?;
-    super::update_extraction_text(&tx, &request.asset_id, &text_content)?;
+    super::replace_extraction_text(&tx, &request.asset_id, &text_content, Some(source))?;
     crate::asset_history::record_best_effort(
         &tx,
         &crate::asset_history::ProcessEvent::new(
@@ -659,13 +755,12 @@ pub async fn reocr_layout_block(
         if loaded.asset_type == "pdf" {
             super::pdf::init_pdfium_path(&render_app);
         }
-        let page = render_page(&loaded)?;
-        let png = crop_to_png(&page, &bbox, loaded.layout_w, loaded.layout_h)?;
-        Ok::<_, String>((png, loaded.api_key))
+        let (png, source) = cut_block(&loaded, &bbox)?;
+        Ok::<_, String>((png, loaded.api_key, source))
     })
     .await
     .map_err(|e| format!("Layout crop task failed: {e}"))?;
-    let (png, api_key) = crop_png?;
+    let (png, api_key, source) = crop_png?;
 
     let payload = super::encode_bytes_for_glm_ocr(&png)?;
     let response = GlmOcrClient::new(api_key).parse_file(&payload).await?;
@@ -682,6 +777,7 @@ pub async fn reocr_layout_block(
             &block_content,
             &text_piece,
             detected_label.as_deref(),
+            &source,
         )
     })
     .await
@@ -897,5 +993,251 @@ mod tests {
         let png = crop_to_png(&page, &bx(10.0, 10.0, 100.0, 8.0), 400.0, 400.0).expect("png");
         let decoded = image::load_from_memory(&png).expect("decode");
         assert!(decoded.height() >= MIN_CROP_SIDE_PX);
+    }
+
+    #[test]
+    fn the_crop_of_a_camera_photo_is_cut_from_the_upright_image() {
+        use crate::image_orient::test_support::{camera_jpeg, close_to, upright_quadrants, RED};
+
+        // What the person sees is 400×200, and so is the layout space. The
+        // file holds it sideways (200×400) with orientation 6. The layout was
+        // computed on this very file, so it carries its hash.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let photo = camera_jpeg(&upright_quadrants(400, 200), 6);
+        let path = dir.path().join("photo.jpg");
+        std::fs::write(&path, &photo).expect("fixture");
+        let loaded = LoadedBlock {
+            stored_path: "assets/c1/photo_v3.jpg".to_string(),
+            layout_sha256: Some(crate::asset_history::sha256_hex(&photo)),
+            ..image_block(&path, 400, 200)
+        };
+
+        let (page, source) = render_page(&loaded).expect("page");
+        // The stamp is the file on disk, whatever was done to decode it.
+        assert_eq!(source.path, "assets/c1/photo_v3.jpg");
+        assert_eq!(
+            source.sha256,
+            crate::sync::blobs::hash_file(&path).expect("hash").0
+        );
+        // A box well inside the top-left quadrant, which is red.
+        let png = crop_to_png(&page, &bx(20.0, 20.0, 100.0, 50.0), 400.0, 200.0).expect("png");
+
+        let crop = image::load_from_memory(&png).expect("decode").to_rgb8();
+        let centre = *crop.get_pixel(crop.width() / 2, crop.height() / 2);
+        assert!(
+            close_to(centre, RED),
+            "the crop shows {centre:?}, expected the red quadrant"
+        );
+        assert_eq!((page.width(), page.height()), (400, 200));
+    }
+
+    /// A block of an image asset whose layout row says `width × height` and
+    /// carries no stamp.
+    fn image_block(path: &std::path::Path, width: i64, height: i64) -> LoadedBlock {
+        LoadedBlock {
+            stored_path: "assets/c1/photo.jpg".to_string(),
+            asset_path: path.to_string_lossy().into_owned(),
+            asset_type: "image".to_string(),
+            page: 1,
+            layout_w: width as f64,
+            layout_h: height as f64,
+            layout_row_width: width,
+            layout_row_height: height,
+            layout_sha256: None,
+            api_key: String::new(),
+        }
+    }
+
+    fn write_fixture(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).expect("fixture");
+        path
+    }
+
+    #[test]
+    fn a_block_of_a_layout_from_another_version_is_refused_before_anything_is_cut() {
+        use crate::image_orient::test_support::{camera_jpeg, encode_jpeg, upright_quadrants};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scan = encode_jpeg(upright_quadrants(400, 200));
+        let scan_path = write_fixture(&dir, "scan.jpg", &scan);
+        let photo_path = write_fixture(
+            &dir,
+            "photo.jpg",
+            &camera_jpeg(&upright_quadrants(400, 200), 6),
+        );
+
+        let refused = |loaded: LoadedBlock, why: &str| {
+            let error = render_page(&loaded).err().unwrap_or_else(|| {
+                panic!("{why}: the block was accepted");
+            });
+            assert_eq!(error, LAYOUT_FROM_OTHER_VERSION, "{why}");
+        };
+
+        refused(
+            LoadedBlock {
+                layout_sha256: Some("the hash of the file before the crop".to_string()),
+                ..image_block(&scan_path, 400, 200)
+            },
+            "stamped with another hash, same size",
+        );
+        refused(
+            image_block(&scan_path, 747, 1169),
+            "no stamp, the file has another size",
+        );
+        refused(
+            image_block(&photo_path, 400, 200),
+            "no stamp on a tagged photo: computed in the sideways system",
+        );
+    }
+
+    /// Without a GLM key, a layout of another version is still reported as
+    /// such: the key only matters once there is a box worth sending.
+    #[test]
+    fn the_version_is_checked_before_the_glm_key() {
+        use crate::image_orient::test_support::{encode_jpeg, upright_quadrants};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scan_path = write_fixture(&dir, "scan.jpg", &encode_jpeg(upright_quadrants(400, 200)));
+        let whole = bx(0.0, 0.0, 200.0, 100.0);
+
+        let other_version = cut_block(&image_block(&scan_path, 747, 1169), &whole);
+        assert_eq!(
+            other_version.err().as_deref(),
+            Some(LAYOUT_FROM_OTHER_VERSION)
+        );
+
+        let no_key = cut_block(&image_block(&scan_path, 400, 200), &whole);
+        assert_eq!(no_key.err().as_deref(), Some(GLM_KEY_MISSING));
+
+        let (png, _) = cut_block(
+            &LoadedBlock {
+                api_key: "key".to_string(),
+                ..image_block(&scan_path, 400, 200)
+            },
+            &whole,
+        )
+        .expect("a block of the current file, with a key");
+        assert!(png.starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn a_block_of_a_layout_of_the_current_file_is_cut() {
+        use crate::image_orient::test_support::{encode_jpeg, upright_quadrants};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scan = encode_jpeg(upright_quadrants(400, 200));
+        let scan_path = write_fixture(&dir, "scan.jpg", &scan);
+
+        // A row from before the stamps, on an untagged file of the same size.
+        let (page, _) = render_page(&image_block(&scan_path, 400, 200)).expect("unstamped");
+        assert_eq!((page.width(), page.height()), (400, 200));
+
+        // A stamped row, whatever size it recorded: the hash decides.
+        render_page(&LoadedBlock {
+            layout_sha256: Some(crate::asset_history::sha256_hex(&scan)),
+            ..image_block(&scan_path, 747, 1169)
+        })
+        .expect("stamped with the hash of the file");
+    }
+
+    #[test]
+    fn a_pdf_asset_is_never_refused_by_the_version_check() {
+        // Facts that agree with nothing in the row.
+        let facts = AssetFileFacts {
+            orientation: 6,
+            width: Some(1),
+            height: Some(1),
+            sha256: Some("another file".to_string()),
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf = LoadedBlock {
+            asset_type: "pdf".to_string(),
+            layout_sha256: Some("the stamp".to_string()),
+            ..image_block(&dir.path().join("acta.pdf"), 595, 842)
+        };
+
+        assert_eq!(ensure_layout_of_current_file(&pdf, &facts), Ok(()));
+        assert_eq!(
+            ensure_layout_of_current_file(
+                &LoadedBlock {
+                    asset_type: "image".to_string(),
+                    ..pdf
+                },
+                &facts
+            ),
+            Err(LAYOUT_FROM_OTHER_VERSION.to_string())
+        );
+    }
+
+    #[test]
+    fn a_block_re_ocr_stamps_the_layout_and_the_text_with_the_file_it_read() {
+        use crate::sync::test_support::new_synced_test_db;
+
+        let conn = new_synced_test_db();
+        let blocks = serde_json::to_string(&vec![
+            block(1, 1, "Uno.", (10, 10, 100, 50)),
+            block(1, 2, "Dos cortado", (10, 80, 100, 50)),
+        ])
+        .expect("blocks");
+        conn.execute_batch(
+            "INSERT INTO collections(id,name,created_at,updated_at) VALUES('c1','C',1,1);
+             INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','I','c1',1,1);
+             INSERT INTO assets(id,item_id,path,type,created_at)
+             VALUES('a1','i1','assets/c1/photo_v4.jpg','image',1);
+             INSERT INTO extractions(id,asset_id,text_content,method,created_at,source_path,source_sha256)
+             VALUES('ext-a1','a1','Uno.\n\nDos cortado','glm_ocr',1,'assets/c1/photo_v3.jpg','old-sha');",
+        )
+        .expect("seed");
+        conn.execute(
+            "INSERT INTO layouts(id,asset_id,regions,blocks,model,image_width,image_height,created_at,source_path,source_sha256)
+             VALUES('lay-a1','a1','[]',?1,'glm_ocr',1000,2000,1,'assets/c1/photo_v3.jpg','old-sha')",
+            [&blocks],
+        )
+        .expect("seed layout");
+        let db = AppDbState::new(
+            conn,
+            rusqlite::Connection::open_in_memory().expect("worker conn"),
+            std::path::PathBuf::new(),
+        );
+        let request = LayoutBlockReocrRequest {
+            asset_id: "a1".to_string(),
+            block_index: 1,
+            expected_bbox: bx(10.0, 80.0, 100.0, 50.0),
+            bbox: bx(10.0, 80.0, 100.0, 120.0),
+            mode: LayoutBlockEditMode::Replace,
+            current_text: "Uno.\n\nDos cortado".to_string(),
+        };
+        let read = SourceStamp::of("assets/c1/photo_v4.jpg", b"the file the box was cut from");
+
+        let result = persist_edit(
+            &db,
+            &request,
+            &request.bbox,
+            "Dos cortado y su final.",
+            "Dos cortado y su final.",
+            Some("text"),
+            &read,
+        )
+        .expect("persist");
+
+        assert_eq!(result.text_content, "Uno.\n\nDos cortado y su final.");
+        let conn = db.ui_conn.lock().expect("conn");
+        for table in ["layouts", "extractions"] {
+            let stored: (Option<String>, Option<String>) = conn
+                .query_row(
+                    &format!(
+                        "SELECT source_path, source_sha256 FROM {table} WHERE asset_id = 'a1'"
+                    ),
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("stamp");
+            assert_eq!(
+                stored,
+                (Some(read.path.clone()), Some(read.sha256.clone())),
+                "{table}"
+            );
+        }
     }
 }

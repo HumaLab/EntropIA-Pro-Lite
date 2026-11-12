@@ -9,7 +9,7 @@ export default defineConfig({
   },
   build: {
     lib: {
-      entry: resolve(__dirname, 'src/index.ts'),
+      entry: resolve(import.meta.dirname, 'src/index.ts'),
       formats: ['es'],
       fileName: 'index',
     },
@@ -18,7 +18,7 @@ export default defineConfig({
     // the package "exports", so its size never reaches a user. The limit sits
     // just above today's bundle so further bloat still warns.
     chunkSizeWarningLimit: 2600,
-    rollupOptions: {
+    rolldownOptions: {
       external: ['svelte', 'svelte/internal'],
     },
   },

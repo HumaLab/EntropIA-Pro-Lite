@@ -3509,3 +3509,69 @@ ALTER TABLE triples ADD COLUMN evidence_end INTEGER CHECK(evidence_end IS NULL O
 -- second runMigrations() pass skips it. Do not apply this file twice by hand.
 
 ALTER TABLE collections ADD COLUMN ai_context TEXT;
+
+-- 0064_derived_source_path
+-- 0064_derived_source_path: the file a layout or an extraction was computed from.
+--
+-- source_path:   relative path (assets/...) of the file the row was computed
+--                from. An image asset changes file on every edit (crop,
+--                rotate, erase, undo), so this names the version the layout
+--                boxes or the text belong to.
+-- source_sha256: sha256 of the raw bytes of that file as read from disk,
+--                before any EXIF orientation is applied. The hash decides
+--                whether a row matches the file on screen. The path explains.
+--
+-- NULL on both means the origin is unknown: every row from before this
+-- migration, and any row a writer does not stamp. There is no backfill,
+-- because SQL cannot read a file.
+--
+-- Additive only: two nullable columns on each of two synced tables, no table
+-- rebuild. Sync carries every column of the row, so the first push from a
+-- device with this migration raises the account schema_tag. Devices that have
+-- not updated drop the unknown columns on apply and journal the drift.
+--
+-- ALTER TABLE ... ADD COLUMN has no IF NOT EXISTS form in SQLite. Like 0062
+-- and 0063, this runs through the single-batch path with its _migrations row,
+-- so a second runMigrations() pass skips it. Do not apply this file twice by
+-- hand.
+
+ALTER TABLE layouts ADD COLUMN source_path TEXT;
+ALTER TABLE layouts ADD COLUMN source_sha256 TEXT;
+ALTER TABLE extractions ADD COLUMN source_path TEXT;
+ALTER TABLE extractions ADD COLUMN source_sha256 TEXT;
+
+-- 0065_entity_aliases
+-- 0065_entity_aliases: the owner's global alias list for entity surface forms.
+--
+-- alias_key: the normalized surface form (trimmed, whitespace collapsed,
+--            lowercased — the same normalization as normalize_entity_value in
+--            src-tauri/src/nlp/ner/mod.rs and the relation-graph key in
+--            apps/desktop/src/lib/relation-graph.ts). UNIQUE: one canonical
+--            per surface form, archive-wide.
+-- alias:     the form as the owner typed it (kept verbatim for display).
+-- canonical: the name the alias resolves to at read time (T2). Resolution is
+--            single-hop: nothing rewrites entities rows (S2), so changing an
+--            alias is one UPDATE here.
+--
+-- Global on purpose (S1): no collection column. The alias list is curated by
+-- the owner (S6): upserts that would silently merge (empty values, alias equal
+-- to canonical, chains) are rejected by EntityAliasRepo, not by the schema.
+--
+-- Additive only: one new table, no change to any existing table. Sync does
+-- NOT carry this table yet (T4): the desktop must not sync it until
+-- EntropIA-Cloud accepts it, so the first push from a device with this
+-- migration raises the account schema_tag. Devices that have not updated drop
+-- the unknown table on apply and journal the drift.
+--
+-- Runs through the single-batch path with its _migrations row (same as 0062,
+-- 0063 and 0064), so a second runMigrations() pass skips it. Do not apply
+-- this file twice by hand.
+
+CREATE TABLE IF NOT EXISTS entity_aliases (
+  id TEXT PRIMARY KEY,
+  alias_key TEXT NOT NULL UNIQUE,
+  alias TEXT NOT NULL,
+  canonical TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);

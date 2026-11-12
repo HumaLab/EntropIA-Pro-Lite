@@ -150,6 +150,10 @@ export const extractions = sqliteTable('extractions', {
   method: text('method').notNull(), // 'native' | 'ocr'
   confidence: real('confidence'),
   createdAt: integer('created_at').notNull(),
+  /** Relative path of the file this text was computed from (0064); NULL: unknown. */
+  sourcePath: text('source_path'),
+  /** sha256 of that file's raw bytes (0064); NULL: unknown. */
+  sourceSha256: text('source_sha256'),
 })
 
 // ---------------------------------------------------------------------------
@@ -166,6 +170,10 @@ export const layouts = sqliteTable('layouts', {
   imageWidth: integer('image_width').notNull(),
   imageHeight: integer('image_height').notNull(),
   createdAt: integer('created_at').notNull(),
+  /** Relative path of the file this layout was computed from (0064); NULL: unknown. */
+  sourcePath: text('source_path'),
+  /** sha256 of that file's raw bytes (0064); NULL: unknown. */
+  sourceSha256: text('source_sha256'),
 })
 
 // ---------------------------------------------------------------------------
@@ -1526,6 +1534,24 @@ export const assetProcessEvents = sqliteTable(
     assetIdx: index('idx_asset_process_events_asset').on(table.assetId, table.createdAt),
   })
 )
+
+// ---------------------------------------------------------------------------
+// Entity aliases — the owner's global alias list (migration 0065, T1).
+// One row maps a normalized surface form (alias_key) to the canonical name
+// the app shows at read time (T2). Global on purpose (S1): no collection
+// column. Entities rows are never rewritten (S2); resolution is single-hop.
+// ---------------------------------------------------------------------------
+export const entityAliases = sqliteTable('entity_aliases', {
+  id: text('id').primaryKey(),
+  /** Normalized surface form (trimmed, whitespace collapsed, lowercased). */
+  aliasKey: text('alias_key').notNull().unique(),
+  /** The form as the owner typed it (kept verbatim for display). */
+  alias: text('alias').notNull(),
+  /** The canonical name this alias resolves to at read time. */
+  canonical: text('canonical').notNull(),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+})
 
 /** Web API pull cursor and shared pause of one library for one Web account. */
 export const zoteroAnnotationSyncState = sqliteTable(

@@ -1,6 +1,8 @@
 # Research: readable message when a batch's model output is unusable
 
-**Status:** pending, not started. Requested by the owner 2026-11-05, after a
+**Status:** done (2026-11-10): the engine fixed the root cause on 2026-11-05/06
+and the desktop now words the remaining warnings plainly; see «Resolution».
+Requested by the owner 2026-11-05, after a
 real run on another PC ("Variantes en el nombre de Carmela", model
 `anthropic/claude-haiku-5.5`, collection of 323 indexed items).
 
@@ -75,3 +77,41 @@ part of the evidence is missing.
 - Same treatment for the other roles that can fall back to default
   (`prospeccion`, verifier, etc.).
 - hlab-platform parity if it shows the same report.
+
+## Resolution (2026-11-10)
+
+Checked against EntropIA-Agent `441bc269` (the revision the desktop pins, same as
+its `main`) and the desktop `main`.
+
+Already done in the engine, shipped in desktop 1.5.0 (pin `29929f5d`, 2026-11-06):
+
+- `ce6268b7`: a failed archive batch is retried with 48, 24 and 12 KB inputs (one
+  `archive_retry` event per failed attempt). If no size closes it, the job pauses
+  with a `research_error` naming the batch and its documents, and resuming retries
+  that same batch. A batch is no longer recorded without claims and skipped, so
+  the false-negative risk is gone, and the string `salida de archivo no parseable;
+  lote registrado sin claims` no longer exists. Covers point 2.
+- `aa3bd98b`: output cap of 16384 tokens and `finish_reason` exposed, so a cut-off
+  answer is told apart from a malformed one. Covers point 6.
+- `20a03793`: each failed archive attempt leaves one `role_warning` (`el lote de
+  archivo necesitó reintentos con lotes más chicos`); the engine aggregates role
+  warnings by role and error with a `times` count.
+- The desktop already showed the pause (`research_error`) and the retries
+  (`archive_retry`) in `InvestigationView.svelte`.
+
+Done in the desktop on branch `fix/research-readable-degradations` (points 1, 3,
+4 and 5, for every role, as the owner decided on 2026-11-10):
+
+- `lib/research-degradations.ts` turns each role warning into one line: the
+  step's plain name instead of its id (es and en; an unknown role gets a generic
+  name, and a role id quoted inside the engine text is replaced too). An
+  unreadable or cut-off answer says what it means for the report and what to
+  try; a retried archive batch says the documents were still read.
+- A cut-off answer points to the fix the person controls: raise the «Tope de
+  salida» (`max_tokens_salida`, 1024 to 131072) in Configuración › Agente,
+  quoting the cap the engine reports, or use a model that allows longer answers.
+- The raw engine error of an unreadable or cut-off answer goes into a folded
+  «Detalle técnico»; the «Degradación del pipeline:» prefix is gone.
+- Lines are deduplicated by their final message.
+
+Still open, not part of this task: hlab-platform parity.

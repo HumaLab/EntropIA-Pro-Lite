@@ -319,8 +319,13 @@ impl OpenRouterImage {
             ));
         }
 
-        let bytes = std::fs::read(path)
+        let raw = std::fs::read(path)
             .map_err(|error| format!("Failed to read OCR correction image: {error}"))?;
+        // The model must see the photo the way the person does: upright. Only
+        // an image carrying an orientation tag is re-encoded; `raw` is the
+        // file as it is on disk.
+        let bytes = crate::image_orient::oriented_bytes(raw)
+            .map_err(|error| format!("Failed to orient OCR correction image: {error}"))?;
         Self::from_bytes(&bytes)
     }
 
@@ -1157,6 +1162,37 @@ mod tests {
             OpenRouterImage::from_file(outside.path().to_string_lossy().as_ref(), app_data.path())
                 .unwrap_err();
         assert!(error.contains("outside the allowed directory"));
+    }
+
+    fn payload_of(image: &OpenRouterImage) -> Vec<u8> {
+        let (_, base64) = image.data_url.split_once(";base64,").expect("data url");
+        BASE64_STANDARD.decode(base64).expect("base64 payload")
+    }
+
+    #[test]
+    fn sends_a_camera_photo_upright_and_an_untagged_image_as_stored() {
+        use crate::image_orient::test_support::{
+            assert_upright_quadrants, camera_jpeg, encode_jpeg, upright_quadrants,
+        };
+        let app_data = tempfile::tempdir().unwrap();
+
+        let photo_path = app_data.path().join("photo.jpg");
+        let photo = camera_jpeg(&upright_quadrants(64, 32), 6);
+        std::fs::write(&photo_path, &photo).unwrap();
+        let image = OpenRouterImage::from_validated_file(&photo_path).unwrap();
+        assert_eq!(image.mime_type(), "image/jpeg");
+        let sent = payload_of(&image);
+        assert_eq!(crate::image_orient::exif_orientation_bytes(&sent), 1);
+        let decoded = image::load_from_memory(&sent).unwrap();
+        assert_upright_quadrants(&decoded, 64, 32, "LLM image, orientation 6");
+        // The file itself is never rewritten.
+        assert_eq!(std::fs::read(&photo_path).unwrap(), photo);
+
+        let scan_path = app_data.path().join("scan.jpg");
+        let scan = encode_jpeg(upright_quadrants(64, 32));
+        std::fs::write(&scan_path, &scan).unwrap();
+        let image = OpenRouterImage::from_validated_file(&scan_path).unwrap();
+        assert_eq!(payload_of(&image), scan);
     }
 
     #[test]

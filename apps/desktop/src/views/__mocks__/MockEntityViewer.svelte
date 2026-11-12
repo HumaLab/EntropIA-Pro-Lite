@@ -9,6 +9,8 @@
     labels,
     onentityclick = () => {},
     onhighlight = () => {},
+    onaliasentity = () => {},
+    resolveAlias = (value: string) => value,
     oneditvaluechange = () => {},
     onsaveentity = () => {},
     oncancelentityedit = () => {},
@@ -26,6 +28,7 @@
 
 <div data-testid="mock-entity-viewer">
   {#each entities as entity (entity.id)}
+    {@const canonical = resolveAlias(entity.value)}
     {#if editingEntityId === entity.id}
       <div data-testid={`mock-entity-editing-${entity.id}`}>
         <input
@@ -51,7 +54,18 @@
           onentityclick(entity)
         }}
       >
-        {entity.value}
+        {canonical}
+        {#if canonical !== entity.value}
+          <span data-testid={`mock-entity-original-${entity.id}`}>{entity.value}</span>
+        {/if}
+      </button>
+      <button
+        type="button"
+        aria-label={`Same as ${entity.value}`}
+        data-testid={`mock-entity-alias-${entity.id}`}
+        onclick={() => onaliasentity(entity)}
+      >
+        same-as
       </button>
       <button
         type="button"

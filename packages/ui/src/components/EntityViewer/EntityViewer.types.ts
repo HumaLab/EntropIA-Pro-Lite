@@ -23,6 +23,19 @@ export interface EntityViewerProps {
   creatableTypes?: EntityType[]
   newEntityType?: EntityType
   newEntityValue?: string
+  /**
+   * Read-time canonical name for a mention (entity aliases, T2): when it
+   * returns a different name, the pill shows the canonical name with the
+   * original surface form as secondary text. Omitted means current
+   * rendering, exactly as before.
+   */
+  resolveAlias?: (value: string) => string
+  /**
+   * Alias action for a mention (entity aliases, T3, S8): "Es la misma
+   * persona que…" next to the existing mention actions. Omitted means no
+   * alias action, exactly as before.
+   */
+  onaliasentity?: (entity: Entity) => void
   onhighlight?: (detail: { startOffset: number; endOffset: number }) => void
   onentityclick?: (entity: Entity) => void
   oneditvaluechange?: (value: string) => void
@@ -51,6 +64,8 @@ export interface EntityViewerLabels {
   deleteEntityTitle: string
   confirmDeleteEntityTitle: string
   deletePrompt: string
+  aliasEntityAria: (value: string) => string
+  aliasEntityTitle: string
   addEntity: string
   newEntityTypeAria: string
   newEntityValueAria: string

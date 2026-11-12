@@ -72,6 +72,10 @@ export interface AssetLayout {
   imageWidth: number
   imageHeight: number
   createdAt: number
+  /** Relative path of the file the layout was computed from; null: unknown. */
+  sourcePath: string | null
+  /** sha256 of that file's raw bytes; null: unknown. */
+  sourceSha256: string | null
 }
 
 /**

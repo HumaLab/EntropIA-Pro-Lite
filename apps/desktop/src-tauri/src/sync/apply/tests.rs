@@ -210,6 +210,57 @@ fn unknown_column_is_dropped_and_drift_journaled_once() {
 }
 
 // --------------------------------------------------------------------------
+// Source columns of a derived row (0064) are applied, not dropped as drift
+// --------------------------------------------------------------------------
+
+#[test]
+fn pulled_layout_keeps_its_source_columns_without_drift() {
+    let conn = capturing_db();
+    seed_collection(&conn);
+    let dir = tmp_app_dir();
+    let mut ctx = ApplyContext::new(dir.path());
+    conn.execute_batch(
+        "INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1);
+         INSERT INTO assets(id,item_id,path,type,created_at) VALUES('a1','i1','assets/a_v3.jpg','image',1);
+         DELETE FROM sync_oplog;",
+    )
+    .unwrap();
+
+    let row = upsert_row(
+        "layouts",
+        "lay-a1",
+        30,
+        json!({
+            "id":"lay-a1","asset_id":"a1","regions":"[]","blocks":"[]","model":"glm_ocr",
+            "image_width":30,"image_height":40,"created_at":1,
+            "source_path":"assets/a_v3.jpg","source_sha256":"abc"
+        }),
+    );
+    let outcome = apply_page(&conn, &mut ctx, std::slice::from_ref(&row), 30).expect("apply");
+    assert_eq!(outcome.applied, 1);
+
+    let source: (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT source_path, source_sha256 FROM layouts WHERE id='lay-a1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        source,
+        (Some("assets/a_v3.jpg".to_string()), Some("abc".to_string()))
+    );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_conflicts WHERE reason='schema_drift'"
+        ),
+        0,
+        "a known column is not drift"
+    );
+}
+
+// --------------------------------------------------------------------------
 // Missing column preserved on UPDATE
 // --------------------------------------------------------------------------
 

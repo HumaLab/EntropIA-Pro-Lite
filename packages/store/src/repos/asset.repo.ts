@@ -42,6 +42,30 @@ function orderAssetsForDisplay(rows: Asset[]): Asset[] {
   })
 }
 
+/** A card prefers a picture, then a PDF, then whatever else the item holds. */
+function primaryTypeRank(type: string): number {
+  if (type === 'image') return 0
+  if (type === 'pdf') return 1
+  return 2
+}
+
+/**
+ * Whether `a` is a better primary asset than `b`.
+ *
+ * This is the `ORDER BY` of the primary-asset subquery in `item.repo.ts`
+ * (`CARD_SUMMARY_SOURCE_SQL`), term by term. `item.repo.test.ts` runs both over
+ * the same rows; change one and the other must follow.
+ */
+function isBetterPrimary(a: Asset, b: Asset): boolean {
+  const byType = primaryTypeRank(a.type) - primaryTypeRank(b.type)
+  if (byType !== 0) return byType < 0
+  const bySortIndex = (a.sortIndex ?? 0) - (b.sortIndex ?? 0)
+  if (bySortIndex !== 0) return bySortIndex < 0
+  const byCreatedAt = (a.createdAt ?? 0) - (b.createdAt ?? 0)
+  if (byCreatedAt !== 0) return byCreatedAt < 0
+  return a.id < b.id
+}
+
 function isAssetOrderSnapshotConflict(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -54,6 +78,22 @@ export class AssetRepo {
     private db: DrizzleClient,
     private rawClient?: DbClient
   ) {}
+
+  /**
+   * The asset a collection card shows for an item, picked from that item's
+   * assets: the same one the card summary query picks in SQL.
+   *
+   * It is always a root asset, so for a split PDF it is the container. A
+   * viewer that hides containers opens that container's first page.
+   */
+  static primaryOf(assets: Asset[]): Asset | null {
+    let primary: Asset | null = null
+    for (const asset of assets) {
+      if (asset.parentAssetId) continue
+      if (!primary || isBetterPrimary(asset, primary)) primary = asset
+    }
+    return primary
+  }
 
   async create(data: Omit<NewAsset, 'id' | 'createdAt'>): Promise<Asset> {
     const createdAsset: Asset = {
@@ -403,7 +443,8 @@ export class AssetRepo {
       ])
     } catch (e) {
       throw new Error(
-        `Failed to delete asset cascade for ${id}: ${e instanceof Error ? e.message : String(e)}`
+        `Failed to delete asset cascade for ${id}: ${e instanceof Error ? e.message : String(e)}`,
+        { cause: e }
       )
     }
 

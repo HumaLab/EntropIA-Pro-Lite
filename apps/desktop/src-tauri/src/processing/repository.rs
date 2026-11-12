@@ -5108,6 +5108,22 @@ fn validate_corpus_claim_input(
     }
 }
 
+/// Whether an OCR task must read past a PDF's text layer and run the engine.
+///
+/// True while some active request for it asked for that: a batch with
+/// "Incluir texto nativo", or an OCR the person started on the document (a
+/// page whose text is native would otherwise come back unchanged, #250).
+pub(crate) fn ocr_task_includes_native(conn: &Connection, task_id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM processing_batch_tasks l JOIN processing_batches b ON b.id=l.batch_id \
+         WHERE l.task_id=?1 AND l.request_state='active' AND (b.origin='manual' \
+         OR EXISTS(SELECT 1 FROM json_each(b.operations) op WHERE op.value=?2)))",
+        rusqlite::params![task_id, super::commands::OCR_INCLUDE_NATIVE],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("Failed to read OCR intent: {e}"))
+}
+
 fn mark_skipped(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), String> {
     in_savepoint(conn, || {
         conn.execute(
@@ -8062,10 +8078,44 @@ mod tests {
         assert_eq!(class_a2, "already_done");
         let mut claimed = Vec::new();
         while let Some(task) = claim_next(&conn, "s", &["ocr"], 1).expect("claim") {
+            // The engine is told to read past the PDF's text layer (#250).
+            assert!(
+                ocr_task_includes_native(&conn, &task.task_id).unwrap(),
+                "{}",
+                task.asset_id
+            );
             claimed.push(task.asset_id);
         }
         claimed.sort();
         assert_eq!(claimed, vec!["a1", "a4", "a5p1"]);
+    }
+
+    #[test]
+    fn a_batch_without_native_text_lets_the_engine_keep_the_text_layer() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let task = claim_next(&conn, "s", &["ocr"], 1)
+            .expect("claim")
+            .expect("one OCR task");
+        assert!(!ocr_task_includes_native(&conn, &task.task_id).unwrap());
+    }
+
+    #[test]
+    fn an_ocr_the_person_asks_for_reads_past_the_text_layer() {
+        let (_dir, conn) = batch_db();
+        let manual = ensure_system_batch(&conn, "manual").unwrap();
+        let admitted =
+            admit_or_attach(&conn, &manual, "ocr", "a4", 0, "", "ocr:high", None).unwrap();
+        assert!(ocr_task_includes_native(&conn, &admitted.task_id).unwrap());
+        // A request that was withdrawn no longer counts.
+        conn.execute(
+            "UPDATE processing_batch_tasks SET request_state='cancelled' WHERE task_id=?1",
+            [&admitted.task_id],
+        )
+        .unwrap();
+        assert!(!ocr_task_includes_native(&conn, &admitted.task_id).unwrap());
     }
 
     #[test]

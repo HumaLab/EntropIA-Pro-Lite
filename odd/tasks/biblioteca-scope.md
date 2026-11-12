@@ -44,13 +44,13 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
 - [x] B4 — Research chat scope: Corpus / Biblioteca / both, with cited Zotero
   passages. Route: delegated writer (single writer on main). Commits b4e2fe6
   (backend) and 1dc2113 (UI). See the 2026-10-03 B4 progress entry.
-- [ ] B5 — Passages in "Obras" and a top-level "Biblioteca" section.
+- [x] B5 — Passages in "Obras" and a top-level "Biblioteca" section.
   - [x] B5a — Passages in Writing's "Obras" tab (route: delegated writer, single
     writer on main).
-  - [ ] B5b — Top-level "Biblioteca" section (awaits the owner; NOT part of B5a).
-- [ ] B6 — Investigación can use the Biblioteca (cross-repo `entropia-agent`).
+  - [x] B5b — Top-level "Biblioteca" section (awaits the owner; NOT part of B5a).
+- [x] B6 — Investigación can use the Biblioteca (cross-repo `entropia-agent`).
 
-- [ ] B7 — First sync of a large library must be usable early and show its progress (owner,
+- [x] B7 — First sync of a large library must be usable early and show its progress (owner,
   2026-10-03). Measured: profile embeddings were 80 of 82 busy minutes, one request at a
   time. B7a (running, branch perf/bibliography-embeddings): batched embedding requests +
   3-4 bounded concurrent requests with 429/Retry-After backoff; skip already-embedded chunks.
@@ -308,3 +308,4 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   `RagChatView` tests (63) stayed green through the extraction. Existing tab
   tests were re-pointed from a blanket mock to per-command routing (the tab now
   calls two commands).
+- 2026-11-10: B5b done (`0ae3f74d` top-level Biblioteca section, 2026-10-05) so B5 (B5a already checked) is closed; B6 done (`ef06a1e3` research searches the Biblioteca + `1d1ea222` engine pin, 2026-10-06); B7 done (`4094bbf4` + `cb97af08` batched embeddings with bounded concurrency/429 backoff and vector reuse = B7a; `54414a9d` profiles-first with live progress + ETA = B7b; `f6116997` page-based ETA = B7c). Subjects verified against `git log --oneline`.

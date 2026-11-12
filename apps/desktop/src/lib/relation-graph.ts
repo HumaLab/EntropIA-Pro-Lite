@@ -5,6 +5,16 @@
  */
 
 import { normalizeGraphSettings, type GraphStructureSettings } from './analysis-settings'
+import type { EntityAliasResolver } from './entity-aliases'
+
+/**
+ * Read-time canonicalization of a triple endpoint (entity aliases, T2): the
+ * canonical name when the value has an alias, the value itself otherwise.
+ * The default keeps every name as written, so existing callers behave
+ * exactly as before; the views pass the store-backed resolver from
+ * `./entity-aliases`. Pure: never reads the store.
+ */
+const identityAlias: EntityAliasResolver = (value) => value
 
 export interface RelationTriple {
   subject: string
@@ -63,7 +73,8 @@ const relationKeyOf = (source: string, predicate: string, target: string) =>
 export function buildRelationGraph(
   triples: readonly RelationTriple[],
   options: number | Partial<GraphStructureSettings> = MAX_GRAPH_NODES,
-  expanded: readonly string[] = []
+  expanded: readonly string[] = [],
+  resolveAlias: EntityAliasResolver = identityAlias
 ): RelationGraph {
   const settings = normalizeGraphSettings({
     structure: typeof options === 'number' ? { maxEntities: options } : options,
@@ -78,13 +89,17 @@ export function buildRelationGraph(
   const nodeRelations = new Map<string, string[]>()
 
   for (const triple of triples) {
-    const source = key(triple.subject)
-    const target = key(triple.object)
+    // Endpoints resolve through the alias list before grouping (S3): alias
+    // forms of one person share the canonical node; weights and mention
+    // counts add up. The label is the canonical name, whatever form came
+    // first; names without an alias keep the first-seen surface form.
+    const source = key(resolveAlias(triple.subject))
+    const target = key(resolveAlias(triple.object))
     // Count mentions per role and input occurrence, even for a self-reference.
     if (source) asSubject.set(source, (asSubject.get(source) ?? 0) + 1)
     if (target) asObject.set(target, (asObject.get(target) ?? 0) + 1)
-    if (source && !labels.has(source)) labels.set(source, triple.subject.trim())
-    if (target && !labels.has(target)) labels.set(target, triple.object.trim())
+    if (source && !labels.has(source)) labels.set(source, resolveAlias(triple.subject).trim())
+    if (target && !labels.has(target)) labels.set(target, resolveAlias(triple.object).trim())
     // Empty and self pairs name an entity but never make a link.
     if (!source || !target || source === target) continue
 
@@ -225,13 +240,17 @@ export interface NodeDetails {
 
 /** What the 3D view shows when a node is clicked: its relations and the
  *  documents they were read from. */
-export function describeNode(id: string, triples: readonly RelationTriple[]): NodeDetails {
+export function describeNode(
+  id: string,
+  triples: readonly RelationTriple[],
+  resolveAlias: EntityAliasResolver = identityAlias
+): NodeDetails {
   const relations: NodeRelation[] = []
   const seen = new Map<string, NodeRelation>()
   const itemIds: string[] = []
   for (const triple of triples) {
-    const source = key(triple.subject)
-    const target = key(triple.object)
+    const source = key(resolveAlias(triple.subject))
+    const target = key(resolveAlias(triple.object))
     if (source === target || (source !== id && target !== id)) continue
     const relationKey = relationKeyOf(source, triple.predicate, target)
     const known = seen.get(relationKey)
@@ -268,13 +287,14 @@ export function linkLabelText(link: GraphLink): string {
  */
 export function splitRelations(
   relations: readonly NodeRelation[],
-  graph: Pick<RelationGraph, 'links'>
+  graph: Pick<RelationGraph, 'links'>,
+  resolveAlias: EntityAliasResolver = identityAlias
 ): { shown: NodeRelation[]; hidden: NodeRelation[] } {
   const drawn = new Set(graph.links.map((link) => `${link.source}\u0000${link.target}`))
   const shown: NodeRelation[] = []
   const hidden: NodeRelation[] = []
   for (const relation of relations) {
-    const pair = `${key(relation.subject)}\u0000${key(relation.object)}`
+    const pair = `${key(resolveAlias(relation.subject))}\u0000${key(resolveAlias(relation.object))}`
     ;(drawn.has(pair) ? shown : hidden).push(relation)
   }
   return { shown, hidden }

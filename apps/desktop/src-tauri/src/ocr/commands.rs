@@ -361,6 +361,26 @@ pub async fn test_glm_ocr_connection(
         .await
 }
 
+/// Read the manual-edit signal of an asset's OCR text without changing it.
+///
+/// A user-requested OCR replaces the text even when it was corrected by hand
+/// (only the automatic one skips it), so the item view asks first.
+#[tauri::command]
+pub async fn extraction_is_edited_by_hand(
+    asset_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<bool, String> {
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock poisoned: {e}"))?;
+        crate::asset_history::text_is_edited_by_hand(&conn, &asset_id)
+    })
+    .await
+}
+
 /// Update the text_content of the latest extraction for an asset.
 ///
 /// This allows users to manually correct OCR output and persist the correction.
@@ -451,15 +471,72 @@ pub async fn generate_pdf_thumbnail(
 /// Longest edge of a generated card thumbnail, in pixels.
 pub const IMAGE_THUMBNAIL_MAX_EDGE: u32 = 400;
 
-/// Cache file name for one asset's thumbnail.
+/// Version of the image thumbnail generator. Raise it whenever the same source
+/// file would now produce a different picture: the version is part of what the
+/// cache key hashes, so every thumbnail made by an older generator stops being
+/// served and is generated again the next time it is asked for.
 ///
-/// The path hash is part of the name so an edited asset, which receives a new
-/// file path, does not reuse the pre-edit thumbnail under the same asset ID.
+/// - 1: the stored pixels, EXIF orientation ignored (never written into the
+///   key: those thumbnails hash the path alone).
+/// - 2: EXIF orientation applied.
+const IMAGE_THUMBNAIL_GENERATOR_VERSION: u32 = 2;
+
+/// Cache file name for one asset's thumbnail: `image-{asset_id}-{64 hex}.png`.
+///
+/// The hash covers the generator version and the file path. The path is there
+/// so an edited asset, which receives a new file path, does not reuse the
+/// pre-edit thumbnail under the same asset ID. The shape of the name does not
+/// change with the version: the sync cleanup of a deleted asset recognises it
+/// by its 64 hex characters (`sync::asset_files`).
 pub fn image_thumbnail_file_name(asset_id: &str, asset_path: &str) -> String {
     use sha2::{Digest, Sha256};
 
-    let path_hash = Sha256::digest(asset_path.as_bytes());
-    format!("image-{asset_id}-{}.png", hex::encode(path_hash))
+    let mut hasher = Sha256::new();
+    hasher.update(format!("image-thumbnail-v{IMAGE_THUMBNAIL_GENERATOR_VERSION}\n").as_bytes());
+    hasher.update(asset_path.as_bytes());
+    format!("image-{asset_id}-{}.png", hex::encode(hasher.finalize()))
+}
+
+/// True when `name` is a cached image thumbnail of exactly `asset_id`, from
+/// any generator version. The hash must be the whole rest of the name, so
+/// `abc` does not claim the thumbnails of `abc-2`.
+fn is_image_thumbnail_of(name: &str, asset_id: &str) -> bool {
+    name.strip_prefix("image-")
+        .and_then(|rest| rest.strip_prefix(asset_id))
+        .and_then(|rest| rest.strip_prefix('-'))
+        .and_then(|rest| rest.strip_suffix(".png"))
+        .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// Remove the thumbnails of `asset_id` in `thumb_dir` other than `keep`: the
+/// ones an older generator made and the ones of earlier file versions.
+///
+/// Best effort. Whatever cannot be listed or deleted stays as an unused file
+/// and never fails the thumbnail that was just generated.
+fn remove_superseded_image_thumbnails(
+    thumb_dir: &std::path::Path,
+    asset_id: &str,
+    keep: &std::path::Path,
+) {
+    let Ok(entries) = std::fs::read_dir(thumb_dir) else {
+        return;
+    };
+    let keep_name = keep.file_name();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if Some(name.as_os_str()) == keep_name {
+            continue;
+        }
+        if !is_image_thumbnail_of(&name.to_string_lossy(), asset_id) {
+            continue;
+        }
+        if let Err(error) = std::fs::remove_file(entry.path()) {
+            log::warn!(
+                "could not remove a superseded image thumbnail ({}): {error}",
+                entry.path().display()
+            );
+        }
+    }
 }
 
 /// Decode one image, shrink it, and write the PNG thumbnail.
@@ -475,12 +552,12 @@ pub fn render_image_thumbnail(
     use image::ImageFormat;
     use std::io::Cursor;
 
-    let image = image::ImageReader::open(asset_path)
-        .map_err(|e| format!("Failed to open image file: {e}"))?
-        .with_guessed_format()
-        .map_err(|e| format!("Failed to detect image format: {e}"))?
-        .decode()
+    // Upright, as the WebView draws the image itself: a camera photo carries
+    // its rotation in an EXIF tag, not in its pixels.
+    let bytes = std::fs::read(asset_path).map_err(|e| format!("Failed to open image file: {e}"))?;
+    let image = crate::image_orient::decode_oriented_bytes(&bytes)
         .map_err(|e| format!("Failed to decode image file: {e}"))?;
+    drop(bytes);
 
     let thumbnail = image.thumbnail(IMAGE_THUMBNAIL_MAX_EDGE, IMAGE_THUMBNAIL_MAX_EDGE);
     let mut png_data = Vec::new();
@@ -511,20 +588,33 @@ pub async fn generate_image_thumbnail(
     std::fs::create_dir_all(&thumb_dir)
         .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
 
-    let thumb_path = thumb_dir.join(image_thumbnail_file_name(&asset_id, &asset_path));
-
-    if thumb_path.exists() {
-        return Ok(normalize_windows_path_string(&thumb_path));
-    }
-
     let result_path = tokio::task::spawn_blocking(move || {
-        render_image_thumbnail(&asset_path, &thumb_path)?;
+        let thumb_path = cached_or_new_image_thumbnail(&thumb_dir, &asset_id, &asset_path)?;
         Ok::<String, String>(normalize_windows_path_string(&thumb_path))
     })
     .await
     .map_err(|e| format!("Image thumbnail generation task panicked: {e}"))??;
 
     Ok(result_path)
+}
+
+/// The cached thumbnail of `asset_path` under `thumb_dir`, generated first
+/// when the cache does not hold it yet.
+///
+/// A newly generated thumbnail replaces every other one of the asset: those
+/// belong to an older generator or to an earlier version of the file.
+fn cached_or_new_image_thumbnail(
+    thumb_dir: &std::path::Path,
+    asset_id: &str,
+    asset_path: &str,
+) -> Result<std::path::PathBuf, String> {
+    let thumb_path = thumb_dir.join(image_thumbnail_file_name(asset_id, asset_path));
+    if thumb_path.exists() {
+        return Ok(thumb_path);
+    }
+    render_image_thumbnail(asset_path, &thumb_path)?;
+    remove_superseded_image_thumbnails(thumb_dir, asset_id, &thumb_path);
+    Ok(thumb_path)
 }
 
 /// Delete cached image thumbnails for an asset. Best-effort cleanup when assets
@@ -856,6 +946,114 @@ mod tests {
 
         assert!(error.contains("Failed to open image file"), "{error}");
         assert!(!thumb.exists());
+    }
+
+    /// A photo as a camera writes it: 800×400 for the person, stored sideways
+    /// with orientation 6.
+    fn write_camera_photo(path: &std::path::Path) {
+        use crate::image_orient::test_support::{camera_jpeg, upright_quadrants};
+        std::fs::write(path, camera_jpeg(&upright_quadrants(800, 400), 6)).expect("write photo");
+    }
+
+    fn open_thumbnail(path: &std::path::Path) -> image::DynamicImage {
+        image::ImageReader::open(path)
+            .expect("open thumb")
+            .decode()
+            .expect("decode thumb")
+    }
+
+    /// The name the cache gave a thumbnail before the generator version was
+    /// part of the key: the hash of the path alone.
+    fn legacy_thumbnail_file_name(asset_id: &str, asset_path: &str) -> String {
+        use sha2::{Digest, Sha256};
+        format!(
+            "image-{asset_id}-{}.png",
+            hex::encode(Sha256::digest(asset_path.as_bytes()))
+        )
+    }
+
+    #[test]
+    fn the_thumbnail_of_a_camera_photo_is_upright() {
+        use crate::image_orient::test_support::assert_upright_quadrants;
+
+        let dir = tempdir().expect("tempdir");
+        let source = dir.path().join("photo.jpg");
+        let thumb = dir.path().join("thumb.png");
+        write_camera_photo(&source);
+
+        render_image_thumbnail(&source.to_string_lossy(), &thumb).expect("render");
+
+        assert_upright_quadrants(&open_thumbnail(&thumb), 400, 200, "thumbnail");
+    }
+
+    #[test]
+    fn image_thumbnail_name_keeps_the_shape_the_sync_cleanup_matches() {
+        let name = image_thumbnail_file_name("asset-1", "/a/scan.png");
+
+        let hash = name
+            .strip_prefix("image-asset-1-")
+            .and_then(|rest| rest.strip_suffix(".png"))
+            .expect("image-{asset_id}-{hash}.png");
+        assert_eq!(hash.len(), 64, "{name}");
+        assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+    }
+
+    #[test]
+    fn a_thumbnail_cached_by_an_older_generator_is_replaced() {
+        use crate::image_orient::test_support::assert_upright_quadrants;
+
+        let dir = tempdir().expect("tempdir");
+        let thumb_dir = dir.path().join("thumbnails");
+        std::fs::create_dir_all(&thumb_dir).expect("thumb dir");
+        let source = dir.path().join("photo.jpg");
+        write_camera_photo(&source);
+        let source = source.to_string_lossy().into_owned();
+        let old = thumb_dir.join(legacy_thumbnail_file_name("asset-1", &source));
+        std::fs::write(&old, b"sideways thumbnail").expect("old thumbnail");
+
+        let served = cached_or_new_image_thumbnail(&thumb_dir, "asset-1", &source).expect("thumb");
+
+        assert_ne!(served, old);
+        assert!(!old.exists(), "the old thumbnail is left behind");
+        assert_upright_quadrants(&open_thumbnail(&served), 400, 200, "regenerated");
+
+        // The second request is a cache hit: same file, nothing rewritten.
+        std::fs::write(&served, b"marker").expect("mark the cached file");
+        let again = cached_or_new_image_thumbnail(&thumb_dir, "asset-1", &source).expect("thumb");
+        assert_eq!(again, served);
+        assert_eq!(std::fs::read(&again).expect("read"), b"marker");
+    }
+
+    #[test]
+    fn regenerating_a_thumbnail_leaves_other_assets_alone() {
+        let dir = tempdir().expect("tempdir");
+        let thumb_dir = dir.path().join("thumbnails");
+        std::fs::create_dir_all(&thumb_dir).expect("thumb dir");
+        let source = dir.path().join("photo.jpg");
+        write_camera_photo(&source);
+        let source = source.to_string_lossy().into_owned();
+
+        let own_old = thumb_dir.join(legacy_thumbnail_file_name("abc", &source));
+        let kept = [
+            // Ids that only start with this one.
+            thumb_dir.join(image_thumbnail_file_name("abc-2", "/a/other.jpg")),
+            thumb_dir.join(image_thumbnail_file_name("abcd", "/a/other.jpg")),
+            // The PDF thumbnail of the same id, and a name that is not ours.
+            thumb_dir.join("abc.png"),
+            thumb_dir.join("image-abc-notahash.png"),
+        ];
+        std::fs::write(&own_old, b"old").expect("own old");
+        for path in &kept {
+            std::fs::write(path, b"other").expect("other thumbnail");
+        }
+
+        let served = cached_or_new_image_thumbnail(&thumb_dir, "abc", &source).expect("thumb");
+
+        assert!(served.exists());
+        assert!(!own_old.exists());
+        for path in &kept {
+            assert!(path.exists(), "{} was deleted", path.display());
+        }
     }
 
     /// Measures what work unit 0 of the collections pagination plan could not:

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { firstVisibleAsset, visibleAssets } from './asset-visibility'
+import { firstVisibleAsset, openingAssetIndex, visibleAssets } from './asset-visibility'
 
 /**
  * Which of an item's assets a person ever sees.
@@ -72,5 +72,34 @@ describe('the first one someone could open', () => {
     const assets = [page('p1', 'elsewhere'), page('p2', 'elsewhere')]
 
     expect(firstVisibleAsset(assets)?.id).toBe('p1')
+  })
+})
+
+/**
+ * The viewer opens on the asset the collection card shows. The card's asset is
+ * a root one, so for a split PDF it is the container, which is never drawn:
+ * the viewer opens that container's first page instead.
+ */
+describe('where the viewer opens', () => {
+  it('opens on the card asset even when it is not first in the strip', () => {
+    const strip = [container('alpha'), container('zeta')]
+
+    expect(openingAssetIndex(strip, container('zeta'))).toBe(1)
+  })
+
+  it('skips a hidden container and opens its first page', () => {
+    const assets = [container('photo'), container('pdf'), page('p1', 'pdf'), page('p2', 'pdf')]
+    const strip = visibleAssets(assets)
+
+    expect(strip.map((asset) => asset.id)).toEqual(['photo', 'p1', 'p2'])
+    expect(openingAssetIndex(strip, container('pdf'))).toBe(1)
+  })
+
+  it('opens the first asset when the card has none or it is gone', () => {
+    const strip = [container('alpha'), container('zeta')]
+
+    expect(openingAssetIndex(strip, null)).toBe(0)
+    expect(openingAssetIndex(strip, container('deleted'))).toBe(0)
+    expect(openingAssetIndex([], container('deleted'))).toBe(0)
   })
 })

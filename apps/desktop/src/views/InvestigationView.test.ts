@@ -1721,4 +1721,53 @@ describe('InvestigationView reintentos de lote del archivo', () => {
     expect(screen.queryByText('Limitaciones')).not.toBeInTheDocument()
     expect(screen.queryByText(/Degradación del pipeline/)).not.toBeInTheDocument()
   })
+
+  it('explica en palabras claras una respuesta ilegible y pliega el error técnico', async () => {
+    const base = detailPayload()
+    const error = 'Salida inválida de asistente_archivo: la salida no contiene JSON recuperable'
+    invokeMock.mockResolvedValue({
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      events: [],
+      artifacts: [
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            markdown: '# Variantes del nombre\n\nTexto.',
+            report: {
+              title: 'Variantes del nombre',
+              references: [],
+              sections: [{ title: 'Hechos', text: 'Texto.', quotes: [] }],
+            },
+            coverage: { collections: [] },
+            coverage_warning: { sufficient: true },
+            archive_limitations: [{ text: 'Sin actas de 1931' }],
+            role_warnings: [{ role: 'asistente_archivo', error, times: 2 }],
+          },
+        },
+      ],
+    })
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    await waitFor(() => {
+      expect(screen.getByText('Limitaciones')).toBeInTheDocument()
+    })
+    const lista = screen.getByText('Limitaciones').closest('section')!
+    const lineas = lista.querySelectorAll('li')
+    expect(lineas).toHaveLength(2)
+    expect(lineas[0]).toHaveTextContent(/^Sin actas de 1931$/)
+    expect(lineas[1]).toHaveTextContent(
+      'Lectura de documentos: el modelo devolvió una respuesta con un formato que el programa no entiende (2 veces), así que ese paso siguió sin su resultado.'
+    )
+    expect(screen.queryByText(/Degradación del pipeline/)).not.toBeInTheDocument()
+
+    const detalle = lineas[1]!.querySelector('details')!
+    expect(detalle).not.toHaveAttribute('open')
+    expect(detalle.querySelector('summary')).toHaveTextContent('Detalle técnico')
+    expect(detalle.querySelector('code')).toHaveTextContent(error)
+  })
 })

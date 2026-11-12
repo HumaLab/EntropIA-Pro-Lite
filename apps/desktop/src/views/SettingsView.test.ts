@@ -101,6 +101,18 @@ vi.mock('$lib/reranker', () => ({
   rerankerDownloadModel: rerankerDownloadModelMock,
 }))
 
+const { aliasesListMock } = vi.hoisted(() => ({ aliasesListMock: vi.fn() }))
+
+vi.mock('$lib/db', () => ({
+  getStore: () => ({
+    entityAliases: {
+      list: aliasesListMock,
+      upsert: vi.fn(),
+      delete: vi.fn(),
+    },
+  }),
+}))
+
 function applyDefaultSettingsBackend() {
   settingsGetMock.mockImplementation(async (key: string) => {
     if (key === 'openrouter_api_key') return 'sk-or-v1-test-key'
@@ -135,6 +147,7 @@ describe('SettingsView', () => {
     embeddingDownloadModelMock.mockReset().mockResolvedValue('started')
     rerankerOpenModelsDirMock.mockReset().mockResolvedValue(undefined)
     rerankerDownloadModelMock.mockReset().mockResolvedValue('started')
+    aliasesListMock.mockReset().mockResolvedValue([])
     rerankerLocalModelInfoMock.mockReset().mockResolvedValue({
       available: false,
       canAutoDownload: true,
@@ -330,6 +343,39 @@ describe('SettingsView', () => {
     expect(screen.getByTestId('appearance-zoom-level')).toBeInTheDocument()
     // A dropdown like the others: the cards only appear once it is opened.
     expect(screen.getByRole('button', { name: 'Tipografía Académica' })).toBeInTheDocument()
+  })
+
+  it('opens the Aliases tab listing every entity alias', async () => {
+    render(SettingsView)
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Alias' }))
+
+    expect(screen.getByRole('tab', { name: 'Alias' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('heading', { name: 'Alias de entidades' })).toBeInTheDocument()
+    // The tab loads the list itself; an empty archive explains itself.
+    expect(await screen.findByText(/Todavía no hay alias/)).toBeInTheDocument()
+    expect(aliasesListMock).toHaveBeenCalled()
+  })
+
+  it('opens the Mantenimiento tab, in Pro and in Lite, on the image versions review', async () => {
+    render(SettingsView)
+
+    const tabs = (await screen.findAllByRole('tab')).map((tab) => tab.textContent?.trim())
+    // After Copias; Apariencia stays last.
+    expect(tabs.indexOf('Mantenimiento')).toBe(tabs.indexOf('Copias') + 1)
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Mantenimiento' }))
+
+    expect(screen.getByRole('tab', { name: 'Mantenimiento' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(
+      screen.getByRole('heading', { name: 'Revisar versiones de imágenes' })
+    ).toBeInTheDocument()
+    // Opening the tab reviews nothing: the review starts on its button.
+    expect(screen.getByRole('button', { name: 'Revisar' })).toBeInTheDocument()
+    expect(invokeMock).not.toHaveBeenCalledWith('scan_image_version_repairs')
   })
 
   it.runIf(LOCAL_ML)(

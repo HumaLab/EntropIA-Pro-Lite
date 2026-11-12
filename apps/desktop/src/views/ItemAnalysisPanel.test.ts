@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/svelte'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ItemAnalysisPanel from './ItemAnalysisPanel.svelte'
 import itemAnalysisPanelSource from './ItemAnalysisPanel.svelte?raw'
 import type { ItemNlpState } from '$lib/nlp'
@@ -25,6 +25,15 @@ vi.mock('@entropia/ui', async () => {
     await import('../../../../packages/ui/src/components/IconButton/IconButton.svelte')
   ).default
 
+  // The alias dialog is real: these tests prove the mention action opens it
+  // and its save refreshes the list. Only the viewer itself stays mocked.
+  const ActualConfirmDialog = (
+    await import('../../../../packages/ui/src/components/ConfirmDialog/ConfirmDialog.svelte')
+  ).default
+
+  const ActualInput = (await import('../../../../packages/ui/src/components/Input/Input.svelte'))
+    .default
+
   // The real action, for the same reason as the real controls above: these
   // tests read the tooltip off the rendered element, and a stand-in would only
   // prove the stand-in.
@@ -33,8 +42,10 @@ vi.mock('@entropia/ui', async () => {
   return {
     ActionIcon: ActualActionIcon,
     Button: ActualButton,
+    ConfirmDialog: ActualConfirmDialog,
     EntityViewer: MockEntityViewer,
     IconButton: ActualIconButton,
+    Input: ActualInput,
     MapViewer: MockMapViewer,
     StatusBadge: ActualStatusBadge,
     tooltip,
@@ -44,6 +55,39 @@ vi.mock('@entropia/ui', async () => {
 vi.mock('@entropia/ui/components/MapViewer', async () => ({
   MapViewer: (await import('./__mocks__/MockMapViewer.svelte')).default,
 }))
+
+// The entity viewer loads the alias list itself; these tests drive that seam
+// directly: the default is identity, each alias test resolves its own list.
+// The alias dialog writes through the store: upsert saves, list reloads.
+const { loadAliasesMock, aliasUpsertMock, aliasListMock } = vi.hoisted(() => ({
+  loadAliasesMock: vi.fn(),
+  aliasUpsertMock: vi.fn(),
+  aliasListMock: vi.fn(),
+}))
+vi.mock('$lib/entity-aliases', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('$lib/entity-aliases')
+  return { ...actual, loadEntityAliasResolver: loadAliasesMock }
+})
+
+vi.mock('$lib/db', () => ({
+  getStore: () => ({
+    entityAliases: { upsert: aliasUpsertMock, list: aliasListMock },
+  }),
+}))
+
+beforeEach(() => {
+  loadAliasesMock.mockReset()
+  loadAliasesMock.mockResolvedValue((value: string) => value)
+  aliasUpsertMock.mockReset().mockResolvedValue({
+    id: 'a1',
+    aliasKey: 'mdme. cuevas',
+    alias: 'Mdme. Cuevas',
+    canonical: 'Carmela Cuevas',
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  aliasListMock.mockReset().mockResolvedValue([])
+})
 
 const idleNlpState: ItemNlpState = { fts: 'idle', embed: 'idle', ner: 'idle', triples: 'idle' }
 
@@ -550,5 +594,178 @@ describe('ItemAnalysisPanel', () => {
     expect(screen.queryByRole('combobox', { name: 'item.newEntityType' })).not.toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'item.newEntityValue' })).not.toBeInTheDocument()
     expect(itemAnalysisPanelSource).not.toContain('entity-editor__create')
+  })
+})
+
+describe('ItemAnalysisPanel entity aliases (T2)', () => {
+  // Same fixture as S1/S3: "Mdme. Cuevas = Carmela Cuevas".
+  const resolveAlias = (value: string) =>
+    value.trim().replace(/\s+/g, ' ').toLowerCase() === 'mdme. cuevas' ? 'Carmela Cuevas' : value
+
+  const aliasedEntity = {
+    id: 'e1',
+    itemId: 'item-1',
+    entityType: 'person' as const,
+    value: 'Mdme. Cuevas',
+    startOffset: 0,
+    endOffset: 12,
+    confidence: 1,
+    createdAt: 1,
+  }
+
+  it('shows the canonical name with the original form for an aliased mention', async () => {
+    loadAliasesMock.mockResolvedValue(resolveAlias)
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { entities: [aliasedEntity] }))
+
+    expect(await screen.findByText('Carmela Cuevas')).toBeInTheDocument()
+    expect(screen.getByText('Mdme. Cuevas')).toBeInTheDocument()
+  })
+
+  it('renders mentions unchanged when the alias list resolves to identity', () => {
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { entities: [aliasedEntity] }))
+
+    expect(screen.getByText('Mdme. Cuevas')).toBeInTheDocument()
+    expect(screen.queryByText('Carmela Cuevas')).toBeNull()
+  })
+})
+
+describe('ItemAnalysisPanel entity aliases dialog (T3)', () => {
+  const mention = {
+    id: 'e1',
+    itemId: 'item-1',
+    entityType: 'person' as const,
+    value: 'Mdme. Cuevas',
+    startOffset: 0,
+    endOffset: 12,
+    confidence: 1,
+    createdAt: 1,
+  }
+  const otherMention = {
+    id: 'e2',
+    itemId: 'item-1',
+    entityType: 'person' as const,
+    value: 'Carmela Cuevas',
+    startOffset: 20,
+    endOffset: 34,
+    confidence: 1,
+    createdAt: 2,
+  }
+
+  it('opens the alias dialog from a mention with the other values as suggestions', async () => {
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { entities: [mention, otherMention] }))
+
+    await fireEvent.click(screen.getByTestId('mock-entity-alias-e1'))
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    // Prefilled with the mention's surface form as the alias (S2, S6).
+    expect(screen.getByDisplayValue('Mdme. Cuevas')).toBeInTheDocument()
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByRole('button', { name: 'Carmela Cuevas' })).toBeInTheDocument()
+  })
+
+  it('only offers mentions of the same entity type, never the mention itself', async () => {
+    // T6, S9: the owner opened the dialog on a person and was offered places
+    // and organizations. Same-type only, deduplicated, without the mention.
+    const person = {
+      id: 'e1',
+      itemId: 'item-1',
+      entityType: 'person' as const,
+      value: 'Fernando Solá',
+      startOffset: 0,
+      endOffset: 12,
+      confidence: 1,
+      createdAt: 1,
+    }
+    render(
+      ItemAnalysisPanel,
+      makeProps(vi.fn(), {
+        entities: [
+          person,
+          {
+            id: 'e2',
+            itemId: 'item-1',
+            entityType: 'person' as const,
+            value: 'Anselmo Marini',
+            startOffset: 20,
+            endOffset: 34,
+            confidence: 1,
+            createdAt: 2,
+          },
+          {
+            id: 'e3',
+            itemId: 'item-1',
+            entityType: 'person' as const,
+            value: 'Anselmo Marini',
+            startOffset: 40,
+            endOffset: 54,
+            confidence: 1,
+            createdAt: 3,
+          },
+          {
+            id: 'e4',
+            itemId: 'item-1',
+            entityType: 'place' as const,
+            value: 'Buenos Aires',
+            startOffset: 60,
+            endOffset: 72,
+            confidence: 1,
+            createdAt: 4,
+          },
+          {
+            id: 'e5',
+            itemId: 'item-1',
+            entityType: 'organization' as const,
+            value: 'Confederación General del Trabajo',
+            startOffset: 80,
+            endOffset: 114,
+            confidence: 1,
+            createdAt: 5,
+          },
+        ],
+      })
+    )
+
+    await fireEvent.click(screen.getByTestId('mock-entity-alias-e1'))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('button', { name: 'Anselmo Marini' })).toBeInTheDocument()
+    // The duplicate collapses to one suggestion; other types and the
+    // mention itself are never offered.
+    expect(within(dialog).getAllByRole('button', { name: 'Anselmo Marini' })).toHaveLength(1)
+    expect(within(dialog).queryByRole('button', { name: 'Buenos Aires' })).toBeNull()
+    expect(
+      within(dialog).queryByRole('button', { name: 'Confederación General del Trabajo' })
+    ).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Fernando Solá' })).toBeNull()
+  })
+
+  it('saves the alias and shows the canonical name without restarting', async () => {
+    aliasListMock.mockResolvedValue([
+      {
+        id: 'a1',
+        aliasKey: 'mdme. cuevas',
+        alias: 'Mdme. Cuevas',
+        canonical: 'Carmela Cuevas',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ])
+    render(ItemAnalysisPanel, makeProps(vi.fn(), { entities: [mention, otherMention] }))
+
+    await fireEvent.click(screen.getByTestId('mock-entity-alias-e1'))
+    await fireEvent.input(await screen.findByLabelText('Nombre canónico'), {
+      target: { value: 'Carmela Cuevas' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar' }))
+
+    await waitFor(() => {
+      expect(aliasUpsertMock).toHaveBeenCalledWith({
+        alias: 'Mdme. Cuevas',
+        canonical: 'Carmela Cuevas',
+      })
+    })
+    // The shared cache reloaded: the dialog closes and the list resolves.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(await screen.findByTestId('mock-entity-original-e1')).toHaveTextContent('Mdme. Cuevas')
   })
 })
