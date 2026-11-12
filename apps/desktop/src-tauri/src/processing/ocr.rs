@@ -53,6 +53,26 @@ impl OcrComputeOutput {
     }
 }
 
+/// One page served from the PDF's text layer, without running an engine: the
+/// shape the batch path publishes for a usable layer, and the shape the
+/// import path stores at once (S4). One builder so the two can never drift.
+pub(crate) fn native_page_output(text: String, source: SourceStamp) -> OcrComputeOutput {
+    OcrComputeOutput {
+        text,
+        method: "native".to_string(),
+        outcome: "text".to_string(),
+        regions_json: None,
+        blocks_json: None,
+        layout_model: String::new(),
+        image_width: 0,
+        image_height: 0,
+        provider: "native".to_string(),
+        page_count: 1,
+        page_methods: Vec::new(),
+        source: Some(source),
+    }
+}
+
 /// Writes extraction/layout rows for one asset. Runs INSIDE the commit
 /// transaction (ambient, never begins its own) so canonical rows and the
 /// task receipt confirm together. Mirrors the worker's atomic path exactly:
@@ -271,6 +291,10 @@ impl Executor for OcrExecutor {
                         .map(|output| output.read_from(&source))
                 });
             }
+            // A request that included native text wants the engine's reading,
+            // not the text layer back (#250).
+            let include_native =
+                super::repository::ocr_task_includes_native(&self.settings_conn()?, &task.task_id)?;
             let pages = crate::ocr::pdf::split_pdf_to_single_page_bytes(&bytes)?;
             ctx.progress_total(task, pages.len() as i64)?;
             let mut outputs = Vec::with_capacity(pages.len());
@@ -279,22 +303,14 @@ impl Executor for OcrExecutor {
                     return Err("stopped".to_string());
                 }
                 let output = ctx.unit(task, &format!("page:{number}"), || {
-                    if let Ok(text) = crate::ocr::pdf::extract_pdf_text(&page) {
+                    let native = if include_native {
+                        None
+                    } else {
+                        crate::ocr::pdf::extract_pdf_text(&page).ok()
+                    };
+                    if let Some(text) = native {
                         if crate::ocr::pdf::is_quality_text(&text) {
-                            return Ok(OcrComputeOutput {
-                                text,
-                                method: "native".to_string(),
-                                outcome: "text".to_string(),
-                                regions_json: None,
-                                blocks_json: None,
-                                layout_model: String::new(),
-                                image_width: 0,
-                                image_height: 0,
-                                provider: "native".to_string(),
-                                page_count: 1,
-                                page_methods: Vec::new(),
-                                source: Some(source.clone()),
-                            });
+                            return Ok(native_page_output(text, source.clone()));
                         }
                     }
                     self.compute(task, "pdf", &page)
@@ -562,6 +578,7 @@ impl OcrExecutor {
                 asset_id: task.asset_id.clone(),
                 asset_type: asset_type.to_string(),
                 mode: ocr::OcrMode::High,
+                include_native: super::repository::ocr_task_includes_native(&conn, &task.task_id)?,
             };
             let output = tauri::async_runtime::block_on(ocr::process_job(
                 &engines.provider,
@@ -583,6 +600,7 @@ impl OcrExecutor {
             asset_id: task.asset_id.clone(),
             asset_type: asset_type.to_string(),
             mode: ocr::OcrMode::Light,
+            include_native: super::repository::ocr_task_includes_native(&conn, &task.task_id)?,
         };
         // Borrow-check: re-fetch the vl guard as immutable for process_job.
         let vl_guard = engines
