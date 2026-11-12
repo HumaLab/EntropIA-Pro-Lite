@@ -24,9 +24,17 @@ pub fn display_file_name(remote_name: &str, identifier: &str) -> String {
 /// fallback is `PDF` or `Image`.
 pub fn display_file_name_for(remote_name: &str, identifier: &str, extension: &str) -> String {
     let segment = remote_name.rsplit(['/', '\\']).next().unwrap_or("");
-    let stem = strip_known_extension(&sanitize_stem(segment));
+    // PDFs strip only `.pdf`/`.lcpdf`, exactly as before images existed.
+    let strip = |stem: &str| {
+        if extension == "pdf" {
+            strip_pdf_extension(stem)
+        } else {
+            strip_known_extension(stem)
+        }
+    };
+    let stem = strip(&sanitize_stem(segment));
     let stem = if stem.is_empty() {
-        let from_id = strip_known_extension(&sanitize_stem(identifier));
+        let from_id = strip(&sanitize_stem(identifier));
         if from_id.is_empty() {
             if extension == "pdf" { "PDF" } else { "Image" }.to_string()
         } else {
@@ -166,6 +174,13 @@ mod tests {
     #[test]
     fn drops_trailing_dots_and_spaces() {
         assert_eq!(display_file_name("  report... ", "id"), "report.pdf");
+    }
+
+    #[test]
+    fn pdf_names_keep_image_looking_suffixes_as_before() {
+        assert_eq!(display_file_name("scan.tif", "id"), "scan.tif.pdf");
+        assert_eq!(display_file_name("photo.jpg", "id"), "photo.jpg.pdf");
+        assert_eq!(display_file_name("???", "foo.png"), "foo.png.pdf");
     }
 
     #[test]
