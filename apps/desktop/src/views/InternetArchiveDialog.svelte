@@ -1472,7 +1472,9 @@
           aria-expanded={selectionOpen}
           onclick={() => (selectionOpen = !selectionOpen)}
         >
-          {selectionOpen ? t('internetArchive.selection.hide') : t('internetArchive.selection.show')}
+          {selectionOpen
+            ? t('internetArchive.selection.hide')
+            : t('internetArchive.selection.show')}
         </button>
       {/if}
     </div>
@@ -1878,6 +1880,9 @@
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
     cursor: pointer;
+    /* Keep one line and one width, however long the row's metadata is. */
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .ia-results__action:hover {
