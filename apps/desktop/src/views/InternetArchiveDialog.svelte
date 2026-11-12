@@ -68,10 +68,14 @@
     onImported?: (collectionId: string) => void
   } = $props()
 
-  type Phase = 'discover' | 'item' | 'destination' | 'summary' | 'running' | 'done'
+  type Phase = 'discover' | 'destination' | 'summary' | 'running' | 'done'
   type DiscoverTab = 'search' | 'collection' | 'link'
 
-  const ROWS = 10
+  /** Page sizes offered; Advanced Search answers 100 rows as fast as 10. */
+  const PAGE_SIZES = [25, 50, 100] as const
+  type PageSize = (typeof PAGE_SIZES)[number]
+  /** Advanced Search refuses `page * rows` past this offset (deep paging). */
+  const MAX_RESULT_OFFSET = 10_000
   const NEW_COLLECTION = '__new__'
   /** The synced-volume estimate above which the summary warns (plan §5). */
   const SYNC_WARN_BYTES = 1024 ** 3
@@ -98,6 +102,7 @@
   let phase = $state<Phase>('discover')
   let discoverTab = $state<DiscoverTab>('search')
   let problem = $state<string | null>(null)
+  let rows = $state<PageSize>(50)
 
   // Discovery: search tab.
   let searchText = $state('')
@@ -119,7 +124,7 @@
   let linkInput = $state('')
   let resolving = $state(false)
 
-  // Item phase.
+  // Item shown beside the results (master-detail).
   let itemIdentifier = $state('')
   let itemDetails = $state<IaItemDetails | null>(null)
   let itemLoading = $state(false)
@@ -128,6 +133,7 @@
 
   // Selection accumulated across items.
   let selection = $state<Array<{ identifier: string; fileName: string; title: string }>>([])
+  let selectionOpen = $state(false)
 
   // Destination phase.
   let collections = $state<Collection[]>([])
@@ -333,8 +339,17 @@
     return numberFormatter.format(value)
   }
 
+  /** Reachable pages: never past the deep-paging offset, whatever numFound says. */
   function totalPages(numFound: number): number {
-    return Math.max(1, Math.ceil(numFound / ROWS))
+    const reachable = Math.floor(MAX_RESULT_OFFSET / rows)
+    return Math.max(1, Math.min(Math.ceil(numFound / rows), reachable))
+  }
+
+  function setPageSize(size: PageSize): void {
+    if (size === rows) return
+    rows = size
+    if (discoverTab === 'search' && searchResult) void submitSearch(1)
+    else if (discoverTab === 'collection' && collectionResult) void submitCollection(1)
   }
 
   function parseYear(raw: string): number | undefined {
@@ -389,7 +404,7 @@
           textsOnly: true,
         },
         page,
-        ROWS
+        rows
       )
     } catch (reason) {
       problem = describeError(reason)
@@ -409,7 +424,7 @@
     problem = null
     try {
       collectionPage = page
-      collectionResult = await iaListCollection(identifier, page, ROWS)
+      collectionResult = await iaListCollection(identifier, page, rows)
     } catch (reason) {
       problem = describeError(reason)
     } finally {
@@ -438,7 +453,6 @@
 
   async function openItem(identifier: string): Promise<void> {
     const request = ++itemRequest
-    phase = 'item'
     problem = null
     itemLoading = true
     itemDetails = null
@@ -460,7 +474,8 @@
     collectionInput = identifier
     collectionPage = 1
     collectionResult = null
-    phase = 'discover'
+    itemIdentifier = ''
+    itemDetails = null
     problem = null
     void submitCollection(1)
   }
@@ -764,7 +779,7 @@
   }
 
   function handleDialogConfirm(): void {
-    if (phase === 'discover' || phase === 'item') {
+    if (phase === 'discover') {
       goDestination()
     } else if (phase === 'destination') {
       void prepare()
@@ -788,7 +803,7 @@
   )
 
   const confirmDisabled = $derived(
-    phase === 'discover' || phase === 'item'
+    phase === 'discover'
       ? selection.length === 0
       : phase === 'destination'
         ? !validDestination || collectionsLoading
@@ -854,6 +869,7 @@
 {#if open}
   <ConfirmDialog
     title={t('internetArchive.title')}
+    size="wide"
     titleId="internet-archive-dialog-title"
     cancelLabel={$currentLocale && cancelLabel}
     {cancelDisabled}
@@ -923,13 +939,13 @@
 
       {#if discoverTab === 'search'}
         <form
-          class="ia-form"
+          class="ia-form ia-form--inline"
           onsubmit={(event) => {
             event.preventDefault()
             void submitSearch(1)
           }}
         >
-          <label class="ia-field">
+          <label class="ia-field ia-field--grow">
             <span class="ia-field__label">{t('internetArchive.search.text')}</span>
             <input type="text" class="ia-field__input" bind:value={searchText} />
           </label>
@@ -941,108 +957,43 @@
             <span class="ia-field__label">{t('internetArchive.search.creator')}</span>
             <input type="text" class="ia-field__input" bind:value={searchCreator} />
           </label>
-          <div class="ia-form__row">
-            <label class="ia-field">
-              <span class="ia-field__label number-field-label"
-                >{t('internetArchive.search.yearFrom')}</span
-              >
-              <NumberField
-                min="0"
-                max="9999"
-                bind:value={searchFrom}
-                decrementLabel={t('numberField.decrease')}
-                incrementLabel={t('numberField.increase')}
-              />
-            </label>
-            <label class="ia-field">
-              <span class="ia-field__label number-field-label"
-                >{t('internetArchive.search.yearTo')}</span
-              >
-              <NumberField
-                min="0"
-                max="9999"
-                bind:value={searchTo}
-                decrementLabel={t('numberField.decrease')}
-                incrementLabel={t('numberField.increase')}
-              />
-            </label>
-          </div>
+          <label class="ia-field ia-field--year">
+            <span class="ia-field__label number-field-label"
+              >{t('internetArchive.search.yearFrom')}</span
+            >
+            <NumberField
+              min="0"
+              max="9999"
+              bind:value={searchFrom}
+              decrementLabel={t('numberField.decrease')}
+              incrementLabel={t('numberField.increase')}
+            />
+          </label>
+          <label class="ia-field ia-field--year">
+            <span class="ia-field__label number-field-label"
+              >{t('internetArchive.search.yearTo')}</span
+            >
+            <NumberField
+              min="0"
+              max="9999"
+              bind:value={searchTo}
+              decrementLabel={t('numberField.decrease')}
+              incrementLabel={t('numberField.increase')}
+            />
+          </label>
           <button type="submit" class="ia-submit" disabled={searching}>
             {searching ? t('internetArchive.search.searching') : t('internetArchive.search.submit')}
           </button>
         </form>
-        {#if searching && !searchResult}
-          <p class="ia-status" role="status" aria-live="polite">
-            {t('internetArchive.search.searching')}
-          </p>
-        {:else if searchResult}
-          {#if searchResult.numFound === 0}
-            <p class="ia-status" role="status">{t('internetArchive.search.empty')}</p>
-          {:else}
-            <p class="ia-status" role="status">
-              {searchResult.numFound === 1
-                ? t('internetArchive.search.results.one')
-                : t('internetArchive.search.results.other', {
-                    count: formatCount(searchResult.numFound),
-                  })}
-            </p>
-            <ul class="ia-results">
-              {#each searchResult.items as hit (hit.identifier)}
-                <li class="ia-results__item">
-                  <span class="ia-results__title">{hit.title ?? hit.identifier}</span>
-                  {#if hit.creators.length > 0}
-                    <span class="ia-results__meta">{hit.creators.join(', ')}</span>
-                  {/if}
-                  {#if hit.date}
-                    <span class="ia-results__meta">{hit.date}</span>
-                  {/if}
-                  <span class="ia-results__meta ia-results__identifier">{hit.identifier}</span>
-                  {#if hit.restricted}
-                    <span class="ia-badge">{t('internetArchive.restrictedBadge')}</span>
-                  {/if}
-                  <button
-                    type="button"
-                    class="ia-results__action"
-                    onclick={() => void openItem(hit.identifier)}
-                  >
-                    {t('internetArchive.search.viewFiles')}
-                  </button>
-                </li>
-              {/each}
-            </ul>
-            <div class="ia-paging">
-              <button
-                type="button"
-                disabled={searchPage <= 1 || searching}
-                onclick={() => void submitSearch(searchPage - 1)}
-              >
-                {t('internetArchive.search.prev')}
-              </button>
-              <span class="ia-paging__label" role="status">
-                {t('internetArchive.search.page', {
-                  page: formatCount(searchPage),
-                  pages: formatCount(totalPages(searchResult.numFound)),
-                })}
-              </span>
-              <button
-                type="button"
-                disabled={searchPage >= totalPages(searchResult.numFound) || searching}
-                onclick={() => void submitSearch(searchPage + 1)}
-              >
-                {t('internetArchive.search.next')}
-              </button>
-            </div>
-          {/if}
-        {/if}
       {:else if discoverTab === 'collection'}
         <form
-          class="ia-form"
+          class="ia-form ia-form--inline"
           onsubmit={(event) => {
             event.preventDefault()
             void submitCollection(1)
           }}
         >
-          <label class="ia-field">
+          <label class="ia-field ia-field--grow">
             <span class="ia-field__label">{t('internetArchive.collection.idLabel')}</span>
             <input
               type="text"
@@ -1057,71 +1008,15 @@
               : t('internetArchive.collection.submit')}
           </button>
         </form>
-        {#if listing && !collectionResult}
-          <p class="ia-status" role="status" aria-live="polite">
-            {t('internetArchive.collection.loading')}
-          </p>
-        {:else if collectionResult}
-          {#if collectionResult.numFound === 0}
-            <p class="ia-status" role="status">{t('internetArchive.collection.empty')}</p>
-          {:else}
-            <ul class="ia-results">
-              {#each collectionResult.items as hit (hit.identifier)}
-                <li class="ia-results__item">
-                  <span class="ia-results__title">{hit.title ?? hit.identifier}</span>
-                  {#if hit.creators.length > 0}
-                    <span class="ia-results__meta">{hit.creators.join(', ')}</span>
-                  {/if}
-                  {#if hit.date}
-                    <span class="ia-results__meta">{hit.date}</span>
-                  {/if}
-                  <span class="ia-results__meta ia-results__identifier">{hit.identifier}</span>
-                  {#if hit.restricted}
-                    <span class="ia-badge">{t('internetArchive.restrictedBadge')}</span>
-                  {/if}
-                  <button
-                    type="button"
-                    class="ia-results__action"
-                    onclick={() => void openItem(hit.identifier)}
-                  >
-                    {t('internetArchive.search.viewFiles')}
-                  </button>
-                </li>
-              {/each}
-            </ul>
-            <div class="ia-paging">
-              <button
-                type="button"
-                disabled={collectionPage <= 1 || listing}
-                onclick={() => void submitCollection(collectionPage - 1)}
-              >
-                {t('internetArchive.search.prev')}
-              </button>
-              <span class="ia-paging__label" role="status">
-                {t('internetArchive.search.page', {
-                  page: formatCount(collectionPage),
-                  pages: formatCount(totalPages(collectionResult.numFound)),
-                })}
-              </span>
-              <button
-                type="button"
-                disabled={collectionPage >= totalPages(collectionResult.numFound) || listing}
-                onclick={() => void submitCollection(collectionPage + 1)}
-              >
-                {t('internetArchive.search.next')}
-              </button>
-            </div>
-          {/if}
-        {/if}
       {:else}
         <form
-          class="ia-form"
+          class="ia-form ia-form--inline"
           onsubmit={(event) => {
             event.preventDefault()
             void submitLink()
           }}
         >
-          <label class="ia-field">
+          <label class="ia-field ia-field--grow">
             <span class="ia-field__label">{t('internetArchive.link.label')}</span>
             <input
               type="text"
@@ -1130,86 +1025,52 @@
               bind:value={linkInput}
             />
           </label>
-          <p class="ia-hint">{t('internetArchive.link.hint')}</p>
           <button type="submit" class="ia-submit" disabled={resolving}>
             {resolving ? t('internetArchive.link.resolving') : t('internetArchive.link.submit')}
           </button>
         </form>
+        <p class="ia-hint">{t('internetArchive.link.hint')}</p>
       {/if}
 
-      {@render selectionPanel()}
-    {:else if phase === 'item'}
-      <button type="button" class="ia-back" onclick={() => (phase = 'discover')}>
-        {t('internetArchive.back')}
-      </button>
-      {#if itemLoading}
-        <p class="ia-status" role="status" aria-live="polite">
-          {t('internetArchive.item.loading')}
-        </p>
-      {:else if itemDetails}
-        <div class="ia-item">
-          <p class="ia-item__title">{itemDetails.title ?? itemDetails.identifier}</p>
-          {#if itemDetails.creators.length > 0}
-            <p class="ia-item__meta">{itemDetails.creators.join(', ')}</p>
-          {/if}
-          {#if itemDetails.date}
-            <p class="ia-item__meta">{itemDetails.date}</p>
-          {/if}
-          <p class="ia-item__meta ia-results__identifier">{itemDetails.identifier}</p>
-          {#if itemDetails.restricted}
-            <p><span class="ia-badge">{t('internetArchive.restrictedBadge')}</span></p>
-          {/if}
-        </div>
-        {#if itemDetails.mediatype === 'collection'}
-          <p class="ia-status" role="status">{t('internetArchive.item.isCollection')}</p>
-          <button
-            type="button"
-            class="ia-submit"
-            onclick={() => browseItemAsCollection(itemDetails?.identifier ?? itemIdentifier)}
-          >
-            {t('internetArchive.item.browseCollection')}
-          </button>
-        {:else}
-          <h4 class="ia-heading">{t('internetArchive.item.files')}</h4>
-          {#if itemDetails.pdfs.length === 0}
-            <p class="ia-status" role="status">{t('internetArchive.item.noPdfs')}</p>
-          {:else}
-            <ul class="ia-files">
-              {#each itemDetails.pdfs as file (file.name)}
-                {@const selected = isSelected(itemDetails.identifier, file.name)}
-                {@const available = file.availability === 'available'}
-                <li class="ia-files__item">
-                  <Checkbox
-                    checked={selected}
-                    disabled={!available}
-                    label={t('internetArchive.item.select', { name: file.name })}
-                    onchange={() =>
-                      toggleFile(
-                        itemDetails?.identifier ?? itemIdentifier,
-                        file.name,
-                        itemDetails?.title ?? itemDetails?.identifier ?? itemIdentifier
-                      )}
-                  >
-                    <span class="ia-files__name">{file.name}</span>
-                  </Checkbox>
-                  <span class="ia-files__meta">
-                    {t('internetArchive.item.size', { size: formatBytes(file.size) })}
-                  </span>
-                  <span class="ia-files__meta">
-                    {t('internetArchive.item.source', { source: sourceText(file.source) })}
-                  </span>
-                  {#if !available}
-                    <span class="ia-files__reason">{availabilityText(file.availability)}</span>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-            {#if itemDetails.truncated}
-              <p class="ia-status" role="status">{t('internetArchive.item.truncated')}</p>
+      <div class="ia-browser">
+        <section class="ia-browser__list" aria-label={t('internetArchive.results.region')}>
+          {#if discoverTab === 'search'}
+            {#if searching && !searchResult}
+              <p class="ia-status" role="status" aria-live="polite">
+                {t('internetArchive.search.searching')}
+              </p>
+            {:else if searchResult}
+              {#if searchResult.numFound === 0}
+                <p class="ia-status" role="status">{t('internetArchive.search.empty')}</p>
+              {:else}
+                {@render resultList(searchResult, searchPage, searching, submitSearch, true)}
+              {/if}
+            {/if}
+          {:else if discoverTab === 'collection'}
+            {#if listing && !collectionResult}
+              <p class="ia-status" role="status" aria-live="polite">
+                {t('internetArchive.collection.loading')}
+              </p>
+            {:else if collectionResult}
+              {#if collectionResult.numFound === 0}
+                <p class="ia-status" role="status">{t('internetArchive.collection.empty')}</p>
+              {:else}
+                {@render resultList(
+                  collectionResult,
+                  collectionPage,
+                  listing,
+                  submitCollection,
+                  false
+                )}
+              {/if}
             {/if}
           {/if}
-        {/if}
-      {/if}
+        </section>
+
+        <section class="ia-browser__detail" aria-label={t('internetArchive.item.region')}>
+          {@render itemPane()}
+        </section>
+      </div>
 
       {@render selectionPanel()}
     {:else if phase === 'destination'}
@@ -1445,20 +1306,184 @@
   </ConfirmDialog>
 {/if}
 
+{#snippet resultList(
+  result: IaSearchPage,
+  page: number,
+  busy: boolean,
+  go: (page: number) => Promise<void>,
+  showCount: boolean
+)}
+  <div class="ia-results-bar">
+    {#if showCount}
+      <p class="ia-status ia-results-bar__count" role="status">
+        {result.numFound === 1
+          ? t('internetArchive.search.results.one')
+          : t('internetArchive.search.results.other', { count: formatCount(result.numFound) })}
+      </p>
+    {/if}
+    <div class="ia-segmented" role="group" aria-label={t('internetArchive.pageSize.label')}>
+      {#each PAGE_SIZES as size (size)}
+        <button
+          type="button"
+          class="ia-segmented__option"
+          class:ia-segmented__option--active={rows === size}
+          aria-pressed={rows === size}
+          disabled={busy}
+          onclick={() => setPageSize(size)}
+        >
+          {size}
+        </button>
+      {/each}
+    </div>
+  </div>
+  <ul class="ia-results ia-results--dense">
+    {#each result.items as hit (hit.identifier)}
+      <li class="ia-row" class:ia-row--active={hit.identifier === itemIdentifier}>
+        <div class="ia-row__main">
+          <span class="ia-row__title">{hit.title ?? hit.identifier}</span>
+          <span class="ia-row__meta">
+            {#if hit.creators.length > 0}
+              <span class="ia-results__meta">{hit.creators.join(', ')}</span>
+            {/if}
+            {#if hit.date}
+              <span class="ia-results__meta">{hit.date}</span>
+            {/if}
+            <span class="ia-results__meta ia-results__identifier">{hit.identifier}</span>
+          </span>
+        </div>
+        {#if hit.restricted}
+          <span class="ia-badge">{t('internetArchive.restrictedBadge')}</span>
+        {/if}
+        <button
+          type="button"
+          class="ia-results__action"
+          onclick={() => void openItem(hit.identifier)}
+        >
+          {t('internetArchive.search.viewFiles')}
+        </button>
+      </li>
+    {/each}
+  </ul>
+  <div class="ia-paging">
+    <button type="button" disabled={page <= 1 || busy} onclick={() => void go(page - 1)}>
+      {t('internetArchive.search.prev')}
+    </button>
+    <span class="ia-paging__label" role="status">
+      {t('internetArchive.search.page', {
+        page: formatCount(page),
+        pages: formatCount(totalPages(result.numFound)),
+      })}
+    </span>
+    <button
+      type="button"
+      disabled={page >= totalPages(result.numFound) || busy}
+      onclick={() => void go(page + 1)}
+    >
+      {t('internetArchive.search.next')}
+    </button>
+  </div>
+{/snippet}
+
+{#snippet itemPane()}
+  {#if itemLoading}
+    <p class="ia-status" role="status" aria-live="polite">
+      {t('internetArchive.item.loading')}
+    </p>
+  {:else if itemDetails}
+    <div class="ia-item">
+      <p class="ia-item__title">{itemDetails.title ?? itemDetails.identifier}</p>
+      {#if itemDetails.creators.length > 0}
+        <p class="ia-item__meta">{itemDetails.creators.join(', ')}</p>
+      {/if}
+      {#if itemDetails.date}
+        <p class="ia-item__meta">{itemDetails.date}</p>
+      {/if}
+      <p class="ia-item__meta ia-results__identifier">{itemDetails.identifier}</p>
+      {#if itemDetails.restricted}
+        <p><span class="ia-badge">{t('internetArchive.restrictedBadge')}</span></p>
+      {/if}
+    </div>
+    {#if itemDetails.mediatype === 'collection'}
+      <p class="ia-status" role="status">{t('internetArchive.item.isCollection')}</p>
+      <button
+        type="button"
+        class="ia-submit"
+        onclick={() => browseItemAsCollection(itemDetails?.identifier ?? itemIdentifier)}
+      >
+        {t('internetArchive.item.browseCollection')}
+      </button>
+    {:else}
+      <h4 class="ia-heading">{t('internetArchive.item.files')}</h4>
+      {#if itemDetails.pdfs.length === 0}
+        <p class="ia-status" role="status">{t('internetArchive.item.noPdfs')}</p>
+      {:else}
+        <ul class="ia-files">
+          {#each itemDetails.pdfs as file (file.name)}
+            {@const selected = isSelected(itemDetails.identifier, file.name)}
+            {@const available = file.availability === 'available'}
+            <li class="ia-files__item">
+              <Checkbox
+                checked={selected}
+                disabled={!available}
+                label={t('internetArchive.item.select', { name: file.name })}
+                onchange={() =>
+                  toggleFile(
+                    itemDetails?.identifier ?? itemIdentifier,
+                    file.name,
+                    itemDetails?.title ?? itemDetails?.identifier ?? itemIdentifier
+                  )}
+              >
+                <span class="ia-files__name">{file.name}</span>
+              </Checkbox>
+              <span class="ia-files__meta">
+                {t('internetArchive.item.size', { size: formatBytes(file.size) })}
+              </span>
+              <span class="ia-files__meta">
+                {t('internetArchive.item.source', { source: sourceText(file.source) })}
+              </span>
+              {#if !available}
+                <span class="ia-files__reason">{availabilityText(file.availability)}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+        {#if itemDetails.truncated}
+          <p class="ia-status" role="status">{t('internetArchive.item.truncated')}</p>
+        {/if}
+      {/if}
+    {/if}
+  {:else if !itemIdentifier}
+    <p class="ia-status ia-placeholder">{t('internetArchive.item.placeholder')}</p>
+  {/if}
+{/snippet}
+
 {#snippet selectionPanel()}
   <div class="ia-selection">
-    <h4 class="ia-heading">{t('internetArchive.selection.title')}</h4>
-    <p class="ia-status" role="status">
-      {t('internetArchive.selection.count', { count: formatCount(selection.length) })}
-    </p>
-    {#if selection.length === 0}
-      <p class="ia-status">{t('internetArchive.selection.empty')}</p>
-    {:else}
-      <ul class="ia-results">
+    <div class="ia-selection__bar">
+      {#if selection.length === 0}
+        <p class="ia-status ia-selection__summary">{t('internetArchive.selection.empty')}</p>
+      {:else}
+        <p class="ia-status ia-selection__summary" role="status">
+          {t('internetArchive.selection.count', { count: formatCount(selection.length) })}
+        </p>
+        <button
+          type="button"
+          class="ia-results__action"
+          aria-expanded={selectionOpen}
+          onclick={() => (selectionOpen = !selectionOpen)}
+        >
+          {selectionOpen ? t('internetArchive.selection.hide') : t('internetArchive.selection.show')}
+        </button>
+      {/if}
+    </div>
+    {#if selectionOpen && selection.length > 0}
+      <ul class="ia-results ia-selection__list">
         {#each selection as entry (selectionKey(entry.identifier, entry.fileName))}
-          <li class="ia-results__item">
-            <span class="ia-results__title">{entry.fileName}</span>
-            <span class="ia-results__meta ia-results__identifier">{entry.identifier}</span>
+          <li class="ia-row">
+            <div class="ia-row__main">
+              <span class="ia-row__title">{entry.fileName}</span>
+              <span class="ia-results__meta ia-results__identifier">{entry.identifier}</span>
+            </div>
             <button
               type="button"
               class="ia-results__action"
@@ -1547,14 +1572,172 @@
     margin-bottom: var(--space-3);
   }
 
-  .ia-form__row {
-    display: flex;
-    gap: var(--space-2);
+  .ia-form--inline {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
   }
 
-  .ia-form__row .ia-field {
-    flex: 1;
+  .ia-form--inline .ia-field {
+    flex: 1 1 160px;
     min-width: 0;
+  }
+
+  .ia-form--inline .ia-field--grow {
+    flex: 2 1 220px;
+  }
+
+  .ia-form--inline .ia-field--year {
+    flex: 0 1 120px;
+  }
+
+  .ia-form--inline .ia-submit {
+    align-self: flex-end;
+  }
+
+  /* Master-detail: results on the left, the open item's files on the right.
+     Fixed height so each pane scrolls on its own instead of the dialog. */
+  .ia-browser {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr);
+    gap: var(--space-3);
+    height: min(56vh, 560px);
+    min-height: 260px;
+  }
+
+  .ia-browser__list,
+  .ia-browser__detail {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    padding: var(--space-2);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-control);
+    background-color: color-mix(in srgb, var(--color-surface-sunken) 60%, transparent);
+  }
+
+  .ia-browser__detail {
+    overflow-y: auto;
+  }
+
+  .ia-browser__list .ia-results {
+    flex: 1 1 auto;
+    max-height: none;
+    min-height: 0;
+  }
+
+  .ia-browser__detail .ia-files {
+    max-height: none;
+  }
+
+  @media (max-width: 860px) {
+    .ia-browser {
+      grid-template-columns: minmax(0, 1fr);
+      height: auto;
+    }
+
+    .ia-browser__list .ia-results {
+      max-height: 320px;
+    }
+  }
+
+  .ia-results-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-bottom: var(--space-1);
+  }
+
+  .ia-results-bar__count {
+    margin: 0;
+  }
+
+  .ia-segmented {
+    display: inline-flex;
+    gap: 2px;
+    margin-left: auto;
+    padding: 2px;
+    border-radius: var(--radius-control);
+    background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
+  }
+
+  .ia-segmented__option {
+    min-width: 2.5rem;
+    padding: var(--space-1) var(--space-2);
+    border: none;
+    border-radius: var(--radius-control);
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+  }
+
+  .ia-segmented__option--active {
+    background: var(--color-surface-raised);
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .ia-segmented__option:disabled {
+    cursor: not-allowed;
+  }
+
+  .ia-results--dense {
+    gap: 0;
+  }
+
+  .ia-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-control);
+  }
+
+  .ia-row:hover {
+    background: var(--color-accent-faint);
+  }
+
+  .ia-row--active {
+    background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  }
+
+  .ia-row__main {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .ia-row__title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+  }
+
+  .ia-row__meta {
+    display: flex;
+    gap: var(--space-2);
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .ia-row__meta .ia-results__identifier {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    overflow-wrap: normal;
+  }
+
+  .ia-placeholder {
+    margin: auto 0;
+    text-align: center;
   }
 
   .ia-field {
@@ -1797,6 +1980,22 @@
 
   .ia-selection {
     margin-top: var(--space-3);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--color-hairline);
+  }
+
+  .ia-selection__bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .ia-selection__summary {
+    margin: 0;
+  }
+
+  .ia-selection__list {
+    margin-top: var(--space-2);
   }
 
   .ia-destination {
