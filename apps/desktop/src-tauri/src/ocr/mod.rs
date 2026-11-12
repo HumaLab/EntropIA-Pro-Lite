@@ -972,6 +972,8 @@ pub struct OcrJob {
     pub asset_id: String,
     pub asset_type: String, // "pdf" | "image"
     pub mode: OcrMode,
+    /// Run the engine even when the PDF already has a usable text layer.
+    pub include_native: bool,
 }
 
 /// OCR processing mode.
@@ -1480,6 +1482,7 @@ pub(crate) async fn process_job(
                 app_handle,
                 paddle_vl_engine,
                 &job.mode,
+                job.include_native,
             )
             .await
         }
@@ -1512,6 +1515,7 @@ async fn process_pdf(
     app_handle: &AppHandle,
     paddle_vl_engine: Option<&PaddleVlEngine>,
     mode: &OcrMode,
+    include_native: bool,
 ) -> Result<ProcessedOcrOutput, String> {
     if mode == &OcrMode::High {
         let ocrh_mode = get_ocrh_mode(conn);
@@ -1551,9 +1555,14 @@ async fn process_pdf(
     emit_progress(app_handle, asset_id, 50, "extracting_native");
 
     let bytes_owned = bytes.to_vec();
-    let native_text = tokio::task::spawn_blocking(move || extract_pdf_text(&bytes_owned))
-        .await
-        .map_err(|e| format!("PDF extraction task panicked: {e}"))?;
+    let native_text = if include_native {
+        // The request asked for the engine's reading, not the text layer (#250).
+        Err("native text excluded by the request".to_string())
+    } else {
+        tokio::task::spawn_blocking(move || extract_pdf_text(&bytes_owned))
+            .await
+            .map_err(|e| format!("PDF extraction task panicked: {e}"))?
+    };
 
     match native_text {
         Ok(text) if is_quality_text(&text) => {
