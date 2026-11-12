@@ -1,7 +1,7 @@
 # Internet Archive importer: layout, file-type filter, bulk selection
 
 Objective: make the Internet Archive import dialog practical (more results visible, file-type filter, bulk selection) without changing the import pipeline's guarantees.
-Branch: `feat/ia-importer-ux` · Delivery: `ask-on-risk` · Runner: Vitest (`pnpm --filter @entropia-pro/desktop test -- <file>`), `cargo test -p entropia-internet-archive`.
+Branch: tracker `feat/ia-importer-ux` (draft, no-merge) + children `feat/ia-importer-ux-<n>-<slice>` · Delivery: `ask-on-risk`, chain: `feature-branch-chain` (user, 2026-11-12) · Runner: Vitest (`pnpm --filter @entropia-pro/desktop test -- <file>`), `cargo test -p entropia-internet-archive`.
 Mockup: https://claude.ai/artifact/5XyJZgwi4BRyo9nr39nnAr (artboard "Propuesta").
 
 ## Specs
@@ -19,11 +19,11 @@ Mockup: https://claude.ai/artifact/5XyJZgwi4BRyo9nr39nnAr (artboard "Propuesta")
 
 | ID | Specs | Route | Status | Commit |
 |---|---|---|---|---|
-| T1 | S1, S2, S5 | inline | in progress | — |
-| T2 | S3 (search + listing filter, crate + Tauri + TS) | inline | pending | — |
-| T3 | S3 (image files: list, download, verify, import) | inline | pending | — |
-| T4 | S4 (page-level bulk select, file resolution in batch) | inline | pending | — |
-| T5 | S4 (select all results across pages) | inline | pending | — |
+| T1 | S1, S2, S5 | inline | done | 7f950fb3 on `feat/ia-importer-ux-1-layout` (+585/−265, over budget: one cohesive dialog rewrite) |
+| T2 | S3 (search + listing filter, crate + Tauri + TS) | inline | done | f37d7e12 on `feat/ia-importer-ux-2-kinds` (+483/−21); RED 7 failing → GREEN 4219 desktop tests |
+| T3 | S3 (image files: list, download, verify, import) | inline | done | 21875827 on `feat/ia-importer-ux-3-images` (+672/−78); RED compile + 5 Tauri failures → GREEN 162 crate + 85 Tauri; Risk item 1 → independent verifier |
+| T4 | S4 (page-level bulk select, file resolution in batch) | inline | done | on `feat/ia-importer-ux-4-bulk` (+275/−1); RED 3+1 → GREEN 4222 desktop + 963 ui |
+| T5 | S4 (select all results across pages) | inline | done | on `feat/ia-importer-ux-5-all-results`; RED 2 → GREEN 4225 desktop; cap 500 records |
 
 ## Log
 
@@ -33,3 +33,6 @@ Mockup: https://claude.ai/artifact/5XyJZgwi4BRyo9nr39nnAr (artboard "Propuesta")
 - L4 (2026-11-12, user): "el boceto me gusta, solo dos cosas, una estetica general, mantener la estetica de la app no usar html crudo como el que muestra la barra deslizante blanca y gris rectangular sin bordes redondeados y queiro que se peuden seleccionar y desseleccioant dodos los docuemtnos y que no se aobligaotrio ir uno a uno"
 - L5 (2026-11-12, user): "Sí, arrancá" — implement Phase 1 + type filter + bulk selection.
 - L6 evidence: live API probe — `rows` 10/50/100 cost 1.86/1.44/1.30 s; `format:(PDF)` keeps 141 of 283 hits; `Text PDF` 140, `Image Container PDF` 19; `mediatype:image` 195 for the same title query.
+- L7 (2026-11-12) User chose chain strategy: "Feature-branch chain". T1 branch renamed `feat/ia-importer-ux-1-layout`; tracker `feat/ia-importer-ux` reset to main (local only, nothing pushed). T2 committed f37d7e12. GIF stays out of the image Lucene group: the app does not import GIF (file-import.ts), pending note to user.
+- L8 (2026-11-12) T3: IA publishes `__ia_thumb.jpg` as `source: original` with format "Item Tile"; images now require a declared format of exactly JPEG/PNG/TIFF (name extension only when no format). Kind derives from file_name+format, so job.json gains no field. Staging `<uuid>.{pdf,jpg,png,tif}`; older builds would reject a job holding image staging names (downgrade only).
+- L9 (2026-11-12) T4/T5: row checkbox per record, page checkbox (checked/mixed/empty; shared Checkbox gained optional `indeterminate`), lookups 4 at a time; "Seleccionar los N resultados" appears once the page is fully selected, capped at 500 records with a notice. The page checkbox replaces separate "Seleccionar todos"/"Deseleccionar todos" buttons.

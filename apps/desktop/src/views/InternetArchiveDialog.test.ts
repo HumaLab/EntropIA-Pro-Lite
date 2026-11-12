@@ -465,6 +465,73 @@ describe('InternetArchiveDialog discovery', () => {
     expect(iaRef.iaGetItem).toHaveBeenCalledTimes(10)
   })
 
+  function pagedSearch(total: number) {
+    iaRef.iaSearch.mockImplementation(async (_query: unknown, page: number, rows: number) => ({
+      numFound: total,
+      items: Array.from(
+        { length: Math.max(0, Math.min(rows, total - (page - 1) * rows)) },
+        (_, i) =>
+          searchItem({
+            identifier: `id-${(page - 1) * rows + i}`,
+            title: `R${(page - 1) * rows + i}`,
+          })
+      ),
+    }))
+    iaRef.iaGetItem.mockImplementation(async (id: string) =>
+      itemDetails({ identifier: id, pdfs: [pdf()] })
+    )
+  }
+
+  async function searchAndSelectPage() {
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar todos los registros de la página' })
+    )
+    await screen.findByText('Seleccionados: 50')
+  }
+
+  it('offers every result once the page is selected, and selects them all', async () => {
+    pagedSearch(120)
+    await searchAndSelectPage()
+
+    expect(
+      screen.getByText('Se van a revisar los archivos de 120 registros; puede tardar.')
+    ).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 120 resultados' }))
+
+    await screen.findByText('Seleccionados: 120', undefined, { timeout: 3000 })
+    expect(iaRef.iaSearch).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Chaplin', kinds: ['pdf'] }),
+      2,
+      100
+    )
+    expect(iaRef.iaGetItem).toHaveBeenCalledTimes(120)
+  })
+
+  it('caps the all-results selection and says how many it takes', async () => {
+    pagedSearch(2000)
+    await searchAndSelectPage()
+
+    expect(
+      screen.getByRole('button', { name: 'Seleccionar los 500 resultados' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Se seleccionan los primeros 500 de 2.?000 resultados\./)
+    ).toBeInTheDocument()
+  })
+
+  it('does not offer every result while the page is not fully selected', async () => {
+    pagedSearch(120)
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+    expect(screen.queryByRole('button', { name: /Seleccionar los \d+ resultados/ })).toBeNull()
+  })
+
   it('opens in the wide layout', () => {
     open()
 

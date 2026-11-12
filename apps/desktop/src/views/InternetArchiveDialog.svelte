@@ -366,6 +366,41 @@
     void selectRecords(records.filter((hit) => !isRecordSelected(hit.identifier)))
   }
 
+  // "Select all N results": every page of the last search or listing, up
+  // to MAX_BULK_RECORDS records, fetched BULK_ROWS at a time.
+  const MAX_BULK_RECORDS = 500
+  const BULK_ROWS = 100
+  type PageFetcher = (page: number, rows: number) => Promise<IaSearchPage>
+  let searchFetcher = $state<PageFetcher | null>(null)
+  let collectionFetcher = $state<PageFetcher | null>(null)
+  let loadingAll = $state(0)
+
+  function bulkCount(numFound: number): number {
+    return Math.min(numFound, MAX_BULK_RECORDS, MAX_RESULT_OFFSET)
+  }
+
+  async function selectAllResults(numFound: number, fetcher: PageFetcher | null): Promise<void> {
+    if (!fetcher || loadingAll > 0) return
+    const count = bulkCount(numFound)
+    loadingAll = count
+    problem = null
+    const records: PageRecord[] = []
+    try {
+      for (let page = 1; records.length < count; page++) {
+        const result = await fetcher(page, BULK_ROWS)
+        records.push(...result.items.slice(0, count - records.length))
+        if (result.items.length < BULK_ROWS) break
+      }
+    } catch (reason) {
+      problem = describeError(reason)
+    } finally {
+      loadingAll = 0
+    }
+    await selectRecords(
+      selectableRecords(records).filter((hit) => !isRecordSelected(hit.identifier))
+    )
+  }
+
   function removeSelection(identifier: string, fileName: string): void {
     selection = selection.filter(
       (entry) => !(entry.identifier === identifier && entry.fileName === fileName)
@@ -505,21 +540,19 @@
     }
     searching = true
     problem = null
+    const query = {
+      text: searchText.trim() === '' ? undefined : searchText.trim(),
+      title: searchTitle.trim() === '' ? undefined : searchTitle.trim(),
+      creator: searchCreator.trim() === '' ? undefined : searchCreator.trim(),
+      yearFrom,
+      yearTo,
+      textsOnly: true,
+      kinds: [...kinds],
+    }
     try {
       searchPage = page
-      searchResult = await iaSearch(
-        {
-          text: searchText.trim() === '' ? undefined : searchText.trim(),
-          title: searchTitle.trim() === '' ? undefined : searchTitle.trim(),
-          creator: searchCreator.trim() === '' ? undefined : searchCreator.trim(),
-          yearFrom,
-          yearTo,
-          textsOnly: true,
-          kinds: [...kinds],
-        },
-        page,
-        rows
-      )
+      searchResult = await iaSearch(query, page, rows)
+      searchFetcher = (fetchPage, fetchRows) => iaSearch(query, fetchPage, fetchRows)
     } catch (reason) {
       problem = describeError(reason)
     } finally {
@@ -538,7 +571,10 @@
     problem = null
     try {
       collectionPage = page
-      collectionResult = await iaListCollection(identifier, page, rows, [...kinds])
+      const listKinds = [...kinds]
+      collectionResult = await iaListCollection(identifier, page, rows, listKinds)
+      collectionFetcher = (fetchPage, fetchRows) =>
+        iaListCollection(identifier, fetchPage, fetchRows, listKinds)
     } catch (reason) {
       problem = describeError(reason)
     } finally {
@@ -1178,7 +1214,14 @@
               {#if searchResult.numFound === 0}
                 <p class="ia-status" role="status">{t('internetArchive.search.empty')}</p>
               {:else}
-                {@render resultList(searchResult, searchPage, searching, submitSearch, true)}
+                {@render resultList(
+                  searchResult,
+                  searchPage,
+                  searching,
+                  submitSearch,
+                  true,
+                  searchFetcher
+                )}
               {/if}
             {/if}
           {:else if discoverTab === 'collection'}
@@ -1195,7 +1238,8 @@
                   collectionPage,
                   listing,
                   submitCollection,
-                  false
+                  false,
+                  collectionFetcher
                 )}
               {/if}
             {/if}
@@ -1446,7 +1490,8 @@
   page: number,
   busy: boolean,
   go: (page: number) => Promise<void>,
-  showCount: boolean
+  showCount: boolean,
+  fetcher: PageFetcher | null
 )}
   <div class="ia-results-bar">
     {#if showCount}
@@ -1485,7 +1530,30 @@
         <span class="ia-bulk__label">{t('internetArchive.record.selectPage')}</span>
       </Checkbox>
     {/key}
-    {#if resolvingRecords > 0}
+    {#if pageSelection === 'all' && result.numFound > result.items.length && fetcher}
+      {@const count = bulkCount(result.numFound)}
+      <button
+        type="button"
+        class="ia-results__action"
+        disabled={loadingAll > 0 || resolvingRecords > 0}
+        onclick={() => void selectAllResults(result.numFound, fetcher)}
+      >
+        {t('internetArchive.record.selectAll', { count: formatCount(count) })}
+      </button>
+      <span class="ia-status">
+        {count < result.numFound
+          ? t('internetArchive.record.selectAllCapped', {
+              count: formatCount(count),
+              total: formatCount(result.numFound),
+            })
+          : t('internetArchive.record.selectAllNotice', { count: formatCount(count) })}
+      </span>
+    {/if}
+    {#if loadingAll > 0}
+      <span class="ia-status" role="status" aria-live="polite">
+        {t('internetArchive.record.loadingAll', { count: formatCount(loadingAll) })}
+      </span>
+    {:else if resolvingRecords > 0}
       <span class="ia-status" role="status" aria-live="polite">
         {t('internetArchive.record.resolving', { count: formatCount(resolvingRecords) })}
       </span>
