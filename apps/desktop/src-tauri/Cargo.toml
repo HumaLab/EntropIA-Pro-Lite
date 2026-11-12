@@ -34,6 +34,9 @@ serde_json = "1"
 rusqlite = { version = "0.41", features = ["bundled", "backup", "hooks"] }
 fs2 = "0.4"
 tauri-plugin-dialog = "2.8.1"
+# Debug-only automation bridge for the Tauri MCP driver (dev testing); never
+# registered in release builds (see lib.rs `#[cfg(debug_assertions)]`).
+tauri-plugin-mcp-bridge = "0.13"
 tauri-plugin-fs = "2.6.0"
 thiserror = "2"
 ocr-rs = { version = "2.2", optional = true, features = ["build-mnn-from-source"] }

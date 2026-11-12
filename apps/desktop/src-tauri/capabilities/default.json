@@ -4,6 +4,7 @@
   "description": "Default capabilities for EntropIA desktop app",
   "webviews": ["main"],
   "permissions": [
+    "mcp-bridge:default",
     "allow-resolve-data-dir",
     "allow-assets-check-integrity",
     "allow-research-request",

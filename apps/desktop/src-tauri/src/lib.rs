@@ -801,9 +801,19 @@ pub fn run() {
         }
     }
 
-    tauri::Builder::default()
+    // `mut` is only exercised by the debug-only plugin below; release builds
+    // never reassign it.
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+    // Debug-only automation bridge (Tauri MCP driver). Compiled out of release
+    // builds, so production behavior is untouched.
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    }
+    builder
         .setup(|app| {
             #[cfg(debug_assertions)]
             apply_development_window_title(app)?;
