@@ -405,6 +405,43 @@ fn stored_key(absolute: &Path, data_dir: &Path) -> Result<String, String> {
     })
 }
 
+/// The native text of one split page file, when its text layer is usable
+/// (S4): the same `is_quality_text` rule the OCR executor applies. Any
+/// failure — the file cannot be read, the layer cannot be parsed — answers
+/// `None` and is logged, never raised: a bad text layer must never fail the
+/// import. The stamp is the page file the asset row points to, as the
+/// executor's native result stamps the file it read.
+fn native_text_of_page(
+    page_path: &Path,
+    page_key: &str,
+) -> Option<(String, crate::derived_source::SourceStamp)> {
+    let bytes = match std::fs::read(page_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            log::warn!(
+                target: "corpus",
+                "import leaves {page_key} without native text: cannot read {}: {error}",
+                page_path.display()
+            );
+            return None;
+        }
+    };
+    match crate::ocr::pdf::extract_pdf_text(&bytes) {
+        Ok(text) if crate::ocr::pdf::is_quality_text(&text) => Some((
+            text,
+            crate::derived_source::SourceStamp::of(page_key, &bytes),
+        )),
+        Ok(_) => None,
+        Err(error) => {
+            log::warn!(
+                target: "corpus",
+                "import leaves {page_key} without native text: {error}"
+            );
+            None
+        }
+    }
+}
+
 /// One asset row to record for an imported item.
 struct NewAsset<'a> {
     item_id: &'a str,
@@ -587,6 +624,16 @@ pub fn import_file(
         .iter()
         .map(|(_, page_path)| crate::asset_history::sha256_file(page_path))
         .collect();
+    // The text layer is read outside any transaction: parsing pages must
+    // not hold the BEGIN IMMEDIATE lock. Publishing happens with the asset
+    // rows below, in the same commit.
+    let native_texts: Vec<Option<(String, crate::derived_source::SourceStamp)>> = pages
+        .iter()
+        .map(|(_, page_path)| {
+            let page_key = stored_key(page_path, data_dir).ok()?;
+            native_text_of_page(page_path, &page_key)
+        })
+        .collect();
     let recorded = (|| {
         conn.execute_batch("BEGIN IMMEDIATE").map_err(|error| {
             format!("unavailable: could not begin recording the files: {error}")
@@ -616,7 +663,9 @@ pub fn import_file(
                 .input_sha256(stored_hash.clone())
                 .output_sha256(stored_hash.clone()),
             );
-            for ((page_number, page_path), page_hash) in pages.iter().zip(&page_hashes) {
+            for (index, ((page_number, page_path), page_hash)) in
+                pages.iter().zip(&page_hashes).enumerate()
+            {
                 let size = std::fs::metadata(page_path)
                     .map(|meta| meta.len())
                     .unwrap_or(0);
@@ -648,6 +697,19 @@ pub fn import_file(
                     .input_sha256(stored_hash.clone())
                     .output_sha256(page_hash.clone()),
                 );
+                // S4: a usable text layer is stored at once, exactly as the
+                // OCR executor's native result would publish it (same rows,
+                // method, history event and stamp). Pages without one keep
+                // no extraction, as before.
+                if let Some((text, source)) =
+                    native_texts.get(index).and_then(|native| native.as_ref())
+                {
+                    crate::processing::ocr::publish_ocr_output(
+                        conn,
+                        &page_asset,
+                        &crate::processing::ocr::native_page_output(text.clone(), source.clone()),
+                    )?;
+                }
             }
             crate::nlp::fts::index_item_from_db(conn, &item_id)
                 .map_err(|error| format!("unavailable: could not index the item: {error}"))?;

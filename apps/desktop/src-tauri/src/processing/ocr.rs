@@ -53,6 +53,26 @@ impl OcrComputeOutput {
     }
 }
 
+/// One page served from the PDF's text layer, without running an engine: the
+/// shape the batch path publishes for a usable layer, and the shape the
+/// import path stores at once (S4). One builder so the two can never drift.
+pub(crate) fn native_page_output(text: String, source: SourceStamp) -> OcrComputeOutput {
+    OcrComputeOutput {
+        text,
+        method: "native".to_string(),
+        outcome: "text".to_string(),
+        regions_json: None,
+        blocks_json: None,
+        layout_model: String::new(),
+        image_width: 0,
+        image_height: 0,
+        provider: "native".to_string(),
+        page_count: 1,
+        page_methods: Vec::new(),
+        source: Some(source),
+    }
+}
+
 /// Writes extraction/layout rows for one asset. Runs INSIDE the commit
 /// transaction (ambient, never begins its own) so canonical rows and the
 /// task receipt confirm together. Mirrors the worker's atomic path exactly:
@@ -290,20 +310,7 @@ impl Executor for OcrExecutor {
                     };
                     if let Some(text) = native {
                         if crate::ocr::pdf::is_quality_text(&text) {
-                            return Ok(OcrComputeOutput {
-                                text,
-                                method: "native".to_string(),
-                                outcome: "text".to_string(),
-                                regions_json: None,
-                                blocks_json: None,
-                                layout_model: String::new(),
-                                image_width: 0,
-                                image_height: 0,
-                                provider: "native".to_string(),
-                                page_count: 1,
-                                page_methods: Vec::new(),
-                                source: Some(source.clone()),
-                            });
+                            return Ok(native_page_output(text, source.clone()));
                         }
                     }
                     self.compute(task, "pdf", &page)
