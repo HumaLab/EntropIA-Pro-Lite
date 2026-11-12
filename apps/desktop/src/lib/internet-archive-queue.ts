@@ -108,16 +108,21 @@ export function queueProgress(queue: IaQueue): {
  * `MAX_BATCH_FILES` or `MAX_BATCH_RECORDS`. A record with no files is
  * `empty`, one whose lookup throws is `failed`; a single record with more
  * files than a batch keeps its first `MAX_BATCH_FILES`. Returns a new queue.
+ * `onProgress` hears the records checked so far against the batch's
+ * expected size (pending records, at most `MAX_BATCH_RECORDS`).
  */
 export async function buildBatch(
   queue: IaQueue,
-  resolveFiles: (identifier: string) => Promise<string[]>
+  resolveFiles: (identifier: string) => Promise<string[]>,
+  onProgress?: (checked: number, total: number) => void
 ): Promise<{ queue: IaQueue; selections: IaSelection[] }> {
   const records = queue.records.map((record) => ({ ...record }))
   const pending = records.filter((record) => record.state === 'pending')
   const selections: IaSelection[] = []
+  const total = Math.min(pending.length, MAX_BATCH_RECORDS)
   let files = 0
   let next = 0
+  if (total > 0) onProgress?.(0, total)
   batch: while (next < pending.length && selections.length < MAX_BATCH_RECORDS) {
     const chunk = pending.slice(next, next + LOOKUP_CONCURRENCY)
     const found = await Promise.allSettled(chunk.map((record) => resolveFiles(record.identifier)))
@@ -137,6 +142,7 @@ export async function buildBatch(
       }
       next += 1
     }
+    onProgress?.(Math.min(next, total), total)
   }
   return { queue: { ...queue, records }, selections }
 }

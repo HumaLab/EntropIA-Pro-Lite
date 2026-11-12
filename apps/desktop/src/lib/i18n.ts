@@ -3094,6 +3094,8 @@ const es = {
   'internetArchive.queue.unselect': 'Quitar la cola',
   'internetArchive.queue.batch': 'Tanda de {count} registros · {finished} de {total} ya procesados',
   'internetArchive.queue.preparing': 'Preparando la próxima tanda…',
+  'internetArchive.queue.checking': 'Revisando los registros de la tanda: {checked} de {total}',
+  'internetArchive.queue.preparingBatch': 'Preparando la importación de {count} registros…',
   'internetArchive.queue.finished': 'Toda la búsqueda quedó importada ({total} registros).',
   'internetArchive.queue.paused':
     'La cola quedó en pausa: faltan {count} registros. Se retoma al volver a abrir el importador.',
@@ -6413,6 +6415,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'internetArchive.queue.batch':
     'Batch of {count} records · {finished} of {total} already processed',
   'internetArchive.queue.preparing': 'Preparing the next batch…',
+  'internetArchive.queue.checking': 'Checking the batch records: {checked} of {total}',
+  'internetArchive.queue.preparingBatch': 'Preparing the import of {count} records…',
   'internetArchive.queue.finished': 'The whole search is imported ({total} records).',
   'internetArchive.queue.paused':
     'The queue is paused: {count} records left. It resumes when you open the importer again.',

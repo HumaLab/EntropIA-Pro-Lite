@@ -123,6 +123,33 @@ describe('buildBatch', () => {
     expect(peak).toBeLessThanOrEqual(4)
   })
 
+  it('reports how many records of the batch it has checked', async () => {
+    const queue = queueOf(10)
+    const progress: Array<[number, number]> = []
+    await buildBatch(
+      queue,
+      async (id) => [`${id}.pdf`],
+      (checked, total) => progress.push([checked, total])
+    )
+    expect(progress).toEqual([
+      [0, 10],
+      [4, 10],
+      [8, 10],
+      [10, 10],
+    ])
+  })
+
+  it('counts the batch total against the record limit', async () => {
+    const queue = queueOf(MAX_BATCH_RECORDS + 50)
+    const totals = new Set<number>()
+    await buildBatch(
+      queue,
+      async (id) => [`${id}.pdf`],
+      (_checked, total) => totals.add(total)
+    )
+    expect([...totals]).toEqual([MAX_BATCH_RECORDS])
+  })
+
   it('returns no selections once nothing is pending', async () => {
     const queue = queueOf(1)
     queue.records[0]!.state = 'done'

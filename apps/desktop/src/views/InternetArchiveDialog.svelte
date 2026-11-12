@@ -432,6 +432,13 @@
   let queueTotals = $state({ imported: 0, present: 0, failed: 0 })
   /** Selections behind the prepared job (the file selection or a batch). */
   let preparedSelections = $state<IaSelection[]>([])
+  /** Where the preparation of the next batch is: looking up its records'
+   *  files, or preparing the import job (both can take minutes). */
+  let batchStep = $state<
+    | { kind: 'checking'; checked: number; total: number }
+    | { kind: 'preparing'; count: number }
+    | null
+  >(null)
 
   async function loadSavedQueue(): Promise<void> {
     try {
@@ -458,15 +465,22 @@
 
   /** Prepare the queue's next batch; `null` once nothing is left. */
   async function prepareQueueBatch(current: IaQueue): Promise<IaPrepareResult | null> {
-    const built = await buildBatch(current, resolveQueueFiles)
-    if (built.selections.length === 0) {
-      await storeQueue(built.queue)
-      return null
+    try {
+      const built = await buildBatch(current, resolveQueueFiles, (checked, total) => {
+        batchStep = { kind: 'checking', checked, total }
+      })
+      if (built.selections.length === 0) {
+        await storeQueue(built.queue)
+        return null
+      }
+      preparedSelections = built.selections
+      batchStep = { kind: 'preparing', count: built.selections.length }
+      const result = await iaPrepareImport(built.queue.collectionId, built.selections)
+      await storeQueue({ ...built.queue, currentJobId: result.jobId })
+      return result
+    } finally {
+      batchStep = null
     }
-    preparedSelections = built.selections
-    const result = await iaPrepareImport(built.queue.collectionId, built.selections)
-    await storeQueue({ ...built.queue, currentJobId: result.jobId })
-    return result
   }
 
   /** Prepare and start batches until one has something to download. */
@@ -1560,6 +1574,7 @@
           </div>
         {/if}
       </fieldset>
+      {@render batchStepLine()}
     {:else if phase === 'summary' && prepareResult}
       <h4 class="ia-heading">{t('internetArchive.summary.heading')}</h4>
       {@render queueBatchLine()}
@@ -1659,7 +1674,9 @@
     {:else if phase === 'running'}
       <h4 class="ia-heading">{t('internetArchive.running.heading')}</h4>
       {@render queueBatchLine()}
-      {#if queueBusy}
+      {#if batchStep}
+        {@render batchStepLine()}
+      {:else if queueBusy}
         <p class="ia-status" role="status">{t('internetArchive.queue.preparing')}</p>
       {/if}
       {#if runningProgress}
@@ -1974,6 +1991,19 @@
     {/if}
   {:else if !itemIdentifier}
     <p class="ia-status ia-placeholder">{t('internetArchive.item.placeholder')}</p>
+  {/if}
+{/snippet}
+
+{#snippet batchStepLine()}
+  {#if batchStep}
+    <p class="ia-status" role="status" aria-live="polite">
+      {batchStep.kind === 'checking'
+        ? t('internetArchive.queue.checking', {
+            checked: formatCount(batchStep.checked),
+            total: formatCount(batchStep.total),
+          })
+        : t('internetArchive.queue.preparingBatch', { count: formatCount(batchStep.count) })}
+    </p>
   {/if}
 {/snippet}
 

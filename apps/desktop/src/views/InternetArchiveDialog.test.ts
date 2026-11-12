@@ -1218,6 +1218,52 @@ describe('InternetArchiveDialog import every result (queue)', () => {
     iaRef.iaPrepareImport.mockReset()
   })
 
+  it('shows how far the preparation of a batch has got', async () => {
+    pagedSearch(150)
+    let releaseLookup: () => void = () => {}
+    const lookupGate = new Promise<void>((resolve) => (releaseLookup = resolve))
+    iaRef.iaGetItem.mockImplementation(async (id: string) => {
+      if (id === 'id-99') await lookupGate
+      return itemDetails({ identifier: id, pdfs: [pdf()] })
+    })
+    let finishPrepare: (value: unknown) => void = () => {}
+    iaRef.iaPrepareImport.mockImplementationOnce(
+      () => new Promise((resolve) => (finishPrepare = resolve))
+    )
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar todos los registros de la página' })
+    )
+    await screen.findByText('Seleccionados: 50')
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 150 resultados' }))
+    await screen.findByText('Toda la búsqueda en cola: 150 registros', undefined, {
+      timeout: 3000,
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Continuar' }))
+    await screen.findByText('Destino')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Preparar importación' }))
+
+    expect(
+      await screen.findByText('Revisando los registros de la tanda: 96 de 100', undefined, {
+        timeout: 3000,
+      })
+    ).toBeInTheDocument()
+    releaseLookup()
+    expect(
+      await screen.findByText('Preparando la importación de 100 registros…', undefined, {
+        timeout: 3000,
+      })
+    ).toBeInTheDocument()
+    finishPrepare(prepareResult({ jobId: 'job-1' }))
+    await screen.findByText('Revisa la preparación', undefined, { timeout: 3000 })
+    expect(screen.queryByText(/Revisando los registros/)).toBeNull()
+    expect(screen.queryByText(/Preparando la importación de/)).toBeNull()
+  })
+
   it('prepares the first batch of the queue and saves the queue', async () => {
     await queueAndPrepare(150)
 

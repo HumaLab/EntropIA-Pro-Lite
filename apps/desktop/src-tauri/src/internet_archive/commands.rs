@@ -582,6 +582,11 @@ pub struct PrepareResultDto {
     pub rejected: Vec<RejectedDto>,
 }
 
+/// Item lookups a preparation runs at once (same as the dialog's batch
+/// builder): enough to cut the wait of a 100-record batch about fourfold,
+/// few enough to stay polite with archive.org.
+pub(crate) const PREPARE_LOOKUP_CONCURRENCY: usize = 4;
+
 /// Item metadata source for import preparation. The production
 /// implementation reads through [`IaClient::get_item`]; tests substitute
 /// fixture maps, so no prepare test touches the network.
@@ -605,10 +610,49 @@ impl ItemFetcher for LiveFetcher<'_> {
     }
 }
 
+/// Look up every identifier at once and return the results in the same
+/// order. Polls the lookups in place (no spawned tasks), so the fetcher may
+/// borrow and the caller's future stays `Send` when the fetcher's is.
+async fn fetch_together<F>(fetcher: &F, identifiers: &[String]) -> Vec<Result<ItemDetails, String>>
+where
+    F: ItemFetcher,
+{
+    use std::future::Future as _;
+    use std::task::Poll;
+
+    let mut lookups: Vec<_> = identifiers
+        .iter()
+        .map(|identifier| Box::pin(fetcher.fetch_item(identifier)))
+        .collect();
+    let mut results: Vec<Option<Result<ItemDetails, String>>> =
+        identifiers.iter().map(|_| None).collect();
+    std::future::poll_fn(|cx| {
+        let mut waiting = false;
+        for (lookup, result) in lookups.iter_mut().zip(results.iter_mut()) {
+            if result.is_none() {
+                match lookup.as_mut().poll(cx) {
+                    Poll::Ready(value) => *result = Some(value),
+                    Poll::Pending => waiting = true,
+                }
+            }
+        }
+        if waiting {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    })
+    .await;
+    results
+        .into_iter()
+        .map(|result| result.expect("every lookup finished"))
+        .collect()
+}
+
 /// Prepare an import job over an existing collection: validate the request,
 /// open the provenance snapshot (synchronously, under the caller's SQLite
-/// lock — never held across an `.await`), fetch each identifier once in
-/// order, include every requested `Available` PDF via [`JobFile::from_pdf`],
+/// lock — never held across an `.await`), fetch each identifier once (a few
+/// at a time), include every requested `Available` PDF via [`JobFile::from_pdf`],
 /// report the rest as `rejected`, persist the job with [`JobStore::create`],
 /// and return the job id with its [`summarize`] summary. Fails with
 /// `nothing_to_import` (creating no job) when no requested file is
@@ -692,11 +736,12 @@ where
     if !snapshot.collection_exists {
         return Err(format!("collection_not_found: {collection_id:?}"));
     }
-    // Sequential fetches; a fetcher error already carries its own code.
+    // A few fetches at a time; a fetcher error already carries its own code.
     let mut details_by_id = HashMap::with_capacity(identifiers.len());
-    for identifier in &identifiers {
-        let details = fetcher.fetch_item(identifier).await?;
-        details_by_id.insert(identifier.clone(), details);
+    for chunk in identifiers.chunks(PREPARE_LOOKUP_CONCURRENCY) {
+        for (identifier, details) in chunk.iter().zip(fetch_together(fetcher, chunk).await) {
+            details_by_id.insert(identifier.clone(), details?);
+        }
     }
     let target = ImportTarget::ExistingCollection {
         collection_id: collection_id.to_string(),
@@ -1984,6 +2029,109 @@ mod tests {
         // One snapshot for the identifier that contributed the file.
         assert_eq!(job.items.len(), 1);
         assert_eq!(job.items[0].identifier, OPEN_FIXTURE_ID);
+    }
+
+    /// Returns the same open item for any identifier after a short wait,
+    /// counting how many lookups run at once.
+    #[cfg(test)]
+    struct CountingFetcher {
+        details: ItemDetails,
+        in_flight: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[cfg(test)]
+    impl ItemFetcher for CountingFetcher {
+        async fn fetch_item(&self, identifier: &str) -> Result<ItemDetails, String> {
+            use std::sync::atomic::Ordering;
+            self.calls.lock().unwrap().push(identifier.to_string());
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            if identifier == "broken-item" {
+                return Err("network: unreachable".to_string());
+            }
+            Ok(self.details.clone())
+        }
+    }
+
+    #[cfg(test)]
+    fn counting_fetcher() -> CountingFetcher {
+        CountingFetcher {
+            details: fixture_details()[OPEN_FIXTURE_ID].clone(),
+            in_flight: Default::default(),
+            peak: Default::default(),
+            calls: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn prepare_looks_up_a_few_items_at_once_and_keeps_their_order() {
+        let fetcher = counting_fetcher();
+        let pdf_name = fetcher.details.pdfs[0].name.clone();
+        let ids: Vec<String> = (0..10).map(|n| format!("item-{n}")).collect();
+        let selections: Vec<SelectionDto> = ids
+            .iter()
+            .map(|id| selection(id, &[pdf_name.as_str()]))
+            .collect();
+        let conn = test_db();
+        insert_test_collection(&conn, "col-1");
+        let (_dir, store) = prepare_store();
+        let result = prepare_import_with_fetcher(
+            &fetcher,
+            &store,
+            |identifiers| {
+                Ok(ProvenanceSnapshot::open(&conn, "col-1", identifiers).expect("snapshot"))
+            },
+            1_700_000_000,
+            "col-1",
+            &selections,
+        )
+        .await
+        .expect("prepare succeeds");
+        let peak = fetcher.peak.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(peak > 1, "lookups ran one at a time");
+        assert!(peak <= PREPARE_LOOKUP_CONCURRENCY, "peak {peak}");
+        let mut called = fetcher.calls.lock().unwrap().clone();
+        called.sort();
+        let mut expected = ids.clone();
+        expected.sort();
+        assert_eq!(called, expected, "each identifier is looked up once");
+        let job = store.load(&result.job_id).expect("job persisted");
+        let order: Vec<&str> = job.files.iter().map(|f| f.identifier.as_str()).collect();
+        assert_eq!(order, ids.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(result.summary.new_files, 10);
+    }
+
+    #[tokio::test]
+    async fn prepare_fails_when_any_lookup_fails_and_creates_no_job() {
+        let fetcher = counting_fetcher();
+        let pdf_name = fetcher.details.pdfs[0].name.clone();
+        let selections: Vec<SelectionDto> = ["item-0", "broken-item", "item-2", "item-3", "item-4"]
+            .iter()
+            .map(|id| selection(id, &[pdf_name.as_str()]))
+            .collect();
+        let conn = test_db();
+        insert_test_collection(&conn, "col-1");
+        let (dir, store) = prepare_store();
+        let error = prepare_import_with_fetcher(
+            &fetcher,
+            &store,
+            |identifiers| {
+                Ok(ProvenanceSnapshot::open(&conn, "col-1", identifiers).expect("snapshot"))
+            },
+            1_700_000_000,
+            "col-1",
+            &selections,
+        )
+        .await
+        .expect_err("a failed lookup fails the preparation");
+        assert_eq!(error, "network: unreachable");
+        let root = dir.path().join("internet-archive");
+        let jobs = std::fs::read_dir(&root).map(|dir| dir.count()).unwrap_or(0);
+        assert_eq!(jobs, 0, "no job was written");
     }
 
     #[tokio::test]
