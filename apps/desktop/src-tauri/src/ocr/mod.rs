@@ -1507,6 +1507,7 @@ pub(crate) async fn process_job(
 /// If it's insufficient (scanned PDFs, images), every page is rendered and OCR'd,
 /// then the results are concatenated with page separators.
 #[cfg(feature = "paddle-ocr")]
+#[allow(clippy::too_many_arguments)]
 async fn process_pdf(
     provider: &Arc<dyn OcrProvider>,
     conn: &rusqlite::Connection,
