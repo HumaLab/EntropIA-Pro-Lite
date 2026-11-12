@@ -5,6 +5,7 @@
     checked = $bindable(false),
     children,
     disabled = false,
+    indeterminate = false,
     onchange,
     label,
     class: className = '',
@@ -17,7 +18,14 @@
 </script>
 
 <label class="checkbox {className}" class:checkbox--disabled={disabled}>
-  <input type="checkbox" {checked} {disabled} aria-label={label} onchange={handleChange} />
+  <input
+    type="checkbox"
+    {checked}
+    {disabled}
+    {indeterminate}
+    aria-label={label}
+    onchange={handleChange}
+  />
   <span class="checkbox__label">
     {#if children}{@render children()}{/if}
   </span>
@@ -97,6 +105,15 @@
 
   .checkbox input:checked::after {
     transform: scale(1);
+  }
+
+  .checkbox input:indeterminate {
+    border-color: var(--color-text-primary);
+  }
+
+  .checkbox input:indeterminate::after {
+    transform: scale(1);
+    clip-path: inset(40% 10%);
   }
 
   .checkbox input:focus-visible {

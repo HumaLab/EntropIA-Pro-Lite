@@ -22,6 +22,12 @@ describe('Checkbox', () => {
     expect(onchange).toHaveBeenLastCalledWith(false)
   })
 
+  it('shows a mixed state when asked', async () => {
+    render(Checkbox, { props: { label: 'All', indeterminate: true } })
+    const control = screen.getByRole('checkbox', { name: 'All' })
+    expect(control).toBePartiallyChecked()
+  })
+
   it('does not change while disabled', async () => {
     const onchange = vi.fn()
     render(Checkbox, { props: { label: 'Embeddings', disabled: true, onchange } })
