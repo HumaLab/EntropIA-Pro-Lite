@@ -14,13 +14,13 @@ const productName =
   localMl === '1' ? productionTauriConfig.productName : liteTauriConfig.productName
 
 export default defineConfig({
-  plugins: [svelte({ hot: !process.env.VITEST })],
+  plugins: [svelte()],
   define: {
     'import.meta.env.VITE_LOCAL_ML': JSON.stringify(localMl),
     'import.meta.env.VITE_PRODUCT_NAME': JSON.stringify(productName),
   },
   resolve: {
-    alias: { $lib: resolve(__dirname, './src/lib') },
+    alias: { $lib: resolve(import.meta.dirname, './src/lib') },
     conditions: ['browser'],
   },
   test: {
