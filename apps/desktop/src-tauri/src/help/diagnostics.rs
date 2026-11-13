@@ -43,6 +43,14 @@ pub(crate) const KEY_SETTINGS: &[(&str, &str)] = &[
 /// Longest single line kept; longer ones are cut and marked.
 const MAX_LINE_CHARS: usize = 2_000;
 
+/// Longest log message kept in a report (30 of them stay under
+/// [`MAX_REPORT_CHARS`] with the header).
+const MAX_MESSAGE_CHARS: usize = 300;
+
+/// File extensions that end a file name, so a path or name with spaces is
+/// taken whole up to them.
+const FILE_EXTENSIONS: &str = "pdf|jpe?g|png|tiff?|gif|webp|bmp|heic|txt|md|docx?|odt|rtf|epub|mp3|wav|m4a|ogg|flac|mp4|mov|mkv|webm|csv|xlsx?|json|xml|html?|zip";
+
 /// Most log entries that go along.
 pub(crate) const MAX_LOG_ENTRIES: usize = 30;
 
@@ -113,6 +121,15 @@ pub(crate) fn build_report(inputs: &DiagnosticInputs) -> String {
                 AppLogLevel::Error => "error",
             };
             let message = entry.message.replace(['\r', '\n'], " ");
+            // Cut before scrubbing, so 30 entries always fit MAX_REPORT_CHARS
+            // and the text sent is exactly the text previewed.
+            let message = if message.chars().count() > MAX_MESSAGE_CHARS {
+                let mut cut: String = message.chars().take(MAX_MESSAGE_CHARS).collect();
+                cut.push('…');
+                cut
+            } else {
+                message
+            };
             out.push(scrub_line(&format!(
                 "- {} {level} [{}] {message}",
                 format_utc(entry.timestamp_ms),
@@ -131,24 +148,39 @@ struct Patterns {
     file_name: Regex,
     double_quoted: Regex,
     single_quoted: Regex,
+    opaque_token: Regex,
 }
 
 fn patterns() -> &'static Patterns {
     static PATTERNS: OnceLock<Patterns> = OnceLock::new();
     PATTERNS.get_or_init(|| {
-        let re = |pattern: &str| Regex::new(pattern).expect("valid scrub pattern");
+        let re = |pattern: &str| {
+            Regex::new(&pattern.replace("EXT", FILE_EXTENSIONS)).expect("valid scrub pattern")
+        };
         Patterns {
-            // Keep scheme and host (which service failed), drop the path.
-            url: re(r#"(https?)://([^/\s"'«»]+)[^\s"'«»]*"#),
-            // Folder names may hold spaces; the last part may not.
-            windows_path: re(r#"[A-Za-z]:\\(?:[^\\\n:"'«»]*\\)*[^\\\s:"'«»]*"#),
-            unc_path: re(r#"\\\\(?:[^\\\n:"'«»]*\\)*[^\\\s:"'«»]*"#),
-            unix_path: re(r#"(^|[\s(=:,\[])~?/[^/\s"'«»)\]][^\s"'«»)\]]*"#),
-            file_name: re(
-                r#"[^\s/\\"'«»\[\]]+\.(?i:pdf|jpe?g|png|tiff?|gif|webp|bmp|heic|txt|md|docx?|odt|rtf|epub|mp3|wav|m4a|ogg|flac|mp4|mov|mkv|webm|csv|xlsx?|json|xml|html?|zip)\b"#,
+            // Keep scheme and host (which service failed), drop the path; a
+            // path with spaces runs up to its file extension.
+            url: re(
+                r#"([A-Za-z][A-Za-z0-9+.-]*)://([^/\s"'«»‘’]*)[^\s"'«»‘’]*(?:[^\n"'«»‘’]*?\.(?i:EXT)\b)?"#,
             ),
-            double_quoted: re(r#""[^"\n]*"|«[^»\n]*»|“[^”\n]*”|`[^`\n]*`"#),
-            single_quoted: re(r#"(^|[\s(=:,\[])'[^'\n]*'"#),
+            // Folder names may hold spaces; the last part runs up to its
+            // extension, or to the first space when it has none.
+            windows_path: re(
+                r#"[A-Za-z]:\\(?:[^\\\n:"'«»]*\\)*(?:[^\\\n:"'«»]*?\.(?i:EXT)\b|[^\\\s:"'«»]*)"#,
+            ),
+            unc_path: re(
+                r#"\\\\(?:[^\\\n:"'«»]*\\)*(?:[^\\\n:"'«»]*?\.(?i:EXT)\b|[^\\\s:"'«»]*)"#,
+            ),
+            unix_path: re(
+                r#"(^|[\s(=:,\[])~?/(?:[^/\n"'«»]+/)*(?:[^/\n"'«»]*?\.(?i:EXT)\b|[^/\s"'«»)\]]+)"#,
+            ),
+            file_name: re(r#"[^\s/\\"'«»\[\]]+\.(?i:EXT)\b"#),
+            // Up to the last closing mark on the line, so an apostrophe inside
+            // a title does not end it early.
+            double_quoted: re(r#""[^"\n]*"|«[^»\n]*»|“[^”\n]*”|‘[^\n]*’|`[^`\n]*`"#),
+            single_quoted: re(r#"(^|[\s(=:,\[])'[^\n]*'"#),
+            // Credential-shaped runs with no marker word next to them.
+            opaque_token: re(r#"[A-Za-z0-9_\-+/=]{32,}"#),
         }
     })
 }
@@ -165,6 +197,18 @@ pub(crate) fn scrub_line(line: &str) -> String {
     let line = p.file_name.replace_all(&line, "[archivo]");
     let line = p.double_quoted.replace_all(&line, "[texto]");
     let line = p.single_quoted.replace_all(&line, "${1}[texto]");
+    let line = p
+        .opaque_token
+        .replace_all(&line, |caps: &regex::Captures<'_>| {
+            let token = &caps[0];
+            let has_digit = token.chars().any(|c| c.is_ascii_digit());
+            let has_letter = token.chars().any(|c| c.is_ascii_alphabetic());
+            if has_digit && has_letter {
+                "[redactado]".to_string()
+            } else {
+                token.to_string()
+            }
+        });
     sanitize_field(line.into_owned(), MAX_LINE_CHARS)
 }
 
@@ -294,6 +338,59 @@ mod tests {
                 assert!(!scrubbed.contains(word), "{scrubbed:?} still has {word:?}");
             }
         }
+    }
+
+    #[test]
+    fn scrub_line_closes_the_leaks_the_independent_review_found() {
+        let cases: [(&str, &[&str]); 7] = [
+            (
+                r"no abre C:\Users\ana\Informe médico Ana Pérez.pdf: acceso denegado",
+                &["ana", "médico", "Pérez", "Informe"],
+            ),
+            (
+                "no abre /Users/ana/Mis Documentos/Informe médico Ana.pdf (os error 2)",
+                &["ana", "Documentos", "médico"],
+            ),
+            (
+                "falla file:///Users/ana/Acta.pdf",
+                &["Users", "ana", "Acta"],
+            ),
+            ("título ‘Memorias de Dorrego’ sin texto", &["Dorrego"]),
+            (
+                "título 'Carta d'Artagnan a Mitre' sin texto",
+                &["Artagnan", "Mitre"],
+            ),
+            (
+                "AssemblyAI 401 con 0123456789abcdef0123456789abcdef",
+                &["0123456789abcdef0123456789abcdef"],
+            ),
+            (
+                "respuesta Zx9-Qw8_Er7Ty6Ui5Op4As3Df2Gh1Jk0Lz9Xc8Vb7",
+                &["Zx9-Qw8_Er7Ty6Ui5Op4As3Df2Gh1Jk0Lz9Xc8Vb7"],
+            ),
+        ];
+        for (raw, gone) in cases {
+            let scrubbed = scrub_line(raw);
+            for word in gone {
+                assert!(!scrubbed.contains(word), "{scrubbed:?} still has {word:?}");
+            }
+        }
+        assert!(scrub_line("falla file:///Users/ana/Acta.pdf").contains("falla"));
+        assert!(scrub_line("AssemblyAI 401 con 0123456789abcdef0123456789abcdef").contains("401"));
+    }
+
+    #[test]
+    fn the_longest_report_is_sent_exactly_as_previewed() {
+        let logs = (1..=40)
+            .map(|id| entry(id, AppLogLevel::Error, &"palabra ".repeat(1_000)))
+            .collect();
+        let report = build_report(&inputs(logs));
+        assert!(
+            report.chars().count() <= MAX_REPORT_CHARS,
+            "{} chars",
+            report.chars().count()
+        );
+        assert_eq!(scrub_report(&report), report);
     }
 
     #[test]
