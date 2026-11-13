@@ -40,7 +40,10 @@
         status = result.hasOpenrouterKey ? 'ready' : 'no-key'
       },
       () => {
-        status = 'no-key'
+        // A failed check is not a missing key: let the user ask, and let
+        // help_ask report the real cause (it switches to the no-key page on
+        // help_no_openrouter_key).
+        status = 'ready'
       }
     )
   })

@@ -224,6 +224,17 @@ describe('HelpView', () => {
     )
   })
 
+  it('a failed status check is not reported as a missing key', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'help_status') throw new Error('Command help_status not allowed by ACL')
+      return undefined
+    })
+    render(HelpView)
+
+    expect(await screen.findByRole('textbox')).toBeInTheDocument()
+    expect(screen.queryByText('La ayuda usa tu cuenta de OpenRouter')).not.toBeInTheDocument()
+  })
+
   it('shows a loading state while waiting for the answer', async () => {
     let release!: (value: unknown) => void
     mockInvoke.mockImplementation(async (command: string) => {
