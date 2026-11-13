@@ -65,7 +65,7 @@ own card later and can reuse this base.
 |---|---|---|---|---|
 | T1 | S4 | inline, TDD — Rust `help::manual`: embed, split into sections, local selection | done | bd30782d |
 | T2 | S5 | inline, TDD — Rust `help::diagnostics`: allowlisted config + scrubbed recent logs, `help_diagnostics_preview` (Risk item 2) | done (builder; command lands in T3) | bd30782d |
-| T3 | S1-S3, S5 | inline, TDD — Rust `help_ask`: key gate, prompt assembly, OpenRouter call | pending | |
+| T3 | S1-S3, S5 | inline, TDD — Rust `help_ask`: key gate, prompt assembly, OpenRouter call | done | dbf36925 |
 | T4 | S1, S2, S5-S7 | inline, TDD — frontend: `lib/help.ts`, `HelpView`, header button, no-key page, i18n ES/EN | pending | |
 | T5 | S4 | inline — manual: short section on the help chat | pending | |
 | T6 | S5, S8 | independent verify (Risk item 2), then owner check with the real failures of S8 | pending | |
@@ -86,3 +86,4 @@ own card later and can reuse this base.
   redaction at write time (`redact_sensitive`), `logs_get` returns 20 entries;
   no help button or manual link anywhere in the app.
 - L4 (2026-11-13, T1+T2): `help::manual` (parse, BM25 selection over 5-letter stems, chapter 19 first for failures, sections skipped not cut over budget) and `help::diagnostics` (allowlisted settings, keys as configurada / no configurada, last 30 warn/error lines with URL paths, file paths, file names and quoted text replaced, credential redaction via `sanitize_field`). T1 RED not observed: the compile started after the implementation was written (7/7 green on first run); a mutation check is owed in T6. T2 RED 6 failing -> GREEN `cargo test --lib help::` 14/14. Commit bd30782d.
+- L5 (2026-11-13, T3, delegated worker): `help/prompt.rs` (wire types camelCase, validation, history last 6 turns cut to 4000 chars, Spanish prompt with excerpts `chapter › title`, diagnostics labelled as data) and `help/commands.rs` (`help_status` from the raw setting, `help_diagnostics_preview`, `help_ask` re-scrubbing diagnostics, key gate error `help_no_openrouter_key`, model `openrouter_model` else `DEFAULT_OPENROUTER_MODEL`, `provider_defaults(1500, 0.2)`). RED 7 failing -> GREEN `cargo test --lib help::` 21/21; clippy lean `-D warnings` clean; rustfmt clean (worker report). No live OpenRouter call tested. Commit dbf36925.
