@@ -318,7 +318,7 @@ impl HelpIndex {
     }
 
     /// The pinned troubleshooting chapter («¿Qué hago si…?»), independent of
-    /// any query: `pick_sections` leads with it on failures.
+    /// any query: `pick_sections_with_budget` leads with it on failures.
     pub(crate) fn troubleshooting(&self) -> Option<Hit> {
         let mut stmt = self
             .conn
@@ -360,7 +360,7 @@ impl HelpIndex {
     /// through the shared trigrams. An empty or stopword-only question
     /// matches nothing.
     ///
-    /// A `None` source searches everything; `pick_sections` passes
+    /// A `None` source searches everything; `pick_sections_with_budget` passes
     /// `Some(Source::Manual)` so FAQ entries never leak into the model prompt.
     pub(crate) fn search_in(&self, query: &str, limit: usize, source: Option<Source>) -> Vec<Hit> {
         if limit == 0 {

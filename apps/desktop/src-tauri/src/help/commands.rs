@@ -12,8 +12,8 @@ use super::diagnostics::{
 use super::faq;
 use super::index::{HelpIndex, Hit};
 use super::prompt::{
-    build_help_prompt, normalize_history, pick_sections, validate_question, HelpAnswer, HelpSource,
-    HelpStatus, HelpTurn, ANSWER_MAX_TOKENS, ANSWER_TEMPERATURE,
+    build_help_prompt, normalize_history_capped, pick_sections_with_budget, validate_question,
+    HelpAnswer, HelpSource, HelpStatus, HelpTurn,
 };
 
 /// The help index, opened lazily once per process (D6): the first question
@@ -106,8 +106,9 @@ pub async fn help_diagnostics_preview(
 ///
 /// Before the key gate, a question that matches a bundled FAQ entry (S10)
 /// is answered locally with that entry's text, verbatim: no key needed, no
-/// network touched. Questions with diagnostics attached always go to the
-/// model.
+/// network touched — unless `help_local_answers` is off, which sends every
+/// question to the model. Questions with diagnostics attached always go to
+/// the model.
 #[tauri::command]
 pub async fn help_ask(
     app: tauri::AppHandle,
@@ -117,7 +118,6 @@ pub async fn help_ask(
     db: tauri::State<'_, crate::db::state::AppDbState>,
 ) -> Result<HelpAnswer, String> {
     let question = validate_question(&question)?;
-    let history = normalize_history(history)?;
     // What the user previewed is what leaves, re-scrubbed on the way out in
     // case it was edited in between (D3). Anything else diagnostic stays home.
     let diagnostics = match diagnostics {
@@ -125,9 +125,27 @@ pub async fn help_ask(
         _ => None,
     };
     let with_diagnostics = diagnostics.is_some();
+    // One settings read (S14, D10): the model override with its fallback
+    // chain, the clamped budgets and the local-answers switch. The key gate
+    // stays below the local answer, so it is attempted here but only
+    // unwrapped once the question is known to need the model.
+    let conn = db.ui_conn.clone();
+    let (key_result, help) = tokio::task::spawn_blocking(move || {
+        let guard = conn.lock().map_err(|e| e.to_string())?;
+        let help = super::settings::resolve_help_settings(&|key| {
+            crate::settings::get_setting(&guard, key)
+        });
+        // The frontend shows its fixed no-key page on exactly this string (S6).
+        let api_key = crate::llm::require_openrouter_key(&guard)
+            .map_err(|_| "help_no_openrouter_key".to_string());
+        Ok::<_, String>((api_key, help))
+    })
+    .await
+    .map_err(|e| format!("help settings task panicked: {e}"))??;
     // S10: deterministic local answer first, before the key gate and without
     // any network call. It carries the entry's Fuente as its single source.
-    if let Some(local) = faq::answer_locally(diagnostics.as_deref(), &question) {
+    if let Some(local) = super::settings::local_answer_for(&help, diagnostics.as_deref(), &question)
+    {
         return Ok(HelpAnswer {
             answer: local.answer,
             sources: vec![HelpSource {
@@ -137,25 +155,13 @@ pub async fn help_ask(
             local: true,
         });
     }
-    let conn = db.ui_conn.clone();
-    let (api_key, model) = tokio::task::spawn_blocking(move || {
-        let guard = conn.lock().map_err(|e| e.to_string())?;
-        // The frontend shows its fixed no-key page on exactly this string (S6).
-        let api_key = crate::llm::require_openrouter_key(&guard)
-            .map_err(|_| "help_no_openrouter_key".to_string())?;
-        let model = crate::settings::get_setting(&guard, "openrouter_model")
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| crate::settings::DEFAULT_OPENROUTER_MODEL.to_string());
-        Ok::<_, String>((api_key, model))
-    })
-    .await
-    .map_err(|e| format!("help settings task panicked: {e}"))??;
+    let api_key = key_result?;
+    let history = normalize_history_capped(history, help.history_turns)?;
     let picked: Vec<Hit> = {
         // The guard drops before the network call below: the index is only
         // borrowed to rank, never across an await.
         let index = help_index(&app)?;
-        pick_sections(&index, &question, with_diagnostics)
+        pick_sections_with_budget(&index, &question, with_diagnostics, help.context_chars)
     };
     let prompt = build_help_prompt(&question, &history, &picked, diagnostics.as_deref());
     let sources = picked
@@ -166,10 +172,10 @@ pub async fn help_ask(
         })
         .collect();
     let params = crate::llm::generation::OpenRouterGenerationParams::provider_defaults(
-        ANSWER_MAX_TOKENS,
-        ANSWER_TEMPERATURE,
+        help.max_tokens,
+        help.temperature,
     );
-    let answer = crate::llm::openrouter::OpenRouterClient::new(api_key, model)
+    let answer = crate::llm::openrouter::OpenRouterClient::new(api_key, help.model)
         .generate(&prompt, &params)
         .await?;
     Ok(HelpAnswer {

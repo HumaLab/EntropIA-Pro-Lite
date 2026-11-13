@@ -34,6 +34,7 @@
 - «Agente» `settings.agentParamsTab`
 - «Sincronización» `settings.syncTab`
 - «Asistentes» `settings.assistantsTab`
+- «Ayuda» `settings.helpTab`
 - «Dependencias de IA» `settings.dependenciesTab`
 - «Lotes» `settings.batchTab`
 - «Alias» `settings.aliasesTab`
@@ -2376,6 +2377,21 @@
 - «{product} instala los archivos ONNX desde {repo} y conserva los nombres esperados por el proveedor local.»
 - «{product} vectoriza por API usando OpenRouter con el contrato BGE-M3 de 1024 dimensiones.»
 
+### Ayuda
+
+- «Ayuda»
+- «Contexto: caracteres del manual y del mapa de pantallas enviados al modelo (4000-60000)»
+- «Historial: cantidad de turnos previos incluidos (0-12)»
+- «Las preguntas que van al modelo se cobran en tu cuenta de OpenRouter. El diagnóstico y tus documentos solo viajan si los activás en cada pregunta.»
+- «Modelo de la ayuda: vacío usa el modelo general de Configuración»
+- «Modelo, contexto y límites de la ayuda en la app. Los valores mostrados son los vigentes.»
+- «Parámetro de ayuda inválido: {param}»
+- «Responde las preguntas frecuentes en este equipo, sin consultar a OpenRouter. Apagado: todas las preguntas van al modelo.»
+- «Respuesta: tope de tokens generados por el modelo (200-8000)»
+- «Respuestas locales»
+- «Restaurar defaults»
+- «Temperatura: gradúa la creatividad de la respuesta (0-1)»
+
 ### llmMode
 
 - «API remota. Requiere API key y conexión a internet.»
@@ -2587,6 +2603,7 @@
 - «Apariencia» `settings.appearanceTab`
 - «Asistentes» `settings.assistantsTab`
 - «AssemblyAI» `settings.assemblyai.title`
+- «Ayuda» `settings.helpTab`
 - «Clave cargada: {key}» `settings.loadedKey`
 - «Clave en formato anterior (texto plano); guardá de nuevo para protegerla en el almacén de credenciales» `settings.keyStoredLegacyPlaintext`
 - «Clave guardada en el almacén del sistema» `settings.keyStoredInCredentialManager`
@@ -2619,10 +2636,10 @@
 - «Ingresá una API key de GLM-OCR antes de probar la conexión.» `settings.enterGlmOcrApiKey`
 - «Ir a Configuración» `settings.modelList.openSettings`
 - «Logs» `settings.logsTab`
-- «Lotes» `settings.batchTab`
 
 ### Varios (2/3)
 
+- «Lotes» `settings.batchTab`
 - «Mantenimiento» `settings.maintenanceTab`
 - «Model Params» `settings.modelParamsTab`
 - «Modelo generativo» `settings.model`
@@ -2661,10 +2678,10 @@
 - «google/gemma-4-26b-a4b-it» `settings.modelPlaceholder`
 - «sk-or-v1-...» `settings.apiKeyPlaceholder`
 - «zai-... / sk-...» `settings.glmOcrApiKeyPlaceholder`
-- «{count} más: seguí escribiendo para acotar» `settings.modelList.moreMatches`
 
 ### Varios (3/3)
 
+- «{count} más: seguí escribiendo para acotar» `settings.modelList.moreMatches`
 - «¿Quitar la clave de {service}?» `settings.clearKeyTitle`
 
 ## Actualizaciones

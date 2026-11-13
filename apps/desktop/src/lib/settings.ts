@@ -217,6 +217,18 @@ export const SETTINGS_KEYS = {
    * defaults del motor. Ver `docs/parametros-agente.md` en el motor.
    */
   RESEARCH_AGENT_PARAMETERS: 'research_agent_parameters',
+  /**
+   * Ajustes de la ayuda en la app (S14, D10). `help_model` vacío o ausente =
+   * hereda `openrouter_model` (el modelo general); el backend resuelve esa
+   * herencia y aplica clamps y defaults.
+   */
+  HELP_MODEL: 'help_model',
+  HELP_CONTEXT_CHARS: 'help_context_chars',
+  HELP_MAX_TOKENS: 'help_max_tokens',
+  HELP_TEMPERATURE: 'help_temperature',
+  HELP_HISTORY_TURNS: 'help_history_turns',
+  /** `help_local_answers`: 'false' apaga las respuestas locales (S10). */
+  HELP_LOCAL_ANSWERS: 'help_local_answers',
 } as const
 
 export type LlmMode = 'local' | 'openrouter' | 'auto'
@@ -350,3 +362,16 @@ export const DEFAULT_RAG_PARAMS = {
   temperature: '0.2',
   maxTokens: '4096',
 } as const
+
+/**
+ * Defaults de la ayuda en la app (S14, D10): espejan los del backend
+ * (`src-tauri/src/help/settings.rs`). `model` vacío = hereda el modelo
+ * general de Configuración; `localAnswers` encendido = las preguntas
+ * frecuentes se responden en este equipo, sin consultar a OpenRouter (S10).
+ */
+export const DEFAULT_HELP_MODEL = ''
+export const DEFAULT_HELP_CONTEXT_CHARS = '24000'
+export const DEFAULT_HELP_MAX_TOKENS = '1500'
+export const DEFAULT_HELP_TEMPERATURE = '0.2'
+export const DEFAULT_HELP_HISTORY_TURNS = '6'
+export const DEFAULT_HELP_LOCAL_ANSWERS = true

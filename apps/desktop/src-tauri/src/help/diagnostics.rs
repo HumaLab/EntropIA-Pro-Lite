@@ -13,7 +13,15 @@ use regex::Regex;
 use crate::app_logs::{sanitize_field, AppLogEntry, AppLogLevel};
 
 /// Mode and model settings that say how the app is wired, never what it holds.
+/// Help settings (S14) travel too: the model override and its budgets are
+/// wiring, never secrets.
 pub(crate) const SETTINGS_ALLOWLIST: &[&str] = &[
+    "help_context_chars",
+    "help_history_turns",
+    "help_local_answers",
+    "help_max_tokens",
+    "help_model",
+    "help_temperature",
     "llm_mode",
     "openrouter_model",
     "rag_model",
@@ -403,6 +411,22 @@ mod tests {
         assert!(report.contains("Zotero: configurada"), "{report}");
         assert!(!report.contains("sk-or-v1"), "{report}");
         assert!(!report.contains("secret_ref"), "{report}");
+    }
+
+    #[test]
+    fn report_carries_help_wiring() {
+        // S14: the help model override and its budgets are wiring, like the
+        // other allowlisted keys — shown by value, never as configured/not.
+        let mut styled = inputs(Vec::new());
+        styled
+            .settings
+            .push(("help_model".into(), "vendor/help-model".into()));
+        styled
+            .settings
+            .push(("help_context_chars".into(), "12000".into()));
+        let report = build_report(&styled);
+        assert!(report.contains("help_model: vendor/help-model"), "{report}");
+        assert!(report.contains("help_context_chars: 12000"), "{report}");
     }
 
     #[test]
