@@ -190,20 +190,43 @@ def _init_pipeline(requested_device: str):
     # Try requested device first
     try:
         pipeline = PaddleOCRVL(device=requested_device, **kwargs)
+        if requested_device == "gpu":
+            _smoke_test_gpu(pipeline)
         sys.stderr.write(f"[paddle_vl] Pipeline initialized on device='{requested_device}'\n")
         return pipeline, requested_device
     except Exception as e:
         if requested_device == "gpu":
             sys.stderr.write(
-                f"[paddle_vl] GPU init failed: {e}. "
-                "Falling back to CPU. If you expected GPU acceleration, "
-                "ensure paddlepaddle-gpu is installed. "
-                "EntropIA can install it automatically via the dependency manager.\n"
+                f"[paddle_vl] GPU unusable ({e.__class__.__name__}: {e}); "
+                "falling back to CPU. GPU init can succeed while inference is "
+                "broken (e.g. Paddle 3.2 event_waiter nullptr on some "
+                "driver/wheel combos), so the smoke test runs a tiny predict. "
+                "If you expected GPU acceleration, ensure paddlepaddle-gpu "
+                "matches your CUDA driver.\n"
             )
             pipeline = PaddleOCRVL(device="cpu", **kwargs)
             sys.stderr.write("[paddle_vl] Pipeline initialized on device='cpu' (GPU fallback)\n")
             return pipeline, "cpu"
         raise
+
+
+def _smoke_test_gpu(pipeline):
+    """Run a tiny predict to prove GPU inference works before trusting it.
+
+    Pipeline construction downloads/loads models but does not execute the
+    kernels that break on some GPU setups; a failed smoke test must fall
+    back to CPU instead of failing the whole OCRH run.
+    """
+    import tempfile
+
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        probe_path = os.path.join(tmpdir, "probe.png")
+        Image.new("RGB", (32, 32), "white").save(probe_path)
+        for _ in pipeline.predict(probe_path):
+            pass  # Drain the generator; content is irrelevant, execution is.
+    sys.stderr.write("[paddle_vl] GPU smoke test passed\n")
 
 
 def main():

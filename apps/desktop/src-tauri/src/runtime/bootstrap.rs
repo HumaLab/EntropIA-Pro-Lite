@@ -147,26 +147,47 @@ impl BootstrapController {
 }
 
 pub fn fetch_remote_catalog(source: BootstrapRemoteSource) -> BootstrapRemoteCatalog {
-    load_remote_catalog(source, |source| {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .map_err(|error| format!("Failed to create bootstrap HTTP client: {error}"))?;
-        let response = client
-            .get(&source.manifest_url)
-            .send()
-            .map_err(|error| format!("Failed to fetch bootstrap manifest: {error}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!(
-                "Bootstrap manifest request failed with HTTP status {status}"
-            ));
-        }
+    load_remote_catalog(source, |source| fetch_manifest_on_dedicated_thread(source))
+}
 
-        response
-            .text()
-            .map_err(|error| format!("Failed to read bootstrap manifest body: {error}"))
-    })
+/// Fetch the manifest with `reqwest::blocking` on a dedicated thread.
+///
+/// A blocking `Client` owns an internal tokio runtime, and tokio panics when
+/// such a runtime is dropped from an async context — the calling paths reach
+/// this from `RuntimeManager::ensure_ready_or_bootstrap`, which is invoked
+/// from async commands, from `block_on`-wrapped processing executors and from
+/// plain scheduler threads alike. Building, using and dropping the client on
+/// a dedicated thread is legal in every one of those contexts, so the fetch
+/// is always off-thread. The client's own 15s timeout bounds the join.
+fn fetch_manifest_on_dedicated_thread(
+    source: &BootstrapRemoteSource,
+) -> Result<String, String> {
+    let url = source.manifest_url.clone();
+    std::thread::Builder::new()
+        .name("runtime-bootstrap-fetch".to_string())
+        .spawn(move || {
+            let client = Client::builder()
+                .timeout(Duration::from_secs(15))
+                .build()
+                .map_err(|error| format!("Failed to create bootstrap HTTP client: {error}"))?;
+            let response = client
+                .get(&url)
+                .send()
+                .map_err(|error| format!("Failed to fetch bootstrap manifest: {error}"))?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(format!(
+                    "Bootstrap manifest request failed with HTTP status {status}"
+                ));
+            }
+
+            response
+                .text()
+                .map_err(|error| format!("Failed to read bootstrap manifest body: {error}"))
+        })
+        .map_err(|error| format!("Failed to spawn bootstrap fetch thread: {error}"))?
+        .join()
+        .map_err(|_| "Bootstrap fetch thread panicked".to_string())?
 }
 
 pub fn load_remote_catalog<F>(
