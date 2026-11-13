@@ -105,7 +105,17 @@ pub async fn llm_download_model(
     db: State<'_, AppDbState>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    let db_path = db.db_path.clone();
+    start_local_model_download(&db.db_path, app_handle)
+}
+
+/// Shared starter behind the Settings button and the assistant `models_setup`
+/// tool: queue the configured local-model (Gemma) download in the background.
+#[cfg(feature = "local-ml")]
+pub(crate) fn start_local_model_download(
+    db_path: &std::path::Path,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    let db_path = db_path.to_path_buf();
     let conn = crate::db::open::open_archive_connection(&db_path)
         .map_err(|e| format!("Failed to open DB: {e}"))?;
     let url = super::resolve_local_model_source_url(Some(&conn));

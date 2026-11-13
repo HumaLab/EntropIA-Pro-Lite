@@ -161,7 +161,16 @@ pub async fn rag_reranker_download_model(
     db: tauri::State<'_, crate::db::state::AppDbState>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    let model_dir = local_reranker_model_dir(&db);
+    start_reranker_download(&db.db_path, app_handle)
+}
+
+/// Shared starter behind the Settings button and the assistant `models_setup`
+/// tool: queue the local reranker install in the background.
+pub(crate) fn start_reranker_download(
+    db_path: &std::path::Path,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    let model_dir = super::reranker::resolve_local_reranker_model_dir(db_path.parent());
 
     #[cfg(not(feature = "local-ml"))]
     return super::reranker::download_local_reranker_model_files(&model_dir, &app_handle)

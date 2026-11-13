@@ -200,6 +200,7 @@ async fn harness() -> Harness {
         root.path().to_path_buf(),
         db_path,
         root.path().join("cache"),
+        None,
     ));
     endpoint.sync(&access).await.unwrap();
     let port = endpoint.port().expect("the endpoint is running");
@@ -299,6 +300,7 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
             "items_update",
             "jobs_get",
             "jobs_list",
+            "models_setup",
             "processing_control",
             "processing_prepare",
             "processing_start",
@@ -777,7 +779,7 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         )
         .await;
     let tools = body["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 22);
+    assert_eq!(tools.len(), 23);
     let writes = [
         "processing_prepare",
         "processing_start",
@@ -790,6 +792,7 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         "documents_index",
         "documents_delete",
         "documents_import",
+        "models_setup",
     ];
     // Deleting is the only thing an assistant may ask for that destroys data.
     let destructive = ["collections_delete", "documents_delete"];
@@ -824,7 +827,7 @@ async fn every_tool_publishes_a_strict_input_schema() {
         .expect("tools/list answers with an array")
         .clone();
 
-    let expected: [(&str, &[&str]); 22] = [
+    let expected: [(&str, &[&str]); 23] = [
         ("approvals_status", &["approvalId"]),
         ("collections_create", &["description", "name", "requestId"]),
         ("collections_delete", &["collectionId"]),
@@ -860,6 +863,7 @@ async fn every_tool_publishes_a_strict_input_schema() {
             ],
         ),
         ("jobs_list", &["cursor", "limit", "states"]),
+        ("models_setup", &["action", "components"]),
         (
             "processing_control",
             &["action", "failedOnly", "jobId", "revision", "taskId"],
@@ -3009,4 +3013,85 @@ async fn a_collection_that_gained_a_document_after_the_request_is_not_deleted() 
     assert!(harness.collection_exists(BETA));
     assert_eq!(harness.item_count(), (ALFA_ITEMS + BETA_ITEMS + 1) as i64);
     assert_eq!(harness.items_titled("Revista 3"), 1);
+}
+
+#[tokio::test]
+async fn models_setup_status_is_readable_without_write_scope() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    let report = harness
+        .payload(&token, "models_setup", json!({ "action": "status" }))
+        .await;
+    assert_eq!(report["action"], "status");
+    #[cfg(feature = "local-ml")]
+    {
+        assert_eq!(report["localMl"], true);
+        let ids: Vec<&str> = report["components"]
+            .as_array()
+            .expect("components array")
+            .iter()
+            .map(|c| c["id"].as_str().expect("component id"))
+            .collect();
+        for expected in [
+            "runtime",
+            "llm",
+            "glm_ocr",
+            "qwen_correct",
+            "embeddings",
+            "reranker",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "missing component {expected}: {ids:?}"
+            );
+        }
+        // The temp archive ships no models, so nothing is ready.
+        assert!(
+            report["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| c["ready"] == false),
+            "fresh temp dir must report every component missing: {report}"
+        );
+        assert_eq!(report["started"].as_array().unwrap().len(), 0);
+    }
+    #[cfg(not(feature = "local-ml"))]
+    {
+        assert_eq!(report["localMl"], false);
+        assert_eq!(report["components"].as_array().unwrap().len(), 0);
+    }
+}
+
+#[tokio::test]
+async fn models_setup_rejects_unknown_actions() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    let refused = harness
+        .refusal(&token, "models_setup", json!({ "action": "reboot" }))
+        .await;
+    assert_eq!(refused["error"], "invalid_argument");
+}
+
+#[tokio::test]
+async fn models_setup_install_needs_the_write_scope() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    let refused = harness
+        .refusal(&token, "models_setup", json!({ "action": "install" }))
+        .await;
+    assert_eq!(refused["error"], "forbidden_scope");
+}
+
+#[tokio::test]
+async fn models_setup_install_without_app_context_is_unavailable() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    // The test harness builds the endpoint without an AppHandle, so installs
+    // cannot emit progress: the tool must say so instead of hanging.
+    let refused = harness
+        .refusal(&token, "models_setup", json!({ "action": "install" }))
+        .await;
+    assert_eq!(refused["error"], "unavailable");
 }

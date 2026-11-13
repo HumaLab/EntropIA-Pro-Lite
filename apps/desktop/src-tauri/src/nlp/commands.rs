@@ -59,6 +59,25 @@ fn triples_retired_error(target: &str) -> String {
         "NLP triples extraction was retired for {target}. Use the LLM triples commands instead."
     )
 }
+/// Synchronous twin of [`local_embedding_model_dir`] for callers without the
+/// UI connection (the assistant `models_setup` tool opens the archive from
+/// its path, like every other tool).
+pub(crate) fn resolve_embedding_model_dir_for(
+    db_path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let cache_dir = crate::path_utils::remembered_cache_dir();
+    let app_data_dir = cache_dir.as_deref().or_else(|| db_path.parent());
+    let conn = crate::db::open::open_archive_connection(db_path)
+        .map_err(|e| format!("Failed to open DB: {e}"))?;
+    let configured = crate::settings::get_raw_setting(
+        &conn,
+        super::embeddings::LOCAL_EMBEDDING_MODEL_DIR_SETTING_KEY,
+    );
+    Ok(super::embeddings::resolve_local_embedding_model_dir(
+        configured.as_deref(),
+        app_data_dir,
+    ))
+}
 
 /// The configured local embedding model directory, read on the blocking pool:
 /// an async command must not lock `ui_conn` on its own thread (A-05b).
@@ -126,7 +145,16 @@ pub async fn embedding_download_model(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
-    let model_dir = local_embedding_model_dir(&db).await;
+    start_embedding_download(&db.db_path, app_handle)
+}
+
+/// Shared starter behind the Settings button and the assistant `models_setup`
+/// tool: queue the local BGE-M3 install in the background.
+pub(crate) fn start_embedding_download(
+    db_path: &std::path::Path,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    let model_dir = resolve_embedding_model_dir_for(db_path)?;
     crate::app_logs::info(
         &app_handle,
         "embedding/download",

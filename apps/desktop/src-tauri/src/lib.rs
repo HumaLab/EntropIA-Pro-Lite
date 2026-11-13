@@ -1132,6 +1132,7 @@ pub fn run() {
                         app_dir.clone(),
                         db_path.clone(),
                         cache_dir.clone(),
+                        Some(app.handle().clone()),
                     ),
                 );
                 // A request from an assistant reaches the person at once: the

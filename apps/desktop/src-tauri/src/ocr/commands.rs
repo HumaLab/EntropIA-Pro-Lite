@@ -395,13 +395,23 @@ pub async fn glm_ocr_download_models(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
+    start_glm_ocr_download(&db.db_path, app_handle)
+}
+
+/// Shared starter behind the Settings button and the assistant `models_setup`
+/// tool: queue the missing GLM-OCR GGUF downloads in the background.
+#[cfg(feature = "local-ml")]
+pub(crate) fn start_glm_ocr_download(
+    db_path: &std::path::Path,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    let db_path = db_path.to_path_buf();
     use super::glm_ocr_local::{
         models_dir, MMPROJ_FILENAME, MMPROJ_URL, MODEL_FILENAME, MODEL_URL,
     };
     use crate::llm::download::{download_model_file, open_managed_models_dir};
     use tauri::Emitter;
 
-    let db_path = db.db_path.clone();
     let dir = models_dir(&db_path);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Failed to create GLM-OCR models dir {}: {e}", dir.display()))?;
@@ -517,11 +527,21 @@ pub async fn qwen_correction_download_models(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
+    start_qwen_correction_download(&db.db_path, app_handle)
+}
+
+/// Shared starter behind the Settings button and the assistant `models_setup`
+/// tool: queue the missing Qwen3-VL correction downloads in the background.
+#[cfg(feature = "local-ml")]
+pub(crate) fn start_qwen_correction_download(
+    db_path: &std::path::Path,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    let db_path = db_path.to_path_buf();
     use super::qwen_local::{models_dir, MMPROJ_FILENAME, MMPROJ_URL, MODEL_FILENAME, MODEL_URL};
     use crate::llm::download::{download_model_file, open_managed_models_dir};
     use tauri::Emitter;
 
-    let db_path = db.db_path.clone();
     let dir = models_dir(&db_path);
     std::fs::create_dir_all(&dir).map_err(|e| {
         format!(

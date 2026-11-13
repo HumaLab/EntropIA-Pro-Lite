@@ -90,6 +90,7 @@ const TOOL_IMPORT_SOURCES_LIST: &str = "import_sources_list";
 const TOOL_DOCUMENTS_IMPORT: &str = "documents_import";
 const TOOL_DOCUMENTS_DELETE: &str = "documents_delete";
 const TOOL_COLLECTIONS_DELETE: &str = "collections_delete";
+const TOOL_MODELS_SETUP: &str = "models_setup";
 
 const REFUSE_LOCAL_WRITE: &str = "Este asistente no tiene permiso para preparar ni controlar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar procesamiento y editar el corpus»).";
 const REFUSE_REMOTE_SPEND: &str = "Este asistente no tiene permiso para pedir procesamiento pago: la persona puede dárselo en Configuración › Asistentes («Pedir procesamiento pago»).";
@@ -390,6 +391,18 @@ pub struct ApprovalsStatusParams {
     pub approval_id: String,
 }
 
+/// `models_setup` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelsSetupParams {
+    /// `status` inspects without changing anything; `install` queues the
+    /// missing downloads in the background (same as the Settings buttons).
+    pub action: String,
+    /// Component ids to install (`runtime`, `llm`, `glm_ocr`,
+    /// `qwen_correct`, `embeddings`, `reranker`); omit for all missing.
+    pub components: Option<Vec<String>>,
+}
+
 /// Arguments that deserialize strictly but fail as a tool error.
 ///
 /// rmcp turns a failed `Parameters` extraction into a plain-text tool result, and
@@ -423,12 +436,16 @@ pub struct AgentServer {
     tool_router: ToolRouter<Self>,
     reader: ArchiveReader,
     jobs: JobsArchive,
+    /// The archive the tools read; also where model dirs resolve from.
+    db_path: PathBuf,
     /// Where paid requests wait for the owner (D3); shared with the app.
     approvals: Arc<ApprovalStore>,
     corpus: CorpusArchive,
     /// Who may connect and which folders imports may read.
     access: Arc<AgentAccess>,
     audit: AuditLog,
+    /// `None` in tests, where installs cannot run.
+    app_handle: Option<tauri::AppHandle>,
 }
 
 impl AgentServer {
@@ -440,6 +457,7 @@ impl AgentServer {
         approvals: Arc<ApprovalStore>,
         corpus_events: Arc<CorpusEvents>,
         access: Arc<AgentAccess>,
+        app_handle: Option<tauri::AppHandle>,
     ) -> Self {
         let db_path = db_path.into();
         Self {
@@ -448,8 +466,10 @@ impl AgentServer {
             access,
             corpus: CorpusArchive::new(db_path.clone(), corpus_events),
             jobs: JobsArchive::new(db_path.clone()),
-            reader: ArchiveReader::new(db_path),
+            reader: ArchiveReader::new(db_path.clone()),
+            db_path,
             audit: AuditLog::new(cache_dir.into().join("logs")),
+            app_handle,
         }
     }
 
@@ -1539,6 +1559,89 @@ impl AgentServer {
                     ERROR_NOT_FOUND,
                     format!("No hay un pedido {} de este asistente.", args.approval_id),
                 ))
+            }
+        }
+    }
+
+    #[tool(
+        name = "models_setup",
+        description = "Modelos locales de IA: `action: status` dice qué hay instalado (runtime, Gemma, GLM-OCR, Qwen, embeddings, reranker) y qué habilita cada cosa; `action: install` pone en marcha las descargas que falten en segundo plano (igual que los botones de Configuración) y devuelve lo que empezó; repetí `status` para seguir el progreso. Instalar necesita el permiso «Preparar procesamiento y editar el corpus»; no gasta nada pago, pero baja varios GB.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn models_setup(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<ModelsSetupParams>>,
+    ) -> Result<Json<super::models_setup::ModelsSetupReport>, CallToolResult> {
+        const REFUSE_MODELS_SETUP_WRITE: &str = "Este asistente no tiene permiso para instalar modelos locales: la persona puede dárselo en Configuración › Asistentes («Preparar procesamiento y editar el corpus»).";
+        // Parse before scoping: reading the inventory never changes anything,
+        // so `status` stays available to read-only clients; only `install`
+        // needs the write scope.
+        let params = match args.0 {
+            Ok(params) => params,
+            Err(reason) => {
+                if let Ok(caller) = Self::caller(&context) {
+                    self.audit_error(&caller, TOOL_MODELS_SETUP, ERROR_INVALID_ARGUMENT, None);
+                }
+                return Err(tool_error(
+                    ERROR_INVALID_ARGUMENT,
+                    format!("Los argumentos de la herramienta no son válidos: {reason}"),
+                ));
+            }
+        };
+        if params.action.trim() == "install" {
+            let caller = self.guard_scope(
+                &context,
+                TOOL_MODELS_SETUP,
+                Scope::LocalWrite,
+                REFUSE_MODELS_SETUP_WRITE,
+            )?;
+            return self.models_setup_install(&caller, params).await;
+        }
+        let caller = self.guard(&context, TOOL_MODELS_SETUP)?;
+        if params.action.trim() != "status" {
+            self.audit_error(&caller, TOOL_MODELS_SETUP, ERROR_INVALID_ARGUMENT, None);
+            return Err(tool_error(
+                ERROR_INVALID_ARGUMENT,
+                "action debe ser `status` o `install`.".to_string(),
+            ));
+        }
+        let report =
+            super::models_setup::ModelsSetupReport::status(&self.db_path, self.app_handle.as_ref());
+        self.audit_ok(&caller, TOOL_MODELS_SETUP, Vec::new(), None);
+        Ok(Json(report))
+    }
+
+    /// `models_setup` with `action: install`, after the write-scope check.
+    async fn models_setup_install(
+        &self,
+        caller: &Principal,
+        params: ModelsSetupParams,
+    ) -> Result<Json<super::models_setup::ModelsSetupReport>, CallToolResult> {
+        let Some(handle) = self.app_handle.clone() else {
+            self.audit_error(caller, TOOL_MODELS_SETUP, ERROR_UNAVAILABLE, None);
+            return Err(tool_error(
+                ERROR_UNAVAILABLE,
+                "Instalar modelos necesita la app en marcha.".to_string(),
+            ));
+        };
+        let only = params.components.unwrap_or_default();
+        match super::models_setup::start_missing(&self.db_path, &handle, &only).await {
+            Ok((started, snapshot)) => {
+                let ids = super::models_setup::only_or_started_ids(&only, &started);
+                self.audit_ok(caller, TOOL_MODELS_SETUP, ids, None);
+                Ok(Json(
+                    super::models_setup::ModelsSetupReport::install_started(snapshot, started),
+                ))
+            }
+            Err(error) => {
+                self.audit_error(caller, TOOL_MODELS_SETUP, ERROR_UNAVAILABLE, None);
+                Err(tool_error(ERROR_UNAVAILABLE, error))
             }
         }
     }
