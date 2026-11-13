@@ -90,7 +90,8 @@ own card later and can reuse this base.
 | T10 | S11 | inline, TDD — screen map generator script + committed map + staleness test, indexed | done | see git log (feat(help): generate a screen map …) |
 | T11 | S14 | inline, TDD — Settings tab «Ayuda» (D10) wired into help_ask | done | see git log (feat(help): add an Ayuda settings tab …) |
 | T12 | S12 | TDD — «Buscar en mis documentos» opt-in: local lexical retrieval (`rag::retrieval::hybrid_retrieve_candidates` with no embedding + `pack_sources`) injected into the prompt (Risk item 2) | done | see git log (feat(help): search the user's documents locally …) |
-| T13 | S8-S14 | manual § 13.5 update, independent verify, owner check | pending | |
+| T13a | S8-S14 | manual § 13.5 update + «Ayuda» row in the settings table | done | bf099db0 |
+| T13b | S5, S9-S14 | independent verify of v2 (Risk item 2) | pending | |
 | T6 | S8 | owner check with the real failures of S8 (needs a real OpenRouter key) | pending | |
 
 ## Log
