@@ -608,13 +608,14 @@
         entry.availability === 'available' && entry.duplicate?.status === 'already_in_target'
     )
   )
-  /** 2x known bytes of the files that will be imported (plan §5). */
+  /** Known bytes the import adds: 2x for a PDF (original plus pages), 1x for an image. */
   const syncEstimate = $derived.by(() => {
     let total = 0
     for (const entry of willImportEntries) {
-      total += entry.size ?? 0
+      const size = entry.size ?? 0
+      total += entry.kind === 'image' ? size : size * 2
     }
-    return total * 2
+    return total
   })
   const showSyncWarning = $derived(syncEstimate > SYNC_WARN_BYTES)
   const canStart = $derived(willImportEntries.length > 0 || alreadyEntries.length > 0)

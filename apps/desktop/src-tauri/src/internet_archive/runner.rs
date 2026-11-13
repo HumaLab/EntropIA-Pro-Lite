@@ -272,10 +272,12 @@ type SelectedFile = (
     Option<u64>,
     Option<String>,
     Option<String>,
+    &'static str,
 );
 
 /// Download every `Queued` file of `job_id` one at a time, verifying each
-/// staged PDF and recording `sha256` / `page_count`.
+/// staged PDF or image and recording `sha256` / `page_count` (an image is
+/// one page).
 ///
 /// No job copy is ever kept across an `.await`: every write goes through
 /// [`update`] (fresh load → touch only the current file → save) under the
@@ -327,10 +329,12 @@ pub(crate) async fn run_job<D: Downloader + Sync>(
                         file.expected_size,
                         file.md5.clone(),
                         file.sha1.clone(),
+                        file.staging_extension(),
                     )
                 })
         };
-        let Some((index, identifier, remote_name, expected_size, md5, sha1)) = selected else {
+        let Some((index, identifier, remote_name, expected_size, md5, sha1, extension)) = selected
+        else {
             break;
         };
         if is_cancelled(&cancel) {
@@ -338,7 +342,7 @@ pub(crate) async fn run_job<D: Downloader + Sync>(
             break;
         }
         // Fresh staging name plus `Downloading`, touching only this file.
-        let staging = internet_archive::store::new_staging_name();
+        let staging = internet_archive::store::new_staging_name_with(extension);
         let dest = store
             .staging_path(job_id, &staging)
             .map_err(|_| "io: local storage error".to_string())?;
@@ -483,7 +487,12 @@ pub(crate) async fn run_job<D: Downloader + Sync>(
             sha1,
             content_length: expected_size,
         };
-        match internet_archive::verify_staged_pdf(&dest, &expected, &page_limits) {
+        let verified = if extension == "pdf" {
+            internet_archive::verify_staged_pdf(&dest, &expected, &page_limits)
+        } else {
+            internet_archive::verify_staged_image(&dest, &expected, extension)
+        };
+        match verified {
             Ok(verified) => {
                 let sha256_hex = verified.sha256_hex;
                 let page_count = verified.page_count;
@@ -761,6 +770,87 @@ mod tests {
             std::fs::write(dest, &bytes).map_err(|e| IaError::Io(e.to_string()))?;
             Ok(bytes.len() as u64)
         }
+    }
+
+    struct ImageDownloader;
+
+    impl Downloader for ImageDownloader {
+        async fn download(
+            &self,
+            _identifier: &str,
+            _remote_name: &str,
+            dest: &Path,
+            _expected_size: Option<u64>,
+        ) -> Result<u64, IaError> {
+            let bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+            std::fs::write(dest, &bytes).map_err(|e| IaError::Io(e.to_string()))?;
+            Ok(bytes.len() as u64)
+        }
+    }
+
+    fn image_job(name: &str) -> Job {
+        let mut image = available_pdf(name);
+        image.format = Some("PNG".to_string());
+        let file = JobFile::from_pdf("id-img", &image).expect("available");
+        Job::new(
+            uuid::Uuid::new_v4().hyphenated().to_string(),
+            1_700_000_000,
+            ImportTarget::ExistingCollection {
+                collection_id: "col-1".to_string(),
+            },
+            vec![file],
+        )
+        .expect("job")
+    }
+
+    #[tokio::test]
+    async fn image_stages_with_its_extension_and_verifies_as_one_page() {
+        let (_dir, store) = test_store();
+        let job = running_job(image_job("plate.png"));
+        let job_id = job.id.clone();
+        store.create(&job).unwrap();
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        let out = run_job(
+            &store,
+            &Mutex::new(()),
+            &job_id,
+            &ImageDownloader,
+            rx,
+            default_limits(),
+            &|| 1_700_000_010,
+            &|_| {},
+        )
+        .await
+        .expect("run succeeds");
+        let file = &out.files[0];
+        assert_eq!(file.state, FileState::Verified, "{:?}", file.error);
+        assert_eq!(file.page_count, Some(1));
+        let staging = file.staging_name.as_deref().unwrap();
+        assert!(staging.ends_with(".png"), "{staging}");
+        assert!(store.staging_path(&job_id, staging).unwrap().exists());
+    }
+
+    #[tokio::test]
+    async fn image_with_pdf_bytes_fails_verification() {
+        let (_dir, store) = test_store();
+        let job = running_job(image_job("plate.png"));
+        let job_id = job.id.clone();
+        store.create(&job).unwrap();
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        let out = run_job(
+            &store,
+            &Mutex::new(()),
+            &job_id,
+            &SuccessDownloader { pages: 1 },
+            rx,
+            default_limits(),
+            &|| 1_700_000_010,
+            &|_| {},
+        )
+        .await
+        .expect("run settles");
+        assert_eq!(out.files[0].state, FileState::Failed);
+        assert_eq!(out.files[0].page_count, None);
     }
 
     #[tokio::test]

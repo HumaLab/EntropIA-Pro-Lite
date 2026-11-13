@@ -217,7 +217,7 @@ impl From<internet_archive::PdfFile> for PdfFileDto {
     fn from(file: internet_archive::PdfFile) -> Self {
         Self {
             availability: availability_tag(&file.availability).to_string(),
-            kind: file_kind_tag(FileKind::of_pdf_format(file.format.as_deref())),
+            kind: file_kind_tag(file.kind()),
             name: file.name,
             format: file.format,
             source: file_source_tag(&file.source),
@@ -492,6 +492,9 @@ pub struct PrepareEntryDto {
     /// Availability tag (`available` here: only importable files are listed).
     pub availability: String,
     pub size: Option<u64>,
+    /// File kind tag (`pdf`, `pdf_text` or `image`): an image is synced once,
+    /// a PDF about twice (original plus its pages).
+    pub kind: String,
     /// Duplicate classification against the local provenance.
     pub duplicate: Option<DuplicateStatusDto>,
 }
@@ -503,6 +506,7 @@ impl From<&internet_archive::prepare::PrepareEntry> for PrepareEntryDto {
             file_name: entry.file_name.clone(),
             availability: availability_tag(&entry.availability).to_string(),
             size: entry.size,
+            kind: file_kind_tag(entry.kind).to_string(),
             duplicate: entry.duplicate.as_ref().map(DuplicateStatusDto::from),
         }
     }
@@ -894,9 +898,10 @@ pub(crate) fn job_to_status(job: &Job, running: bool) -> JobStatusDto {
             index,
             identifier: file.identifier.clone(),
             file_name: file.file_name.clone(),
-            display_file_name: internet_archive::display_file_name(
+            display_file_name: internet_archive::display_file_name_for(
                 &file.file_name,
                 &file.identifier,
+                file.staging_extension(),
             ),
             state: file.state,
             attempts: file.attempts,
@@ -940,11 +945,18 @@ pub(crate) fn verified_file_entry(
     let dest = store
         .staging_path(&job.id, &staging_name)
         .map_err(|_| "io: local storage error".to_string())?;
-    let display = internet_archive::display_file_name(&file.file_name, &file.identifier);
+    let extension = file.staging_extension();
+    let display =
+        internet_archive::display_file_name_for(&file.file_name, &file.identifier, extension);
     let item_title = job
         .item(&file.identifier)
         .and_then(|snapshot| snapshot.title.clone())
-        .unwrap_or_else(|| display.strip_suffix(".pdf").unwrap_or(&display).to_string());
+        .unwrap_or_else(|| {
+            display
+                .strip_suffix(&format!(".{extension}"))
+                .unwrap_or(&display)
+                .to_string()
+        });
     let provenance = internet_archive::build_provenance(file, job.item(&file.identifier), now)
         .map_err(|_| "io: cannot build provenance".to_string())?;
     Ok(VerifiedFileDto {
@@ -1375,6 +1387,60 @@ mod tests {
         assert_eq!(tag(text_pdf), "pdf_text");
         assert_eq!(tag(scan), "pdf");
         assert_eq!(tag(unknown), "pdf");
+        let mut photo = available_pdf("photo.jpg");
+        photo.format = Some("JPEG".to_string());
+        assert_eq!(tag(photo), "image");
+    }
+
+    #[test]
+    fn prepare_entry_dto_carries_the_file_kind() {
+        let entry = |kind| internet_archive::prepare::PrepareEntry {
+            identifier: "some-id".to_string(),
+            file_name: "plate.png".to_string(),
+            kind,
+            availability: internet_archive::Availability::Available,
+            size: Some(10),
+            duplicate: None,
+        };
+        assert_eq!(PrepareEntryDto::from(&entry(FileKind::Image)).kind, "image");
+        assert_eq!(PrepareEntryDto::from(&entry(FileKind::Pdf)).kind, "pdf");
+    }
+
+    #[test]
+    fn verified_image_keeps_its_extension_in_names() {
+        use internet_archive::job::{FileState, ImportTarget, Job, JobFile, JobState};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = JobStore::new(dir.path().join("internet-archive"));
+        let mut photo = available_pdf("plates/Plate 1.jpeg");
+        photo.format = Some("JPEG".to_string());
+        let mut file = JobFile::from_pdf("some-id", &photo).expect("available");
+        file.state = FileState::Verified;
+        file.staging_name = Some(internet_archive::store::new_staging_name_with("jpg"));
+        file.sha256 = Some("abc123".to_string());
+        file.page_count = Some(1);
+        let mut job = Job::new(
+            uuid::Uuid::new_v4().hyphenated().to_string(),
+            1_700_000_000,
+            ImportTarget::ExistingCollection {
+                collection_id: "col-1".to_string(),
+            },
+            vec![file],
+        )
+        .expect("job");
+        job.set_job_state(JobState::Ready, 1_700_000_001).unwrap();
+        job.set_job_state(JobState::Running, 1_700_000_002).unwrap();
+        store.create(&job).unwrap();
+
+        let out = verified_files_logic(&store, &job, 1_700_000_010).expect("verified list");
+        assert_eq!(out[0].display_file_name, "Plate 1.jpg");
+        assert_eq!(out[0].item_title, "Plate 1");
+        assert!(
+            out[0].staging_path.ends_with(".jpg"),
+            "{}",
+            out[0].staging_path
+        );
+        let status = job_to_status(&job, false);
+        assert_eq!(status.files[0].display_file_name, "Plate 1.jpg");
     }
 
     #[test]
@@ -1600,6 +1666,7 @@ mod tests {
                     file_name: "a.pdf".to_string(),
                     availability: "available".to_string(),
                     size: Some(10),
+                    kind: "pdf".to_string(),
                     duplicate: Some(DuplicateStatusDto::from(
                         &DuplicateStatus::AlreadyInTarget {
                             item_id: "item-1".to_string(),

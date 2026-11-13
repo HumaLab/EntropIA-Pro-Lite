@@ -122,6 +122,7 @@ export type IaPrepareEntry = {
   fileName: string
   availability: IaAvailability
   size: number | null
+  kind: IaFileKind
   duplicate: IaDuplicateStatus | null
 }
 

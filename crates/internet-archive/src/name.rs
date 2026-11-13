@@ -4,30 +4,46 @@
 //! carry directories, Windows-invalid characters, or reserved device names.
 //! The rules mirror `safeStem` in `apps/desktop/src/lib/navegador-copy.ts`.
 
-/// Longest stored file name, including `.pdf`. Matches the web-capture helper.
+/// Longest stored file name, including the extension. Matches the
+/// web-capture helper.
 const FILE_NAME_MAX: usize = 100;
-const EXTENSION: &str = ".pdf";
-const FALLBACK: &str = "PDF";
+/// Room kept for the longest extension (`.pdf`, `.jpg`, `.png`, `.tif`).
+const EXTENSION_LEN: usize = 4;
 
-/// The name passed as `overrides.fileName`. Always ends in `.pdf`.
+/// The name passed as `overrides.fileName` for a PDF. Always ends in `.pdf`.
 ///
 /// Uses the last segment of `remote_name` (Archive names often include
 /// folders). When that segment sanitizes to empty, falls back to `identifier`,
 /// then to `PDF`.
 pub fn display_file_name(remote_name: &str, identifier: &str) -> String {
+    display_file_name_for(remote_name, identifier, "pdf")
+}
+
+/// [`display_file_name`] for any staging `extension` (`pdf`, `jpg`, `png`,
+/// `tif`): the remote extension is replaced by `.<extension>` and the last
+/// fallback is `PDF` or `Image`.
+pub fn display_file_name_for(remote_name: &str, identifier: &str, extension: &str) -> String {
     let segment = remote_name.rsplit(['/', '\\']).next().unwrap_or("");
-    let stem = strip_pdf_extension(&sanitize_stem(segment));
+    // PDFs strip only `.pdf`/`.lcpdf`, exactly as before images existed.
+    let strip = |stem: &str| {
+        if extension == "pdf" {
+            strip_pdf_extension(stem)
+        } else {
+            strip_known_extension(stem)
+        }
+    };
+    let stem = strip(&sanitize_stem(segment));
     let stem = if stem.is_empty() {
-        let from_id = strip_pdf_extension(&sanitize_stem(identifier));
+        let from_id = strip(&sanitize_stem(identifier));
         if from_id.is_empty() {
-            FALLBACK.to_string()
+            if extension == "pdf" { "PDF" } else { "Image" }.to_string()
         } else {
             from_id
         }
     } else {
         stem
     };
-    format!("{stem}{EXTENSION}")
+    format!("{stem}.{extension}")
 }
 
 fn sanitize_stem(text: &str) -> String {
@@ -48,7 +64,7 @@ fn sanitize_stem(text: &str) -> String {
     let trimmed = collapsed.trim_matches(|c: char| c.is_whitespace() || c == '.');
     let mut stem: String = trimmed
         .chars()
-        .take(FILE_NAME_MAX - EXTENSION.len() - 1)
+        .take(FILE_NAME_MAX - EXTENSION_LEN - 1)
         .collect();
     while stem.ends_with([' ', '.']) {
         stem.pop();
@@ -62,6 +78,18 @@ fn sanitize_stem(text: &str) -> String {
     } else {
         stem
     }
+}
+
+/// Strip a trailing `.pdf`/`.lcpdf` or importable image extension.
+fn strip_known_extension(stem: &str) -> String {
+    let lower = stem.to_ascii_lowercase();
+    for ext in [".jpeg", ".jpg", ".png", ".tiff", ".tif"] {
+        if lower.ends_with(ext) {
+            let kept = stem[..stem.len() - ext.len()].trim_end_matches([' ', '.']);
+            return kept.to_string();
+        }
+    }
+    strip_pdf_extension(stem)
 }
 
 fn strip_pdf_extension(stem: &str) -> String {
@@ -146,5 +174,24 @@ mod tests {
     #[test]
     fn drops_trailing_dots_and_spaces() {
         assert_eq!(display_file_name("  report... ", "id"), "report.pdf");
+    }
+
+    #[test]
+    fn pdf_names_keep_image_looking_suffixes_as_before() {
+        assert_eq!(display_file_name("scan.tif", "id"), "scan.tif.pdf");
+        assert_eq!(display_file_name("photo.jpg", "id"), "photo.jpg.pdf");
+        assert_eq!(display_file_name("???", "foo.png"), "foo.png.pdf");
+    }
+
+    #[test]
+    fn images_keep_their_own_extension() {
+        assert_eq!(
+            display_file_name_for("photos/Plate 1.jpeg", "id", "jpg"),
+            "Plate 1.jpg"
+        );
+        assert_eq!(display_file_name_for("map.TIF", "id", "tif"), "map.tif");
+        assert_eq!(display_file_name_for("scan.png", "id", "png"), "scan.png");
+        assert_eq!(display_file_name_for("???", "", "png"), "Image.png");
+        assert_eq!(display_file_name_for("book.pdf", "id", "pdf"), "book.pdf");
     }
 }
