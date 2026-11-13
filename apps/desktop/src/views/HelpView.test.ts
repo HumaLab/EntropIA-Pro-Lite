@@ -444,7 +444,27 @@ describe('HelpView', () => {
     )
   })
 
-  it('caps the history sent at 6 turns', async () => {
+  it('S12: does not resend document-derived answers without renewed consent', async () => {
+    const secret = 'El cabildo aprobó el presupuesto reservado.'
+    const calls = backend({
+      hasKey: true,
+      ask: { answer: secret, sources: [], local: false, documents: [{ title: 'Acta privada' }] },
+    })
+    render(HelpView)
+    await composer()
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' }))
+    await sendQuestion('¿Qué dice mi acta?')
+    await screen.findByText(secret)
+
+    await sendQuestion('Explicame las opciones de ayuda')
+    await waitFor(() => expect(calls).toHaveLength(2))
+    const next = calls[1] as { documents?: boolean; history: Array<{ content: string }> }
+    expect(next.documents).not.toBe(true)
+    expect(next.history.map((turn) => turn.content).join('\n')).not.toContain(secret)
+    expect(next.history.map((turn) => turn.content)).toContain('¿Qué dice mi acta?')
+  })
+
+  it('caps the history sent at 12 turns, the most the settings allow', async () => {
     let n = 0
     const askCalls = backend({ hasKey: true })
     mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
@@ -461,16 +481,16 @@ describe('HelpView', () => {
     render(HelpView)
     await composer()
 
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 8; i += 1) {
       const input = screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })
       await fireEvent.input(input, { target: { value: `pregunta ${i}` } })
       await fireEvent.click(screen.getByRole('button', { name: 'Enviar' }))
       await screen.findByText(`respuesta ${i + 1}`)
     }
 
-    expect(askCalls).toHaveLength(5)
-    const last = askCalls[4] as { history: Array<{ content: string }> }
-    expect(last.history).toHaveLength(6)
+    expect(askCalls).toHaveLength(8)
+    const last = askCalls[7] as { history: Array<{ content: string }> }
+    expect(last.history).toHaveLength(12)
     expect(last.history[0]?.content).toBe('pregunta 1')
   })
 

@@ -48,17 +48,22 @@ export function helpDiagnosticsPreview(): Promise<string> {
 
 /**
  * Answers a help question from the manual excerpts (and the opted-in
- * diagnostic report). History is capped at the last 6 turns (D4); diagnostics
+ * diagnostic report). History is capped at the last HELP_HISTORY_MAX_TURNS
+ * turns, the most the settings allow; the backend applies the configured cap
+ * (`help_history_turns`, D10); diagnostics
  * travel only when the caller passes the previewed text (S5); document
  * excerpts travel only with `{ documents: true }` for this question (S12).
  */
+/** Upper bound of `help_history_turns` (D10); Rust trims to the setting. */
+export const HELP_HISTORY_MAX_TURNS = 12
+
 export function helpAsk(
   question: string,
   history: HelpTurn[] = [],
   diagnostics?: string | null,
   options?: { documents?: boolean }
 ): Promise<HelpAnswer> {
-  const kept = history.slice(-6)
+  const kept = history.slice(-HELP_HISTORY_MAX_TURNS)
   if (diagnostics) {
     if (options?.documents) {
       return invoke<HelpAnswer>('help_ask', {

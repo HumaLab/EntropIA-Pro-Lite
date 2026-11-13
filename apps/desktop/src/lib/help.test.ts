@@ -66,9 +66,9 @@ describe('help backend wrappers', () => {
     expect('diagnostics' in args).toBe(false)
   })
 
-  it('helpAsk sends at most the last 6 turns of history', async () => {
+  it('helpAsk sends at most the last 12 turns of history', async () => {
     vi.mocked(invoke).mockResolvedValue({ answer: 'hacelo así', sources: [] })
-    const history = Array.from({ length: 10 }, (_, index) => ({
+    const history = Array.from({ length: 16 }, (_, index) => ({
       role: (index % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
       content: `turno ${index}`,
     }))
@@ -78,9 +78,9 @@ describe('help backend wrappers', () => {
     const args = vi.mocked(invoke).mock.calls[0]?.[1] as {
       history: Array<{ content: string }>
     }
-    expect(args.history).toHaveLength(6)
+    expect(args.history).toHaveLength(12)
     expect(args.history[0]?.content).toBe('turno 4')
-    expect(args.history[5]?.content).toBe('turno 9')
+    expect(args.history[11]?.content).toBe('turno 15')
   })
 
   it('helpAsk sends documents:true only when the box is ticked', async () => {

@@ -4,6 +4,7 @@
   import { locale, t } from '$lib/i18n'
   import { renderMarkdown } from '$lib/markdown'
   import {
+    HELP_HISTORY_MAX_TURNS,
     helpAsk,
     helpDiagnosticsPreview,
     helpFaqList,
@@ -104,8 +105,11 @@
         return
       }
     }
+    // An answer built from the user's documents (S12) never travels again as
+    // history: its consent covered that one question only.
     const history: HelpTurn[] = messages
-      .slice(-6)
+      .filter((message) => !(message.documents && message.documents.length > 0))
+      .slice(-HELP_HISTORY_MAX_TURNS)
       .map((message) => ({ role: message.role, content: message.content }))
     messages = [...messages, { role: 'user', content: question }]
     draft = ''
