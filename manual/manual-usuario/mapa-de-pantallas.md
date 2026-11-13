@@ -1023,14 +1023,17 @@
 - «Abrir Configuración» `help.openSettings`
 - «Ayuda» `help.title`
 - «Buscando en el manual…» `help.thinking`
+- «Buscar en mis documentos» `help.includeDocuments`
 - «Cargando el diagnóstico…» `help.diagnosticsLoading`
 - «Cargá tu clave en Configuración › APIs remotas › OpenRouter y asegurate de que tu cuenta tenga crédito disponible.» `help.noKeyBody`
 - «Cerrar ayuda» `help.closePanel`
 - «Comprobando tu clave de OpenRouter…» `help.statusLoading`
+- «De tus documentos» `help.documentsLabel`
 - «Del manual» `help.sourcesLabel`
 - «Enviar» `help.send`
 - «Escribí tu pregunta…» `help.placeholder`
 - «Falló una transcripción, ¿qué hago?» `help.suggestion3`
+- «Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.» `help.documentsHint`
 - «Incluir diagnóstico» `help.includeDiagnostics`
 - «La ayuda usa tu cuenta de OpenRouter» `help.noKeyTitle`
 - «Ocultar» `help.previewHide`

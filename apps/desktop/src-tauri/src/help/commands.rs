@@ -9,11 +9,12 @@ use serde::{Deserialize, Serialize};
 use super::diagnostics::{
     build_report, scrub_report, DiagnosticInputs, KEY_SETTINGS, SETTINGS_ALLOWLIST,
 };
+use super::documents::{DOCUMENTS_MAX_CHARS, DOCUMENTS_MAX_FRAGMENTS};
 use super::faq;
 use super::index::{HelpIndex, Hit};
 use super::prompt::{
     build_help_prompt, normalize_history_capped, pick_sections_with_budget, validate_question,
-    HelpAnswer, HelpSource, HelpStatus, HelpTurn,
+    HelpAnswer, HelpDocument, HelpSource, HelpStatus, HelpTurn,
 };
 
 /// The help index, opened lazily once per process (D6): the first question
@@ -108,16 +109,22 @@ pub async fn help_diagnostics_preview(
 /// is answered locally with that entry's text, verbatim: no key needed, no
 /// network touched — unless `help_local_answers` is off, which sends every
 /// question to the model. Questions with diagnostics attached always go to
-/// the model.
+/// the model. `documents` (S12) opts into local archive excerpts for this
+/// question only, camelCase on the wire, absent means off: the Chat's lexical
+/// retrieval runs locally (no embeddings) and its fragments join the prompt,
+/// and a question with documents on never gets a local FAQ answer.
 #[tauri::command]
 pub async fn help_ask(
     app: tauri::AppHandle,
     question: String,
     history: Option<Vec<HelpTurn>>,
     diagnostics: Option<String>,
+    documents: Option<bool>,
     db: tauri::State<'_, crate::db::state::AppDbState>,
 ) -> Result<HelpAnswer, String> {
     let question = validate_question(&question)?;
+    // S12: opt-in per question, off when absent (S5 stands unchanged).
+    let with_documents = documents.unwrap_or(false);
     // What the user previewed is what leaves, re-scrubbed on the way out in
     // case it was edited in between (D3). Anything else diagnostic stays home.
     let diagnostics = match diagnostics {
@@ -144,7 +151,10 @@ pub async fn help_ask(
     .map_err(|e| format!("help settings task panicked: {e}"))??;
     // S10: deterministic local answer first, before the key gate and without
     // any network call. It carries the entry's Fuente as its single source.
-    if let Some(local) = super::settings::local_answer_for(&help, diagnostics.as_deref(), &question)
+    // With documents on there is no local answer: the question needs the
+    // archive (S12).
+    if let Some(local) =
+        super::settings::local_answer_for(&help, diagnostics.as_deref(), with_documents, &question)
     {
         return Ok(HelpAnswer {
             answer: local.answer,
@@ -153,17 +163,44 @@ pub async fn help_ask(
                 title: local.title,
             }],
             local: true,
+            documents: Vec::new(),
         });
     }
     let api_key = key_result?;
     let history = normalize_history_capped(history, help.history_turns)?;
+    // S12: the opted-in excerpts, retrieved locally on the worker connection
+    // like rag_ask. The key gate above already ran, so documents on with no
+    // key still reports help_no_openrouter_key without touching the archive.
+    let fragments = if with_documents {
+        let worker = db.worker_conn.clone();
+        let owned = question.clone();
+        tokio::task::spawn_blocking(move || {
+            let guard = worker.lock().map_err(|e| e.to_string())?;
+            super::documents::document_fragments(
+                &guard,
+                &owned,
+                DOCUMENTS_MAX_FRAGMENTS,
+                DOCUMENTS_MAX_CHARS,
+            )
+        })
+        .await
+        .map_err(|e| format!("help documents task panicked: {e}"))??
+    } else {
+        Vec::new()
+    };
     let picked: Vec<Hit> = {
         // The guard drops before the network call below: the index is only
         // borrowed to rank, never across an await.
         let index = help_index(&app)?;
         pick_sections_with_budget(&index, &question, with_diagnostics, help.context_chars)
     };
-    let prompt = build_help_prompt(&question, &history, &picked, diagnostics.as_deref());
+    let prompt = build_help_prompt(
+        &question,
+        &history,
+        &picked,
+        diagnostics.as_deref(),
+        &fragments,
+    );
     let sources = picked
         .iter()
         .map(|section| HelpSource {
@@ -182,6 +219,12 @@ pub async fn help_ask(
         answer,
         sources,
         local: false,
+        documents: fragments
+            .iter()
+            .map(|fragment| HelpDocument {
+                title: fragment.title.clone(),
+            })
+            .collect(),
     })
 }
 

@@ -10,6 +10,7 @@
     helpStatus,
     isNoKeyError,
     openHelpManual,
+    type HelpDocument,
     type HelpSource,
     type HelpTurn,
   } from '$lib/help'
@@ -25,6 +26,8 @@
     sources?: HelpSource[]
     /** True when the backend answered from the bundled FAQ, with no network call (S10). */
     local?: boolean
+    /** Titles of the user's excerpts sent to the model for this question (S12). */
+    documents?: HelpDocument[]
   }
 
   /** The backend's group name for the first-steps starter buttons (S10). */
@@ -38,6 +41,8 @@
   let error = $state<string | null>(null)
   // Opt-in per question, off by default (S5, D3).
   let includeDiagnostics = $state(false)
+  // Opt-in per question, off by default (S12); same reset-after-send pattern.
+  let includeDocuments = $state(false)
   let preview = $state<string | null>(null)
   let previewOpen = $state(false)
   let previewLoading = $state(false)
@@ -104,11 +109,25 @@
       .map((message) => ({ role: message.role, content: message.content }))
     messages = [...messages, { role: 'user', content: question }]
     draft = ''
+    // Same pattern as diagnostics (S5): every send starts unsubscribed again.
+    const withDocuments = includeDocuments
+    includeDocuments = false
     try {
-      const answer = await helpAsk(question, history, diagnostics)
+      const answer = await helpAsk(
+        question,
+        history,
+        diagnostics,
+        withDocuments ? { documents: true } : undefined
+      )
       messages = [
         ...messages,
-        { role: 'assistant', content: answer.answer, sources: answer.sources, local: answer.local },
+        {
+          role: 'assistant',
+          content: answer.answer,
+          sources: answer.sources,
+          local: answer.local,
+          documents: answer.documents ?? [],
+        },
       ]
     } catch (sendError) {
       if (isNoKeyError(sendError)) {
@@ -220,6 +239,13 @@
                 {/each}
               </ul>
             {/if}
+            {#if message.documents && message.documents.length > 0}
+              <p class="help-view__doc-titles">
+                {$currentLocale && t('help.documentsLabel')}: {message.documents
+                  .map((document) => document.title)
+                  .join('; ')}
+              </p>
+            {/if}
           </article>
         {/if}
       {/each}
@@ -265,6 +291,16 @@
             <pre class="help-view__preview">{preview}</pre>
           {/if}
         {/if}
+      </div>
+      <div class="help-view__documents">
+        <Checkbox
+          bind:checked={includeDocuments}
+          disabled={sending}
+          label={$currentLocale && t('help.includeDocuments')}
+        >
+          {$currentLocale && t('help.includeDocuments')}
+        </Checkbox>
+        <p class="help-view__hint">{$currentLocale && t('help.documentsHint')}</p>
       </div>
       <div class="help-view__input-row">
         <textarea
@@ -457,6 +493,12 @@
     font-style: italic;
   }
 
+  .help-view__doc-titles {
+    margin: var(--space-2) 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+  }
+
   .help-view__sources li + li {
     margin-top: var(--space-1);
   }
@@ -476,6 +518,13 @@
   }
 
   .help-view__diagnostics {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .help-view__documents {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;

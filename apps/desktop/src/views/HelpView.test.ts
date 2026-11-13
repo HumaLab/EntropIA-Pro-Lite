@@ -133,6 +133,71 @@ describe('HelpView', () => {
     expect(await screen.findByText('Respuesta de ayuda')).toBeInTheDocument()
   })
 
+  it('the documents checkbox is off by default', async () => {
+    backend({ hasKey: true })
+    render(HelpView)
+    await composer()
+
+    expect(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })).not.toBeChecked()
+  })
+
+  it('explains that document fragments go to OpenRouter for this question only', async () => {
+    backend({ hasKey: true })
+    render(HelpView)
+    await composer()
+
+    expect(
+      screen.getByText('Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.')
+    ).toBeInTheDocument()
+  })
+
+  it('checkbox on: the send passes documents:true, then resets to off', async () => {
+    const askCalls = backend({ hasKey: true })
+    render(HelpView)
+    await composer()
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' }))
+    await sendQuestion('¿Qué dice mi acta?')
+
+    await waitFor(() => expect(askCalls).toHaveLength(1))
+    expect(askCalls[0]).toEqual({
+      question: '¿Qué dice mi acta?',
+      history: [],
+      documents: true,
+    })
+    expect(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })).not.toBeChecked()
+  })
+
+  it('lists the used document titles under the answer', async () => {
+    backend({
+      hasKey: true,
+      ask: {
+        answer: 'Dice esto',
+        sources: [],
+        local: false,
+        documents: [{ title: 'Acta del cabildo' }, { title: 'Crónica del puerto' }],
+      },
+    })
+    render(HelpView)
+
+    await sendQuestion('¿Qué dice mi acta?')
+
+    expect(await screen.findByText('Dice esto')).toBeInTheDocument()
+    expect(
+      screen.getByText('De tus documentos: Acta del cabildo; Crónica del puerto')
+    ).toBeInTheDocument()
+  })
+
+  it('no document titles when the box is off', async () => {
+    backend({ hasKey: true, ask: answer('Respuesta de ayuda', []) })
+    render(HelpView)
+
+    await sendQuestion('¿Cómo importo?')
+
+    expect(await screen.findByText('Respuesta de ayuda')).toBeInTheDocument()
+    expect(screen.queryByText(/De tus documentos/)).not.toBeInTheDocument()
+  })
+
   it('renders the assistant answer as markdown and lists the manual sections used', async () => {
     backend({
       hasKey: true,

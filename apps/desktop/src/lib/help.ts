@@ -18,11 +18,18 @@ export interface HelpSource {
   title: string
 }
 
+/** One title of the user's own excerpts sent to the model (S12). */
+export interface HelpDocument {
+  title: string
+}
+
 export interface HelpAnswer {
   answer: string
   sources: HelpSource[]
   /** True when the backend answered from the bundled FAQ, with no network call (S10). */
   local: boolean
+  /** Titles of the user's excerpts sent to the model (S12); empty unless the box was ticked. */
+  documents: HelpDocument[]
 }
 
 export interface HelpStatus {
@@ -42,16 +49,29 @@ export function helpDiagnosticsPreview(): Promise<string> {
 /**
  * Answers a help question from the manual excerpts (and the opted-in
  * diagnostic report). History is capped at the last 6 turns (D4); diagnostics
- * travel only when the caller passes the previewed text (S5).
+ * travel only when the caller passes the previewed text (S5); document
+ * excerpts travel only with `{ documents: true }` for this question (S12).
  */
 export function helpAsk(
   question: string,
   history: HelpTurn[] = [],
-  diagnostics?: string | null
+  diagnostics?: string | null,
+  options?: { documents?: boolean }
 ): Promise<HelpAnswer> {
   const kept = history.slice(-6)
   if (diagnostics) {
+    if (options?.documents) {
+      return invoke<HelpAnswer>('help_ask', {
+        question,
+        history: kept,
+        diagnostics,
+        documents: true,
+      })
+    }
     return invoke<HelpAnswer>('help_ask', { question, history: kept, diagnostics })
+  }
+  if (options?.documents) {
+    return invoke<HelpAnswer>('help_ask', { question, history: kept, documents: true })
   }
   return invoke<HelpAnswer>('help_ask', { question, history: kept })
 }

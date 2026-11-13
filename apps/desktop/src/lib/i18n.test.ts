@@ -395,6 +395,11 @@ describe('i18n', () => {
       'Parámetro de ayuda inválido: contextChars'
     )
     expect(t('settings.help.restoreDefaults')).toBe('Restaurar defaults')
+    expect(t('help.includeDocuments')).toBe('Buscar en mis documentos')
+    expect(t('help.documentsHint')).toBe(
+      'Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.'
+    )
+    expect(t('help.documentsLabel')).toBe('De tus documentos')
 
     locale.set('en')
 
@@ -450,6 +455,11 @@ describe('i18n', () => {
       'Invalid help parameter: contextChars'
     )
     expect(t('settings.help.restoreDefaults')).toBe('Restore defaults')
+    expect(t('help.includeDocuments')).toBe('Search my documents')
+    expect(t('help.documentsHint')).toBe(
+      'Excerpts from your documents go to OpenRouter for this question only.'
+    )
+    expect(t('help.documentsLabel')).toBe('From your documents')
   })
 
   it('exposes the API key clearing copy in both locales', async () => {

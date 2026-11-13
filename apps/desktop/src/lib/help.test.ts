@@ -83,6 +83,31 @@ describe('help backend wrappers', () => {
     expect(args.history[5]?.content).toBe('turno 9')
   })
 
+  it('helpAsk sends documents:true only when the box is ticked', async () => {
+    vi.mocked(invoke).mockResolvedValue({ answer: 'hacelo así', sources: [], documents: [] })
+
+    await helpAsk('¿Qué dice mi acta?', [], null, { documents: true })
+
+    expect(invoke).toHaveBeenCalledWith('help_ask', {
+      question: '¿Qué dice mi acta?',
+      history: [],
+      documents: true,
+    })
+  })
+
+  it('helpAsk leaves documents out when the box is off', async () => {
+    vi.mocked(invoke).mockResolvedValue({ answer: 'hacelo así', sources: [] })
+
+    await helpAsk('¿Qué dice mi acta?', [], null)
+
+    expect(invoke).toHaveBeenCalledWith('help_ask', {
+      question: '¿Qué dice mi acta?',
+      history: [],
+    })
+    const args = vi.mocked(invoke).mock.calls[0]?.[1] as Record<string, unknown>
+    expect('documents' in args).toBe(false)
+  })
+
   it('helpAsk passes the local flag through', async () => {
     vi.mocked(invoke).mockResolvedValue({
       answer: 'hacelo así',

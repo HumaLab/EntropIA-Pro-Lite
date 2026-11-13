@@ -103,14 +103,19 @@ fn parse_enabled(raw: Option<String>) -> bool {
 }
 
 /// The deterministic local answer for `question`, or `None` when it must go
-/// to the model: the switch is off, or diagnostics travel along (they need
-/// the model). Pure and synchronous: no key, no network.
+/// to the model: the switch is off, diagnostics travel along (they need the
+/// model), or the user opted into document excerpts (the question needs the
+/// archive). Pure and synchronous: no key, no network.
 pub(crate) fn local_answer_for(
     settings: &HelpSettings,
     diagnostics: Option<&str>,
+    documents: bool,
     question: &str,
 ) -> Option<LocalAnswer> {
     if !settings.local_answers {
+        return None;
+    }
+    if documents {
         return None;
     }
     answer_locally(diagnostics, question)
@@ -228,14 +233,14 @@ mod tests {
         let help = resolve_help_settings(&|key| stored.get(key).cloned());
         let question = "¿Cómo importo un PDF?";
         assert!(
-            local_answer_for(&help, None, question).is_some(),
+            local_answer_for(&help, None, false, question).is_some(),
             "the FAQ answer must stay local while the switch is on"
         );
 
         let stored = lookup(&[("help_local_answers", "false")]);
         let help = resolve_help_settings(&|key| stored.get(key).cloned());
         assert!(
-            local_answer_for(&help, None, question).is_none(),
+            local_answer_for(&help, None, false, question).is_none(),
             "with the switch off the question must go to the model"
         );
     }
@@ -247,8 +252,20 @@ mod tests {
         assert!(local_answer_for(
             &help,
             Some("Producto: EntropIA Lite"),
+            false,
             "¿Cómo importo un PDF?"
         )
         .is_none());
+    }
+
+    #[test]
+    fn documents_opt_in_bypasses_the_local_answer() {
+        // S12: with «Buscar en mis documentos» on, the question needs the
+        // archive, so even a perfect FAQ match goes to the model.
+        let stored = lookup(&[]);
+        let help = resolve_help_settings(&|key| stored.get(key).cloned());
+        let question = "¿Cómo importo un PDF?";
+        assert!(local_answer_for(&help, None, false, question).is_some());
+        assert!(local_answer_for(&help, None, true, question).is_none());
     }
 }
