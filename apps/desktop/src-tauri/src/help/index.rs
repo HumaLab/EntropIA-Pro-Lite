@@ -1,6 +1,6 @@
 //! The help assistant's local index (S9, D6): the bundled knowledge documents
-//! (for now the user manual only; T9/T10 add the FAQ and the screen map)
-//! indexed in a standalone SQLite file under the cache dir — never in the
+//! (the user manual, the FAQ and the generated screen map) indexed in a
+//! standalone SQLite file under the cache dir — never in the
 //! user's archive, so no migration and no sync.
 //!
 //! The file stores the SHA-256 of the bundled knowledge next to the index: a
@@ -16,13 +16,12 @@ use std::path::Path;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
-use super::{faq, manual, text};
+use super::{faq, manual, screenmap, text};
 
 const CONTENT_HASH_KEY: &str = "content_hash";
 
-/// Where the bundled knowledge comes from. Only the manual ships today; the
-/// FAQ (T9) and the screen map (T10) extend this enum without changing the
-/// index code.
+/// Where the bundled knowledge comes from: the manual, the FAQ (T9) and the
+/// generated screen map (T10, S11).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Source {
     Manual,
@@ -114,20 +113,41 @@ fn content_hash(docs: &[KnowledgeDoc]) -> String {
 
 /// The FTS5 MATCH expression for a natural-language question: the
 /// accent-folded words (>= 3 chars, stopwords dropped), each quoted, with
-/// its 5-letter stem beside it, OR-joined. A misspelled word then simply
-/// contributes nothing while the rest still retrieve; every term is long
-/// enough for the trigram tokenizer to use its index.
+/// its 5-letter stem beside it, OR-joined, plus the adjacent word pairs as
+/// quoted phrases. A misspelled word then simply contributes nothing while
+/// the rest still retrieve; every term is long enough for the trigram
+/// tokenizer to use its index. The phrases matter for the screen map (S11):
+/// a «Guardar cambios» question must reach the section holding that exact
+/// label, not a longer section that merely repeats one of its words.
 fn match_expression(query: &str) -> String {
-    let mut terms: Vec<String> = Vec::new();
+    let mut words: Vec<String> = Vec::new();
     for word in text::fold(query).split(|c: char| !c.is_alphanumeric()) {
         if word.chars().count() < 3 || text::STOPWORDS.contains(&word) {
             continue;
         }
-        let stem: String = word.chars().take(5).collect();
-        for term in [word.to_string(), stem] {
+        let owned = word.to_string();
+        if !words.contains(&owned) {
+            words.push(owned);
+        }
+    }
+    let mut terms: Vec<String> = Vec::new();
+    for word in &words {
+        for term in [word.clone(), word.chars().take(5).collect()] {
             if !terms.contains(&term) {
                 terms.push(term);
             }
+        }
+    }
+    // Adjacent pairs as phrases, so an exact label («guardar cambios»)
+    // outranks sections holding its words apart. Capped with everything
+    // else: a long question needs no more than a few dozen terms.
+    for pair in words.windows(2) {
+        if terms.len() >= 96 {
+            break;
+        }
+        let phrase = format!("{} {}", pair[0], pair[1]);
+        if !terms.contains(&phrase) {
+            terms.push(phrase);
         }
     }
     terms
@@ -180,7 +200,7 @@ fn hit_row(row: &rusqlite::Row) -> rusqlite::Result<(String, String, String, Str
 }
 
 impl HelpIndex {
-    /// The manual sections as index documents (T10 appends the screen map).
+    /// The manual sections as index documents.
     pub(crate) fn manual_docs() -> Vec<KnowledgeDoc> {
         manual::sections()
             .iter()
@@ -193,12 +213,14 @@ impl HelpIndex {
             .collect()
     }
 
-    /// The manual sections as index documents, plus the FAQ entries (T9):
-    /// the content hash covers both, so a new app version with new answers
-    /// rebuilds the index (S9).
+    /// The bundled knowledge as index documents: the manual sections, the
+    /// FAQ entries (T9) and the screen-map sections (T10, S11). The content
+    /// hash covers all three, so a new app version with new answers or new
+    /// UI labels rebuilds the index (S9).
     pub(crate) fn bundled_docs() -> Vec<KnowledgeDoc> {
         let mut docs = Self::manual_docs();
         docs.extend(faq::faq_docs());
+        docs.extend(screenmap::screenmap_docs());
         docs
     }
 
@@ -570,6 +592,79 @@ mod tests {
         assert!(
             hits.iter().any(|hit| hit.title.contains("Importar")),
             "trigram fallback top 5: {:?}",
+            hits.iter().map(|hit| &hit.title).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bundled_docs_include_one_screen_map_doc_per_section() {
+        // S11: the generated map is indexed with the manual, one doc per
+        // `###` section with the `##` area as its chapter.
+        let docs = HelpIndex::bundled_docs();
+        let screen: Vec<&KnowledgeDoc> = docs
+            .iter()
+            .filter(|doc| doc.source == Source::ScreenMap)
+            .collect();
+        assert!(!screen.is_empty(), "bundled docs must hold the screen map");
+        assert_eq!(
+            screen.len(),
+            super::super::screenmap::sections().len(),
+            "one doc per ### section"
+        );
+        for doc in screen {
+            assert!(!doc.chapter.is_empty(), "{doc:?}");
+            assert!(!doc.title.is_empty(), "{doc:?}");
+            assert!(!doc.body.is_empty(), "{doc:?}");
+        }
+    }
+
+    #[test]
+    fn the_content_hash_covers_the_screen_map() {
+        // S9: a regenerated map flips the hash and rebuilds the index.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("help-index.sqlite");
+        let docs = HelpIndex::bundled_docs();
+        let first = HelpIndex::open(&path, &docs).expect("first open");
+        assert!(first.rebuilt());
+        drop(first);
+
+        let mut changed = docs.clone();
+        let section = changed
+            .iter_mut()
+            .find(|doc| doc.source == Source::ScreenMap)
+            .expect("bundled docs hold screen-map docs");
+        section.body.push_str("\n- «Botón nuevo»");
+        let second = HelpIndex::open(&path, &changed).expect("reopen");
+        assert!(
+            second.rebuilt(),
+            "a changed screen-map section must rebuild"
+        );
+    }
+
+    fn open_bundled() -> (tempfile::TempDir, HelpIndex) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let docs = HelpIndex::bundled_docs();
+        assert!(
+            docs.iter().any(|doc| doc.source == Source::ScreenMap),
+            "bundled docs hold the screen map"
+        );
+        let index =
+            HelpIndex::open(&dir.path().join("help-index.sqlite"), &docs).expect("open index");
+        (dir, index)
+    }
+
+    #[test]
+    fn a_button_question_retrieves_a_screen_map_hit() {
+        // S11: «¿Dónde está el botón Guardar cambios?» names the UI label.
+        let (_dir, index) = open_bundled();
+        let hits = index.search_in(
+            "¿Dónde está el botón Guardar cambios?",
+            5,
+            Some(Source::ScreenMap),
+        );
+        assert!(
+            hits.iter().any(|hit| hit.body.contains("Guardar cambios")),
+            "top 5: {:?}",
             hits.iter().map(|hit| &hit.title).collect::<Vec<_>>()
         );
     }

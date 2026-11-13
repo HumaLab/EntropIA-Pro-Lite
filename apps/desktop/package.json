@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "help:screen-map": "node scripts/build-help-screen-map.mjs",
+    "help:screen-map:check": "node scripts/build-help-screen-map.mjs --check",
     "tauri": "tauri",
     "tauri:dev:isolated": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build:isolated": "tauri build --config src-tauri/tauri.dev.conf.json",
