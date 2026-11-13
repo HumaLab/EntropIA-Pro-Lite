@@ -278,7 +278,8 @@ impl JobStore {
     /// Restart recovery over every entry in `root`, in sorted order.
     ///
     /// For each real directory with a valid job id name (symlinks are
-    /// skipped, never followed): remove a leftover `job.json.tmp`;
+    /// skipped, never followed): remove an empty job folder (left when a
+    /// removed job's folder could not be deleted); remove a leftover `job.json.tmp`;
     /// quarantine an unparsable `job.json` as `job.json.corrupt-<now>`
     /// without touching PDFs; leave unsupported versions untouched;
     /// otherwise run `normalize_after_restart(now)`, save the job when
@@ -324,7 +325,13 @@ impl JobStore {
             let bytes = match fs::read(&job_path) {
                 Ok(bytes) => bytes,
                 Err(_) => {
-                    // Valid folder but no manifest: leave it alone.
+                    // An empty folder is what a discarded job leaves when
+                    // Windows could not delete the folder itself; `remove_dir`
+                    // only removes it while it is still empty. Any other
+                    // folder without a manifest is left alone.
+                    if fs::remove_dir(&path).is_ok() {
+                        continue;
+                    }
                     report.skipped.push(name);
                     continue;
                 }
@@ -745,6 +752,22 @@ mod tests {
         assert_eq!(report.skipped, vec![VALID_ID.to_string()]);
         let after = fs::read(target.join("job.json")).unwrap();
         assert_eq!(before, after, "target untouched");
+    }
+
+    #[test]
+    fn recover_all_removes_empty_job_folders_and_keeps_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = JobStore::new(tmp.path().to_path_buf());
+        // An empty folder left behind when Windows could not delete it.
+        fs::create_dir_all(store.root().join(VALID_ID)).unwrap();
+        // A folder without manifest that still holds a file stays.
+        let kept = store.root().join(VALID_ID_2);
+        fs::create_dir_all(&kept).unwrap();
+        fs::write(kept.join("notes.txt"), b"x").unwrap();
+        let report = store.recover_all(1);
+        assert!(!store.root().join(VALID_ID).exists());
+        assert!(kept.join("notes.txt").exists());
+        assert_eq!(report.skipped, vec![VALID_ID_2.to_string()]);
     }
 
     #[test]
