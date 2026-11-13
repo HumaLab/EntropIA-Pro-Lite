@@ -152,28 +152,10 @@ describe('NavigationStore', () => {
     expect(nav.canGoBack).toBe(true)
   })
 
-  it('navigates to help view', () => {
-    nav.navigate({ name: 'help' })
-    expect(nav.current).toEqual({ name: 'help' })
-    expect(nav.canGoBack).toBe(true)
-  })
-
-  it('help breadcrumb is its own root: Ayuda', () => {
-    nav.navigate({ name: 'help' })
-    expect(nav.breadcrumb).toEqual(['Ayuda'])
-  })
-
-  it('openRootSection pushes help so Back returns to the previous screen', () => {
-    nav.navigate({ name: 'rag-chat' })
-    nav.openRootSection({ name: 'help' })
-
-    expect(nav.current).toEqual({ name: 'help' })
-    expect(nav.breadcrumb).toEqual(['Ayuda'])
-
-    nav.back()
-    expect(nav.current).toEqual({ name: 'rag-chat' })
-  })
-
+  // D9 (S13): there is no help root view anymore — the help chat lives in
+  // the floating bubble, so `help` is not a navigable View at all (the
+  // exhaustive switches in tab-meta.ts and the route loader prove it at
+  // type level; these tests pin the breadcrumb roots that remain).
   it('navigates to db browser view', () => {
     nav.navigate({ name: 'db-browser' })
     expect(nav.current).toEqual({ name: 'db-browser' })
@@ -218,9 +200,6 @@ describe('NavigationStore', () => {
 
     nav.navigate({ name: 'rag-chat' })
     expect(nav.breadcrumb).toEqual(['Chat'])
-
-    nav.navigate({ name: 'help' })
-    expect(nav.breadcrumb).toEqual(['Ayuda'])
 
     nav.navigate({ name: 'research' })
     expect(nav.breadcrumb).toEqual(['Investigación'])

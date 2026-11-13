@@ -127,7 +127,8 @@ describe('AppShell', () => {
     expect(screen.queryByText('Abrí una colección para ver el explorador')).not.toBeInTheDocument()
   })
 
-  it.each(['db-browser', 'help', 'rag-chat', 'settings'] as const)(
+  // D9 (S13): no help root view anymore — the bubble replaced it.
+  it.each(['db-browser', 'rag-chat', 'settings'] as const)(
     'hides the whole sidebar on the %s root section so it reserves no width',
     async (viewName) => {
       workspace.activeNavigation.resetToPath([{ name: viewName }])
@@ -857,8 +858,10 @@ describe('AppShell', () => {
       expect(await screen.findByText('1,2 GB de 2,4 GB (50 %)')).toBeInTheDocument()
       expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50')
       // Non-modal: the app stays usable, nothing traps focus behind a dialog.
+      // (The help bubble's panel is in the DOM but shut: hidden dialogs trap
+      // nothing, so only a shown one counts here.)
       expect(screen.getByTestId('app-shell-child')).toBeInTheDocument()
-      expect(container.querySelector('[role="dialog"]')).toBeNull()
+      expect(container.querySelector('[role="dialog"]:not([hidden])')).toBeNull()
     })
 
     it.runIf(LOCAL_ML)('pause_cancel_returns_to_pending_state', async () => {

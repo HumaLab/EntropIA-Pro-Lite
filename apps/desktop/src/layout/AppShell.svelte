@@ -43,6 +43,7 @@
   import SyncStatusIndicator from './SyncStatusIndicator.svelte'
   import BatchStatusIndicator from './BatchStatusIndicator.svelte'
   import NotificationBell from './NotificationBell.svelte'
+  import HelpBubble from '../components/HelpBubble.svelte'
   import WorkPane from './WorkPane.svelte'
   import SplitDivider from './SplitDivider.svelte'
 
@@ -647,6 +648,10 @@
        work panes, which are size containers and would clip a fixed overlay,
        but still inside the shell's stacking context, under the tooltip. -->
   <div data-overlay-root></div>
+
+  <!-- The help bubble (S13, D9): one floating entry point for the whole app,
+       visible on every screen, in Lite and Pro. -->
+  <HelpBubble />
 
   <TopBar splitAvailable={splitFits} />
 

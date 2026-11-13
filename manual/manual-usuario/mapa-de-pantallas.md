@@ -15,7 +15,6 @@
 - `collection`
 - `item`
 - «Base de datos» `db-browser`
-- «Ayuda» `help`
 - «Chat» `rag-chat`
 - «Investigación» `research`
 - `investigation`
@@ -1026,6 +1025,7 @@
 - «Buscando en el manual…» `help.thinking`
 - «Cargando el diagnóstico…» `help.diagnosticsLoading`
 - «Cargá tu clave en Configuración › APIs remotas › OpenRouter y asegurate de que tu cuenta tenga crédito disponible.» `help.noKeyBody`
+- «Cerrar ayuda» `help.closePanel`
 - «Comprobando tu clave de OpenRouter…» `help.statusLoading`
 - «Del manual» `help.sourcesLabel`
 - «Enviar» `help.send`
@@ -1893,7 +1893,6 @@
 
 ### Varios
 
-- «Ayuda» `nav.help`
 - «Base de datos» `nav.dbBrowser`
 - «Biblioteca» `nav.biblioteca`
 - «Chat» `nav.ragChat`
@@ -2380,9 +2379,12 @@
 ### Ayuda
 
 - «Ayuda»
+- «Contexto del manual (caracteres)»
 - «Contexto: caracteres del manual y del mapa de pantallas enviados al modelo (4000-60000)»
 - «Historial: cantidad de turnos previos incluidos (0-12)»
+- «Largo máximo de la respuesta (tokens)»
 - «Las preguntas que van al modelo se cobran en tu cuenta de OpenRouter. El diagnóstico y tus documentos solo viajan si los activás en cada pregunta.»
+- «Modelo»
 - «Modelo de la ayuda: vacío usa el modelo general de Configuración»
 - «Modelo, contexto y límites de la ayuda en la app. Los valores mostrados son los vigentes.»
 - «Parámetro de ayuda inválido: {param}»
@@ -2390,7 +2392,9 @@
 - «Respuesta: tope de tokens generados por el modelo (200-8000)»
 - «Respuestas locales»
 - «Restaurar defaults»
+- «Temperatura»
 - «Temperatura: gradúa la creatividad de la respuesta (0-1)»
+- «Turnos de historial»
 
 ### llmMode
 
@@ -2837,7 +2841,6 @@
 
 ### Varios
 
-- «Abrir Ayuda» `topbar.helpAria`
 - «Abrir Biblioteca» `topbar.bibliotecaAria`
 - «Abrir Colecciones» `topbar.collectionsAria`
 - «Abrir Escritura» `topbar.writingAria`
@@ -2850,7 +2853,6 @@
 - «Agente de investigación» `topbar.researchTitle`
 - «Alternar vista dividida» `topbar.splitAria`
 - «Aumentar zoom» `topbar.zoomIn`
-- «Ayuda» `topbar.helpTitle`
 - «Base de datos» `topbar.dbBrowserTitle`
 - «Biblioteca» `topbar.bibliotecaTitle, topbar.searchBibliographyGroup`
 - «Breadcrumb» `topbar.breadcrumb`

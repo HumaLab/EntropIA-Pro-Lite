@@ -246,15 +246,13 @@ describe('TopBar', () => {
     expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'rag-chat' })
   })
 
-  it('opens Ayuda from its header icon button and navigates to help', async () => {
+  // D9 (S13): the help chat lives in the floating bubble, not in the header.
+  // No header button may open a help view again.
+  it('no longer offers a header button for help', async () => {
     render(TopBar)
 
-    const button = screen.getByRole('button', { name: 'Abrir Ayuda' })
-    expect(button.querySelector('svg')?.getAttribute('data-action-icon')).toBe('circle-help')
-
-    await fireEvent.click(button)
-
-    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'help' })
+    expect(screen.queryByRole('button', { name: 'Abrir Ayuda' })).not.toBeInTheDocument()
+    expect(navigateActiveMock).not.toHaveBeenCalledWith({ name: 'help' })
   })
 
   it('opens the research agent from its section icon', async () => {

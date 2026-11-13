@@ -59,7 +59,6 @@ export type View =
       noteId?: string | null
     }
   | { name: 'db-browser' }
-  | { name: 'help' }
   | { name: 'rag-chat' }
   | { name: 'research' }
   | { name: 'investigation'; jobId: string; title: string }
@@ -89,7 +88,6 @@ type RootSectionView = Extract<
       | 'home'
       | 'settings'
       | 'db-browser'
-      | 'help'
       | 'rag-chat'
       | 'research'
       | 'writing'
@@ -187,7 +185,6 @@ export class NavigationStore {
       return breadcrumb
     }
     if (view.name === 'db-browser') return [t('nav.dbBrowser')]
-    if (view.name === 'help') return [t('nav.help')]
     if (view.name === 'rag-chat') return [t('nav.ragChat')]
     if (view.name === 'research') return [t('nav.research')]
     if (view.name === 'navegador') return [t('nav.navegador')]
