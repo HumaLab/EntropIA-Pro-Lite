@@ -274,6 +274,98 @@
     selection = [...selection, { identifier, fileName, title }]
   }
 
+  // Bulk selection: a whole record (or page of records) at once. Files are
+  // looked up without opening the record, a few records at a time.
+  const RECORD_CONCURRENCY = 4
+  const recordCache = new Map<string, IaItemDetails>()
+  let emptyRecords = $state<string[]>([])
+  let resolvingRecords = $state(0)
+  let failedRecords = $state(0)
+
+  function isRecordSelected(identifier: string): boolean {
+    return selection.some((entry) => entry.identifier === identifier)
+  }
+
+  /** Available files of the chosen kinds; a collection holds none. */
+  function selectableFiles(details: IaItemDetails): IaPdfFile[] {
+    if (details.mediatype === 'collection') return []
+    return details.pdfs.filter((file) => file.availability === 'available' && matchesKinds(file))
+  }
+
+  function deselectRecord(identifier: string): void {
+    selection = selection.filter((entry) => entry.identifier !== identifier)
+  }
+
+  async function selectRecord(hit: { identifier: string; title: string | null }): Promise<void> {
+    let details = recordCache.get(hit.identifier)
+    if (!details) {
+      details = await iaGetItem(hit.identifier)
+      recordCache.set(hit.identifier, details)
+    }
+    const files = selectableFiles(details)
+    if (files.length === 0) {
+      if (!emptyRecords.includes(hit.identifier)) emptyRecords = [...emptyRecords, hit.identifier]
+      return
+    }
+    const title = details.title ?? hit.title ?? hit.identifier
+    const added = files
+      .filter((file) => !isSelected(hit.identifier, file.name))
+      .map((file) => ({ identifier: hit.identifier, fileName: file.name, title }))
+    selection = [...selection, ...added]
+  }
+
+  /** Select records, at most `RECORD_CONCURRENCY` lookups in flight. */
+  async function selectRecords(
+    hits: ReadonlyArray<{ identifier: string; title: string | null }>
+  ): Promise<void> {
+    failedRecords = 0
+    resolvingRecords += hits.length
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (next < hits.length) {
+        const hit = hits[next++]!
+        try {
+          await selectRecord(hit)
+        } catch {
+          failedRecords += 1
+        } finally {
+          resolvingRecords -= 1
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(RECORD_CONCURRENCY, hits.length) }, () => worker())
+    )
+  }
+
+  function toggleRecord(hit: { identifier: string; title: string | null }): void {
+    if (isRecordSelected(hit.identifier)) deselectRecord(hit.identifier)
+    else void selectRecords([hit])
+  }
+
+  type PageRecord = { identifier: string; title: string | null; restricted: boolean }
+
+  function selectableRecords(items: readonly PageRecord[]): PageRecord[] {
+    return items.filter((hit) => !hit.restricted && !emptyRecords.includes(hit.identifier))
+  }
+
+  function pageState(items: readonly PageRecord[]): 'none' | 'some' | 'all' {
+    const records = selectableRecords(items)
+    const selected = records.filter((hit) => isRecordSelected(hit.identifier)).length
+    if (selected === 0) return 'none'
+    return selected === records.length ? 'all' : 'some'
+  }
+
+  function togglePage(items: readonly PageRecord[]): void {
+    const records = selectableRecords(items)
+    if (pageState(items) === 'all') {
+      const ids = new Set(records.map((hit) => hit.identifier))
+      selection = selection.filter((entry) => !ids.has(entry.identifier))
+      return
+    }
+    void selectRecords(records.filter((hit) => !isRecordSelected(hit.identifier)))
+  }
+
   function removeSelection(identifier: string, fileName: string): void {
     selection = selection.filter(
       (entry) => !(entry.identifier === identifier && entry.fileName === fileName)
@@ -1379,9 +1471,43 @@
       {/each}
     </div>
   </div>
+  {@const pageSelection = pageState(result.items)}
+  <div class="ia-bulk">
+    {#key selectableRecords(result.items).length}
+      <Checkbox
+        class="ia-bulk__all"
+        checked={pageSelection === 'all'}
+        indeterminate={pageSelection === 'some'}
+        disabled={selectableRecords(result.items).length === 0}
+        label={t('internetArchive.record.selectPage')}
+        onchange={() => togglePage(result.items)}
+      >
+        <span class="ia-bulk__label">{t('internetArchive.record.selectPage')}</span>
+      </Checkbox>
+    {/key}
+    {#if resolvingRecords > 0}
+      <span class="ia-status" role="status" aria-live="polite">
+        {t('internetArchive.record.resolving', { count: formatCount(resolvingRecords) })}
+      </span>
+    {:else if failedRecords > 0}
+      <span class="ia-status" role="alert">
+        {t('internetArchive.record.failed', { count: formatCount(failedRecords) })}
+      </span>
+    {/if}
+  </div>
   <ul class="ia-results ia-results--dense">
     {#each result.items as hit (hit.identifier)}
+      {@const empty = emptyRecords.includes(hit.identifier)}
       <li class="ia-row" class:ia-row--active={hit.identifier === itemIdentifier}>
+        {#key empty}
+          <Checkbox
+            class="ia-row__check"
+            checked={isRecordSelected(hit.identifier)}
+            disabled={hit.restricted || empty}
+            label={t('internetArchive.record.select', { title: hit.title ?? hit.identifier })}
+            onchange={() => toggleRecord(hit)}
+          />
+        {/key}
         <div class="ia-row__main">
           <span class="ia-row__title">{hit.title ?? hit.identifier}</span>
           <span class="ia-row__meta">
@@ -1392,6 +1518,9 @@
               <span class="ia-results__meta">{hit.date}</span>
             {/if}
             <span class="ia-results__meta ia-results__identifier">{hit.identifier}</span>
+            {#if empty}
+              <span class="ia-results__meta">{t('internetArchive.record.empty')}</span>
+            {/if}
           </span>
         </div>
         {#if hit.restricted}
@@ -1776,6 +1905,24 @@
 
   .ia-row--active {
     background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  }
+
+  .ia-bulk {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-1);
+  }
+
+  .ia-bulk__label {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+
+  .ia-row :global(.ia-row__check) {
+    flex: 0 0 auto;
+    padding: var(--space-1);
   }
 
   .ia-row__main {

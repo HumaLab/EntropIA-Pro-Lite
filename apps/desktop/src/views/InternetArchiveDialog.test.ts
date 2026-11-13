@@ -375,6 +375,96 @@ describe('InternetArchiveDialog discovery', () => {
     expect(screen.getByRole('checkbox', { name: 'Seleccionar scan.pdf' })).toBeInTheDocument()
   })
 
+  async function searchPage(items: Array<Record<string, unknown>>) {
+    iaRef.iaSearch.mockResolvedValue({ numFound: items.length, items: items.map(searchItem) })
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+  }
+
+  const recordFiles: Record<string, ReturnType<typeof itemDetails>> = {
+    'some-id': itemDetails({
+      pdfs: [
+        pdf(),
+        pdf({ name: 'scan.pdf', format: 'Image Container PDF', kind: 'pdf' }),
+        pdf({ name: 'locked.pdf', availability: 'encrypted' }),
+        pdf({ name: 'photo.jpg', format: 'JPEG', kind: 'image' }),
+      ],
+    }),
+    'third-id': itemDetails({ identifier: 'third-id', title: 'Third', pdfs: [pdf()] }),
+  }
+
+  it('selects every matching file of a record from its row, without opening it', async () => {
+    iaRef.iaGetItem.mockImplementation(async (id: string) => recordFiles[id])
+    await searchPage([{}])
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar registro Some Title' }))
+
+    await screen.findByText('Seleccionados: 2')
+    expect(iaRef.iaGetItem).toHaveBeenCalledWith('some-id')
+    expect(screen.getByRole('checkbox', { name: 'Seleccionar registro Some Title' })).toBeChecked()
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar registro Some Title' }))
+    expect(screen.queryByText('Seleccionados: 2')).toBeNull()
+    expect(
+      screen.getByRole('checkbox', { name: 'Seleccionar registro Some Title' })
+    ).not.toBeChecked()
+  })
+
+  it('selects and deselects the whole page from the header, skipping restricted records', async () => {
+    iaRef.iaGetItem.mockImplementation(async (id: string) => recordFiles[id])
+    await searchPage([
+      {},
+      { identifier: 'other-id', title: 'Locked', restricted: true },
+      { identifier: 'third-id', title: 'Third' },
+    ])
+    expect(screen.getByRole('checkbox', { name: 'Seleccionar registro Locked' })).toBeDisabled()
+    const all = screen.getByRole('checkbox', {
+      name: 'Seleccionar todos los registros de la página',
+    })
+
+    await fireEvent.click(all)
+
+    await screen.findByText('Seleccionados: 3')
+    expect(iaRef.iaGetItem).not.toHaveBeenCalledWith('other-id')
+    expect(all).toBeChecked()
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar registro Third' }))
+    expect(all).toBePartiallyChecked()
+
+    await fireEvent.click(all)
+    await screen.findByText('Seleccionados: 3')
+    await fireEvent.click(all)
+    expect(screen.queryByText(/Seleccionados:/)).toBeNull()
+    expect(all).not.toBeChecked()
+  })
+
+  it('fetches record files a few at a time', async () => {
+    const pending: Array<() => void> = []
+    iaRef.iaGetItem.mockImplementation(
+      (id: string) =>
+        new Promise((resolve) => {
+          pending.push(() => resolve(itemDetails({ identifier: id, pdfs: [pdf()] })))
+        })
+    )
+    await searchPage(
+      Array.from({ length: 10 }, (_, i) => ({ identifier: `id-${i}`, title: `Record ${i}` }))
+    )
+
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar todos los registros de la página' })
+    )
+
+    expect(iaRef.iaGetItem).toHaveBeenCalledTimes(4)
+    while (pending.length > 0) {
+      pending.shift()!()
+      await waitFor(() => undefined)
+    }
+    await screen.findByText('Seleccionados: 10')
+    expect(iaRef.iaGetItem).toHaveBeenCalledTimes(10)
+  })
+
   it('opens in the wide layout', () => {
     open()
 
