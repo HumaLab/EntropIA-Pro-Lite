@@ -63,8 +63,8 @@ own card later and can reuse this base.
 
 | ID | Specs | Route | Status | Commit |
 |---|---|---|---|---|
-| T1 | S4 | inline, TDD — Rust `help::manual`: embed, split into sections, local selection | pending | |
-| T2 | S5 | inline, TDD — Rust `help::diagnostics`: allowlisted config + scrubbed recent logs, `help_diagnostics_preview` (Risk item 2) | pending | |
+| T1 | S4 | inline, TDD — Rust `help::manual`: embed, split into sections, local selection | done | bd30782d |
+| T2 | S5 | inline, TDD — Rust `help::diagnostics`: allowlisted config + scrubbed recent logs, `help_diagnostics_preview` (Risk item 2) | done (builder; command lands in T3) | bd30782d |
 | T3 | S1-S3, S5 | inline, TDD — Rust `help_ask`: key gate, prompt assembly, OpenRouter call | pending | |
 | T4 | S1, S2, S5-S7 | inline, TDD — frontend: `lib/help.ts`, `HelpView`, header button, no-key page, i18n ES/EN | pending | |
 | T5 | S4 | inline — manual: short section on the help chat | pending | |
@@ -85,3 +85,4 @@ own card later and can reuse this base.
   `require_openrouter_key`; logs ring buffer in `app_logs.rs`, credential
   redaction at write time (`redact_sensitive`), `logs_get` returns 20 entries;
   no help button or manual link anywhere in the app.
+- L4 (2026-11-13, T1+T2): `help::manual` (parse, BM25 selection over 5-letter stems, chapter 19 first for failures, sections skipped not cut over budget) and `help::diagnostics` (allowlisted settings, keys as configurada / no configurada, last 30 warn/error lines with URL paths, file paths, file names and quoted text replaced, credential redaction via `sanitize_field`). T1 RED not observed: the compile started after the implementation was written (7/7 green on first run); a mutation check is owed in T6. T2 RED 6 failing -> GREEN `cargo test --lib help::` 14/14. Commit bd30782d.
