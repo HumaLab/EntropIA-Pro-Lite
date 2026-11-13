@@ -379,6 +379,22 @@ describe('i18n', () => {
       'snippetMaxChars no puede superar contextMaxChars.'
     )
     expect(t('settings.ragParams.restoreDefaults')).toBe('Restaurar defaults')
+    expect(t('settings.helpTab')).toBe('Ayuda')
+    expect(t('settings.help.title')).toBe('Ayuda')
+    expect(t('settings.help.description')).toBe(
+      'Modelo, contexto y límites de la ayuda en la app. Los valores mostrados son los vigentes.'
+    )
+    expect(t('settings.help.hint.model')).toBe(
+      'Modelo de la ayuda: vacío usa el modelo general de Configuración'
+    )
+    expect(t('settings.help.hint.contextChars')).toBe(
+      'Contexto: caracteres del manual y del mapa de pantallas enviados al modelo (4000-60000)'
+    )
+    expect(t('settings.help.localAnswers')).toBe('Respuestas locales')
+    expect(t('settings.help.invalidParam', { param: 'contextChars' })).toBe(
+      'Parámetro de ayuda inválido: contextChars'
+    )
+    expect(t('settings.help.restoreDefaults')).toBe('Restaurar defaults')
 
     locale.set('en')
 
@@ -420,6 +436,20 @@ describe('i18n', () => {
       'snippetMaxChars cannot exceed contextMaxChars.'
     )
     expect(t('settings.ragParams.restoreDefaults')).toBe('Restore defaults')
+    expect(t('settings.helpTab')).toBe('Help')
+    expect(t('settings.help.title')).toBe('Help')
+    expect(t('settings.help.description')).toBe(
+      'Model, context and limits for in-app help. The values shown are the ones in effect.'
+    )
+    expect(t('settings.help.hint.model')).toBe('Help model: empty uses the general Settings model')
+    expect(t('settings.help.hint.contextChars')).toBe(
+      'Context: manual and screen-map characters sent to the model (4000-60000)'
+    )
+    expect(t('settings.help.localAnswers')).toBe('Local answers')
+    expect(t('settings.help.invalidParam', { param: 'contextChars' })).toBe(
+      'Invalid help parameter: contextChars'
+    )
+    expect(t('settings.help.restoreDefaults')).toBe('Restore defaults')
   })
 
   it('exposes the API key clearing copy in both locales', async () => {

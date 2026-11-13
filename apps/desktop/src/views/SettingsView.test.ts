@@ -788,15 +788,15 @@ describe('SettingsView', () => {
 
     expect(screen.getByRole('tab', { name: 'Ayuda' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('heading', { name: 'Ayuda' })).toBeInTheDocument()
-    expect(screen.getByLabelText('model')).toHaveValue('anthropic/claude-3.7-sonnet')
-    expect(screen.getByLabelText('model')).toHaveAttribute(
+    expect(screen.getByLabelText('Modelo')).toHaveValue('anthropic/claude-3.7-sonnet')
+    expect(screen.getByLabelText('Modelo')).toHaveAttribute(
       'placeholder',
       'anthropic/claude-3.7-sonnet'
     )
-    expect(screen.getByLabelText('contextChars (4000-60000)')).toHaveValue(24000)
-    expect(screen.getByLabelText('maxTokens (200-8000)')).toHaveValue(1500)
-    expect(screen.getByLabelText('temperature (0-1)')).toHaveValue(0.2)
-    expect(screen.getByLabelText('historyTurns (0-12)')).toHaveValue(6)
+    expect(screen.getByLabelText('Contexto del manual (caracteres)')).toHaveValue(24000)
+    expect(screen.getByLabelText('Largo máximo de la respuesta (tokens)')).toHaveValue(1500)
+    expect(screen.getByLabelText('Temperatura')).toHaveValue(0.2)
+    expect(screen.getByLabelText('Turnos de historial')).toHaveValue(6)
     expect(screen.getByRole('checkbox', { name: 'Respuestas locales' })).toBeChecked()
     expect(
       screen.getByText('Modelo de la ayuda: vacío usa el modelo general de Configuración')
@@ -822,11 +822,11 @@ describe('SettingsView', () => {
     await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
     await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
 
-    await waitFor(() => expect(screen.getByLabelText('model')).toHaveValue('vendor/help-model'))
-    expect(screen.getByLabelText('contextChars (4000-60000)')).toHaveValue(12000)
-    expect(screen.getByLabelText('maxTokens (200-8000)')).toHaveValue(800)
-    expect(screen.getByLabelText('temperature (0-1)')).toHaveValue(0.7)
-    expect(screen.getByLabelText('historyTurns (0-12)')).toHaveValue(2)
+    await waitFor(() => expect(screen.getByLabelText('Modelo')).toHaveValue('vendor/help-model'))
+    expect(screen.getByLabelText('Contexto del manual (caracteres)')).toHaveValue(12000)
+    expect(screen.getByLabelText('Largo máximo de la respuesta (tokens)')).toHaveValue(800)
+    expect(screen.getByLabelText('Temperatura')).toHaveValue(0.7)
+    expect(screen.getByLabelText('Turnos de historial')).toHaveValue(2)
     expect(screen.getByRole('checkbox', { name: 'Respuestas locales' })).not.toBeChecked()
   })
 
@@ -836,19 +836,19 @@ describe('SettingsView', () => {
     await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
     await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
 
-    await fireEvent.input(screen.getByLabelText('model'), {
+    await fireEvent.input(screen.getByLabelText('Modelo'), {
       target: { value: 'vendor/help-model' },
     })
-    await fireEvent.input(screen.getByLabelText('contextChars (4000-60000)'), {
+    await fireEvent.input(screen.getByLabelText('Contexto del manual (caracteres)'), {
       target: { value: '999999' },
     })
-    await fireEvent.input(screen.getByLabelText('maxTokens (200-8000)'), {
+    await fireEvent.input(screen.getByLabelText('Largo máximo de la respuesta (tokens)'), {
       target: { value: '1' },
     })
-    await fireEvent.input(screen.getByLabelText('temperature (0-1)'), {
+    await fireEvent.input(screen.getByLabelText('Temperatura'), {
       target: { value: '5' },
     })
-    await fireEvent.input(screen.getByLabelText('historyTurns (0-12)'), {
+    await fireEvent.input(screen.getByLabelText('Turnos de historial'), {
       target: { value: '99' },
     })
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Respuestas locales' }))
@@ -883,7 +883,7 @@ describe('SettingsView', () => {
 
     // Un número no puede guardar basura: el navegador la sanea a vacío, y
     // el vacío vuelve al default.
-    await fireEvent.input(screen.getByLabelText('contextChars (4000-60000)'), {
+    await fireEvent.input(screen.getByLabelText('Contexto del manual (caracteres)'), {
       target: { value: '' },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
@@ -897,13 +897,13 @@ describe('SettingsView', () => {
     await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
     await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
 
-    await fireEvent.input(screen.getByLabelText('model'), { target: { value: 'vendor/other' } })
-    expect(screen.getByLabelText('model')).toHaveValue('vendor/other')
+    await fireEvent.input(screen.getByLabelText('Modelo'), { target: { value: 'vendor/other' } })
+    expect(screen.getByLabelText('Modelo')).toHaveValue('vendor/other')
 
     await fireEvent.click(screen.getByRole('button', { name: 'Restaurar defaults' }))
 
-    expect(screen.getByLabelText('model')).toHaveValue('anthropic/claude-3.7-sonnet')
-    expect(screen.getByLabelText('contextChars (4000-60000)')).toHaveValue(24000)
+    expect(screen.getByLabelText('Modelo')).toHaveValue('anthropic/claude-3.7-sonnet')
+    expect(screen.getByLabelText('Contexto del manual (caracteres)')).toHaveValue(24000)
     expect(screen.getByRole('checkbox', { name: 'Respuestas locales' })).toBeChecked()
   })
 

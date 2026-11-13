@@ -68,7 +68,7 @@
         <div class="settings__param-card-grid">
           <div class="settings__field--wide">
             <Input
-              label="model"
+              label={t('settings.help.label.model')}
               hint={t('settings.help.hint.model')}
               type="text"
               bind:value={form.model}
@@ -76,52 +76,60 @@
             />
           </div>
           <label class="help-settings-tab__field">
-            <span class="help-settings-tab__label">contextChars (4000-60000)</span>
+            <span class="help-settings-tab__label number-field-label"
+              >{t('settings.help.label.contextChars')}</span
+            >
             <NumberField
               bind:value={form.contextChars}
               min="4000"
               max="60000"
               step="1000"
-              label="contextChars (4000-60000)"
+              label={t('settings.help.label.contextChars')}
               decrementLabel={t('numberField.decrease')}
               incrementLabel={t('numberField.increase')}
             />
             <span class="help-settings-tab__hint">{t('settings.help.hint.contextChars')}</span>
           </label>
           <label class="help-settings-tab__field">
-            <span class="help-settings-tab__label">maxTokens (200-8000)</span>
+            <span class="help-settings-tab__label number-field-label"
+              >{t('settings.help.label.maxTokens')}</span
+            >
             <NumberField
               bind:value={form.maxTokens}
               min="200"
               max="8000"
               step="100"
-              label="maxTokens (200-8000)"
+              label={t('settings.help.label.maxTokens')}
               decrementLabel={t('numberField.decrease')}
               incrementLabel={t('numberField.increase')}
             />
             <span class="help-settings-tab__hint">{t('settings.help.hint.maxTokens')}</span>
           </label>
           <label class="help-settings-tab__field">
-            <span class="help-settings-tab__label">temperature (0-1)</span>
+            <span class="help-settings-tab__label number-field-label"
+              >{t('settings.help.label.temperature')}</span
+            >
             <NumberField
               bind:value={form.temperature}
               min="0"
               max="1"
               step="0.1"
-              label="temperature (0-1)"
+              label={t('settings.help.label.temperature')}
               decrementLabel={t('numberField.decrease')}
               incrementLabel={t('numberField.increase')}
             />
             <span class="help-settings-tab__hint">{t('settings.help.hint.temperature')}</span>
           </label>
           <label class="help-settings-tab__field">
-            <span class="help-settings-tab__label">historyTurns (0-12)</span>
+            <span class="help-settings-tab__label number-field-label"
+              >{t('settings.help.label.historyTurns')}</span
+            >
             <NumberField
               bind:value={form.historyTurns}
               min="0"
               max="12"
               step="1"
-              label="historyTurns (0-12)"
+              label={t('settings.help.label.historyTurns')}
               decrementLabel={t('numberField.decrease')}
               incrementLabel={t('numberField.increase')}
             />
