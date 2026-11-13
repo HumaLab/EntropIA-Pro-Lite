@@ -1023,11 +1023,15 @@ En Windows, algunos antivirus demoran el primer arranque del conector; si el asi
 <a id="ayuda-en-la-app"></a>
 ### 13.5. Ayuda dentro de la app
 
-El botón **Ayuda** de la barra superior abre un chat aparte del Chat de documentos. Responde con este mismo manual: le podés preguntar cómo hacer algo («¿Cómo importo un PDF?») o qué hacer cuando algo falla («Falló una transcripción, ¿qué hago?»). Cada respuesta indica de qué secciones del manual salió.
+La burbuja con el logo de EntropIA, en la esquina inferior derecha de la ventana, abre un chat de ayuda aparte del Chat de documentos. Para moverla, arrastrala con el mouse: queda donde la dejes. Con **Escape** se cierra el panel. Le podés preguntar cómo hacer algo («¿Cómo importo un PDF?») o qué hacer cuando algo falla («Falló una transcripción, ¿qué hago?»). Cada respuesta indica de qué secciones del manual salió.
 
-- **Usa tu clave de OpenRouter.** Las preguntas se responden con la clave de **Configuración → APIs remotas → OpenRouter** y el modelo general elegido ahí, y se cobran en tu cuenta de OpenRouter, que tiene que tener crédito. Sin clave, Ayuda muestra cómo cargarla y el enlace a este manual.
-- **Solo viajan las secciones del manual que hacen falta.** EntropIA elige en tu equipo dos a cuatro secciones relacionadas con la pregunta, más el capítulo [19](#capitulo-19-que-hago-si) cuando algo falla; nunca manda el manual entero ni tus documentos.
-- **Incluir diagnóstico.** Para un error, marcá **Incluir diagnóstico** antes de enviar. Se agrega la versión, el sistema, los modos y modelos elegidos, qué claves están cargadas (sí o no, nunca la clave) y los últimos avisos y errores del registro, sin rutas, nombres de archivo ni textos entre comillas. **Ver qué se envía** muestra el texto exacto. La casilla se apaga después de cada pregunta.
+- **Primeros pasos y preguntas frecuentes, sin conexión.** Las preguntas más comunes (crear la primera colección, hacer OCR, eliminar una imagen, cargar la clave de OpenRouter, entre otras) se responden en tu equipo, sin clave y sin costo; la respuesta lo indica con «Respuesta local, sin consultar a OpenRouter». Los botones de **Primeros pasos** del panel las muestran.
+- **El resto usa tu clave de OpenRouter.** Las demás preguntas se responden con la clave de **Configuración → APIs remotas → OpenRouter** y se cobran en tu cuenta, que tiene que tener crédito. Sin clave, la ayuda sigue respondiendo las preguntas frecuentes y te explica cómo cargarla.
+- **Solo viaja lo que hace falta.** EntropIA busca en tu equipo, en este manual y en el mapa de pantallas de la app, las secciones relacionadas con la pregunta, más el capítulo [19](#capitulo-19-que-hago-si) cuando algo falla; nunca manda el manual entero.
+- **Incluir diagnóstico.** Para un error, marcá **Incluir diagnóstico** antes de enviar. Se agrega la versión, el sistema, los modos y modelos elegidos, qué claves están cargadas (sí o no, nunca la clave) y los últimos avisos y errores del registro, sin rutas, nombres de archivo ni textos entre comillas. **Ver qué se envía** muestra el texto exacto.
+- **Buscar en mis documentos.** Si la pregunta es sobre tu archivo, marcá **Buscar en mis documentos**: EntropIA busca en tu equipo y manda a OpenRouter, solo para esa pregunta, algunos fragmentos con el título de cada documento. La respuesta lista **De tus documentos** con los títulos usados. Sin esa casilla, no se lee ni se envía nada de tus documentos.
+- **Las dos casillas se apagan solas** después de cada pregunta.
+- **Configuración → Ayuda** permite elegir otro modelo (vacío usa el modelo general), cuánto texto del manual se manda, el largo máximo de la respuesta, la temperatura, cuántos turnos anteriores se incluyen y si se usan las respuestas locales.
 - **No queda guardado.** La conversación dura mientras la app está abierta.
 - **Solo explica.** El asistente no cambia nada en la app: te dice qué pasos seguir.
 
@@ -1145,6 +1149,7 @@ Abrí **Configuración** con el botón de engranaje de la barra superior. En Lit
 | **Agente** | Ajustar los parámetros del [Agente de investigación](#capitulo-10-investigacion): salida, red y reintentos, archivo, recuperación y preguntas. | Dejá los valores por defecto; cambian solo las investigaciones que crees después. |
 | **Sincronización** | Conectar la cuenta y compartir datos entre equipos. | No la actives si no necesitás usar más de un equipo. |
 | **Asistentes** | Permitir que un asistente externo (Claude Code, Codex, OpenCode, Pi) consulte el archivo, darle permisos y elegir sus carpetas de entrada ([13.4](#asistentes-externos)). | Dejala apagada si no usás un asistente externo. |
+| **Ayuda** | Modelo, contexto, largo de respuesta, temperatura, historial y respuestas locales del chat de ayuda ([13.5](#ayuda-en-la-app)). | Vacío en el modelo usa el modelo general. |
 | **Lotes** | Procesar varias colecciones: OCR, embeddings, entidades, tripletes, corrección OCR, resúmenes y esquemas propios; seguir también la sincronización de la Biblioteca. | Ejecutá primero una prueba con una colección pequeña. |
 | **Logs** | Leer mensajes de actividad y error. | Anotá el mensaje visible antes de compartirlo con soporte. |
 | **Copias** | Elegir la carpeta y la frecuencia de las copias de seguridad, y hacer una al momento. | Elegí una carpeta en otro disco y activá una copia automática. |
