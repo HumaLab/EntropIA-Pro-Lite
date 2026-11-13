@@ -2148,6 +2148,8 @@ const es = {
   'collectionAnalysis.graphOpenRelation': 'Ver el pasaje con esta relación resaltada',
   'collectionAnalysis.graphRelationCount': '×{count}',
   'collectionAnalysis.graphClose': 'Cerrar el detalle',
+  'collectionAnalysis.graphExport': 'Guardar la red para Gephi (.gexf)',
+  'collectionAnalysis.graphExportError': 'No se pudo guardar el archivo de la red.',
   'collectionAnalysis.loading': 'Analizando el texto de la colección...',
   'collectionAnalysis.empty':
     'No hay texto extraído en esta colección. Ejecutá OCR o transcripción en los documentos.',
@@ -5435,6 +5437,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collectionAnalysis.graphOpenRelation': 'Open the passage with this relation highlighted',
   'collectionAnalysis.graphRelationCount': '×{count}',
   'collectionAnalysis.graphClose': 'Close the details',
+  'collectionAnalysis.graphExport': 'Save the graph for Gephi (.gexf)',
+  'collectionAnalysis.graphExportError': 'The graph file could not be saved.',
   'collectionAnalysis.loading': 'Analyzing collection text...',
   'collectionAnalysis.empty':
     'There is no extracted text in this collection. Run OCR or transcription on the documents.',
