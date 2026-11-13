@@ -111,6 +111,7 @@ export const ACTION_ICON_NAMES = [
   'refresh',
   'research',
   'resize-diagonal',
+  'restore',
   'rotate-ccw',
   'rotate-cw',
   'rotate-fine-ccw',

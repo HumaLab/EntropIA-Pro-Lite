@@ -1110,6 +1110,8 @@ const es = {
   'help.previewToggle': 'Ver qué se envía',
   'help.previewHide': 'Ocultar',
   'help.closePanel': 'Cerrar ayuda',
+  'help.maximizePanel': 'Maximizar',
+  'help.restorePanel': 'Restaurar',
   'help.diagnosticsHint':
     'Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.',
   'help.documentsHint':
@@ -5034,6 +5036,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'help.previewToggle': 'See what is sent',
   'help.previewHide': 'Hide',
   'help.closePanel': 'Close help',
+  'help.maximizePanel': 'Maximize',
+  'help.restorePanel': 'Restore',
   'help.diagnosticsHint':
     'Travels to OpenRouter with your question. It carries no keys and none of your documents’ content.',
   'help.documentsHint': 'Excerpts from your documents go to OpenRouter for this question only.',

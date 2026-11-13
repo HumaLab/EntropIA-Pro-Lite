@@ -1036,11 +1036,13 @@
 - «Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.» `help.documentsHint`
 - «Incluir diagnóstico» `help.includeDiagnostics`
 - «La ayuda usa tu cuenta de OpenRouter» `help.noKeyTitle`
+- «Maximizar» `help.maximizePanel`
 - «Ocultar» `help.previewHide`
 - «Preguntá cómo usar EntropIA o qué hacer cuando algo falla» `help.subtitle`
 - «Preguntá, por ejemplo, cómo importar un PDF o qué hacer si falla una transcripción.» `help.emptyState`
 - «Probá con:» `help.suggestionsLabel`
 - «Respuesta local, sin consultar a OpenRouter» `help.localAnswer`
+- «Restaurar» `help.restorePanel`
 - «Ver el manual en línea» `help.openManual`
 - «Ver qué se envía» `help.previewToggle`
 - «Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.» `help.diagnosticsHint`

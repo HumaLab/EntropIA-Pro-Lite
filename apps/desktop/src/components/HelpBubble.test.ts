@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import { locale } from '$lib/i18n'
-import { HELP_BUBBLE_STORAGE_KEY } from '$lib/help-bubble'
+import { HELP_BUBBLE_MAXIMIZED_KEY, HELP_BUBBLE_STORAGE_KEY } from '$lib/help-bubble'
 import HelpBubble from './HelpBubble.svelte'
 
 const mockInvoke = vi.mocked(invoke)
@@ -41,7 +41,15 @@ async function openPanel(): Promise<void> {
   await screen.findByRole('textbox', { name: 'Escribí tu pregunta…' })
 }
 
+function setWindowSize(width: number, height: number): void {
+  Object.defineProperty(window, 'innerWidth', { value: width, configurable: true })
+  Object.defineProperty(window, 'innerHeight', { value: height, configurable: true })
+}
+
 describe('HelpBubble (S13, D9)', () => {
+  const realWidth = window.innerWidth
+  const realHeight = window.innerHeight
+
   beforeEach(() => {
     locale.set('es')
     localStorage.clear()
@@ -49,6 +57,7 @@ describe('HelpBubble (S13, D9)', () => {
     navigationRef.openRootSection.mockReset()
     mockInvoke.mockReset()
     backend()
+    setWindowSize(realWidth, realHeight)
   })
 
   it('renders one round button at the bottom-right with its accessible name and the logo', () => {
@@ -129,7 +138,7 @@ describe('HelpBubble (S13, D9)', () => {
     }
   })
 
-  it('a drag beyond the threshold moves the bubble, saves the position, and does not open the panel', async () => {
+  it('a drag beyond the threshold moves the bubble, saves offsets, and does not open the panel', async () => {
     render(HelpBubble)
 
     const button = bubbleButton()
@@ -149,9 +158,8 @@ describe('HelpBubble (S13, D9)', () => {
 
     expect(button.style.left).toBe(`${from.x - 100}px`)
     expect(button.style.top).toBe(`${from.y - 50}px`)
-    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBe(
-      `{"x":${from.x - 100},"y":${from.y - 50}}`
-    )
+    // Stored as distances to the right/bottom edges, not absolute left/top.
+    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBe('{"right":124,"bottom":96}')
     expect(screen.queryByRole('textbox', { name: 'Escribí tu pregunta…' })).not.toBeInTheDocument()
   })
 
@@ -172,17 +180,32 @@ describe('HelpBubble (S13, D9)', () => {
     expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
   })
 
-  it('restores the stored position on mount', () => {
-    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"x":120,"y":200}')
+  it('restores the stored offsets on mount', () => {
+    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":124,"bottom":96}')
     render(HelpBubble)
 
     const button = bubbleButton()
-    expect(button.style.left).toBe('120px')
-    expect(button.style.top).toBe('200px')
+    const expected = defaultPosition()
+    expect(button.style.left).toBe(`${expected.x - 100}px`)
+    expect(button.style.top).toBe(`${expected.y - 50}px`)
   })
 
-  it('clamps a stored position that no longer fits the window', () => {
-    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"x":5000,"y":5000}')
+  it('migrates a legacy absolute position using the current window size', () => {
+    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"x":120,"y":200}')
+    render(HelpBubble)
+
+    // The bubble stays where the user left it: conversion, not a reset.
+    const button = bubbleButton()
+    expect(button.style.left).toBe('120px')
+    expect(button.style.top).toBe('200px')
+    // …and the legacy shape is rewritten once, in the new shape.
+    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBe(
+      `{"right":${window.innerWidth - 56 - 120},"bottom":${window.innerHeight - 56 - 200}}`
+    )
+  })
+
+  it('clamps stored offsets that no longer fit the window', () => {
+    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":-1000,"bottom":-1000}')
     render(HelpBubble)
 
     const button = bubbleButton()
@@ -200,7 +223,7 @@ describe('HelpBubble (S13, D9)', () => {
     expect(button.style.top).toBe(`${expected.y}px`)
   })
 
-  it('keeps the dragged position across remounts', async () => {
+  it('keeps the dragged offsets across remounts', async () => {
     const { unmount } = render(HelpBubble)
 
     const button = bubbleButton()
@@ -223,6 +246,62 @@ describe('HelpBubble (S13, D9)', () => {
     expect(again.style.left).toBe(`${from.x - 50}px`)
   })
 
+  it('the default stays in the bottom-right corner after a resize (1024x700 -> 1920x1080)', async () => {
+    setWindowSize(1024, 700)
+    try {
+      render(HelpBubble)
+      const button = bubbleButton()
+      expect(button.style.left).toBe(`${1024 - 56 - 24}px`)
+      expect(button.style.top).toBe(`${700 - 56 - 46}px`)
+
+      // Maximizing the window moves the corner: the bubble follows it.
+      setWindowSize(1920, 1080)
+      window.dispatchEvent(new Event('resize'))
+      await waitFor(() => {
+        expect(button.style.left).toBe(`${1920 - 56 - 24}px`)
+        expect(button.style.top).toBe(`${1080 - 56 - 46}px`)
+      })
+    } finally {
+      setWindowSize(realWidth, realHeight)
+    }
+  })
+
+  it('a dragged bubble keeps its distance to the corner after a resize', async () => {
+    setWindowSize(1024, 768)
+    try {
+      render(HelpBubble)
+      const button = bubbleButton()
+      const from = { x: 1024 - 56 - 24, y: 768 - 56 - 46 }
+
+      await fireEvent.pointerDown(button, {
+        clientX: from.x + 28,
+        clientY: from.y + 28,
+        pointerId: 1,
+      })
+      await fireEvent.pointerMove(button, {
+        clientX: from.x + 28 - 100,
+        clientY: from.y + 28 - 50,
+        pointerId: 1,
+      })
+      await fireEvent.pointerUp(button, {
+        clientX: from.x + 28 - 100,
+        clientY: from.y + 28 - 50,
+        pointerId: 1,
+      })
+      expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBe('{"right":124,"bottom":96}')
+
+      setWindowSize(1920, 1080)
+      window.dispatchEvent(new Event('resize'))
+      await waitFor(() => {
+        // Same offsets from the new corner.
+        expect(button.style.left).toBe(`${1920 - 56 - 124}px`)
+        expect(button.style.top).toBe(`${1080 - 56 - 96}px`)
+      })
+    } finally {
+      setWindowSize(realWidth, realHeight)
+    }
+  })
+
   it('the panel opens toward the inside of the window, never off-screen', async () => {
     render(HelpBubble)
     await openPanel()
@@ -234,7 +313,7 @@ describe('HelpBubble (S13, D9)', () => {
   })
 
   it('the panel flips sides when the bubble sits at the top-left', async () => {
-    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"x":8,"y":8}')
+    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":9000,"bottom":9000}')
     render(HelpBubble)
     await openPanel()
 
@@ -244,24 +323,114 @@ describe('HelpBubble (S13, D9)', () => {
   })
 
   it('re-clamps the bubble when the window shrinks', async () => {
-    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"x":900,"y":700}')
+    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":900,"bottom":600}')
     render(HelpBubble)
     const button = bubbleButton()
-    expect(button.style.left).toBe('900px')
 
-    const originalWidth = window.innerWidth
-    const originalHeight = window.innerHeight
-    Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true })
-    Object.defineProperty(window, 'innerHeight', { value: 400, configurable: true })
+    setWindowSize(500, 400)
     try {
       window.dispatchEvent(new Event('resize'))
       await waitFor(() => {
-        expect(Number.parseFloat(button.style.left)).toBeLessThanOrEqual(500 - 56)
-        expect(Number.parseFloat(button.style.top)).toBeLessThanOrEqual(400 - 56)
+        // Pushed back inside with 8px of air from the shrunken edges.
+        expect(button.style.left).toBe('8px')
+        expect(button.style.top).toBe('8px')
       })
     } finally {
-      Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true })
-      Object.defineProperty(window, 'innerHeight', { value: originalHeight, configurable: true })
+      setWindowSize(realWidth, realHeight)
     }
+  })
+
+  it('the header offers a maximize control with its accessible name', async () => {
+    render(HelpBubble)
+    await openPanel()
+
+    const maximize = screen.getByRole('button', { name: 'Maximizar' })
+    expect(screen.queryByRole('button', { name: 'Restaurar' })).not.toBeInTheDocument()
+
+    await fireEvent.click(maximize)
+
+    expect(screen.queryByRole('button', { name: 'Maximizar' })).not.toBeInTheDocument()
+    const restore = screen.getByRole('button', { name: 'Restaurar' })
+    expect(restore).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Ayuda' })).toHaveAttribute('data-maximized', 'true')
+
+    await fireEvent.click(restore)
+
+    expect(screen.getByRole('button', { name: 'Maximizar' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Ayuda' })).toHaveAttribute('data-maximized', 'false')
+  })
+
+  it('a maximized panel fills the window with a small margin', async () => {
+    render(HelpBubble)
+    await openPanel()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Maximizar' }))
+
+    const panel = screen.getByRole('dialog', { name: 'Ayuda' })
+    expect(panel.style.left).toBe('16px')
+    expect(panel.style.top).toBe('16px')
+    expect(panel.style.right).toBe('16px')
+    // Above the status bar, like the bubble's own default clearance.
+    expect(panel.style.bottom).toBe('46px')
+  })
+
+  it('the maximized state persists across close and reopen', async () => {
+    render(HelpBubble)
+    await openPanel()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Maximizar' }))
+    expect(localStorage.getItem(HELP_BUBBLE_MAXIMIZED_KEY)).toBe('true')
+    await fireEvent.click(screen.getByRole('button', { name: 'Cerrar ayuda' }))
+    expect(screen.queryByRole('textbox', { name: 'Escribí tu pregunta…' })).not.toBeInTheDocument()
+
+    await openPanel()
+    expect(screen.getByRole('button', { name: 'Restaurar' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Ayuda' })).toHaveAttribute('data-maximized', 'true')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Restaurar' }))
+    expect(localStorage.getItem(HELP_BUBBLE_MAXIMIZED_KEY)).toBe('false')
+  })
+
+  it('the maximized state persists across a remount', async () => {
+    const first = render(HelpBubble)
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Maximizar' }))
+    first.unmount()
+
+    render(HelpBubble)
+    await openPanel()
+    expect(screen.getByRole('button', { name: 'Restaurar' })).toBeInTheDocument()
+  })
+
+  it('toggling maximize keeps the conversation: a typed draft survives', async () => {
+    render(HelpBubble)
+    await openPanel()
+
+    const input = screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })
+    await fireEvent.input(input, { target: { value: 'borrador sin enviar' } })
+    expect(input).toHaveValue('borrador sin enviar')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Maximizar' }))
+    expect(screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })).toHaveValue(
+      'borrador sin enviar'
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Restaurar' }))
+    expect(screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })).toHaveValue(
+      'borrador sin enviar'
+    )
+  })
+
+  it('Escape still closes a maximized panel', async () => {
+    render(HelpBubble)
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Maximizar' }))
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(screen.queryByRole('textbox', { name: 'Escribí tu pregunta…' })).not.toBeInTheDocument()
+    // Reopening keeps the last maximized state.
+    await openPanel()
+    expect(screen.getByRole('button', { name: 'Restaurar' })).toBeInTheDocument()
   })
 })

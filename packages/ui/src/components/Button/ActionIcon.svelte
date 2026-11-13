@@ -26,6 +26,7 @@
   import IconArrowForwardUp from '@tabler/icons-svelte-runes/icons/arrow-forward-up'
   import IconArrowsDiagonal2 from '@tabler/icons-svelte-runes/icons/arrows-diagonal-2'
   import IconArrowsMaximize from '@tabler/icons-svelte-runes/icons/arrows-maximize'
+  import IconArrowsMinimize from '@tabler/icons-svelte-runes/icons/arrows-minimize'
   import IconAsterisk from '@tabler/icons-svelte-runes/icons/asterisk'
   import IconBell from '@tabler/icons-svelte-runes/icons/bell'
   import IconBold from '@tabler/icons-svelte-runes/icons/bold'
@@ -300,6 +301,9 @@
     // plain `arrows-diagonal` points the other diagonal (top-right/
     // bottom-left) and would read backwards on a bottom-right handle.
     'resize-diagonal': IconArrowsDiagonal2,
+    // The maximized panel's restore control: arrows point back in, the
+    // mirror of `expand` above (T14).
+    restore: IconArrowsMinimize,
     // The plain rotate arrows, not the -2 variants: those draw a dotted arc,
     // which is the metric the in-house fine-rotation icons below already own.
     'rotate-ccw': IconRotate,

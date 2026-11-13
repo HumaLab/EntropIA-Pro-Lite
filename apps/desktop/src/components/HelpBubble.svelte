@@ -1,13 +1,17 @@
 <script lang="ts">
   import { locale, t } from '$lib/i18n'
   import {
-    clampBubblePosition,
-    defaultBubblePosition,
+    clampBubbleOffsets,
+    defaultBubbleOffsets,
     exceedsDragThreshold,
     HELP_BUBBLE_SIZE_PX,
-    loadBubblePosition,
-    saveBubblePosition,
-    type BubblePosition,
+    loadBubbleMaximized,
+    loadBubbleOffsets,
+    offsetsToPosition,
+    positionToOffsets,
+    saveBubbleMaximized,
+    saveBubbleOffsets,
+    type BubbleOffsets,
     type BubbleViewport,
   } from '$lib/help-bubble'
   import HelpView from '../views/HelpView.svelte'
@@ -17,6 +21,10 @@
   const currentLocale = locale
   const PANEL_ID = 'help-bubble-panel'
   const PANEL_GAP_PX = 12
+  /** Maximized panel air: a small margin around the window… */
+  const PANEL_MAXIMIZED_MARGIN_PX = 16
+  /** …with the status-bar clearance below, like the bubble's own default. */
+  const PANEL_MAXIMIZED_BOTTOM_PX = 46
 
   function readStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
     try {
@@ -31,28 +39,36 @@
     return { width: window.innerWidth, height: window.innerHeight }
   }
 
-  function initialPosition(viewport: BubbleViewport): BubblePosition {
-    const stored = loadBubblePosition(readStorage())
-    return clampBubblePosition(stored ?? defaultBubblePosition(viewport), viewport)
+  function initialOffsets(viewport: BubbleViewport): BubbleOffsets {
+    const stored = loadBubbleOffsets(readStorage(), viewport)
+    return clampBubbleOffsets(stored ?? defaultBubbleOffsets(), viewport)
   }
 
   // Snapshot once: the live viewport below re-reads the window on resize,
-  // but the initial position needs the same values the first paint uses.
+  // but the initial offsets need the same values the first paint uses.
   const initialViewport = readViewport()
   let viewport = $state<BubbleViewport>(initialViewport)
-  let position = $state<BubblePosition>(initialPosition(initialViewport))
+  // Anchored to the window's right/bottom edges (T14): the derived position
+  // below follows the bottom-right corner across resizes and
+  // maximize/restore, and a drag keeps its distance to that corner.
+  let offsets = $state<BubbleOffsets>(initialOffsets(initialViewport))
+  let maximized = $state<boolean>(loadBubbleMaximized(readStorage()))
   let open = $state(false)
   // The chat mounts on first open and stays alive afterwards: opening the
   // panel never costs a backend call while it stays shut (so shell tests
   // rendering AppShell never see the help bridge), and the conversation
-  // survives closing the panel (D4: session memory).
+  // survives closing the panel (D4: session memory). Maximizing never
+  // remounts it either, so a typed draft survives the toggle.
   let dragging = $state(false)
-  let pressStart: { x: number; y: number; position: BubblePosition } | null = null
+  let pressStart: { x: number; y: number; position: { x: number; y: number } } | null = null
   let suppressClick = false
   let bubbleButton: HTMLButtonElement | undefined = $state()
 
+  const position = $derived(offsetsToPosition(offsets, viewport))
+
   // The panel grows toward the inside of the window from wherever the bubble
-  // is, so it never hangs off-screen (S13).
+  // is, so it never hangs off-screen (S13). Maximized it fills the window
+  // instead, independent of the bubble position (T14).
   const panelSide = $derived(
     position.x + HELP_BUBBLE_SIZE_PX / 2 > viewport.width / 2 ? 'left' : 'right'
   )
@@ -60,6 +76,14 @@
     position.y + HELP_BUBBLE_SIZE_PX / 2 > viewport.height / 2 ? 'above' : 'below'
   )
   const panelStyle = $derived.by(() => {
+    if (maximized) {
+      return (
+        `left: ${PANEL_MAXIMIZED_MARGIN_PX}px; ` +
+        `right: ${PANEL_MAXIMIZED_MARGIN_PX}px; ` +
+        `top: ${PANEL_MAXIMIZED_MARGIN_PX}px; ` +
+        `bottom: ${PANEL_MAXIMIZED_BOTTOM_PX}px`
+      )
+    }
     const parts: string[] = []
     if (panelSide === 'left') {
       parts.push(`right: ${viewport.width - position.x + PANEL_GAP_PX}px`)
@@ -104,13 +128,20 @@
       return
     }
     dragging = true
-    position = clampBubblePosition(
-      {
-        x: pressStart.position.x + (event.clientX - pressStart.x),
-        y: pressStart.position.y + (event.clientY - pressStart.y),
-      },
+    const moved = clampBubbleOffsets(
+      positionToOffsets(
+        {
+          x: pressStart.position.x + (event.clientX - pressStart.x),
+          y: pressStart.position.y + (event.clientY - pressStart.y),
+        },
+        viewport
+      ),
       viewport
     )
+    // Keep the Svelte 5 state object reference stable for the linter: assign
+    // fields rather than replacing the whole object.
+    offsets.right = moved.right
+    offsets.bottom = moved.bottom
   }
 
   function endPress(event: PointerEvent, save: boolean): void {
@@ -118,7 +149,7 @@
     pressStart = null
     releaseCapture(event.currentTarget as HTMLElement, event.pointerId)
     if (dragging && save) {
-      saveBubblePosition(readStorage(), position)
+      saveBubbleOffsets(readStorage(), offsets)
       // Browsers fire a click after a drag: it must not toggle the panel.
       suppressClick = true
     }
@@ -151,6 +182,11 @@
     bubbleButton?.focus()
   }
 
+  function toggleMaximized(): void {
+    maximized = !maximized
+    saveBubbleMaximized(readStorage(), maximized)
+  }
+
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Escape' || !open) return
     closePanel()
@@ -158,8 +194,11 @@
 
   function handleWindowResize(): void {
     viewport = readViewport()
-    // The window shrank under the bubble: pull it back inside (D9).
-    position = clampBubblePosition(position, viewport)
+    // The window moved the corner under the bubble: keep its distance to the
+    // corner, pulling it back inside when the window shrank (T14).
+    const clamped = clampBubbleOffsets(offsets, viewport)
+    offsets.right = clamped.right
+    offsets.bottom = clamped.bottom
   }
 </script>
 
@@ -197,16 +236,27 @@
 <div
   id={PANEL_ID}
   class="help-bubble__panel"
+  class:help-bubble__panel--maximized={maximized}
   role="dialog"
   aria-label={$currentLocale && t('help.title')}
   data-side={panelSide}
   data-vertical={panelVertical}
+  data-maximized={maximized}
   style={panelStyle}
   hidden={!open}
   tabindex="-1"
   {@attach portal}
 >
-  <div class="help-bubble__close">
+  <div class="help-bubble__actions">
+    <IconButton
+      size="sm"
+      variant="ghost"
+      label={$currentLocale && t(maximized ? 'help.restorePanel' : 'help.maximizePanel')}
+      title={$currentLocale && t(maximized ? 'help.restorePanel' : 'help.maximizePanel')}
+      onclick={toggleMaximized}
+    >
+      <ActionIcon name={maximized ? 'restore' : 'expand'} size={14} />
+    </IconButton>
     <IconButton
       size="sm"
       variant="ghost"
@@ -280,15 +330,22 @@
     box-shadow: var(--shadow-lg);
   }
 
+  .help-bubble__panel--maximized {
+    width: auto;
+    height: auto;
+  }
+
   .help-bubble__panel[hidden] {
     display: none;
   }
 
-  .help-bubble__close {
+  .help-bubble__actions {
     position: absolute;
     top: var(--space-2);
     right: var(--space-2);
     z-index: 1;
+    display: flex;
+    gap: var(--space-1);
   }
 
   .help-bubble__body {
