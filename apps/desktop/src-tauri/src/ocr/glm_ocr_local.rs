@@ -76,10 +76,12 @@ pub fn local_info(db_path: &Path) -> GlmOcrLocalInfo {
 
 /// Concurrent requests the server accepts; the script sends this many boxes at once.
 pub const PARALLEL_SLOTS: u32 = 4;
-/// Context per slot. One box is ~150 prompt tokens plus at most 2048 generated;
+/// Context per slot. One OCR box is ~150 prompt tokens plus at most 2048
+/// generated; OCR correction prompts need ~6k (template + page + image).
 /// llama.cpp would otherwise size the KV cache from the model's 131k training
-/// context and reserve over 5 GB of VRAM. Output is identical either way.
-const CONTEXT_PER_SLOT: u32 = 4096;
+/// context and reserve over 5 GB of VRAM. Measured idle: ~3.8 GB total on an
+/// 8 GB card. Output is identical either way.
+pub(crate) const CONTEXT_PER_SLOT: u32 = 8192;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(800);
 const PID_FILE: &str = "llama-server.pid";
