@@ -87,6 +87,7 @@ const searchItem = (patch: Record<string, unknown> = {}) => ({
 const pdf = (patch: Record<string, unknown> = {}) => ({
   name: 'doc_text.pdf',
   format: 'Text PDF',
+  kind: 'pdf_text',
   source: 'original',
   size: 1024,
   mtime: null,
@@ -272,7 +273,7 @@ describe('InternetArchiveDialog discovery', () => {
     await searchForResults()
 
     expect(iaRef.iaSearch).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Chaplin', textsOnly: true }),
+      expect.objectContaining({ title: 'Chaplin', textsOnly: true, kinds: ['pdf'] }),
       1,
       50
     )
@@ -321,6 +322,58 @@ describe('InternetArchiveDialog discovery', () => {
     expect(iaRef.iaSearch).toHaveBeenLastCalledWith(expect.anything(), 2, 50)
   })
 
+  it('filters by file kind: PDF by default, any combination of the three', async () => {
+    iaRef.iaSearch.mockResolvedValue({ numFound: 0, items: [] })
+    open()
+    const kinds = screen.getByRole('group', { name: 'Tipo de archivo' })
+    const pdfKind = within(kinds).getByRole('button', { name: 'PDF' })
+    const textKind = within(kinds).getByRole('button', { name: 'PDF + texto' })
+    const imageKind = within(kinds).getByRole('button', { name: 'Imágenes' })
+    expect(pdfKind).toHaveAttribute('aria-pressed', 'true')
+    expect(textKind).toHaveAttribute('aria-pressed', 'false')
+    expect(imageKind).toHaveAttribute('aria-pressed', 'false')
+
+    await fireEvent.click(imageKind)
+    await fireEvent.click(textKind)
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+
+    expect(iaRef.iaSearch).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kinds: ['pdf', 'pdf_text', 'image'] }),
+      1,
+      50
+    )
+  })
+
+  it('refuses to search with no file kind and says why', async () => {
+    open()
+    const kinds = screen.getByRole('group', { name: 'Tipo de archivo' })
+    await fireEvent.click(within(kinds).getByRole('button', { name: 'PDF' }))
+
+    expect(screen.getByText('Elegí al menos un tipo de archivo.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Buscar en el archivo' })).toBeDisabled()
+  })
+
+  it('shows only the record files of the chosen kinds', async () => {
+    await searchForResults()
+    iaRef.iaGetItem.mockResolvedValue(
+      itemDetails({
+        pdfs: [pdf(), pdf({ name: 'scan.pdf', format: 'Image Container PDF', kind: 'pdf' })],
+      })
+    )
+    const kinds = screen.getByRole('group', { name: 'Tipo de archivo' })
+    await fireEvent.click(within(kinds).getByRole('button', { name: 'PDF + texto' }))
+    await fireEvent.click(within(kinds).getByRole('button', { name: 'PDF' }))
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Ver archivos' })[0]!)
+    await screen.findByText('Archivos PDF')
+
+    expect(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Seleccionar scan.pdf' })).toBeNull()
+
+    // PDF covers every PDF, Text PDF included.
+    await fireEvent.click(within(kinds).getByRole('button', { name: 'PDF' }))
+    expect(screen.getByRole('checkbox', { name: 'Seleccionar scan.pdf' })).toBeInTheDocument()
+  })
+
   it('opens in the wide layout', () => {
     open()
 
@@ -333,13 +386,19 @@ describe('InternetArchiveDialog discovery', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
     await screen.findByText('Página 1 de 3')
     const sizes = screen.getByRole('group', { name: 'Resultados por página' })
-    expect(within(sizes).getByRole('button', { name: '50' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(sizes).getByRole('button', { name: '50' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
 
     await fireEvent.click(within(sizes).getByRole('button', { name: '100' }))
     await screen.findByText('Página 1 de 2')
 
     expect(iaRef.iaSearch).toHaveBeenLastCalledWith(expect.anything(), 1, 100)
-    expect(within(sizes).getByRole('button', { name: '100' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(sizes).getByRole('button', { name: '100' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
   })
 
   it('never offers a page past the 10 000-result paging limit', async () => {
@@ -369,7 +428,7 @@ describe('InternetArchiveDialog discovery', () => {
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Explorar' }))
 
-    expect(iaRef.iaListCollection).toHaveBeenCalledWith('opensource', 1, 50)
+    expect(iaRef.iaListCollection).toHaveBeenCalledWith('opensource', 1, 50, ['pdf'])
     expect(await screen.findByText('Some Title')).toBeInTheDocument()
   })
 
@@ -447,7 +506,7 @@ describe('InternetArchiveDialog item and selection', () => {
     await screen.findByText('Esta colección no tiene resultados en esta página.')
 
     expect(screen.getByLabelText('Identificador de la colección')).toHaveValue('some-id')
-    expect(iaRef.iaListCollection).toHaveBeenCalledWith('some-id', 1, 50)
+    expect(iaRef.iaListCollection).toHaveBeenCalledWith('some-id', 1, 50, ['pdf'])
   })
 
   it('accumulates the selection across items and lets files be removed', async () => {

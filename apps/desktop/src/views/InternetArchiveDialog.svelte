@@ -47,6 +47,8 @@
     type IaJobSummary,
     type IaPrepareEntry,
     type IaPrepareResult,
+    type IaFileKind,
+    type IaPdfFile,
     type IaSearchPage,
     type IaSelection,
   } from '$lib/internet-archive'
@@ -104,6 +106,24 @@
   let problem = $state<string | null>(null)
   let rows = $state<PageSize>(50)
 
+  /** File kinds offered, in the order they are shown and sent. */
+  const FILE_KINDS: readonly IaFileKind[] = ['pdf', 'pdf_text', 'image']
+  let kinds = $state<IaFileKind[]>(['pdf'])
+  const noKinds = $derived(kinds.length === 0)
+
+  function toggleKind(kind: IaFileKind): void {
+    const next = kinds.includes(kind) ? kinds.filter((k) => k !== kind) : [...kinds, kind]
+    kinds = FILE_KINDS.filter((k) => next.includes(k))
+  }
+
+  /** `pdf` covers every PDF; `pdf_text` only Text PDFs; `image` images. */
+  function matchesKinds(file: IaPdfFile): boolean {
+    const kind = file.kind ?? 'pdf'
+    if (kind === 'image') return kinds.includes('image')
+    if (kind === 'pdf_text') return kinds.includes('pdf') || kinds.includes('pdf_text')
+    return kinds.includes('pdf')
+  }
+
   // Discovery: search tab.
   let searchText = $state('')
   let searchTitle = $state('')
@@ -127,6 +147,7 @@
   // Item shown beside the results (master-detail).
   let itemIdentifier = $state('')
   let itemDetails = $state<IaItemDetails | null>(null)
+  const visibleFiles = $derived(itemDetails ? itemDetails.pdfs.filter(matchesKinds) : [])
   let itemLoading = $state(false)
   /** Guards `openItem` against stale `iaGetItem` responses. */
   let itemRequest = 0
@@ -380,7 +401,7 @@
   }
 
   async function submitSearch(page: number): Promise<void> {
-    if (searching) return
+    if (searching || noKinds) return
     const yearFrom = parseYear(searchFrom)
     const yearTo = parseYear(searchTo)
     if (
@@ -402,6 +423,7 @@
           yearFrom,
           yearTo,
           textsOnly: true,
+          kinds: [...kinds],
         },
         page,
         rows
@@ -414,7 +436,7 @@
   }
 
   async function submitCollection(page: number): Promise<void> {
-    if (listing) return
+    if (listing || noKinds) return
     const identifier = collectionInput.trim()
     if (identifier === '') {
       problem = t('internetArchive.error.invalid_query')
@@ -424,7 +446,7 @@
     problem = null
     try {
       collectionPage = page
-      collectionResult = await iaListCollection(identifier, page, rows)
+      collectionResult = await iaListCollection(identifier, page, rows, [...kinds])
     } catch (reason) {
       problem = describeError(reason)
     } finally {
@@ -981,7 +1003,7 @@
               incrementLabel={t('numberField.increase')}
             />
           </label>
-          <button type="submit" class="ia-submit" disabled={searching}>
+          <button type="submit" class="ia-submit" disabled={searching || noKinds}>
             {searching ? t('internetArchive.search.searching') : t('internetArchive.search.submit')}
           </button>
         </form>
@@ -1002,7 +1024,7 @@
               bind:value={collectionInput}
             />
           </label>
-          <button type="submit" class="ia-submit" disabled={listing}>
+          <button type="submit" class="ia-submit" disabled={listing || noKinds}>
             {listing
               ? t('internetArchive.collection.loading')
               : t('internetArchive.collection.submit')}
@@ -1031,6 +1053,26 @@
         </form>
         <p class="ia-hint">{t('internetArchive.link.hint')}</p>
       {/if}
+
+      <div class="ia-kinds">
+        <div class="ia-segmented" role="group" aria-label={t('internetArchive.kind.label')}>
+          <span class="ia-kinds__label" aria-hidden="true">{t('internetArchive.kind.label')}</span>
+          {#each FILE_KINDS as kind (kind)}
+            <button
+              type="button"
+              class="ia-segmented__option"
+              class:ia-segmented__option--active={kinds.includes(kind)}
+              aria-pressed={kinds.includes(kind)}
+              onclick={() => toggleKind(kind)}
+            >
+              {t(`internetArchive.kind.${kind}`)}
+            </button>
+          {/each}
+        </div>
+        {#if noKinds}
+          <p class="ia-status ia-kinds__hint" role="status">{t('internetArchive.kind.none')}</p>
+        {/if}
+      </div>
 
       <div class="ia-browser">
         <section class="ia-browser__list" aria-label={t('internetArchive.results.region')}>
@@ -1416,9 +1458,11 @@
       <h4 class="ia-heading">{t('internetArchive.item.files')}</h4>
       {#if itemDetails.pdfs.length === 0}
         <p class="ia-status" role="status">{t('internetArchive.item.noPdfs')}</p>
+      {:else if visibleFiles.length === 0}
+        <p class="ia-status" role="status">{t('internetArchive.item.noMatch')}</p>
       {:else}
         <ul class="ia-files">
-          {#each itemDetails.pdfs as file (file.name)}
+          {#each visibleFiles as file (file.name)}
             {@const selected = isSelected(itemDetails.identifier, file.name)}
             {@const available = file.availability === 'available'}
             <li class="ia-files__item">
@@ -1642,6 +1686,32 @@
     .ia-browser__list .ia-results {
       max-height: 320px;
     }
+  }
+
+  .ia-kinds {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+  }
+
+  .ia-kinds .ia-segmented {
+    align-items: center;
+    margin-left: 0;
+  }
+
+  .ia-kinds__label {
+    padding: 0 var(--space-2);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: 0.075em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+
+  .ia-kinds__hint {
+    margin: 0;
   }
 
   .ia-results-bar {

@@ -8,8 +8,8 @@
 //! path — and [`ia_resolve_identifier`] returns an identifier, never a URL.
 
 use internet_archive::{
-    Availability, Endpoints, FileSource, IaClient, IaError, ItemDetails, PdfFile, RestrictedReason,
-    SearchPage, SearchQuery,
+    Availability, Endpoints, FileKind, FileSource, IaClient, IaError, ItemDetails, PdfFile,
+    RestrictedReason, SearchPage, SearchQuery,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -57,6 +57,37 @@ pub struct SearchQueryDto {
     /// When true (default), the query also requires `mediatype:texts`.
     #[serde(default = "default_texts_only")]
     pub texts_only: bool,
+    /// File kinds to look for; empty (or missing) keeps `textsOnly`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<FileKindDto>,
+}
+
+/// A user-facing file kind, as the frontend sends it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKindDto {
+    Pdf,
+    PdfText,
+    Image,
+}
+
+impl From<FileKindDto> for FileKind {
+    fn from(kind: FileKindDto) -> Self {
+        match kind {
+            FileKindDto::Pdf => FileKind::Pdf,
+            FileKindDto::PdfText => FileKind::PdfText,
+            FileKindDto::Image => FileKind::Image,
+        }
+    }
+}
+
+/// The stable string tag of a [`FileKind`] (`pdf`, `pdf_text`, `image`).
+pub(crate) fn file_kind_tag(kind: FileKind) -> &'static str {
+    match kind {
+        FileKind::Pdf => "pdf",
+        FileKind::PdfText => "pdf_text",
+        FileKind::Image => "image",
+    }
 }
 
 fn default_texts_only() -> bool {
@@ -74,6 +105,7 @@ impl Default for SearchQueryDto {
             year_from: None,
             year_to: None,
             texts_only: true,
+            kinds: Vec::new(),
         }
     }
 }
@@ -99,6 +131,7 @@ impl SearchQueryDto {
             year_from: self.year_from,
             year_to: self.year_to,
             texts_only: self.texts_only,
+            kinds: self.kinds.iter().copied().map(FileKind::from).collect(),
         }
     }
 }
@@ -152,6 +185,8 @@ impl From<SearchPage> for SearchPageDto {
 pub struct PdfFileDto {
     pub name: String,
     pub format: Option<String>,
+    /// `pdf` or `pdf_text` (see [`file_kind_tag`]).
+    pub kind: &'static str,
     pub source: String,
     pub size: Option<u64>,
     pub mtime: Option<u64>,
@@ -182,6 +217,7 @@ impl From<internet_archive::PdfFile> for PdfFileDto {
     fn from(file: internet_archive::PdfFile) -> Self {
         Self {
             availability: availability_tag(&file.availability).to_string(),
+            kind: file_kind_tag(FileKind::of_pdf_format(file.format.as_deref())),
             name: file.name,
             format: file.format,
             source: file_source_tag(&file.source),
@@ -305,11 +341,13 @@ pub(crate) async fn list_collection_logic(
     client: &IaClient,
     endpoints: &Endpoints,
     collection: &str,
+    kinds: &[FileKindDto],
     page: u32,
     rows: u32,
 ) -> Result<SearchPageDto, String> {
+    let kinds: Vec<FileKind> = kinds.iter().copied().map(FileKind::from).collect();
     client
-        .list_collection(endpoints, collection, page, rows)
+        .list_collection_of_kinds(endpoints, collection, &kinds, page, rows)
         .await
         .map(SearchPageDto::from)
         .map_err(|error| ia_error(&error))
@@ -346,15 +384,25 @@ pub async fn ia_search(
     search_logic(&state.client, &state.endpoints, &query, page, rows).await
 }
 
-/// List one page of a collection (identifier only, never a URL or a path).
+/// List one page of a collection (identifier only, never a URL or a path),
+/// optionally restricted to file kinds (missing = texts only, as before).
 #[tauri::command]
 pub async fn ia_list_collection(
     collection: String,
     page: u32,
     rows: u32,
+    kinds: Option<Vec<FileKindDto>>,
     state: State<'_, IaState>,
 ) -> Result<SearchPageDto, String> {
-    list_collection_logic(&state.client, &state.endpoints, &collection, page, rows).await
+    list_collection_logic(
+        &state.client,
+        &state.endpoints,
+        &collection,
+        kinds.as_deref().unwrap_or(&[]),
+        page,
+        rows,
+    )
+    .await
 }
 
 /// Fetch tolerant item metadata with its PDF availability (identifier only).
@@ -1282,6 +1330,51 @@ mod tests {
         .expect("dto deserializes");
         assert!(parsed.texts_only);
         assert_eq!(parsed.year_from, None);
+    }
+
+    #[test]
+    fn query_dto_reads_kinds_in_snake_case_and_defaults_to_none() {
+        let parsed: SearchQueryDto = serde_json::from_value(serde_json::json!({
+            "text": "x",
+            "kinds": ["pdf_text", "image"],
+        }))
+        .expect("dto deserializes");
+        assert_eq!(
+            parsed.to_search_query().kinds,
+            vec![
+                internet_archive::FileKind::PdfText,
+                internet_archive::FileKind::Image
+            ]
+        );
+
+        // No `kinds` keeps the previous texts-only behaviour.
+        let parsed: SearchQueryDto =
+            serde_json::from_value(serde_json::json!({ "text": "x" })).expect("dto deserializes");
+        let query = parsed.to_search_query();
+        assert!(query.kinds.is_empty());
+        assert!(query.texts_only);
+
+        // An unknown kind is refused instead of silently widening the search.
+        assert!(serde_json::from_value::<SearchQueryDto>(serde_json::json!({
+            "text": "x",
+            "kinds": ["video"],
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn pdf_dto_tags_text_pdfs_apart_from_other_pdfs() {
+        let mut text_pdf = available_pdf("doc_text.pdf");
+        text_pdf.format = Some("Text PDF".to_string());
+        let mut scan = available_pdf("doc.pdf");
+        scan.format = Some("Image Container PDF".to_string());
+        let mut unknown = available_pdf("other.pdf");
+        unknown.format = None;
+
+        let tag = |file| serde_json::to_value(PdfFileDto::from(file)).unwrap()["kind"].clone();
+        assert_eq!(tag(text_pdf), "pdf_text");
+        assert_eq!(tag(scan), "pdf");
+        assert_eq!(tag(unknown), "pdf");
     }
 
     #[test]

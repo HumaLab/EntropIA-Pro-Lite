@@ -15,6 +15,7 @@ pub mod download;
 pub mod error;
 pub mod item;
 pub mod job;
+pub mod kind;
 pub mod name;
 pub mod policy;
 pub mod prepare;
@@ -36,6 +37,7 @@ pub use item::{
     parse_item_value, Availability, FileSource, ItemDetails, PdfFile, RestrictedReason,
     MAX_PDFS_PER_ITEM,
 };
+pub use kind::FileKind;
 pub use name::display_file_name;
 pub use policy::{is_public_ip, FetchPolicy};
 pub use provenance::{
