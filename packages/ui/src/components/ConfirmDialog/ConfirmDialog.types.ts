@@ -3,6 +3,13 @@ import type { ActionIconName } from '../Button'
 
 export type ConfirmDialogVariant = 'default' | 'destructive'
 
+/**
+ * `compact` (default) is the 440 px confirmation box. `wide` is for dialogs
+ * that browse lists (e.g. an import catalog): it widens the box and caps its
+ * height to the viewport so the body can scroll instead of the page.
+ */
+export type ConfirmDialogSize = 'compact' | 'wide'
+
 type ConfirmDialogBaseProps = {
   title: string
   message?: string
@@ -10,6 +17,7 @@ type ConfirmDialogBaseProps = {
   error?: string | null
   cancelLabel: string
   variant?: ConfirmDialogVariant
+  size?: ConfirmDialogSize
   confirming?: boolean
   confirmDisabled?: boolean
   cancelDisabled?: boolean

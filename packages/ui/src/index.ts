@@ -70,7 +70,7 @@ export type {
 } from './components/StatusBadge/index'
 
 export { ConfirmDialog } from './components/ConfirmDialog/index'
-export type { ConfirmDialogProps, ConfirmDialogVariant } from './components/ConfirmDialog/index'
+export type { ConfirmDialogProps, ConfirmDialogSize, ConfirmDialogVariant } from './components/ConfirmDialog/index'
 
 // Components — Fase 1
 export { CollectionCard } from './components/CollectionCard/index'

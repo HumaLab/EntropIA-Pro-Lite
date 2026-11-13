@@ -274,7 +274,7 @@ describe('InternetArchiveDialog discovery', () => {
     expect(iaRef.iaSearch).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Chaplin', textsOnly: true }),
       1,
-      10
+      50
     )
     expect(screen.getByText('Some Title')).toBeInTheDocument()
     expect(screen.getByText('Some Author')).toBeInTheDocument()
@@ -309,16 +309,55 @@ describe('InternetArchiveDialog discovery', () => {
   })
 
   it('pages through search results', async () => {
-    iaRef.iaSearch.mockResolvedValue({ numFound: 25, items: [searchItem()] })
+    iaRef.iaSearch.mockResolvedValue({ numFound: 125, items: [searchItem()] })
     open()
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
     await screen.findByText('Página 1 de 3')
 
-    iaRef.iaSearch.mockResolvedValue({ numFound: 25, items: [searchItem()] })
+    iaRef.iaSearch.mockResolvedValue({ numFound: 125, items: [searchItem()] })
     await fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
     await screen.findByText('Página 2 de 3')
 
-    expect(iaRef.iaSearch).toHaveBeenLastCalledWith(expect.anything(), 2, 10)
+    expect(iaRef.iaSearch).toHaveBeenLastCalledWith(expect.anything(), 2, 50)
+  })
+
+  it('opens in the wide layout', () => {
+    open()
+
+    expect(screen.getByRole('dialog')).toHaveClass('confirm-dialog--wide')
+  })
+
+  it('changes the page size and searches again from the first page', async () => {
+    iaRef.iaSearch.mockResolvedValue({ numFound: 125, items: [searchItem()] })
+    open()
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findByText('Página 1 de 3')
+    const sizes = screen.getByRole('group', { name: 'Resultados por página' })
+    expect(within(sizes).getByRole('button', { name: '50' })).toHaveAttribute('aria-pressed', 'true')
+
+    await fireEvent.click(within(sizes).getByRole('button', { name: '100' }))
+    await screen.findByText('Página 1 de 2')
+
+    expect(iaRef.iaSearch).toHaveBeenLastCalledWith(expect.anything(), 1, 100)
+    expect(within(sizes).getByRole('button', { name: '100' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('never offers a page past the 10 000-result paging limit', async () => {
+    iaRef.iaSearch.mockResolvedValue({ numFound: 4_151_546, items: [searchItem()] })
+    open()
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+
+    // 10 000 / 50 rows = 200 reachable pages, however many hits exist.
+    expect(await screen.findByText('Página 1 de 200')).toBeInTheDocument()
+  })
+
+  it('keeps the results visible beside the item files', async () => {
+    await openItem()
+
+    const results = screen.getByRole('region', { name: 'Resultados' })
+    expect(within(results).getByText('Some Title')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Ver archivos' })).toHaveLength(2)
+    expect(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' })).toBeInTheDocument()
   })
 
   it('explores a collection by id through the Colección tab', async () => {
@@ -330,7 +369,7 @@ describe('InternetArchiveDialog discovery', () => {
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Explorar' }))
 
-    expect(iaRef.iaListCollection).toHaveBeenCalledWith('opensource', 1, 10)
+    expect(iaRef.iaListCollection).toHaveBeenCalledWith('opensource', 1, 50)
     expect(await screen.findByText('Some Title')).toBeInTheDocument()
   })
 
@@ -408,7 +447,7 @@ describe('InternetArchiveDialog item and selection', () => {
     await screen.findByText('Esta colección no tiene resultados en esta página.')
 
     expect(screen.getByLabelText('Identificador de la colección')).toHaveValue('some-id')
-    expect(iaRef.iaListCollection).toHaveBeenCalledWith('some-id', 1, 10)
+    expect(iaRef.iaListCollection).toHaveBeenCalledWith('some-id', 1, 50)
   })
 
   it('accumulates the selection across items and lets files be removed', async () => {
@@ -421,6 +460,7 @@ describe('InternetArchiveDialog item and selection', () => {
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' }))
     await screen.findByText('Seleccionados: 1')
 
+    await fireEvent.click(screen.getByRole('button', { name: 'Ver selección' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Quitar doc_text.pdf' }))
 
     expect(screen.queryByText('Seleccionados: 1')).toBeNull()
@@ -935,21 +975,19 @@ describe('InternetArchiveDialog stale responses (28)', () => {
     })
     const buttons = screen.getAllByRole('button', { name: 'Ver archivos' })
     await fireEvent.click(buttons[0]!)
-    // The first item is still loading: go back and open the second one, so
-    // both `iaGetItem` calls overlap with the first resolving last.
-    await screen.findByRole('button', { name: 'Volver' })
-    await fireEvent.click(screen.getByRole('button', { name: 'Volver' }))
-    await screen.findByText('Some Title')
-    const again = screen.getAllByRole('button', { name: 'Ver archivos' })
-    await fireEvent.click(again[1]!)
+    // The first item is still loading: open the second one from the list
+    // that stays beside it, so both `iaGetItem` calls overlap with the first
+    // resolving last.
+    await fireEvent.click(buttons[1]!)
+    const detail = screen.getByRole('region', { name: 'Registro seleccionado' })
     resolveSecond(itemDetails({ identifier: 'other-id', title: 'Other Title' }))
-    await screen.findByText('Other Title')
+    await within(detail).findByText('Other Title')
     resolveFirst(itemDetails({ identifier: 'some-id', title: 'Some Title' }))
     // Let the stale first response settle.
     await waitFor(() => expect(iaRef.iaGetItem).toHaveBeenCalledTimes(2))
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(screen.getByText('Other Title')).toBeInTheDocument()
-    expect(screen.queryByText('some-id')).toBeNull()
+    expect(within(detail).getByText('Other Title')).toBeInTheDocument()
+    expect(within(detail).queryByText('some-id')).toBeNull()
   })
 
   it('does not let an older status overwrite a newer one', async () => {
