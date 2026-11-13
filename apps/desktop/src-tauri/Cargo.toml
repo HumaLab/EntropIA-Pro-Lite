@@ -248,5 +248,8 @@ paddle-ocr = ["dep:ocr-rs"]
 # Opt-in CUDA offload for the local LLM (llama.cpp): offloads every layer to
 # NVIDIA GPUs. NOT part of any installer build (portability: machines without
 # CUDA drivers must still run): enable explicitly for local testing/benchmarks
-# with `--features cuda` (implies `local-ml`).
+# with `--features cuda` (implies `local-ml`). Linking needs a complete CUDA
+# toolkit with static cudart/cublas (12.x+) plus `-fPIC` CUDA objects; the
+# stock Debian toolkit (no cudart_static) plus nvcc 12.0 is NOT enough for
+# current llama.cpp (FP8 kernels need a newer ptxas).
 cuda = ["local-ml", "llama-cpp-2/cuda"]
