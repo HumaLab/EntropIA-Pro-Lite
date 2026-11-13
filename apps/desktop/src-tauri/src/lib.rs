@@ -28,6 +28,7 @@ pub mod deps;
 pub mod deps;
 mod derived_source;
 mod geo;
+mod help;
 mod image_edit;
 mod image_orient;
 mod image_version_repair;
