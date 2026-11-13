@@ -1020,6 +1020,17 @@ Las líneas no contienen ninguna contraseña: la credencial queda en el llavero 
 
 En Windows, algunos antivirus demoran el primer arranque del conector; si el asistente se rinde antes, ampliá su tiempo de espera para servidores MCP o excluí la carpeta de EntropIA en el antivirus.
 
+<a id="ayuda-en-la-app"></a>
+### 13.5. Ayuda dentro de la app
+
+El botón **Ayuda** de la barra superior abre un chat aparte del Chat de documentos. Responde con este mismo manual: le podés preguntar cómo hacer algo («¿Cómo importo un PDF?») o qué hacer cuando algo falla («Falló una transcripción, ¿qué hago?»). Cada respuesta indica de qué secciones del manual salió.
+
+- **Usa tu clave de OpenRouter.** Las preguntas se responden con la clave de **Configuración → APIs remotas → OpenRouter** y el modelo general elegido ahí, y se cobran en tu cuenta de OpenRouter, que tiene que tener crédito. Sin clave, Ayuda muestra cómo cargarla y el enlace a este manual.
+- **Solo viajan las secciones del manual que hacen falta.** EntropIA elige en tu equipo dos a cuatro secciones relacionadas con la pregunta, más el capítulo [19](#capitulo-19-que-hago-si) cuando algo falla; nunca manda el manual entero ni tus documentos.
+- **Incluir diagnóstico.** Para un error, marcá **Incluir diagnóstico** antes de enviar. Se agrega la versión, el sistema, los modos y modelos elegidos, qué claves están cargadas (sí o no, nunca la clave) y los últimos avisos y errores del registro, sin rutas, nombres de archivo ni textos entre comillas. **Ver qué se envía** muestra el texto exacto. La casilla se apaga después de cada pregunta.
+- **No queda guardado.** La conversación dura mientras la app está abierta.
+- **Solo explica.** El asistente no cambia nada en la app: te dice qué pasos seguir.
+
 ---
 
 <a id="capitulo-14-procesamiento-por-lotes"></a>
