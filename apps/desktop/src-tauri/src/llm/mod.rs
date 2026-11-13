@@ -5,6 +5,8 @@ pub mod download;
 pub mod engine;
 pub mod generation;
 pub(crate) mod ocr_correction;
+#[cfg(feature = "paddle-ocr")]
+pub(crate) mod qwen_correction;
 pub mod openrouter;
 pub mod project_context;
 pub mod prompt;
@@ -1474,6 +1476,18 @@ pub(crate) fn correct_ocr_for_asset_blocking(
         asset_id: asset_id.to_string(),
     };
     let conn = crate::db::open::open_archive_connection(db_path)?;
+    // No remote key: correct on the local Qwen server when available,
+    // instead of failing like every other remote-only job.
+    if require_openrouter_key(&conn).is_err() {
+        #[cfg(feature = "paddle-ocr")]
+        if qwen_correction::local_correction_available_for(app_handle, db_path) {
+            drop(conn);
+            return qwen_correction::correct_ocr_via_local_qwen(app_handle, db_path, asset_id);
+        }
+        return Err(
+            "OpenRouter API key no configurada. Andá a Configuración para agregarla.".to_string(),
+        );
+    }
     let api_key = require_openrouter_key(&conn)?;
     let request = prepare_remote_job_request(
         &conn,
@@ -1494,6 +1508,44 @@ pub(crate) fn correct_ocr_for_asset_blocking(
         expected_extraction,
         corrected: generated.output,
     })
+}
+
+/// Local Qwen fallback for OCRC when no remote key exists.
+///
+/// Returns `Some` output only for correction jobs with local assets installed
+/// (or any build without the local engine compiled in: always `None`). The
+/// caller keeps its remote-key error otherwise.
+#[cfg_attr(not(feature = "paddle-ocr"), allow(unused_variables))]
+async fn local_qwen_correction_fallback(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    job: &LlmJob,
+) -> Option<JobExecutionOutput> {
+    #[cfg(feature = "paddle-ocr")]
+    if let LlmJob::CorrectOcrAsset { asset_id } = job {
+        let handle = app_handle.clone();
+        let path = db_path.to_path_buf();
+        let asset = asset_id.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            qwen_correction::correct_ocr_via_local_qwen(&handle, &path, &asset)
+        })
+        .await;
+        match outcome {
+            Ok(Ok(run)) => {
+                return Some(JobExecutionOutput {
+                    output: run.corrected,
+                    ocr_extraction_snapshot: Some(run.expected_extraction),
+                });
+            }
+            Ok(Err(error)) => {
+                log::warn!(target: "llm-local", "Local Qwen correction failed, keeping remote error: {error}");
+            }
+            Err(error) => {
+                log::warn!(target: "llm-local", "Local Qwen correction panicked: {error}");
+            }
+        }
+    }
+    None
 }
 
 /// The same for a page summary: the local engine or OpenRouter, chosen by the
@@ -1601,7 +1653,7 @@ pub struct LlmQueue {
     /// Shared flag set to `true` after the LLM engine initializes successfully.
     available: Arc<AtomicBool>,
     /// Path to the database, used for checking settings.
-    db_path: PathBuf,
+    pub(crate) db_path: PathBuf,
 }
 
 impl LlmQueue {
@@ -1636,9 +1688,17 @@ impl LlmQueue {
         self.is_openrouter_configured()
     }
 
-    /// OCRC is remote-only while local vision support is unavailable.
+    /// OCRC runs remote when an OpenRouter key exists, otherwise on the local
+    /// Qwen3-VL server when its assets are installed.
     pub fn is_ocr_correction_available(&self) -> bool {
-        self.is_openrouter_api_key_configured()
+        if self.is_openrouter_api_key_configured() {
+            return true;
+        }
+        #[cfg(feature = "paddle-ocr")]
+        if qwen_correction::local_correction_available(&self.db_path, None) {
+            return true;
+        }
+        false
     }
 
     /// Report local availability without loading Gemma. Existing models are
@@ -1773,35 +1833,46 @@ impl LlmQueue {
                     // OpenRouter remote path
 
                     if api_key.is_empty() {
-                        emit_error(
-                            &app_handle,
-                            &id,
-                            job_name,
-                            "OpenRouter API key no configurada. Andá a Configuración para agregarla.",
-                        );
-                        continue;
-                    }
-
-                    log::info!(
-                        target: log_target(&job_log_prefix),
-                        "Running job '{job_name}' for {id} via remote API"
-                    );
-                    match prepare_remote_job_request(
-                        &conn,
-                        &job,
-                        OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
-                        db_path
-                            .parent()
-                            .unwrap_or_else(|| std::path::Path::new(".")),
-                    ) {
-                        Ok(request) => {
-                            let client = OpenRouterClient::new(
-                                api_key.clone(),
-                                request.generation.model.clone(),
-                            );
-                            execute_remote_job_request(&client, &request, &app_handle).await
+                        match local_qwen_correction_fallback(&app_handle, &db_path, &job).await {
+                            Some(generated) => {
+                                log::info!(
+                                    target: "llm-local",
+                                    "Running job '{job_name}' for {id} via local Qwen (no remote key)"
+                                );
+                                Ok(generated)
+                            }
+                            None => {
+                                emit_error(
+                                    &app_handle,
+                                    &id,
+                                    job_name,
+                                    "OpenRouter API key no configurada. Andá a Configuración para agregarla.",
+                                );
+                                continue;
+                            }
                         }
-                        Err(e) => Err(e),
+                    } else {
+                        log::info!(
+                            target: log_target(&job_log_prefix),
+                            "Running job '{job_name}' for {id} via remote API"
+                        );
+                        match prepare_remote_job_request(
+                            &conn,
+                            &job,
+                            OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
+                            db_path
+                                .parent()
+                                .unwrap_or_else(|| std::path::Path::new(".")),
+                        ) {
+                            Ok(request) => {
+                                let client = OpenRouterClient::new(
+                                    api_key.clone(),
+                                    request.generation.model.clone(),
+                                );
+                                execute_remote_job_request(&client, &request, &app_handle).await
+                            }
+                            Err(e) => Err(e),
+                        }
                     }
                 } else {
                     // Local engine path. Compiled only with the local engine; under
@@ -2448,12 +2519,12 @@ fn remote_generation_config_for_job(
     }
 }
 
-struct RemoteJobRequest {
-    prompt: String,
-    visual_source_path: Option<std::path::PathBuf>,
-    generation: FlowGenerationConfig,
-    truncate_to_sentence_boundary: bool,
-    ocr_extraction_snapshot: Option<String>,
+pub(crate) struct RemoteJobRequest {
+    pub(crate) prompt: String,
+    pub(crate) visual_source_path: Option<std::path::PathBuf>,
+    pub(crate) generation: FlowGenerationConfig,
+    pub(crate) truncate_to_sentence_boundary: bool,
+    pub(crate) ocr_extraction_snapshot: Option<String>,
 }
 
 async fn execute_remote_job_request(
@@ -2505,7 +2576,7 @@ async fn execute_remote_job_request(
     })
 }
 
-fn resolve_ocr_correction_visual_source_path(
+pub(crate) fn resolve_ocr_correction_visual_source_path(
     conn: &rusqlite::Connection,
     asset_id: &str,
     app_data_dir: &std::path::Path,
@@ -2545,7 +2616,7 @@ struct PreparedRemotePrompt {
 // ---------------------------------------------------------------------------
 
 /// Prepare a remote OpenRouter request without holding a DB connection across `.await`.
-fn prepare_remote_job_request(
+pub(crate) fn prepare_remote_job_request(
     conn: &rusqlite::Connection,
     job: &LlmJob,
     n_ctx: u32,

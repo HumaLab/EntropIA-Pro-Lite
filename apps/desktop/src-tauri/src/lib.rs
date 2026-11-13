@@ -1637,6 +1637,8 @@ pub fn run() {
             ocr::commands::test_glm_ocr_connection,
             ocr::commands::glm_ocr_local_info,
             ocr::commands::glm_ocr_download_models,
+            ocr::commands::qwen_correction_local_info,
+            ocr::commands::qwen_correction_download_models,
             ocr::commands::update_extraction_text_cmd,
             ocr::commands::extraction_is_edited_by_hand,
             ocr::block_reocr::reocr_layout_block,

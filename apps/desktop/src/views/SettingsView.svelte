@@ -116,6 +116,14 @@
     type GlmOcrDownloadCompletePayload,
     type GlmOcrDownloadErrorPayload,
   } from '$lib/glm-ocr-local'
+  import {
+    qwenCorrectionLocalInfo,
+    qwenCorrectionDownloadModels,
+    type QwenLocalInfo,
+    type QwenCorrectionDownloadProgressPayload,
+    type QwenCorrectionDownloadCompletePayload,
+    type QwenCorrectionDownloadErrorPayload,
+  } from '$lib/qwen-correction'
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
   import { registerListeners } from '$lib/register-listeners'
@@ -198,6 +206,7 @@
   let ocrhMode = $state<OcrhMode>(DEFAULT_OCRH_MODE)
   let ocrhLocalEngine = $state<OcrhLocalEngine>(DEFAULT_OCRH_LOCAL_ENGINE)
   let glmOcrLocal = $state<GlmOcrLocalInfo | null>(null)
+  let qwenLocal = $state<QwenLocalInfo | null>(null)
   let localAvailable = $state(false)
   let localModel = $state<LocalModelInfo | null>(null)
   let assemblyAiApiKey = $state('')
@@ -496,6 +505,9 @@
   let glmOcrDownloading = $state(false)
   let glmOcrDownloadPct = $state(0)
   let glmOcrDownloadError = $state<string | null>(null)
+  let qwenDownloading = $state(false)
+  let qwenDownloadPct = $state(0)
+  let qwenDownloadError = $state<string | null>(null)
 
   // Save state
   let saving = $state(false)
@@ -632,6 +644,7 @@
         embeddingModelInfo,
         rerankerModelInfo,
         glmOcrModelInfo,
+        qwenModelInfo,
       ] = await Promise.all([
         settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY),
         settingsGet(SETTINGS_KEYS.OPENROUTER_MODEL),
@@ -654,6 +667,7 @@
         embeddingLocalModelInfo().catch(() => null),
         rerankerLocalModelInfo().catch(() => null),
         glmOcrLocalInfo().catch(() => null),
+        qwenCorrectionLocalInfo().catch(() => null),
       ])
       const settingsMap = new Map((await settingsGetAll()).map((entry) => [entry.key, entry.value]))
 
@@ -726,6 +740,7 @@
       localEmbeddingModel = embeddingModelInfo
       localRerankerModel = rerankerModelInfo
       glmOcrLocal = glmOcrModelInfo
+      qwenLocal = qwenModelInfo
       ocrCorrectionPrompt = storedOcrCorrectionPrompt?.trim() || DEFAULT_PROMPTS.ocrCorrectionPrompt
       summaryPrompt = storedSummaryPrompt?.trim() || DEFAULT_PROMPTS.summaryPrompt
       nerPrompt = storedNerPrompt?.trim() || DEFAULT_PROMPTS.nerPrompt
@@ -851,10 +866,34 @@
             }),
           () =>
             listen<GlmOcrDownloadErrorPayload>('glm-ocr:download_error', (event) => {
-              if (destroyed) return
-              glmOcrDownloading = false
               glmOcrDownloadPct = 0
               glmOcrDownloadError = event.payload.error
+            }),
+          () =>
+            listen<QwenCorrectionDownloadProgressPayload>('qwen-correct:download_progress', (event) => {
+              if (destroyed) return
+              qwenDownloading = true
+              qwenDownloadPct = event.payload.pct
+              qwenDownloadError = null
+            }),
+          () =>
+            listen<QwenCorrectionDownloadCompletePayload>('qwen-correct:download_complete', async () => {
+              if (destroyed) return
+              qwenLocal = await qwenCorrectionLocalInfo().catch(() => null)
+              // Two files download in sequence with one `complete` each; stop
+              // the spinner only when both are on disk.
+              if (qwenLocal?.model_present && qwenLocal?.mmproj_present) {
+                qwenDownloading = false
+                qwenDownloadPct = 100
+              }
+              qwenDownloadError = null
+            }),
+          () =>
+            listen<QwenCorrectionDownloadErrorPayload>('qwen-correct:download_error', (event) => {
+              if (destroyed) return
+              qwenDownloading = false
+              qwenDownloadPct = 0
+              qwenDownloadError = event.payload.error
             })
         ],
         () => destroyed
@@ -1678,6 +1717,24 @@
     } catch (e) {
       glmOcrDownloading = false
       glmOcrDownloadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function handleDownloadQwenModels() {
+    if (qwenDownloading) return
+    qwenDownloading = true
+    qwenDownloadPct = 0
+    qwenDownloadError = null
+    try {
+      const state = await qwenCorrectionDownloadModels()
+      // 'already complete' means nothing was queued; refresh and stop.
+      if (state !== 'started') {
+        qwenLocal = await qwenCorrectionLocalInfo().catch(() => null)
+        qwenDownloading = false
+      }
+    } catch (e) {
+      qwenDownloading = false
+      qwenDownloadError = e instanceof Error ? e.message : String(e)
     }
   }
 
@@ -2658,6 +2715,56 @@
                         {glmOcrDownloadError}
                         <Button variant="secondary" size="sm" onclick={handleDownloadGlmOcrModels}>
                           {t('settings.glmOcrLocal.retry')}
+                        </Button>
+                      </p>
+                    {/if}
+                  </div>
+                {/if}
+
+                {#if qwenLocal}
+                  <div class="settings__local-model">
+                    <div class="settings__local-model-row">
+                      <span class="settings__label">{t('settings.qwenCorrectLocal.title')}</span>
+                      {#if qwenLocal.model_present && qwenLocal.mmproj_present}
+                        <span class="settings__badge settings__badge--ok"
+                          >{t('settings.qwenCorrectLocal.modelsReady')}</span
+                        >
+                      {:else}
+                        <span class="settings__badge settings__badge--warn">
+                          {t('settings.qwenCorrectLocal.modelsMissing')}
+                          {!qwenLocal.model_present ? ' Qwen3VL-4B-Instruct-Q4_K_M.gguf' : ''}{!qwenLocal.mmproj_present
+                            ? ' mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf'
+                            : ''}
+                        </span>
+                      {/if}
+                    </div>
+                    <p class="settings__hint">{t('settings.qwenCorrectLocal.description')}</p>
+
+                    {#if !qwenLocal.server_present}
+                      <p class="settings__hint">{t('settings.glmOcrLocal.serverMissing')}</p>
+                    {/if}
+
+                    {#if qwenDownloading}
+                      <div class="settings__download-progress">
+                        <span
+                          class="settings__download-progress-bar"
+                          style="width: {qwenDownloadPct}%"
+                        ></span>
+                        <span class="settings__download-progress-text">
+                          {qwenDownloadPct}% — {t('settings.qwenCorrectLocal.downloading')}
+                        </span>
+                      </div>
+                    {:else if !qwenLocal.model_present || !qwenLocal.mmproj_present}
+                      <Button variant="primary" size="sm" onclick={handleDownloadQwenModels}>
+                        {t('settings.qwenCorrectLocal.download')}
+                      </Button>
+                    {/if}
+
+                    {#if qwenDownloadError}
+                      <p class="surface-message surface-message--error">
+                        {qwenDownloadError}
+                        <Button variant="secondary" size="sm" onclick={handleDownloadQwenModels}>
+                          {t('settings.qwenCorrectLocal.retry')}
                         </Button>
                       </p>
                     {/if}

@@ -482,6 +482,108 @@ pub async fn glm_ocr_download_models(
     Err("No requerido en este build (solo Pro con modelos locales).".to_string())
 }
 
+/// Error payload for the local Qwen correction model downloads
+/// (`qwen-correct:download_error`).
+#[cfg(feature = "local-ml")]
+#[derive(Clone, Serialize)]
+pub struct QwenCorrectionDownloadErrorPayload {
+    pub error: String,
+}
+
+/// Status of the local Qwen correction install (models + server binary).
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn qwen_correction_local_info(
+    db: State<'_, AppDbState>,
+) -> Result<super::qwen_local::QwenLocalInfo, String> {
+    Ok(super::qwen_local::local_info(&db.db_path))
+}
+
+/// Without `local-ml` there is no local engine to feed, so the command stays
+/// registered but reports that local models are not needed in this build.
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn qwen_correction_local_info(_db: State<'_, AppDbState>) -> Result<String, String> {
+    Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
+/// Download the missing local Qwen3-VL correction GGUF files from HuggingFace.
+/// Emits `qwen-correct:download_progress`, `qwen-correct:download_complete`,
+/// and `qwen-correct:download_error` events; one file at a time, skipping what
+/// is already installed. Returns immediately after queueing the background task.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn qwen_correction_download_models(
+    db: State<'_, AppDbState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    use super::qwen_local::{
+        models_dir, MMPROJ_FILENAME, MMPROJ_URL, MODEL_FILENAME, MODEL_URL,
+    };
+    use crate::llm::download::{download_model_file, open_managed_models_dir};
+    use tauri::Emitter;
+
+    let db_path = db.db_path.clone();
+    let dir = models_dir(&db_path);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create Qwen correction models dir {}: {e}", dir.display()))?;
+    let missing: Vec<(&str, &str)> = [(MODEL_FILENAME, MODEL_URL), (MMPROJ_FILENAME, MMPROJ_URL)]
+        .into_iter()
+        .filter(|(filename, _)| !dir.join(filename).is_file())
+        .collect();
+    if missing.is_empty() {
+        return Ok("already complete".to_string());
+    }
+    // Validated eagerly so a broken models dir fails fast, before queueing;
+    // each file re-opens it inside the worker thread.
+    open_managed_models_dir(&dir)?;
+
+    crate::app_logs::info(
+        &app_handle,
+        "qwen-correct/download",
+        format!("Inicio descarga de Qwen local: {} archivo(s)", missing.len()),
+    );
+    let app_handle_clone = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let worker_handle = app_handle_clone;
+        let files: Vec<(String, String)> = missing
+            .into_iter()
+            .map(|(filename, url)| (filename.to_string(), url.to_string()))
+            .collect();
+        let result = tokio::task::spawn_blocking(move || {
+            for (filename, url) in &files {
+                let managed_dir = open_managed_models_dir(&dir)?;
+                download_model_file("qwen-correct", url, managed_dir, filename, &dir.join(filename), &worker_handle)?;
+            }
+            Ok::<_, String>(())
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                crate::app_logs::error(&app_handle, "qwen-correct/download", format!("Descarga de Qwen local falló: {e}"));
+                let _ = app_handle.emit("qwen-correct:download_error", QwenCorrectionDownloadErrorPayload { error: e });
+            }
+            Err(e) => {
+                let error = format!("Download task panicked: {e}");
+                crate::app_logs::error(&app_handle, "qwen-correct/download", &error);
+                let _ = app_handle.emit("qwen-correct:download_error", QwenCorrectionDownloadErrorPayload { error });
+            }
+        }
+    });
+    Ok("started".to_string())
+}
+
+/// Without `local-ml` there is nothing to download.
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn qwen_correction_download_models(
+    _db: State<'_, AppDbState>,
+    _app_handle: AppHandle,
+) -> Result<String, String> {
+    Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
 /// Read the manual-edit signal of an asset's OCR text without changing it.
 ///
 /// A user-requested OCR replaces the text even when it was corrected by hand

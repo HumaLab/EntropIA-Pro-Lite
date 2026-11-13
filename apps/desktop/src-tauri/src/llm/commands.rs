@@ -19,12 +19,26 @@ pub async fn llm_is_available(llm_queue: State<'_, LlmQueue>) -> Result<bool, St
     Ok(llm_queue.is_available())
 }
 
-/// Returns `true` when the remote provider required by OCRC is configured.
+/// Returns `true` when OCR correction can run: remote provider configured, or
+/// local Qwen3-VL assets installed (managed or installer-bundled).
 #[tauri::command]
+#[cfg_attr(not(feature = "paddle-ocr"), allow(unused_variables))]
 pub async fn llm_ocr_correction_is_available(
     llm_queue: State<'_, LlmQueue>,
+    app_handle: tauri::AppHandle,
 ) -> Result<bool, String> {
-    Ok(llm_queue.is_ocr_correction_available())
+    if llm_queue.is_ocr_correction_available() {
+        return Ok(true);
+    }
+    #[cfg(feature = "paddle-ocr")]
+    {
+        return Ok(super::qwen_correction::local_correction_available_for(
+            &app_handle,
+            &llm_queue.db_path,
+        ));
+    }
+    #[cfg(not(feature = "paddle-ocr"))]
+    Ok(false)
 }
 
 /// Return the current status of the local Gemma GGUF model file.

@@ -102,6 +102,8 @@
     "allow-test-glm-ocr-connection",
     "allow-glm-ocr-local-info",
     "allow-glm-ocr-download-models",
+    "allow-qwen-correction-local-info",
+    "allow-qwen-correction-download-models",
     "allow-update-extraction-text-cmd",
     "allow-extraction-is-edited-by-hand",
     "allow-reocr-layout-block",

@@ -759,6 +759,14 @@ const es = {
   'settings.glmOcrLocal.download': 'Descargar modelos (~1,4 GB)',
   'settings.glmOcrLocal.downloading': 'Descargando modelos…',
   'settings.glmOcrLocal.retry': 'Reintentar descarga',
+  'settings.qwenCorrectLocal.title': 'Corrector local (Qwen3-VL)',
+  'settings.qwenCorrectLocal.description':
+    'Corrige OCR con un modelo local de 4B cuando no hay API key remota.',
+  'settings.qwenCorrectLocal.modelsReady': 'Modelos Qwen instalados.',
+  'settings.qwenCorrectLocal.modelsMissing': 'Faltan modelos:',
+  'settings.qwenCorrectLocal.download': 'Descargar modelos (~2,9 GB)',
+  'settings.qwenCorrectLocal.downloading': 'Descargando modelos…',
+  'settings.qwenCorrectLocal.retry': 'Reintentar descarga',
   'settings.badge.available': 'Disponible',
   'settings.badge.downloadable': 'Descargable',
   'settings.badge.notFound': 'Modelo no encontrado',
@@ -3339,6 +3347,13 @@ type ExtraI18nKey =
   | 'settings.glmOcrLocal.download'
   | 'settings.glmOcrLocal.downloading'
   | 'settings.glmOcrLocal.retry'
+  | 'settings.qwenCorrectLocal.title'
+  | 'settings.qwenCorrectLocal.description'
+  | 'settings.qwenCorrectLocal.modelsReady'
+  | 'settings.qwenCorrectLocal.modelsMissing'
+  | 'settings.qwenCorrectLocal.download'
+  | 'settings.qwenCorrectLocal.downloading'
+  | 'settings.qwenCorrectLocal.retry'
   | 'settings.badge.available'
   | 'settings.badge.downloadable'
   | 'settings.badge.notFound'
@@ -4622,6 +4637,14 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.glmOcrLocal.download': 'Download models (~1.4 GB)',
   'settings.glmOcrLocal.downloading': 'Downloading models…',
   'settings.glmOcrLocal.retry': 'Retry download',
+  'settings.qwenCorrectLocal.title': 'Local corrector (Qwen3-VL)',
+  'settings.qwenCorrectLocal.description':
+    'Corrects OCR with a local 4B model when no remote API key is set.',
+  'settings.qwenCorrectLocal.modelsReady': 'Qwen models installed.',
+  'settings.qwenCorrectLocal.modelsMissing': 'Missing models:',
+  'settings.qwenCorrectLocal.download': 'Download models (~2.9 GB)',
+  'settings.qwenCorrectLocal.downloading': 'Downloading models…',
+  'settings.qwenCorrectLocal.retry': 'Retry download',
   'settings.badge.available': 'Available',
   'settings.badge.downloadable': 'Downloadable',
   'settings.badge.notFound': 'Model not found',

@@ -13,6 +13,10 @@ pub mod layout_onnx;
 #[cfg(feature = "paddle-ocr")]
 pub mod glm_ocr_local;
 #[cfg(feature = "paddle-ocr")]
+pub(crate) mod local_server;
+#[cfg(feature = "paddle-ocr")]
+pub mod qwen_local;
+#[cfg(feature = "paddle-ocr")]
 pub mod paddle_vl;
 pub mod paddle_vl_types;
 pub(crate) mod pdf;
