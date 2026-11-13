@@ -54,7 +54,9 @@ own card later and can reuse this base.
   Settings travel only from an allowlist of mode/model keys; API keys travel
   only as "configurada / no configurada". Log lines lose file paths and quoted
   text (document names and snippets live there) besides the credential
-  redaction they already get.
+  redaction they already get. Known limit: a document title written in a log
+  line without quotes, path or extension cannot be told apart from ordinary
+  words; the opt-in checkbox and the exact preview are the control for it.
 - D4 The conversation lives in memory for the session only; nothing is stored.
 - D5 Model: the general `openrouter_model` (same fallback chain as the other
   flows); not streamed, like the RAG chat.
@@ -68,7 +70,8 @@ own card later and can reuse this base.
 | T3 | S1-S3, S5 | inline, TDD — Rust `help_ask`: key gate, prompt assembly, OpenRouter call | done | dbf36925 |
 | T4 | S1, S2, S5-S7 | inline, TDD — frontend: `lib/help.ts`, `HelpView`, header button, no-key page, i18n ES/EN | done | 64b70c7e |
 | T5 | S4 | inline — manual: short section on the help chat | done | 9e971b52 |
-| T6 | S5, S8 | independent verify (Risk item 2), then owner check with the real failures of S8 | pending | |
+| T6a | S5 | fixes from the independent verify (TDD) + owed T1 mutation check | done | see L9 |
+| T6 | S8 | owner check with the real failures of S8 (needs a real OpenRouter key) | pending | |
 
 ## Log
 
@@ -89,3 +92,5 @@ own card later and can reuse this base.
 - L5 (2026-11-13, T3, delegated worker): `help/prompt.rs` (wire types camelCase, validation, history last 6 turns cut to 4000 chars, Spanish prompt with excerpts `chapter › title`, diagnostics labelled as data) and `help/commands.rs` (`help_status` from the raw setting, `help_diagnostics_preview`, `help_ask` re-scrubbing diagnostics, key gate error `help_no_openrouter_key`, model `openrouter_model` else `DEFAULT_OPENROUTER_MODEL`, `provider_defaults(1500, 0.2)`). RED 7 failing -> GREEN `cargo test --lib help::` 21/21; clippy lean `-D warnings` clean; rustfmt clean (worker report). No live OpenRouter call tested. Commit dbf36925.
 - L6 (2026-11-13, T4, delegated worker + parent fixes): `lib/help.ts`, `HelpView.svelte` (root view `help`, header button «Ayuda»), no-key page (Configuración → APIs remotas → OpenRouter, credit note, manual link), «Incluir diagnóstico» off by default and reset after each send, «Ver qué se envía» preview sent verbatim, sources under each answer, memory-only chat. Worker RED (missing modules) -> GREEN focused suites. Parent fixes: `tab-meta.ts` exhaustive switch (`help` arms + test); native checkbox replaced by `@entropia/ui` `Checkbox` (design-tokens guard); duplicate `help` icon removed, uses the existing `circle-help`. Checks: desktop Pro 306 files / 4283 passed, Lite 4247 passed; ui 963 passed; svelte-check Pro and Lite 0/0; lint clean; prettier clean. Commit 64b70c7e.
 - L7 (2026-11-13, T5): manual § 13.5 «Ayuda dentro de la app» (key, sections only, opt-in diagnostics and what it holds, nothing stored, explains only). `build_html.py` builds. Commit 9e971b52.
+- L8 (2026-11-13, T6 independent verify, gentle-ai-verify): isolated setup failed once (pnpm junction symlinks in the scratch copy), not retried; static findings on S5: Windows path whose last segment has spaces leaked words; `file:///Users/...` kept the path; curly single quotes and apostrophes inside titles survived; a markerless 32-hex key survived `sanitize_field`; a long report could exceed MAX_REPORT_CHARS so the sent text differed from the preview. Unquoted titles: not detectable (see D3).
+- L9 (2026-11-13, T6a): RED 2 new tests failing (adversarial leaks; longest report previewed == sent) -> GREEN `cargo test --lib help::` 23/23; clippy lean `-D warnings` clean. Fix: extension-aware final segment for Windows/UNC/Unix paths and any `scheme://` URL (scheme and host kept), curly single quotes, greedy single quotes, credential-shaped runs of 32+ chars with letters and digits -> `[redactado]`, log messages cut to 300 chars before scrubbing. T1 mutation check: ignoring the budget fails `a_section_over_the_budget_is_skipped_not_cut`; keeping images fails `parse_keeps_chapters_...`; restored, 23/23.
