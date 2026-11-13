@@ -11,6 +11,7 @@
       "resources/runtime-pack/linux-x86_64/**/*",
       "scripts/paddle_vl.py",
       "scripts/glm_ocr_local.py",
+      "scripts/layout_v3.py",
       "scripts/spacy_ner.py",
       "scripts/transcribe.py",
       "resources/pdfium/libpdfium.so",

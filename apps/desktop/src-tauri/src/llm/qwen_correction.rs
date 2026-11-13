@@ -56,8 +56,7 @@ pub(crate) fn correct_ocr_via_local_qwen(
     use tauri::Manager;
 
     let resource_dir = app_handle.path().resource_dir().ok();
-    let assets =
-        qwen_local::resolve_assets_with_resource_dir(db_path, resource_dir.as_deref())?;
+    let assets = qwen_local::resolve_assets_with_resource_dir(db_path, resource_dir.as_deref())?;
     let job = LlmJob::CorrectOcrAsset {
         asset_id: asset_id.to_string(),
     };
@@ -136,22 +135,31 @@ fn strip_correction_preamble(corrected: &str, source: &str) -> String {
         "aquí tienes",
         "texto corregido",
     ];
-    let is_preamble = known.iter().any(|phrase| {
-        lowered == *phrase || lowered.starts_with(&format!("{phrase}:"))
-    }) || (!trimmed.contains(char::is_whitespace)
-        && trimmed.chars().count() <= 15
-        && !source.contains(trimmed));
+    let is_preamble = known
+        .iter()
+        .any(|phrase| lowered == *phrase || lowered.starts_with(&format!("{phrase}:")))
+        || (!trimmed.contains(char::is_whitespace)
+            && trimmed.chars().count() <= 15
+            && !source.contains(trimmed));
     if !is_preamble {
         return corrected.trim_start().to_string();
     }
-    lines.collect::<Vec<_>>().join("\n").trim_start().to_string()
+    lines
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_start()
+        .to_string()
 }
 
 /// Image bytes plus MIME type for the chat request. PDFs contribute their
 /// first rendered page, like the remote flow; anything else goes in raw.
 fn read_correction_image(path: &Path) -> Result<(Vec<u8>, &'static str), String> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| format!("Failed to read OCR correction image {}: {e}", path.display()))?;
+    let bytes = std::fs::read(path).map_err(|e| {
+        format!(
+            "Failed to read OCR correction image {}: {e}",
+            path.display()
+        )
+    })?;
     let is_pdf = path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -211,7 +219,12 @@ fn chat_completion(
         .map_err(|e| format!("Local Qwen correction request failed: {e}"))?;
     if !response.status().is_success() {
         let status = response.status();
-        let detail: String = response.text().unwrap_or_default().chars().take(500).collect();
+        let detail: String = response
+            .text()
+            .unwrap_or_default()
+            .chars()
+            .take(500)
+            .collect();
         return Err(format!(
             "Local Qwen correction failed with HTTP {status}: {detail}"
         ));

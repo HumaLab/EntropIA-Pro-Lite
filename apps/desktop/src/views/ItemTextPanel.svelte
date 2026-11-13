@@ -210,12 +210,13 @@
           >
             {translate('item.ocrHighAction')}
           </Button>
-          {#if ocrCorrectionAvailable && !isOcrCorrected}
+          {#if !isOcrCorrected}
             <Button
               variant="secondary"
               size="sm"
               class="ocr-btn"
-              disabled={ocrEditingDisabled ||
+              disabled={!ocrCorrectionAvailable ||
+                ocrEditingDisabled ||
                 llmState.status === 'running' ||
                 ocrState.status !== 'done'}
               onclick={onCorrectOcr}

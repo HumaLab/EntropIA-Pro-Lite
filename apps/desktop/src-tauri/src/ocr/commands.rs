@@ -517,16 +517,18 @@ pub async fn qwen_correction_download_models(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
-    use super::qwen_local::{
-        models_dir, MMPROJ_FILENAME, MMPROJ_URL, MODEL_FILENAME, MODEL_URL,
-    };
+    use super::qwen_local::{models_dir, MMPROJ_FILENAME, MMPROJ_URL, MODEL_FILENAME, MODEL_URL};
     use crate::llm::download::{download_model_file, open_managed_models_dir};
     use tauri::Emitter;
 
     let db_path = db.db_path.clone();
     let dir = models_dir(&db_path);
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create Qwen correction models dir {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "Failed to create Qwen correction models dir {}: {e}",
+            dir.display()
+        )
+    })?;
     let missing: Vec<(&str, &str)> = [(MODEL_FILENAME, MODEL_URL), (MMPROJ_FILENAME, MMPROJ_URL)]
         .into_iter()
         .filter(|(filename, _)| !dir.join(filename).is_file())
@@ -541,7 +543,10 @@ pub async fn qwen_correction_download_models(
     crate::app_logs::info(
         &app_handle,
         "qwen-correct/download",
-        format!("Inicio descarga de Qwen local: {} archivo(s)", missing.len()),
+        format!(
+            "Inicio descarga de Qwen local: {} archivo(s)",
+            missing.len()
+        ),
     );
     let app_handle_clone = app_handle.clone();
     tauri::async_runtime::spawn(async move {
@@ -553,7 +558,14 @@ pub async fn qwen_correction_download_models(
         let result = tokio::task::spawn_blocking(move || {
             for (filename, url) in &files {
                 let managed_dir = open_managed_models_dir(&dir)?;
-                download_model_file("qwen-correct", url, managed_dir, filename, &dir.join(filename), &worker_handle)?;
+                download_model_file(
+                    "qwen-correct",
+                    url,
+                    managed_dir,
+                    filename,
+                    &dir.join(filename),
+                    &worker_handle,
+                )?;
             }
             Ok::<_, String>(())
         })
@@ -561,13 +573,23 @@ pub async fn qwen_correction_download_models(
         match result {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                crate::app_logs::error(&app_handle, "qwen-correct/download", format!("Descarga de Qwen local falló: {e}"));
-                let _ = app_handle.emit("qwen-correct:download_error", QwenCorrectionDownloadErrorPayload { error: e });
+                crate::app_logs::error(
+                    &app_handle,
+                    "qwen-correct/download",
+                    format!("Descarga de Qwen local falló: {e}"),
+                );
+                let _ = app_handle.emit(
+                    "qwen-correct:download_error",
+                    QwenCorrectionDownloadErrorPayload { error: e },
+                );
             }
             Err(e) => {
                 let error = format!("Download task panicked: {e}");
                 crate::app_logs::error(&app_handle, "qwen-correct/download", &error);
-                let _ = app_handle.emit("qwen-correct:download_error", QwenCorrectionDownloadErrorPayload { error });
+                let _ = app_handle.emit(
+                    "qwen-correct:download_error",
+                    QwenCorrectionDownloadErrorPayload { error },
+                );
             }
         }
     });

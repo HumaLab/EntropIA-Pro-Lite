@@ -52,3 +52,26 @@ pub struct PaddleVlRegion {
     pub bbox: PaddleVlBbox,
     pub confidence: f32,
 }
+
+/// One layout box from the layout-only `layout_v3.py` script: no content,
+/// recognition happens per box with the lightweight OCR engine.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LayoutV3Box {
+    pub label: String,
+    pub category: String,
+    pub bbox: PaddleVlBbox,
+    pub confidence: f32,
+    pub order: i32,
+}
+
+/// Parsed result from the layout-only `layout_v3.py` script.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LayoutV3Output {
+    pub method: String,
+    pub image_width: u32,
+    pub image_height: u32,
+    /// The device that was actually used by the Python subprocess.
+    #[serde(default)]
+    pub actual_device: Option<String>,
+    pub boxes: Vec<LayoutV3Box>,
+}

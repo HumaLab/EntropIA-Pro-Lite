@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use super::local_server::{
-    BUNDLED_SERVER_SUBDIR, SERVER_BINARY_ENV, data_dir, server_binary_name, server_dir,
+    data_dir, server_binary_name, server_dir, BUNDLED_SERVER_SUBDIR, SERVER_BINARY_ENV,
 };
 
 /// Qwen3-VL-4B instruct, Q4_K_M: fits next to a 2 GB KV cache on an 8 GB card.
@@ -152,7 +152,6 @@ pub fn ensure_server(assets: &QwenLocalAssets, db_path: &Path) -> Result<String,
     )
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,7 +179,9 @@ mod tests {
         let assets = resolve_assets_from(&db, None, None).unwrap();
         assert_eq!(
             assets.model,
-            dir.path().join("models/qwen3vl-4b-correct").join(MODEL_FILENAME)
+            dir.path()
+                .join("models/qwen3vl-4b-correct")
+                .join(MODEL_FILENAME)
         );
         assert_eq!(
             assets.server,

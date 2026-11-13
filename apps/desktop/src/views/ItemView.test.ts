@@ -5873,11 +5873,11 @@ describe('ItemView processing labels by asset type', () => {
     expect(screen.queryByRole('button', { name: 'PDFR' })).not.toBeInTheDocument()
   })
 
-  it('hides OCRC when the remote correction provider is unavailable', async () => {
+  it('shows OCRC disabled when the remote correction provider is unavailable', async () => {
     llmOcrCorrectionIsAvailableMock.mockResolvedValue(false)
     await renderTextTabForAsset('image')
 
-    expect(screen.queryByRole('button', { name: 'OCRC' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'OCRC' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'OCRR' })).toBeInTheDocument()
   })
 

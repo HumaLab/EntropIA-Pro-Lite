@@ -272,7 +272,6 @@ fn log_tail(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-
 fn pid_file(db_path: &Path) -> PathBuf {
     server_dir(db_path).join(PID_FILE)
 }

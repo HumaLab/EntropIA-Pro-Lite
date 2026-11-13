@@ -243,6 +243,27 @@ fn glm_label_to_layout_category(label: &str) -> Option<LayoutCategory> {
     }
 }
 
+///
+/// Mirrors the Python-side mapping in `layout_v3.py` / `glm_ocr_local.py`, so
+/// every engine agrees on what each box is. Unknown future labels fall back
+/// to plain text rather than dropping content.
+fn layout_category_from_name(category: &str) -> LayoutCategory {
+    match category {
+        "title" => LayoutCategory::Title,
+        "plain_text" => LayoutCategory::PlainText,
+        "table" => LayoutCategory::Table,
+        "figure" => LayoutCategory::Figure,
+        "caption" => LayoutCategory::Caption,
+        "footnote" => LayoutCategory::Footnote,
+        "header" => LayoutCategory::Header,
+        "footer" => LayoutCategory::Footer,
+        "code" => LayoutCategory::Code,
+        "reference" => LayoutCategory::Reference,
+        "abandoned" => LayoutCategory::Abandoned,
+        _ => LayoutCategory::PlainText,
+    }
+}
+
 fn strip_html_tags(value: &str) -> String {
     let mut result = String::with_capacity(value.len());
     let mut inside_tag = false;
@@ -1239,9 +1260,6 @@ fn replace_extraction_text(
 /// Returns `None` for categories that should be skipped (Figure, Header, Footer, Abandoned).
 /// Returns `Some(formatted_text)` for categories that contribute to the output.
 ///
-/// NOTE: Currently unused in production code (layout-aware pipeline removed from Light mode).
-/// Kept for potential future use and tested in unit tests.
-#[allow(dead_code)]
 fn format_region_text(category: &LayoutCategory, text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -1373,9 +1391,6 @@ fn maybe_downscale_for_paddlevl(bytes: &[u8]) -> Vec<u8> {
 /// which typically produces much better results on newspaper clippings, forms,
 /// and other documents where PP-DocLayout-L gives sparse/wrong regions.
 ///
-/// NOTE: Currently unused in production code (layout-aware pipeline removed from Light mode).
-/// Kept for potential future use and tested in unit tests.
-#[allow(dead_code)]
 fn should_bypass_layout(
     regions: &[provider::LayoutRegion],
     image_width: u32,
@@ -1424,9 +1439,6 @@ fn should_bypass_layout(
 /// Clamps to image bounds. Returns `None` if the cropped region is too small
 /// (< 10px on either axis) — anything smaller cannot produce useful OCR.
 ///
-/// NOTE: Currently unused in production code (layout-aware pipeline removed from Light mode).
-/// Kept for potential future use and tested in unit tests.
-#[allow(dead_code)]
 fn crop_region(
     image: &image::DynamicImage,
     bbox: &provider::BoundingBox,
@@ -1457,8 +1469,9 @@ fn crop_region(
 ///
 /// Returns OCR text plus optional layout persistence payload.
 ///
-/// Layout engine parameter removed — layout-aware Light mode is not used in
-/// production. PaddleVL handles layout in High mode.
+/// The `paddle_vl_engine` drives layout in both modes: High runs PaddleOCR-VL
+/// on it, Light runs the layout-only script through it and recognizes each
+/// box with the lightweight provider.
 ///
 /// `file_bytes` is what the caller read for this job, already through the
 /// single ingress (`image_orient::upright_asset_bytes`): an image is upright
@@ -1651,11 +1664,30 @@ async fn process_pdf(
                 let output = tokio::task::spawn_blocking(move || {
                     match mode_clone {
                         OcrMode::Light => {
-                            // Light mode: lightweight PaddleOCR, no layout detection
-                            provider_clone
-                                .recognize(&page_image)
-                                .map(|output| (output, None))
-                                .map_err(|e| format!("OCR page {} failed: {e}", page_idx + 1))
+                            // Light mode with layout: PP-DocLayoutV3 boxes, one
+                            // lightweight PaddleOCR pass per segment. Falls back
+                            // to the full-page heuristic when layout is missing.
+                            if let Some(ref engine) = engine_clone {
+                                match recognize_image_with_layout(
+                                    &provider_clone,
+                                    &page_image,
+                                    engine,
+                                ) {
+                                    Ok((ocr, vl_output)) => Ok((ocr, Some(vl_output))),
+                                    Err(error) => {
+                                        log::warn!(target: "OCRH", "Layout unavailable for OCRL PDF page {}: {error}; using full-page heuristic", page_idx + 1);
+                                        provider_clone
+                                            .recognize(&page_image)
+                                            .map(|output| (output, None))
+                                            .map_err(|e| format!("OCR page {} failed: {e}", page_idx + 1))
+                                    }
+                                }
+                            } else {
+                                provider_clone
+                                    .recognize(&page_image)
+                                    .map(|output| (output, None))
+                                    .map_err(|e| format!("OCR page {} failed: {e}", page_idx + 1))
+                            }
                         }
                         OcrMode::High => {
                             // High mode: try PaddleVL, fall back to lightweight PaddleOCR
@@ -1793,8 +1825,9 @@ async fn process_pdf(
 
 /// Image pipeline: mode-aware OCR with progressive fallback.
 ///
-/// **Light mode** (OCRL): Plain lightweight PaddleOCR on the full image. No layout detection.
-/// Fast and simple.
+/// **Light mode** (OCRL): PP-DocLayoutV3 boxes, one lightweight PaddleOCR pass
+/// per segment, assembled in reading order; falls back to the full-image
+/// heuristic when layout is unavailable.
 ///
 /// **High mode** (OCRH): PaddleVL Python subprocess with 900s timeout, then fallback to PaddleOCR.
 #[cfg(feature = "paddle-ocr")]
@@ -1808,7 +1841,9 @@ async fn process_image(
     mode: &OcrMode,
 ) -> Result<ProcessedOcrOutput, String> {
     match mode {
-        OcrMode::Light => process_image_light(provider, bytes, asset_id, app_handle).await,
+        OcrMode::Light => {
+            process_image_light(provider, bytes, asset_id, app_handle, paddle_vl_engine).await
+        }
         OcrMode::High => {
             process_image_high(
                 provider,
@@ -1823,20 +1858,56 @@ async fn process_image(
     }
 }
 
-/// Light mode: plain lightweight PaddleOCR — no layout detection.
+/// Light mode with layout: PP-DocLayoutV3 boxes, one lightweight PaddleOCR
+/// pass per segment, assembled in the model's reading order.
 ///
-/// Runs the provider's `recognize()` directly on the full image. Fast and simple.
-/// Layout-aware processing is available via High mode (PaddleVL).
+/// Falls back to the plain full-image heuristic when layout is unavailable
+/// (no Python/PaddleX, model not cached) or untrustworthy — layout must
+/// never break OCRL.
 #[cfg(feature = "paddle-ocr")]
 async fn process_image_light(
     provider: &Arc<dyn OcrProvider>,
     bytes: &[u8],
     asset_id: &str,
     app_handle: &AppHandle,
+    paddle_vl_engine: Option<&PaddleVlEngine>,
 ) -> Result<ProcessedOcrOutput, String> {
     emit_progress(app_handle, asset_id, 50, "ocr_inference");
 
-    // Plain OCR — no layout detection, just run the provider on the full image
+    if let Some(engine) = paddle_vl_engine {
+        let engine = engine.clone();
+        let provider_clone = Arc::clone(provider);
+        let bytes_owned = bytes.to_vec();
+        let asset = asset_id.to_string();
+        let layout_outcome = tokio::task::spawn_blocking(move || {
+            recognize_image_with_layout(&provider_clone, &bytes_owned, &engine)
+        })
+        .await
+        .map_err(|e| format!("OCR layout task panicked: {e}"))?;
+        match layout_outcome {
+            Ok((ocr, vl_output)) => {
+                log::info!(
+                    target: "OCRH",
+                    "OCRL layout: {} boxes for {asset}",
+                    vl_output.blocks.len()
+                );
+                return Ok(ProcessedOcrOutput {
+                    ocr,
+                    layout: Some(LayoutPersistencePayload::from_page(1, &vl_output)),
+                    degradation_reason: None,
+                });
+            }
+            Err(error) => {
+                log::warn!(
+                    target: "OCRH",
+                    "Layout unavailable for OCRL {asset}, using full-image heuristic: {error}"
+                );
+            }
+        }
+    }
+
+    // Plain OCR fallback — no layout detection, just run the provider on the
+    // full image. Fast and simple; reading order is heuristic.
     let provider_clone = Arc::clone(provider);
     let bytes_owned = bytes.to_vec();
 
@@ -1882,6 +1953,146 @@ async fn process_image_light(
         layout: None,
         degradation_reason: None,
     })
+}
+
+/// Segment-by-segment light OCR: crop each PP-DocLayoutV3 box and read it
+/// with the lightweight provider, assembling text in reading order.
+///
+/// Returns the provider output plus a PaddleVl-shaped payload for the shared
+/// layout persistence path. Any failure is an `Err` for the caller to fall
+/// back to full-image OCR.
+#[cfg(feature = "paddle-ocr")]
+fn recognize_image_with_layout(
+    provider: &Arc<dyn OcrProvider>,
+    bytes: &[u8],
+    engine: &PaddleVlEngine,
+) -> Result<(provider::OcrOutput, paddle_vl_types::PaddleVlOutput), String> {
+    // Layout needs a file path: spill the bytes to a temp PNG.
+    let temp_path =
+        std::env::temp_dir().join(format!("entropia_layout_{}.png", uuid::Uuid::new_v4()));
+    std::fs::write(&temp_path, bytes)
+        .map_err(|e| format!("Failed to write temp file for layout: {e}"))?;
+    let temp_str = temp_path
+        .to_str()
+        .ok_or_else(|| "Invalid temp path for layout".to_string())?
+        .to_string();
+    let layout = engine.detect_layout(&temp_str);
+    let _ = std::fs::remove_file(&temp_path);
+    let layout = layout?;
+
+    let image = image::load_from_memory(bytes)
+        .map_err(|e| format!("Could not decode image for layout OCR: {e}"))?;
+    assemble_layout_output(provider, &image, &layout)
+}
+
+/// detection and its per-box recognitions.
+///
+/// Pure layout-to-text logic (no I/O, no subprocess): the unit-testable half
+/// of [`recognize_image_with_layout`].
+#[cfg(feature = "paddle-ocr")]
+fn assemble_layout_output(
+    provider: &Arc<dyn OcrProvider>,
+    image: &image::DynamicImage,
+    layout: &paddle_vl_types::LayoutV3Output,
+) -> Result<(provider::OcrOutput, paddle_vl_types::PaddleVlOutput), String> {
+    let (image_width, image_height) = (image.width(), image.height());
+    let regions_for_check: Vec<provider::LayoutRegion> = layout
+        .boxes
+        .iter()
+        .map(|b| provider::LayoutRegion {
+            label: layout_category_from_name(&b.category),
+            bbox: provider::BoundingBox {
+                x: b.bbox.x,
+                y: b.bbox.y,
+                width: b.bbox.width.max(0) as u32,
+                height: b.bbox.height.max(0) as u32,
+            },
+            confidence: b.confidence,
+            order: b.order.max(0) as usize,
+        })
+        .collect();
+    if should_bypass_layout(&regions_for_check, image_width, image_height) {
+        return Err("Layout too sparse; falling back to full-image OCR".to_string());
+    }
+
+    let mut text_parts = Vec::new();
+    let mut regions = Vec::new();
+    let mut blocks = Vec::new();
+    let mut vl_regions = Vec::new();
+    // The script already emits reading order, but the contract does not
+    // guarantee it: sort defensively so text and persisted layout agree.
+    let mut ordered: Vec<_> = layout.boxes.iter().collect();
+    ordered.sort_by_key(|b| b.order);
+    for b in ordered {
+        let category = layout_category_from_name(&b.category);
+        let bbox = provider::BoundingBox {
+            x: b.bbox.x,
+            y: b.bbox.y,
+            width: b.bbox.width.max(0) as u32,
+            height: b.bbox.height.max(0) as u32,
+        };
+        // Figures and page furniture never reach the OCR engine, but they
+        // stay in the persisted layout like the High path keeps them.
+        let content = if matches!(
+            category,
+            provider::LayoutCategory::Figure
+                | provider::LayoutCategory::Header
+                | provider::LayoutCategory::Footer
+                | provider::LayoutCategory::Abandoned
+        ) {
+            String::new()
+        } else {
+            match crop_region(&image, &bbox) {
+                Some(crop) => {
+                    let mut png = Vec::new();
+                    crop.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                        .map_err(|e| format!("Failed to encode layout box: {e}"))?;
+                    provider.recognize(&png).map(|o| o.text).unwrap_or_default()
+                }
+                None => String::new(),
+            }
+        };
+        let content = content.trim().to_string();
+        blocks.push(paddle_vl_types::PaddleVlBlock {
+            label: b.label.clone(),
+            content: content.clone(),
+            bbox: b.bbox.clone(),
+            order: b.order,
+            group_id: 0,
+        });
+        vl_regions.push(paddle_vl_types::PaddleVlRegion {
+            category: b.category.clone(),
+            bbox: b.bbox.clone(),
+            confidence: b.confidence,
+        });
+        if let Some(formatted) = format_region_text(&category, &content) {
+            text_parts.push(formatted);
+            regions.push(provider::OcrRegion {
+                text: content,
+                confidence: b.confidence,
+                bbox: Some(bbox),
+                column: None,
+            });
+        }
+    }
+
+    let text = text_parts.join("\n\n");
+    Ok((
+        provider::OcrOutput {
+            text: text.clone(),
+            regions,
+            method: "paddle".to_string(),
+        },
+        paddle_vl_types::PaddleVlOutput {
+            text,
+            method: "paddle".to_string(),
+            blocks,
+            regions: vl_regions,
+            image_width,
+            image_height,
+            actual_device: Some("cpu".to_string()),
+        },
+    ))
 }
 
 /// High mode: PaddleVL Python subprocess first, lightweight PaddleOCR fallback.
@@ -1937,6 +2148,7 @@ async fn process_image_high(
         emit_progress(app_handle, asset_id, 55, "paddlevl_detection");
 
         let engine_clone = engine.clone();
+        let engine_for_fallback = engine.clone();
         let provider_clone = Arc::clone(provider);
         let bytes_owned = bytes.to_vec();
         let asset_id_owned = asset_id.to_string();
@@ -2027,14 +2239,24 @@ async fn process_image_high(
                             "PaddleOCR-VL falló/agotó timeout en {asset_id_owned}; usando PaddleOCR liviano: {e}"
                         ),
                     );
-                    provider_clone
-                        .recognize(&bytes_owned)
-                        .map(|ocr| ProcessedOcrOutput {
+                    match recognize_image_with_layout(&provider_clone, &bytes_owned, &engine_for_fallback) {
+                        Ok((ocr, vl_output)) => Ok(ProcessedOcrOutput {
                             ocr,
-                            layout: None,
+                            layout: Some(LayoutPersistencePayload::from_page(1, &vl_output)),
                             degradation_reason: None,
-                        })
-                        .map_err(|e| format!("OCR inference failed: {e}"))
+                        }),
+                        Err(layout_error) => {
+                            log::warn!(target: "OCRH", "Layout unavailable for High fallback {asset_id_owned}: {layout_error}");
+                            provider_clone
+                                .recognize(&bytes_owned)
+                                .map(|ocr| ProcessedOcrOutput {
+                                    ocr,
+                                    layout: None,
+                                    degradation_reason: None,
+                                })
+                                .map_err(|e| format!("OCR inference failed: {e}"))
+                        }
+                    }
                 }
             }
         })
@@ -2050,7 +2272,7 @@ async fn process_image_high(
         "ocrh",
         format!("PaddleOCR-VL no disponible para {asset_id}; usando PaddleOCR liviano"),
     );
-    process_image_light(provider, bytes, asset_id, app_handle).await
+    process_image_light(provider, bytes, asset_id, app_handle, None).await
 }
 
 /// Emit an `ocr:progress` event to the frontend.
@@ -2305,6 +2527,121 @@ mod tests {
         tx.rollback().unwrap();
 
         assert_eq!(atomic_ocr_state(&conn, "asset-1"), before);
+    }
+
+    #[test]
+    fn layout_category_from_name_maps_v3_categories() {
+        // Input is the mapped category (the script already maps raw labels).
+        assert_eq!(layout_category_from_name("title"), LayoutCategory::Title);
+        assert_eq!(
+            layout_category_from_name("plain_text"),
+            LayoutCategory::PlainText
+        );
+        assert_eq!(layout_category_from_name("table"), LayoutCategory::Table);
+        assert_eq!(layout_category_from_name("figure"), LayoutCategory::Figure);
+        assert_eq!(
+            layout_category_from_name("caption"),
+            LayoutCategory::Caption
+        );
+        assert_eq!(
+            layout_category_from_name("footnote"),
+            LayoutCategory::Footnote
+        );
+        assert_eq!(layout_category_from_name("header"), LayoutCategory::Header);
+        assert_eq!(layout_category_from_name("footer"), LayoutCategory::Footer);
+        assert_eq!(layout_category_from_name("code"), LayoutCategory::Code);
+        assert_eq!(
+            layout_category_from_name("reference"),
+            LayoutCategory::Reference
+        );
+        assert_eq!(
+            layout_category_from_name("abandoned"),
+            LayoutCategory::Abandoned
+        );
+        // Unknown future labels keep their content instead of vanishing.
+        assert_eq!(
+            layout_category_from_name("diagram"),
+            LayoutCategory::PlainText
+        );
+    }
+
+    struct FixedTextProvider;
+    impl provider::OcrProvider for FixedTextProvider {
+        fn name(&self) -> &str {
+            "stub"
+        }
+        fn recognize(&self, _bytes: &[u8]) -> Result<provider::OcrOutput, String> {
+            Ok(provider::OcrOutput {
+                text: "stub text".to_string(),
+                regions: Vec::new(),
+                method: "paddle".to_string(),
+            })
+        }
+    }
+
+    fn test_box(label: &str, category: &str, order: i32) -> paddle_vl_types::LayoutV3Box {
+        paddle_vl_types::LayoutV3Box {
+            label: label.to_string(),
+            category: category.to_string(),
+            bbox: paddle_vl_types::PaddleVlBbox {
+                x: 10,
+                y: 10,
+                width: 100,
+                height: 40,
+            },
+            confidence: 0.9,
+            order,
+        }
+    }
+
+    #[test]
+    fn light_layout_reads_boxes_in_order_and_skips_figures() {
+        let provider: std::sync::Arc<dyn provider::OcrProvider> =
+            std::sync::Arc::new(FixedTextProvider);
+        let image = image::DynamicImage::new_rgb8(400, 300);
+        let layout = paddle_vl_types::LayoutV3Output {
+            method: "layout_v3".to_string(),
+            image_width: 400,
+            image_height: 300,
+            actual_device: Some("cpu".to_string()),
+            boxes: vec![
+                test_box("paragraph_title", "title", 2),
+                test_box("text", "plain_text", 1),
+                test_box("image", "figure", 3),
+            ],
+        };
+        let (ocr, vl) = assemble_layout_output(&provider, &image, &layout).unwrap();
+        // Reading order, not input order; titles get markdown; figures keep
+        // their layout box but contribute no text.
+        assert_eq!(ocr.text, "stub text\n\n## stub text");
+        assert_eq!(ocr.regions.len(), 2);
+        assert_eq!(vl.blocks.len(), 3);
+        assert_eq!(vl.blocks[0].label, "text");
+        assert_eq!(ocr.method, "paddle");
+    }
+
+    #[test]
+    fn light_layout_bypass_matches_heuristic() {
+        // A single box covering the page is "OCR the whole thing anyway".
+        let provider: std::sync::Arc<dyn provider::OcrProvider> =
+            std::sync::Arc::new(FixedTextProvider);
+        let image = image::DynamicImage::new_rgb8(400, 300);
+        let layout = paddle_vl_types::LayoutV3Output {
+            method: "layout_v3".to_string(),
+            image_width: 400,
+            image_height: 300,
+            actual_device: None,
+            boxes: vec![test_box("text", "plain_text", 1)],
+        };
+        // Widen the single box to cover the page so the bypass triggers.
+        let mut layout = layout;
+        layout.boxes[0].bbox = paddle_vl_types::PaddleVlBbox {
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 300,
+        };
+        assert!(assemble_layout_output(&provider, &image, &layout).is_err());
     }
 
     #[test]

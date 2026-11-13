@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 pub(crate) use super::local_server::{
-    BUNDLED_SERVER_SUBDIR, SERVER_BINARY_ENV, data_dir, server_binary_name, server_dir,
+    data_dir, server_binary_name, server_dir, BUNDLED_SERVER_SUBDIR, SERVER_BINARY_ENV,
 };
 
 /// Recognition model: Q8_0 decoder. Measured against f16 on scanned press
@@ -84,7 +84,6 @@ pub fn models_dir(db_path: &Path) -> PathBuf {
     data_dir(db_path).join("models").join(MODELS_SUBDIR)
 }
 
-
 /// Resolve every asset, or explain which ones are missing.
 ///
 /// Server binary resolution order: `ENTROPIA_LLAMA_SERVER` override,
@@ -99,7 +98,6 @@ pub fn resolve_assets_with_resource_dir(
         .filter(|path| !path.as_os_str().is_empty());
     resolve_assets_from(db_path, env_server, resource_dir)
 }
-
 
 fn resolve_assets_from(
     db_path: &Path,
@@ -233,5 +231,4 @@ mod tests {
         let assets = resolve_assets_from(&db, None, Some(&resources)).unwrap();
         assert_eq!(assets.server, bundled_dir.join(server_binary_name()));
     }
-
 }
