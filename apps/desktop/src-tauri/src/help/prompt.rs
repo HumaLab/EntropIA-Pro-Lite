@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::manual::ManualSection;
+use super::index::Hit;
 
 /// Longest accepted question, in characters (S1: one focused question).
 pub(crate) const QUESTION_MAX_CHARS: usize = 2000;
@@ -13,6 +13,8 @@ pub(crate) const HISTORY_MAX_TURNS: usize = 6;
 /// Longest single history turn sent to the model, in characters (D4).
 pub(crate) const HISTORY_TURN_MAX_CHARS: usize = 4000;
 /// Manual characters sent with a question (D2).
+/// Most excerpts besides the troubleshooting chapter.
+const MAX_RANKED_SECTIONS: usize = 4;
 pub(crate) const SECTION_BUDGET_CHARS: usize = 24_000;
 /// Generation budget for a help answer (D5: not streamed).
 pub(crate) const ANSWER_MAX_TOKENS: i32 = 1500;
@@ -81,13 +83,47 @@ pub(crate) fn normalize_history(history: Option<Vec<HelpTurn>>) -> Result<Vec<He
         .collect()
 }
 
-/// The manual sections answering `question`, best first: the ranked excerpts
-/// plus the troubleshooting chapter when diagnostics travel along or the
-/// question reads as a failure (D2).
-pub(crate) fn pick_sections(question: &str, with_diagnostics: bool) -> Vec<&'static ManualSection> {
-    let all = super::manual::sections();
+/// The manual sections answering `question`, best first, within
+/// [`SECTION_BUDGET_CHARS`]: the troubleshooting chapter leads when
+/// diagnostics travel along or the question reads as a failure (D2), then the
+/// top index hits. A section that does not fit the remaining budget is
+/// skipped, never cut.
+pub(crate) fn pick_sections(
+    index: &super::index::HelpIndex,
+    question: &str,
+    with_diagnostics: bool,
+) -> Vec<Hit> {
     let include = with_diagnostics || super::manual::looks_like_failure(question);
-    super::manual::select_sections(all, question, include, SECTION_BUDGET_CHARS)
+    let mut picked: Vec<Hit> = Vec::new();
+    let mut used = 0usize;
+    if include {
+        if let Some(hit) = index.troubleshooting() {
+            if used + hit.len_chars() <= SECTION_BUDGET_CHARS {
+                used += hit.len_chars();
+                picked.push(hit);
+            }
+        }
+    }
+    // One extra candidate: a troubleshooting hit ranks but never counts as a
+    // ranked excerpt, so asking for one more keeps the bound whole.
+    let mut ranked = 0;
+    for hit in index.search(question, MAX_RANKED_SECTIONS + 1) {
+        if ranked == MAX_RANKED_SECTIONS {
+            break;
+        }
+        if hit.is_troubleshooting() {
+            continue;
+        }
+        if used + hit.len_chars() <= SECTION_BUDGET_CHARS {
+            used += hit.len_chars();
+            picked.push(hit);
+            ranked += 1;
+        }
+    }
+    // The SQL already orders by rank; reading the scores here keeps the
+    // best-first contract explicit rather than inherited.
+    picked.sort_by(|a, b| a.score.total_cmp(&b.score));
+    picked
 }
 
 /// The model prompt: Spanish instructions, the picked excerpts each headed by
@@ -96,7 +132,7 @@ pub(crate) fn pick_sections(question: &str, with_diagnostics: bool) -> Vec<&'sta
 pub(crate) fn build_help_prompt(
     question: &str,
     history: &[HelpTurn],
-    picked: &[&ManualSection],
+    picked: &[Hit],
     diagnostics: Option<&str>,
 ) -> String {
     let mut out = String::new();
@@ -154,25 +190,29 @@ mod tests {
         }
     }
 
-    fn sample_picked() -> Vec<ManualSection> {
+    fn sample_picked() -> Vec<Hit> {
+        use super::super::index::Source;
         vec![
-            ManualSection {
+            Hit {
+                source: Source::Manual,
                 chapter: "Capítulo 1. Inicio rápido".to_string(),
                 title: "1.1. Importar archivos".to_string(),
                 body: "Arrastrá los PDF a la colección.".to_string(),
+                score: -1.0,
             },
-            ManualSection {
+            Hit {
+                source: Source::Manual,
                 chapter: "Capítulo 2. Transcribir".to_string(),
                 title: "2.3. AssemblyAI".to_string(),
                 body: "Pulsá «Guardar cambios» antes de transcribir.".to_string(),
+                score: -0.5,
             },
         ]
     }
 
     #[test]
     fn prompt_holds_the_picked_excerpts_with_headings() {
-        let owned = sample_picked();
-        let picked: Vec<&ManualSection> = owned.iter().collect();
+        let picked = sample_picked();
         let prompt = build_help_prompt("¿Cómo importo?", &[], &picked, None);
         for section in &picked {
             assert!(prompt.contains(&section.body), "{prompt}");
@@ -186,8 +226,7 @@ mod tests {
 
     #[test]
     fn prompt_carries_diagnostics_only_when_given() {
-        let owned = sample_picked();
-        let picked: Vec<&ManualSection> = owned.iter().collect();
+        let picked = sample_picked();
         let plain = build_help_prompt("falla al importar", &[], &picked, None);
         assert!(!plain.contains("Informe de diagnóstico"), "{plain}");
         assert!(!plain.contains("Producto: EntropIA Lite"), "{plain}");
@@ -214,12 +253,42 @@ mod tests {
 
     #[test]
     fn a_failure_question_brings_the_troubleshooting_chapter() {
+        use super::super::index::HelpIndex;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let docs = HelpIndex::manual_docs();
+        let index =
+            HelpIndex::open(&dir.path().join("help-index.sqlite"), &docs).expect("open index");
         let question = "falla la transcripción con AssemblyAI";
-        let picked = pick_sections(question, false);
+        let picked = pick_sections(&index, question, false);
         assert!(!picked.is_empty(), "no sections picked");
         assert!(picked[0].is_troubleshooting());
+        assert!(picked.len() <= 5, "{} picks", picked.len());
+        let total: usize = picked.iter().map(|hit| hit.len_chars()).sum();
+        assert!(total <= SECTION_BUDGET_CHARS, "{total} chars");
         let prompt = build_help_prompt(question, &[], &picked, None);
         assert!(prompt.contains("¿Qué hago si"), "{prompt}");
+    }
+
+    #[test]
+    fn a_how_to_question_skips_troubleshooting_within_budget() {
+        use super::super::index::HelpIndex;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let docs = HelpIndex::manual_docs();
+        let index =
+            HelpIndex::open(&dir.path().join("help-index.sqlite"), &docs).expect("open index");
+        let picked = pick_sections(&index, "¿Cómo importo archivos PDF?", false);
+        assert!(!picked.is_empty(), "no sections picked");
+        assert!(picked.len() <= 4, "{} picks", picked.len());
+        assert!(picked.iter().all(|hit| !hit.is_troubleshooting()));
+        assert!(
+            picked
+                .iter()
+                .any(|hit| hit.title.contains("Importar archivos")),
+            "picked: {:?}",
+            picked.iter().map(|hit| &hit.title).collect::<Vec<_>>()
+        );
+        let total: usize = picked.iter().map(|hit| hit.len_chars()).sum();
+        assert!(total <= SECTION_BUDGET_CHARS, "{total} chars");
     }
 
     #[test]

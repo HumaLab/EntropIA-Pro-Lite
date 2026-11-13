@@ -4,5 +4,7 @@
 
 pub(crate) mod commands;
 pub(crate) mod diagnostics;
+pub(crate) mod index;
 pub(crate) mod manual;
 pub(crate) mod prompt;
+pub(crate) mod text;

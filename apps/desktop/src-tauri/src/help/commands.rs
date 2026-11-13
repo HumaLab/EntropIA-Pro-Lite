@@ -2,13 +2,41 @@
 //! preview and the OpenRouter-backed answer (S1–S3, S5). The prompt itself
 //! stays pure in `prompt.rs`; nothing here is stored (D4).
 
+use std::sync::{Mutex, OnceLock};
+
 use super::diagnostics::{
     build_report, scrub_report, DiagnosticInputs, KEY_SETTINGS, SETTINGS_ALLOWLIST,
 };
+use super::index::{HelpIndex, Hit};
 use super::prompt::{
     build_help_prompt, normalize_history, pick_sections, validate_question, HelpAnswer, HelpSource,
     HelpStatus, HelpTurn, ANSWER_MAX_TOKENS, ANSWER_TEMPERATURE,
 };
+
+/// The help index, opened lazily once per process (D6): the first question
+/// after start hashes the bundled manual and rebuilds
+/// `<cache_dir>/help-index.sqlite` when it changed, later questions reuse it.
+/// A plain mutex is enough — `search` is a millisecond local SELECT.
+static HELP_INDEX: OnceLock<Mutex<HelpIndex>> = OnceLock::new();
+
+fn help_index(app: &tauri::AppHandle) -> Result<std::sync::MutexGuard<'static, HelpIndex>, String> {
+    // Built at most twice under a race (both open the same file, the loser
+    // is dropped); opening is idempotent, so no fallible once-cell API is
+    // needed.
+    if HELP_INDEX.get().is_none() {
+        let dir = crate::path_utils::cache_dir(app)?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|error| format!("No se pudo crear la caché de ayuda: {error}"))?;
+        let fresh = HelpIndex::open(&dir.join("help-index.sqlite"), &HelpIndex::manual_docs())
+            .map(Mutex::new)?;
+        let _ = HELP_INDEX.set(fresh);
+    }
+    HELP_INDEX
+        .get()
+        .ok_or_else(|| "help index unavailable".to_string())?
+        .lock()
+        .map_err(|error| format!("help index lock poisoned: {error}"))
+}
 
 /// Whether the assistant can run on the user's own OpenRouter key (S3, S6).
 /// The raw row only: resolving the keyring value here would be pointless, the
@@ -74,6 +102,7 @@ pub async fn help_diagnostics_preview(
 /// conversation lives in memory only; nothing is persisted (D4).
 #[tauri::command]
 pub async fn help_ask(
+    app: tauri::AppHandle,
     question: String,
     history: Option<Vec<HelpTurn>>,
     diagnostics: Option<String>,
@@ -102,7 +131,12 @@ pub async fn help_ask(
     })
     .await
     .map_err(|e| format!("help settings task panicked: {e}"))??;
-    let picked = pick_sections(&question, with_diagnostics);
+    let picked: Vec<Hit> = {
+        // The guard drops before the network call below: the index is only
+        // borrowed to rank, never across an await.
+        let index = help_index(&app)?;
+        pick_sections(&index, &question, with_diagnostics)
+    };
     let prompt = build_help_prompt(&question, &history, &picked, diagnostics.as_deref());
     let sources = picked
         .iter()
