@@ -127,6 +127,11 @@ impl PaddleVlEngine {
             .unwrap_or(4)
             .to_string();
 
+        // oneDNN (MKL-DNN) is a CPU-only accelerator. Forcing it on a GPU run
+        // makes Paddle 3.2 mix oneDNN kernels into the CUDA pipeline and fail
+        // inference with "event_waiter_[1][0] shall not be nullptr", which
+        // silently degraded every GPU OCRH run to CPU (and to timeouts).
+        let use_mkldnn = if self.config.device == "gpu" { "0" } else { "1" };
         let mut cmd = Command::new(&self.config.python_path);
         #[cfg(windows)]
         {
@@ -141,7 +146,7 @@ impl PaddleVlEngine {
             .env("OMP_NUM_THREADS", &cpu_threads)
             .env("MKL_NUM_THREADS", &cpu_threads)
             .env("OPENBLAS_NUM_THREADS", &cpu_threads)
-            .env("FLAGS_use_mkldnn", "1")
+            .env("FLAGS_use_mkldnn", use_mkldnn)
             .env("FLAGS_use_avx", "1")
             // Disable Paddle's new PIR executor — it crashes with
             // ConvertPirAttribute2RuntimeAttribute on some paddle/paddleocr combos.
@@ -184,7 +189,7 @@ impl PaddleVlEngine {
 
         log::info!(
             target: "paddle_vl",
-            "device={}, CPU threads: {cpu_threads}, MKLDNN+AVX enabled, offline_mode={}",
+            "device={}, CPU threads: {cpu_threads}, FLAGS_use_mkldnn={use_mkldnn}, offline_mode={}",
             self.config.device, offline_value
         );
 
@@ -827,16 +832,32 @@ fn paddle_vl_caches_look_complete(paddlex_cache_dir: Option<&Path>) -> bool {
 
     let official_models = cache_dir.join("official_models");
     let layout_model = official_models.join("PP-DocLayoutV3");
-    let vl_model = official_models.join("PaddleOCR-VL-1.5");
 
     let layout_ready = layout_model.join("inference.yml").is_file()
         && layout_model.join("inference.pdiparams").is_file()
         && (layout_model.join("inference.json").is_file()
             || layout_model.join("inference.pdmodel").is_file());
 
-    let vl_ready = vl_model.join("model.safetensors").is_file()
-        || vl_model.join("model_state.pdparams").is_file()
-        || vl_model.join("inference.pdparams").is_file();
+    // The VL model dir carries the pack's model version (PaddleOCR-VL-1.5,
+    // -1.6, ...). Matching any version keeps the completeness check valid as
+    // the seeded cache ships newer models; a hardcoded -1.5 made every later
+    // pack look incomplete and silently forced online downloads.
+    let vl_ready = std::fs::read_dir(&official_models)
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let is_vl_dir = name.starts_with("PaddleOCR-VL-");
+                if !is_vl_dir {
+                    return false;
+                }
+                let dir = entry.path();
+                dir.join("model.safetensors").is_file()
+                    || dir.join("model_state.pdparams").is_file()
+                    || dir.join("inference.pdparams").is_file()
+            })
+        })
+        .unwrap_or(false);
 
     layout_ready && vl_ready
 }
@@ -960,7 +981,7 @@ mod tests {
         let vl = cache_dir
             .path()
             .join("official_models")
-            .join("PaddleOCR-VL-1.5");
+            .join("PaddleOCR-VL-1.6");
         std::fs::create_dir_all(&layout).expect("layout dir");
         std::fs::create_dir_all(&vl).expect("vl dir");
         std::fs::write(layout.join("inference.yml"), "mode: paddle").expect("layout yml");
