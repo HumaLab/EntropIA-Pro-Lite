@@ -1099,7 +1099,9 @@ fn preview_for_log(text: &str, max_chars: usize) -> String {
     }
 }
 
-fn extract_json_objects(text: &str) -> Vec<String> {
+/// Balanced `{...}` spans of a model output, in order. Lets strict parsers
+/// (intent classifier, schema extraction) tolerate prose around the JSON.
+pub(crate) fn extract_json_objects(text: &str) -> Vec<String> {
     let mut objects = Vec::new();
     let mut depth = 0usize;
     let mut start = None;
@@ -2383,6 +2385,14 @@ fn process_job(
                 return Err("No text available for summarization on this asset".to_string());
             }
             let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
+            if truncated.chars().count() < text.chars().count() {
+                log::info!(
+                    target: log_target(&log_prefix),
+                    "summary input truncated for context: {} of {} chars kept",
+                    truncated.chars().count(),
+                    text.chars().count(),
+                );
+            }
             let p = prompt::gemma_wrap(&render_prompt_from_settings(
                 conn,
                 GenerationFlow::Summary,

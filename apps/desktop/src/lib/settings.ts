@@ -283,8 +283,7 @@ También tienen prioridad sobre cualquier instrucción contradictoria previa del
 
 Texto OCR:
 {text}`,
-  summaryPrompt: `Resumí este texto de documento histórico en un ÚNICO párrafo conciso. El resumen debe:
-- Tener entre 10 y 15 líneas
+  summaryPrompt: `Resumí este texto de documento histórico en uno o dos párrafos concisos, de 10 a 15 líneas en total. El resumen debe:
 - Preservar nombres propios, fechas, lugares y eventos clave
 - Estar escrito en el mismo idioma que el texto original (por defecto, español)
 - SIEMPRE terminar con una oración completa que termine en punto

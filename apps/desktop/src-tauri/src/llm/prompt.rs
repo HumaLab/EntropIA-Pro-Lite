@@ -131,8 +131,7 @@ Ejemplo válido:
 Texto:
 {text}"#;
 
-pub const DEFAULT_SUMMARY_PROMPT: &str = r#"Resumí este texto de documento histórico en un ÚNICO párrafo conciso. El resumen debe:
-- Tener entre 10 y 15 líneas
+pub const DEFAULT_SUMMARY_PROMPT: &str = r#"Resumí este texto de documento histórico en uno o dos párrafos concisos, de 10 a 15 líneas en total. El resumen debe:
 - Preservar nombres propios, fechas, lugares y eventos clave
 - Estar escrito en el mismo idioma que el texto original (por defecto, español)
 - SIEMPRE terminar con una oración completa que termine en punto
