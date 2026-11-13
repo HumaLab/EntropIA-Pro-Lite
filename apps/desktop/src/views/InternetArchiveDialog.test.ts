@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
 import { DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT } from '$lib/document-explorer'
 import InternetArchiveDialog from './InternetArchiveDialog.svelte'
@@ -19,6 +19,9 @@ const { iaRef, importRef, storeRef } = vi.hoisted(() => ({
     iaGetImportStatus: vi.fn(),
     iaListJobs: vi.fn(),
     onIaJobUpdated: vi.fn(),
+    iaQueueLoad: vi.fn(),
+    iaQueueSave: vi.fn(),
+    iaQueueClear: vi.fn(),
   },
   importRef: {
     importVerifiedFiles: vi.fn(),
@@ -48,6 +51,9 @@ vi.mock('$lib/internet-archive', async (importOriginal) => {
     iaGetImportStatus: iaRef.iaGetImportStatus,
     iaListJobs: iaRef.iaListJobs,
     onIaJobUpdated: iaRef.onIaJobUpdated,
+    iaQueueLoad: iaRef.iaQueueLoad,
+    iaQueueSave: iaRef.iaQueueSave,
+    iaQueueClear: iaRef.iaQueueClear,
   }
 })
 
@@ -265,6 +271,9 @@ beforeEach(() => {
   importRef.importVerifiedFiles.mockResolvedValue(importOutcome())
   iaRef.iaDiscardDraft.mockResolvedValue(undefined)
   iaRef.iaListJobs.mockResolvedValue([])
+  iaRef.iaQueueLoad.mockResolvedValue(null)
+  iaRef.iaQueueSave.mockResolvedValue(undefined)
+  iaRef.iaQueueClear.mockResolvedValue(undefined)
   onClose.mockReset()
   onImported.mockReset()
 })
@@ -493,34 +502,67 @@ describe('InternetArchiveDialog discovery', () => {
     await screen.findByText('Seleccionados: 50')
   }
 
-  it('offers every result once the page is selected, and selects them all', async () => {
-    pagedSearch(120)
-    await searchAndSelectPage()
-
-    expect(
-      screen.getByText('Se van a revisar los archivos de 120 registros; puede tardar.')
-    ).toBeInTheDocument()
-    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 120 resultados' }))
-
-    await screen.findByText('Seleccionados: 120', undefined, { timeout: 3000 })
-    expect(iaRef.iaSearch).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Chaplin', kinds: ['pdf'] }),
-      2,
-      100
-    )
-    expect(iaRef.iaGetItem).toHaveBeenCalledTimes(120)
-  })
-
-  it('caps the all-results selection and says how many it takes', async () => {
+  it('queues every result instead of looking up their files one by one', async () => {
     pagedSearch(2000)
     await searchAndSelectPage()
 
     expect(
-      screen.getByRole('button', { name: 'Seleccionar los 500 resultados' })
+      screen.getByText(
+        'Se importan por tandas; si cerrás el importador, la cola se retoma al volver.'
+      )
     ).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 2.000 resultados' }))
+
     expect(
-      screen.getByText(/Se seleccionan los primeros 500 de 2.?000 resultados\./)
+      await screen.findByText('Toda la búsqueda en cola: 2.000 registros', undefined, {
+        timeout: 3000,
+      })
     ).toBeInTheDocument()
+    // Paged in a stable order: without one, Internet Archive repeats some
+    // records across pages and drops others.
+    expect(iaRef.iaSearch).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Chaplin', kinds: ['pdf'] }),
+      20,
+      100,
+      { stableOrder: true }
+    )
+    // Only the page selection looked files up; the queue resolves them per batch.
+    expect(iaRef.iaGetItem).toHaveBeenCalledTimes(50)
+    expect(screen.queryByText(/Seleccionados:/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Continuar' })).toBeEnabled()
+  })
+
+  it('queues at most the 10,000 results Internet Archive returns', async () => {
+    pagedSearch(12000)
+    await searchAndSelectPage()
+
+    expect(
+      screen.getByText(
+        /Se ponen en cola los primeros 10.000 de 12.000 resultados \(el máximo que entrega Internet Archive\)\./
+      )
+    ).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 10.000 resultados' }))
+
+    expect(
+      await screen.findByText('Toda la búsqueda en cola: 10.000 registros', undefined, {
+        timeout: 5000,
+      })
+    ).toBeInTheDocument()
+    expect(iaRef.iaSearch).not.toHaveBeenCalledWith(expect.anything(), 101, 100)
+  })
+
+  it('takes the queue back out of the selection', async () => {
+    pagedSearch(120)
+    await searchAndSelectPage()
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 120 resultados' }))
+    await screen.findByText('Toda la búsqueda en cola: 120 registros', undefined, {
+      timeout: 3000,
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Quitar la cola' }))
+
+    expect(screen.queryByText(/Toda la búsqueda en cola/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Continuar' })).toBeDisabled()
   })
 
   it('does not offer every result while the page is not fully selected', async () => {
@@ -1110,6 +1152,262 @@ describe('InternetArchiveDialog running and done', () => {
 
     expect(unlisten).toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
+  })
+})
+
+describe('InternetArchiveDialog import every result (queue)', () => {
+  let statuses: Record<string, unknown> = {}
+
+  function pagedSearch(total: number) {
+    iaRef.iaSearch.mockImplementation(async (_query: unknown, page: number, rows: number) => ({
+      numFound: total,
+      items: Array.from(
+        { length: Math.max(0, Math.min(rows, total - (page - 1) * rows)) },
+        (_, i) => searchItem({ identifier: `id-${(page - 1) * rows + i}` })
+      ),
+    }))
+    iaRef.iaGetItem.mockImplementation(async (id: string) =>
+      itemDetails({ identifier: id, pdfs: [pdf()] })
+    )
+  }
+
+  async function queueAndPrepare(total: number) {
+    pagedSearch(total)
+    iaRef.iaGetImportStatus.mockImplementation(async (id: string) => statuses[id])
+    iaRef.iaStartImport.mockResolvedValue(undefined)
+    iaRef.iaPrepareImport
+      .mockResolvedValueOnce(prepareResult({ jobId: 'job-1' }))
+      .mockResolvedValueOnce(prepareResult({ jobId: 'job-2' }))
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar todos los registros de la página' })
+    )
+    await screen.findByText('Seleccionados: 50')
+    await fireEvent.click(
+      screen.getByRole('button', { name: `Seleccionar los ${total} resultados` })
+    )
+    await screen.findByText(`Toda la búsqueda en cola: ${total} registros`, undefined, {
+      timeout: 3000,
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Continuar' }))
+    await screen.findByText('Destino')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Preparar importación' }))
+    await screen.findByText('Revisa la preparación', undefined, { timeout: 3000 })
+  }
+
+  function savedQueue(): {
+    collectionId: string
+    currentJobId: string | null
+    records: Array<{ identifier: string; state: string }>
+  } {
+    const calls = iaRef.iaQueueSave.mock.calls
+    return JSON.parse(calls[calls.length - 1]![0] as string)
+  }
+
+  beforeEach(() => {
+    statuses = {}
+    // Queued once-values survive clearAllMocks; start and end each test clean.
+    iaRef.iaPrepareImport.mockReset()
+  })
+
+  afterEach(() => {
+    iaRef.iaPrepareImport.mockReset()
+  })
+
+  it('shows how far the preparation of a batch has got', async () => {
+    pagedSearch(150)
+    let releaseLookup: () => void = () => {}
+    const lookupGate = new Promise<void>((resolve) => (releaseLookup = resolve))
+    iaRef.iaGetItem.mockImplementation(async (id: string) => {
+      if (id === 'id-99') await lookupGate
+      return itemDetails({ identifier: id, pdfs: [pdf()] })
+    })
+    let finishPrepare: (value: unknown) => void = () => {}
+    iaRef.iaPrepareImport.mockImplementationOnce(
+      () => new Promise((resolve) => (finishPrepare = resolve))
+    )
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar todos los registros de la página' })
+    )
+    await screen.findByText('Seleccionados: 50')
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 150 resultados' }))
+    await screen.findByText('Toda la búsqueda en cola: 150 registros', undefined, {
+      timeout: 3000,
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Continuar' }))
+    await screen.findByText('Destino')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Preparar importación' }))
+
+    expect(
+      await screen.findByText('Revisando los registros de la tanda: 96 de 100', undefined, {
+        timeout: 3000,
+      })
+    ).toBeInTheDocument()
+    releaseLookup()
+    expect(
+      await screen.findByText('Preparando la importación de 100 registros…', undefined, {
+        timeout: 3000,
+      })
+    ).toBeInTheDocument()
+    finishPrepare(prepareResult({ jobId: 'job-1' }))
+    await screen.findByText('Revisa la preparación', undefined, { timeout: 3000 })
+    expect(screen.queryByText(/Revisando los registros/)).toBeNull()
+    expect(screen.queryByText(/Preparando la importación de/)).toBeNull()
+  })
+
+  it('prepares the first batch of the queue and saves the queue', async () => {
+    await queueAndPrepare(150)
+
+    const [collectionId, selections] = iaRef.iaPrepareImport.mock.calls[0]!
+    expect(collectionId).toBe('col-1')
+    expect(selections).toHaveLength(100)
+    expect(selections[0]).toEqual({ identifier: 'id-0', fileNames: ['doc_text.pdf'] })
+    const queue = savedQueue()
+    expect(queue.collectionId).toBe('col-1')
+    expect(queue.currentJobId).toBe('job-1')
+    expect(queue.records).toHaveLength(150)
+    expect(queue.records.filter((record) => record.state === 'batched')).toHaveLength(100)
+    expect(screen.getByText('Tanda de 100 registros · 0 de 150 ya procesados')).toBeInTheDocument()
+  })
+
+  it('chains the next batch when one finishes and clears the queue at the end', async () => {
+    await queueAndPrepare(150)
+    statuses['job-1'] = jobStatus({ id: 'job-1', state: 'running' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Iniciar importación' }))
+    await screen.findByText('Importando…')
+
+    statuses['job-1'] = jobStatus({
+      id: 'job-1',
+      state: 'completed',
+      running: false,
+      files: [jobFile({ state: 'imported' })],
+    })
+    statuses['job-2'] = jobStatus({ id: 'job-2', state: 'running' })
+    jobHandler?.('job-1')
+
+    await waitFor(() => expect(iaRef.iaStartImport).toHaveBeenCalledWith('job-2'))
+    const [, second] = iaRef.iaPrepareImport.mock.calls[1]!
+    expect(second).toHaveLength(50)
+    expect(second[0]).toEqual({ identifier: 'id-100', fileNames: ['doc_text.pdf'] })
+    expect(savedQueue().currentJobId).toBe('job-2')
+
+    statuses['job-2'] = jobStatus({
+      id: 'job-2',
+      state: 'completed',
+      running: false,
+      files: [jobFile({ state: 'imported' })],
+    })
+    jobHandler?.('job-2')
+
+    expect(
+      await screen.findByText('Toda la búsqueda quedó importada (150 registros).')
+    ).toBeInTheDocument()
+    expect(iaRef.iaQueueClear).toHaveBeenCalled()
+  })
+
+  it('pauses the queue when its batch is cancelled', async () => {
+    await queueAndPrepare(150)
+    statuses['job-1'] = jobStatus({ id: 'job-1', state: 'running' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Iniciar importación' }))
+    await screen.findByText('Importando…')
+
+    statuses['job-1'] = jobStatus({
+      id: 'job-1',
+      state: 'cancelled',
+      running: false,
+      files: [jobFile({ state: 'cancelled' })],
+    })
+    jobHandler?.('job-1')
+
+    expect(
+      await screen.findByText(
+        'La cola quedó en pausa: faltan 150 registros. Se retoma al volver a abrir el importador.'
+      )
+    ).toBeInTheDocument()
+    const queue = savedQueue()
+    expect(queue.currentJobId).toBeNull()
+    expect(queue.records.every((record) => record.state === 'pending')).toBe(true)
+    expect(iaRef.iaQueueClear).not.toHaveBeenCalled()
+    expect(iaRef.iaPrepareImport).toHaveBeenCalledTimes(1)
+  })
+
+  const storedQueue = (patch: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      version: 1,
+      collectionId: 'col-1',
+      label: 'Chaplin',
+      kinds: ['pdf'],
+      records: [
+        { identifier: 'id-1', title: 'Uno', state: 'done' },
+        { identifier: 'id-2', title: 'Dos', state: 'pending' },
+        { identifier: 'id-3', title: 'Tres', state: 'pending' },
+      ],
+      currentJobId: null,
+      ...patch,
+    })
+
+  it('offers to resume a saved queue and runs its next batch without asking again', async () => {
+    iaRef.iaQueueLoad.mockResolvedValue(storedQueue())
+    iaRef.iaGetItem.mockImplementation(async (id: string) =>
+      itemDetails({ identifier: id, pdfs: [pdf()] })
+    )
+    iaRef.iaPrepareImport.mockResolvedValue(prepareResult({ jobId: 'job-5' }))
+    iaRef.iaStartImport.mockResolvedValue(undefined)
+    iaRef.iaGetImportStatus.mockResolvedValue(jobStatus({ id: 'job-5' }))
+    open()
+
+    expect(await screen.findByText('Importación por tandas pendiente')).toBeInTheDocument()
+    expect(screen.getByText('Chaplin: 1 de 3 registros procesados')).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Continuar la cola' }))
+
+    await waitFor(() => expect(iaRef.iaStartImport).toHaveBeenCalledWith('job-5'))
+    expect(iaRef.iaPrepareImport).toHaveBeenCalledWith('col-1', [
+      { identifier: 'id-2', fileNames: ['doc_text.pdf'] },
+      { identifier: 'id-3', fileNames: ['doc_text.pdf'] },
+    ])
+    expect(await screen.findByText('Importando…')).toBeInTheDocument()
+  })
+
+  it('resumes the running batch of a saved queue instead of preparing another', async () => {
+    iaRef.iaQueueLoad.mockResolvedValue(storedQueue({ currentJobId: 'job-7' }))
+    iaRef.iaListJobs.mockResolvedValue([
+      {
+        id: 'job-7',
+        state: 'running',
+        targetCollectionId: 'col-1',
+        totalFiles: 2,
+        verifiedFiles: 1,
+      },
+    ])
+    iaRef.iaGetImportStatus.mockResolvedValue(jobStatus({ id: 'job-7', state: 'running' }))
+    open()
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Continuar la cola' }))
+
+    expect(await screen.findByText('Importando…')).toBeInTheDocument()
+    expect(iaRef.iaGetImportStatus).toHaveBeenCalledWith('job-7')
+    expect(iaRef.iaPrepareImport).not.toHaveBeenCalled()
+    // The queue's own job is not offered a second time as a loose import.
+    expect(screen.queryByText('Importaciones en curso')).toBeNull()
+  })
+
+  it('discards a saved queue', async () => {
+    iaRef.iaQueueLoad.mockResolvedValue(storedQueue())
+    open()
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Descartar la cola' }))
+
+    expect(iaRef.iaQueueClear).toHaveBeenCalled()
+    await waitFor(() => expect(screen.queryByText('Importación por tandas pendiente')).toBeNull())
   })
 })
 

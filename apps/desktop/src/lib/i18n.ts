@@ -3086,10 +3086,23 @@ const es = {
   'internetArchive.record.empty': 'Sin archivos de los tipos elegidos',
   'internetArchive.record.selectAll': 'Seleccionar los {count} resultados',
   'internetArchive.record.selectAllNotice':
-    'Se van a revisar los archivos de {count} registros; puede tardar.',
+    'Se importan por tandas; si cerrás el importador, la cola se retoma al volver.',
   'internetArchive.record.selectAllCapped':
-    'Se seleccionan los primeros {count} de {total} resultados.',
+    'Se ponen en cola los primeros {count} de {total} resultados (el máximo que entrega Internet Archive).',
   'internetArchive.record.loadingAll': 'Buscando los {count} registros…',
+  'internetArchive.queue.selected': 'Toda la búsqueda en cola: {count} registros',
+  'internetArchive.queue.unselect': 'Quitar la cola',
+  'internetArchive.queue.batch': 'Tanda de {count} registros · {finished} de {total} ya procesados',
+  'internetArchive.queue.preparing': 'Preparando la próxima tanda…',
+  'internetArchive.queue.checking': 'Revisando los registros de la tanda: {checked} de {total}',
+  'internetArchive.queue.preparingBatch': 'Preparando la importación de {count} registros…',
+  'internetArchive.queue.finished': 'Toda la búsqueda quedó importada ({total} registros).',
+  'internetArchive.queue.paused':
+    'La cola quedó en pausa: faltan {count} registros. Se retoma al volver a abrir el importador.',
+  'internetArchive.queue.resumeTitle': 'Importación por tandas pendiente',
+  'internetArchive.queue.resumeDetail': '{label}: {finished} de {total} registros procesados',
+  'internetArchive.queue.resume': 'Continuar la cola',
+  'internetArchive.queue.discard': 'Descartar la cola',
   'internetArchive.record.failed':
     'No se pudieron leer los archivos de {count} registros. Probá de nuevo o abrilos de a uno.',
   'internetArchive.collection.idLabel': 'Identificador de la colección',
@@ -6393,9 +6406,24 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'internetArchive.record.empty': 'No files of the chosen types',
   'internetArchive.record.selectAll': 'Select all {count} results',
   'internetArchive.record.selectAllNotice':
-    'This looks up the files of {count} records; it may take a while.',
-  'internetArchive.record.selectAllCapped': 'Selects the first {count} of {total} results.',
+    'They are imported in batches; if you close the importer, the queue resumes when you come back.',
+  'internetArchive.record.selectAllCapped':
+    'Queues the first {count} of {total} results (the most Internet Archive returns).',
   'internetArchive.record.loadingAll': 'Looking up the {count} records…',
+  'internetArchive.queue.selected': 'Whole search queued: {count} records',
+  'internetArchive.queue.unselect': 'Remove the queue',
+  'internetArchive.queue.batch':
+    'Batch of {count} records · {finished} of {total} already processed',
+  'internetArchive.queue.preparing': 'Preparing the next batch…',
+  'internetArchive.queue.checking': 'Checking the batch records: {checked} of {total}',
+  'internetArchive.queue.preparingBatch': 'Preparing the import of {count} records…',
+  'internetArchive.queue.finished': 'The whole search is imported ({total} records).',
+  'internetArchive.queue.paused':
+    'The queue is paused: {count} records left. It resumes when you open the importer again.',
+  'internetArchive.queue.resumeTitle': 'Batch import pending',
+  'internetArchive.queue.resumeDetail': '{label}: {finished} of {total} records processed',
+  'internetArchive.queue.resume': 'Continue the queue',
+  'internetArchive.queue.discard': 'Discard the queue',
   'internetArchive.record.failed':
     'Could not read the files of {count} records. Try again or open them one by one.',
   'internetArchive.collection.idLabel': 'Collection identifier',

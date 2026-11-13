@@ -219,6 +219,21 @@ impl IaClient {
             .await
     }
 
+    /// [`IaClient::search`] sorted by identifier (`sort[]=identifier asc`),
+    /// for walking every page of a result set. The default relevance order
+    /// is not stable between requests, so paging through it repeats some
+    /// records and skips others.
+    pub async fn search_in_stable_order(
+        &self,
+        endpoints: &Endpoints,
+        query: &SearchQuery,
+        page: u32,
+        rows: u32,
+    ) -> Result<SearchPage, IaError> {
+        self.advanced_search(endpoints, query, page, rows, Some(COLLECTION_SORT))
+            .await
+    }
+
     /// List one page of a collection with Advanced Search instead of the
     /// unreliable Scraping API (plan decision D5): the query is built
     /// through [`SearchQuery`] with `collection` set and `texts_only`, so
@@ -526,6 +541,42 @@ mod tests {
             pairs.iter().all(|(k, _)| k != "sort[]"),
             "search must not send sort[], got {pairs:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn search_in_stable_order_sorts_by_identifier() {
+        let server = TestServer::start(vec![TestServer::json(
+            "/advancedsearch.php",
+            200,
+            r#"{"response":{"numFound":0,"docs":[]}}"#,
+        )]);
+        let endpoints = local_endpoints(&server);
+        local_client()
+            .search_in_stable_order(
+                &endpoints,
+                &SearchQuery {
+                    title: Some("Mar del Plata".to_string()),
+                    ..SearchQuery::default()
+                },
+                3,
+                100,
+            )
+            .await
+            .unwrap();
+        let url = last_target(&server);
+        let pairs = pairs_of(&url);
+        let sorts: Vec<&str> = pairs
+            .iter()
+            .filter(|(k, _)| k == "sort[]")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(sorts, ["identifier asc"]);
+        assert_eq!(
+            get(&pairs, "q"),
+            Some("title:(\"Mar del Plata\") AND mediatype:texts")
+        );
+        assert_eq!(get(&pairs, "rows"), Some("100"));
+        assert_eq!(get(&pairs, "page"), Some("3"));
     }
 
     #[tokio::test]

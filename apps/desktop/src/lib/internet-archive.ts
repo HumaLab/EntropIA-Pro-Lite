@@ -220,9 +220,22 @@ export function iaResolveIdentifier(input: string): Promise<string> {
   return invoke<string>('ia_resolve_identifier', { input })
 }
 
-/** Run a structured search over `page` (1-based) with `rows` per page. */
-export function iaSearch(query: IaSearchQuery, page: number, rows: number): Promise<IaSearchPage> {
-  return invoke<IaSearchPage>('ia_search', { query, page, rows })
+/**
+ * Run a structured search over `page` (1-based) with `rows` per page.
+ * `stableOrder` sorts by identifier instead of relevance: needed to walk
+ * every page, since the relevance order repeats and skips records between
+ * requests.
+ */
+export function iaSearch(
+  query: IaSearchQuery,
+  page: number,
+  rows: number,
+  options: { stableOrder?: boolean } = {}
+): Promise<IaSearchPage> {
+  return invoke<IaSearchPage>(
+    'ia_search',
+    options.stableOrder ? { query, page, rows, stableOrder: true } : { query, page, rows }
+  )
 }
 
 /** List one page of a collection by identifier. */
@@ -259,6 +272,21 @@ export function iaStartImport(jobId: string): Promise<void> {
 /** Cancel a job download. */
 export function iaCancelImport(jobId: string): Promise<void> {
   return invoke<void>('ia_cancel_import', { jobId })
+}
+
+/** The saved "import every result" queue (a JSON object), if any. */
+export function iaQueueLoad(): Promise<string | null> {
+  return invoke<string | null>('ia_queue_load')
+}
+
+/** Save the "import every result" queue so it resumes after a close. */
+export function iaQueueSave(content: string): Promise<void> {
+  return invoke<void>('ia_queue_save', { content })
+}
+
+/** Forget the "import every result" queue. */
+export function iaQueueClear(): Promise<void> {
+  return invoke<void>('ia_queue_clear')
 }
 
 /**
