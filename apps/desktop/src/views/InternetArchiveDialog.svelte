@@ -37,6 +37,9 @@
     iaListCollection,
     iaListJobs,
     iaPrepareImport,
+    iaQueueClear,
+    iaQueueLoad,
+    iaQueueSave,
     iaResolveIdentifier,
     iaSearch,
     iaStartImport,
@@ -47,9 +50,19 @@
     type IaJobSummary,
     type IaPrepareEntry,
     type IaPrepareResult,
+    type IaFileKind,
+    type IaPdfFile,
     type IaSearchPage,
     type IaSelection,
   } from '$lib/internet-archive'
+  import {
+    buildBatch,
+    createQueue,
+    finishBatch,
+    parseQueue,
+    queueProgress,
+    type IaQueue,
+  } from '$lib/internet-archive-queue'
   import {
     IaImportError,
     importVerifiedFiles,
@@ -68,10 +81,14 @@
     onImported?: (collectionId: string) => void
   } = $props()
 
-  type Phase = 'discover' | 'item' | 'destination' | 'summary' | 'running' | 'done'
+  type Phase = 'discover' | 'destination' | 'summary' | 'running' | 'done'
   type DiscoverTab = 'search' | 'collection' | 'link'
 
-  const ROWS = 10
+  /** Page sizes offered; Advanced Search answers 100 rows as fast as 10. */
+  const PAGE_SIZES = [25, 50, 100] as const
+  type PageSize = (typeof PAGE_SIZES)[number]
+  /** Advanced Search refuses `page * rows` past this offset (deep paging). */
+  const MAX_RESULT_OFFSET = 10_000
   const NEW_COLLECTION = '__new__'
   /** The synced-volume estimate above which the summary warns (plan §5). */
   const SYNC_WARN_BYTES = 1024 ** 3
@@ -98,6 +115,25 @@
   let phase = $state<Phase>('discover')
   let discoverTab = $state<DiscoverTab>('search')
   let problem = $state<string | null>(null)
+  let rows = $state<PageSize>(50)
+
+  /** File kinds offered, in the order they are shown and sent. */
+  const FILE_KINDS: readonly IaFileKind[] = ['pdf', 'pdf_text', 'image']
+  let kinds = $state<IaFileKind[]>(['pdf'])
+  const noKinds = $derived(kinds.length === 0)
+
+  function toggleKind(kind: IaFileKind): void {
+    const next = kinds.includes(kind) ? kinds.filter((k) => k !== kind) : [...kinds, kind]
+    kinds = FILE_KINDS.filter((k) => next.includes(k))
+  }
+
+  /** `pdf` covers every PDF; `pdf_text` only Text PDFs; `image` images. */
+  function matchesKinds(file: IaPdfFile): boolean {
+    const kind = file.kind ?? 'pdf'
+    if (kind === 'image') return kinds.includes('image')
+    if (kind === 'pdf_text') return kinds.includes('pdf') || kinds.includes('pdf_text')
+    return kinds.includes('pdf')
+  }
 
   // Discovery: search tab.
   let searchText = $state('')
@@ -119,15 +155,17 @@
   let linkInput = $state('')
   let resolving = $state(false)
 
-  // Item phase.
+  // Item shown beside the results (master-detail).
   let itemIdentifier = $state('')
   let itemDetails = $state<IaItemDetails | null>(null)
+  const visibleFiles = $derived(itemDetails ? itemDetails.pdfs.filter(matchesKinds) : [])
   let itemLoading = $state(false)
   /** Guards `openItem` against stale `iaGetItem` responses. */
   let itemRequest = 0
 
   // Selection accumulated across items.
   let selection = $state<Array<{ identifier: string; fileName: string; title: string }>>([])
+  let selectionOpen = $state(false)
 
   // Destination phase.
   let collections = $state<Collection[]>([])
@@ -170,6 +208,12 @@
    * are discarded on close, so offering them would resume nothing.
    */
   let resumableJobs = $state<IaJobSummary[]>([])
+  /** Started jobs that are not the current batch of a saved queue. */
+  const looseJobs = $derived(
+    resumableJobs.filter(
+      (job) => job.id !== savedQueue?.currentJobId && job.id !== queue?.currentJobId
+    )
+  )
 
   async function loadResumableJobs(): Promise<void> {
     try {
@@ -210,6 +254,7 @@
   onMount(() => {
     void loadCollections()
     void loadResumableJobs()
+    void loadSavedQueue()
     onIaJobUpdated(handleJobEvent)
       .then((stop) => {
         stopListening = stop
@@ -245,6 +290,304 @@
       return
     }
     selection = [...selection, { identifier, fileName, title }]
+  }
+
+  // Bulk selection: a whole record (or page of records) at once. Files are
+  // looked up without opening the record, a few records at a time.
+  const RECORD_CONCURRENCY = 4
+  const recordCache = new Map<string, IaItemDetails>()
+  let emptyRecords = $state<string[]>([])
+  let resolvingRecords = $state(0)
+  let failedRecords = $state(0)
+
+  function isRecordSelected(identifier: string): boolean {
+    return selection.some((entry) => entry.identifier === identifier)
+  }
+
+  /** Available files of the chosen kinds; a collection holds none. */
+  function selectableFiles(details: IaItemDetails): IaPdfFile[] {
+    if (details.mediatype === 'collection') return []
+    return details.pdfs.filter((file) => file.availability === 'available' && matchesKinds(file))
+  }
+
+  function deselectRecord(identifier: string): void {
+    selection = selection.filter((entry) => entry.identifier !== identifier)
+  }
+
+  async function selectRecord(hit: { identifier: string; title: string | null }): Promise<void> {
+    let details = recordCache.get(hit.identifier)
+    if (!details) {
+      details = await iaGetItem(hit.identifier)
+      recordCache.set(hit.identifier, details)
+    }
+    const files = selectableFiles(details)
+    if (files.length === 0) {
+      if (!emptyRecords.includes(hit.identifier)) emptyRecords = [...emptyRecords, hit.identifier]
+      return
+    }
+    const title = details.title ?? hit.title ?? hit.identifier
+    const added = files
+      .filter((file) => !isSelected(hit.identifier, file.name))
+      .map((file) => ({ identifier: hit.identifier, fileName: file.name, title }))
+    selection = [...selection, ...added]
+  }
+
+  /** Select records, at most `RECORD_CONCURRENCY` lookups in flight. */
+  async function selectRecords(
+    hits: ReadonlyArray<{ identifier: string; title: string | null }>
+  ): Promise<void> {
+    failedRecords = 0
+    resolvingRecords += hits.length
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (next < hits.length) {
+        const hit = hits[next++]!
+        try {
+          await selectRecord(hit)
+        } catch {
+          failedRecords += 1
+        } finally {
+          resolvingRecords -= 1
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(RECORD_CONCURRENCY, hits.length) }, () => worker())
+    )
+  }
+
+  function toggleRecord(hit: { identifier: string; title: string | null }): void {
+    if (isRecordSelected(hit.identifier)) deselectRecord(hit.identifier)
+    else void selectRecords([hit])
+  }
+
+  type PageRecord = { identifier: string; title: string | null; restricted: boolean }
+
+  function selectableRecords(items: readonly PageRecord[]): PageRecord[] {
+    return items.filter((hit) => !hit.restricted && !emptyRecords.includes(hit.identifier))
+  }
+
+  function pageState(items: readonly PageRecord[]): 'none' | 'some' | 'all' {
+    const records = selectableRecords(items)
+    const selected = records.filter((hit) => isRecordSelected(hit.identifier)).length
+    if (selected === 0) return 'none'
+    return selected === records.length ? 'all' : 'some'
+  }
+
+  function togglePage(items: readonly PageRecord[]): void {
+    const records = selectableRecords(items)
+    if (pageState(items) === 'all') {
+      const ids = new Set(records.map((hit) => hit.identifier))
+      selection = selection.filter((entry) => !ids.has(entry.identifier))
+      return
+    }
+    void selectRecords(records.filter((hit) => !isRecordSelected(hit.identifier)))
+  }
+
+  // "Select all N results": every page of the last search or listing (up to
+  // what Advanced Search returns), fetched BULK_ROWS at a time, becomes a
+  // queue imported in batches; files are looked up batch by batch.
+  const BULK_ROWS = 100
+  type PageFetcher = (page: number, rows: number) => Promise<IaSearchPage>
+  let searchFetcher = $state<PageFetcher | null>(null)
+  let collectionFetcher = $state<PageFetcher | null>(null)
+  let searchLabel = $state('')
+  let collectionLabel = $state('')
+  let loadingAll = $state(0)
+  /** Results queued for import; they take the place of the file selection. */
+  let queuedAll = $state<{ label: string; records: PageRecord[] } | null>(null)
+
+  function bulkCount(numFound: number): number {
+    return Math.min(numFound, MAX_RESULT_OFFSET)
+  }
+
+  async function queueAllResults(numFound: number, fetcher: PageFetcher | null): Promise<void> {
+    if (!fetcher || loadingAll > 0) return
+    const label = fetcher === collectionFetcher ? collectionLabel : searchLabel
+    const count = bulkCount(numFound)
+    loadingAll = count
+    problem = null
+    const records: PageRecord[] = []
+    try {
+      for (let page = 1; records.length < count; page++) {
+        const result = await fetcher(page, BULK_ROWS)
+        records.push(...result.items.slice(0, count - records.length))
+        if (result.items.length < BULK_ROWS) break
+      }
+      queuedAll = { label, records: selectableRecords(records) }
+      selection = []
+    } catch (reason) {
+      problem = describeError(reason)
+    } finally {
+      loadingAll = 0
+    }
+  }
+
+  // The queue being imported, as last saved, and a saved one offered to
+  // resume when the dialog opens.
+  let queue = $state<IaQueue | null>(null)
+  let savedQueue = $state<IaQueue | null>(null)
+  let queueBusy = $state(false)
+  let queueEnd = $state<{ kind: 'finished' | 'paused'; count: number } | null>(null)
+  let queueTotals = $state({ imported: 0, present: 0, failed: 0 })
+  /** Selections behind the prepared job (the file selection or a batch). */
+  let preparedSelections = $state<IaSelection[]>([])
+  /** Where the preparation of the next batch is: looking up its records'
+   *  files, or preparing the import job (both can take minutes). */
+  let batchStep = $state<
+    | { kind: 'checking'; checked: number; total: number }
+    | { kind: 'preparing'; count: number }
+    | null
+  >(null)
+
+  async function loadSavedQueue(): Promise<void> {
+    try {
+      savedQueue = parseQueue(await iaQueueLoad())
+    } catch {
+      // Best effort: a failed read hides the notice, never the dialog.
+      savedQueue = null
+    }
+  }
+
+  async function storeQueue(next: IaQueue): Promise<void> {
+    queue = next
+    await iaQueueSave(JSON.stringify(next))
+  }
+
+  async function resolveQueueFiles(identifier: string): Promise<string[]> {
+    let details = recordCache.get(identifier)
+    if (!details) {
+      details = await iaGetItem(identifier)
+      recordCache.set(identifier, details)
+    }
+    return selectableFiles(details).map((file) => file.name)
+  }
+
+  /** Prepare the queue's next batch; `null` once nothing is left. */
+  async function prepareQueueBatch(current: IaQueue): Promise<IaPrepareResult | null> {
+    try {
+      const built = await buildBatch(current, resolveQueueFiles, (checked, total) => {
+        batchStep = { kind: 'checking', checked, total }
+      })
+      if (built.selections.length === 0) {
+        await storeQueue(built.queue)
+        return null
+      }
+      preparedSelections = built.selections
+      batchStep = { kind: 'preparing', count: built.selections.length }
+      const result = await iaPrepareImport(built.queue.collectionId, built.selections)
+      await storeQueue({ ...built.queue, currentJobId: result.jobId })
+      return result
+    } finally {
+      batchStep = null
+    }
+  }
+
+  /** Prepare and start batches until one has something to download. */
+  async function runNextQueueBatch(current: IaQueue): Promise<void> {
+    let next = current
+    for (;;) {
+      const result = await prepareQueueBatch(next)
+      if (!result) {
+        await finishQueue()
+        return
+      }
+      applyPrepareResult(result)
+      if (await launchPrepared()) return
+      next = finishBatch(queue ?? next, 'done')
+      await storeQueue(next)
+    }
+  }
+
+  async function finishQueue(): Promise<void> {
+    const total = queue?.records.length ?? 0
+    await iaQueueClear()
+    queue = null
+    queueEnd = { kind: 'finished', count: total }
+    phase = 'done'
+  }
+
+  /** Close the current batch, then pause (cancelled) or run the next one. */
+  async function advanceQueue(cancelled: boolean): Promise<void> {
+    if (!queue || queueBusy) return
+    queueBusy = true
+    try {
+      queueTotals = {
+        imported: queueTotals.imported + outcome.imported.length,
+        present: queueTotals.present + outcome.confirmedExisting.length,
+        failed:
+          queueTotals.failed +
+          (jobStatus?.files.filter((file) =>
+            ['failed', 'unavailable', 'cancelled'].includes(file.state)
+          ).length ?? 0),
+      }
+      const closed = finishBatch(queue, cancelled ? 'requeue' : 'done')
+      await storeQueue(closed)
+      if (cancelled) {
+        queueEnd = { kind: 'paused', count: queueProgress(closed).pending }
+        phase = 'done'
+        return
+      }
+      await runNextQueueBatch(closed)
+    } catch (reason) {
+      problem = describeError(reason)
+      queueEnd = { kind: 'paused', count: queue ? queueProgress(queue).pending : 0 }
+      phase = 'done'
+    } finally {
+      queueBusy = false
+    }
+  }
+
+  async function continueSavedQueue(): Promise<void> {
+    const saved = savedQueue
+    if (!saved || queueBusy) return
+    savedQueue = null
+    problem = null
+    queue = saved
+    kinds = [...saved.kinds]
+    targetCollectionId = saved.collectionId
+    queueTotals = { imported: 0, present: 0, failed: 0 }
+    queueEnd = null
+    // A batch whose job finished while the dialog was closed counts as
+    // done; a draft, a cancelled job or one that is gone goes back to the queue.
+    let how: 'done' | 'requeue' = 'requeue'
+    if (saved.currentJobId) {
+      let status: IaJobStatus | null
+      try {
+        status = await iaGetImportStatus(saved.currentJobId)
+      } catch {
+        status = null
+      }
+      if (status && status.state !== 'draft' && !TERMINAL_STATES.has(status.state)) {
+        await resumeJob(saved.currentJobId)
+        return
+      }
+      if (status && TERMINAL_STATES.has(status.state) && status.state !== 'cancelled') {
+        how = 'done'
+      }
+    }
+    queueBusy = true
+    try {
+      const closed = finishBatch(saved, how)
+      await storeQueue(closed)
+      await runNextQueueBatch(closed)
+    } catch (reason) {
+      problem = describeError(reason)
+      savedQueue = queue
+      queue = null
+      phase = 'discover'
+    } finally {
+      queueBusy = false
+    }
+  }
+
+  async function discardSavedQueue(): Promise<void> {
+    try {
+      await iaQueueClear()
+      savedQueue = null
+    } catch (reason) {
+      problem = describeError(reason)
+    }
   }
 
   function removeSelection(identifier: string, fileName: string): void {
@@ -333,8 +676,17 @@
     return numberFormatter.format(value)
   }
 
+  /** Reachable pages: never past the deep-paging offset, whatever numFound says. */
   function totalPages(numFound: number): number {
-    return Math.max(1, Math.ceil(numFound / ROWS))
+    const reachable = Math.floor(MAX_RESULT_OFFSET / rows)
+    return Math.max(1, Math.min(Math.ceil(numFound / rows), reachable))
+  }
+
+  function setPageSize(size: PageSize): void {
+    if (size === rows) return
+    rows = size
+    if (discoverTab === 'search' && searchResult) void submitSearch(1)
+    else if (discoverTab === 'collection' && collectionResult) void submitCollection(1)
   }
 
   function parseYear(raw: string): number | undefined {
@@ -365,7 +717,7 @@
   }
 
   async function submitSearch(page: number): Promise<void> {
-    if (searching) return
+    if (searching || noKinds) return
     const yearFrom = parseYear(searchFrom)
     const yearTo = parseYear(searchTo)
     if (
@@ -377,20 +729,22 @@
     }
     searching = true
     problem = null
+    const query = {
+      text: searchText.trim() === '' ? undefined : searchText.trim(),
+      title: searchTitle.trim() === '' ? undefined : searchTitle.trim(),
+      creator: searchCreator.trim() === '' ? undefined : searchCreator.trim(),
+      yearFrom,
+      yearTo,
+      textsOnly: true,
+      kinds: [...kinds],
+    }
     try {
       searchPage = page
-      searchResult = await iaSearch(
-        {
-          text: searchText.trim() === '' ? undefined : searchText.trim(),
-          title: searchTitle.trim() === '' ? undefined : searchTitle.trim(),
-          creator: searchCreator.trim() === '' ? undefined : searchCreator.trim(),
-          yearFrom,
-          yearTo,
-          textsOnly: true,
-        },
-        page,
-        ROWS
-      )
+      searchResult = await iaSearch(query, page, rows)
+      // Walking every page needs a stable order (see `iaSearch`).
+      searchFetcher = (fetchPage, fetchRows) =>
+        iaSearch(query, fetchPage, fetchRows, { stableOrder: true })
+      searchLabel = [query.text, query.title, query.creator].filter(Boolean).join(' · ')
     } catch (reason) {
       problem = describeError(reason)
     } finally {
@@ -399,7 +753,7 @@
   }
 
   async function submitCollection(page: number): Promise<void> {
-    if (listing) return
+    if (listing || noKinds) return
     const identifier = collectionInput.trim()
     if (identifier === '') {
       problem = t('internetArchive.error.invalid_query')
@@ -409,7 +763,11 @@
     problem = null
     try {
       collectionPage = page
-      collectionResult = await iaListCollection(identifier, page, ROWS)
+      const listKinds = [...kinds]
+      collectionResult = await iaListCollection(identifier, page, rows, listKinds)
+      collectionLabel = identifier
+      collectionFetcher = (fetchPage, fetchRows) =>
+        iaListCollection(identifier, fetchPage, fetchRows, listKinds)
     } catch (reason) {
       problem = describeError(reason)
     } finally {
@@ -438,7 +796,6 @@
 
   async function openItem(identifier: string): Promise<void> {
     const request = ++itemRequest
-    phase = 'item'
     problem = null
     itemLoading = true
     itemDetails = null
@@ -460,13 +817,14 @@
     collectionInput = identifier
     collectionPage = 1
     collectionResult = null
-    phase = 'discover'
+    itemIdentifier = ''
+    itemDetails = null
     problem = null
     void submitCollection(1)
   }
 
   function goDestination(): void {
-    if (selection.length === 0) return
+    if (selection.length === 0 && !queuedAll) return
     phase = 'destination'
     problem = null
     if (
@@ -502,13 +860,38 @@
         createdId = created.id
         collectionId = created.id
       }
-      const result = await iaPrepareImport(collectionId, groupedSelections)
+      let result: IaPrepareResult | null
+      if (queuedAll) {
+        queueTotals = { imported: 0, present: 0, failed: 0 }
+        queueEnd = null
+        await storeQueue(
+          createQueue({
+            collectionId,
+            label: queuedAll.label,
+            kinds,
+            records: queuedAll.records,
+          })
+        )
+        result = await prepareQueueBatch(queue!)
+      } else {
+        preparedSelections = groupedSelections
+        result = await iaPrepareImport(collectionId, groupedSelections)
+      }
       // A collection made only for this import must not outlive its failure.
       createdId = null
       targetCollectionId = collectionId
+      queuedAll = null
+      if (!result) {
+        await finishQueue()
+        return
+      }
       applyPrepareResult(result)
       phase = 'summary'
     } catch (reason) {
+      if (queue) {
+        queue = null
+        await iaQueueClear().catch(() => {})
+      }
       if (createdId) {
         await getStore()
           .collections.deleteIfEmpty(createdId)
@@ -571,26 +954,34 @@
         entry.availability === 'available' && entry.duplicate?.status === 'already_in_target'
     )
   )
-  /** 2x known bytes of the files that will be imported (plan §5). */
+  /** Known bytes the import adds: 2x for a PDF (original plus pages), 1x for an image. */
   const syncEstimate = $derived.by(() => {
     let total = 0
     for (const entry of willImportEntries) {
-      total += entry.size ?? 0
+      const size = entry.size ?? 0
+      total += entry.kind === 'image' ? size : size * 2
     }
-    return total * 2
+    return total
   })
   const showSyncWarning = $derived(syncEstimate > SYNC_WARN_BYTES)
   const canStart = $derived(willImportEntries.length > 0 || alreadyEntries.length > 0)
 
-  function filteredSelections(): IaSelection[] {
-    const omitted = new Set(
-      summaryEntries
-        .filter((entry) => isChoosable(entry) && !importChosen.has(entryKey(entry)))
-        .map(entryKey)
+  /** Left out of the job: duplicates not chosen and, in a queue, files the
+   *  collection already holds (no need to download them again). */
+  function isOmitted(entry: IaPrepareEntry): boolean {
+    if (isChoosable(entry)) return !importChosen.has(entryKey(entry))
+    return (
+      queue !== null &&
+      entry.availability === 'available' &&
+      entry.duplicate?.status === 'already_in_target'
     )
-    if (omitted.size === 0) return groupedSelections
+  }
+
+  function filteredSelections(): IaSelection[] {
+    const omitted = new Set(summaryEntries.filter(isOmitted).map(entryKey))
+    if (omitted.size === 0) return preparedSelections
     const filtered: IaSelection[] = []
-    for (const group of groupedSelections) {
+    for (const group of preparedSelections) {
       const fileNames = group.fileNames.filter(
         (fileName) => !omitted.has(selectionKey(group.identifier, fileName))
       )
@@ -599,27 +990,43 @@
     return filtered
   }
 
+  /**
+   * Start the prepared job. The job already contains the omitted files and
+   * no command drops them, so it is prepared again without them first. A
+   * queue batch left with nothing to download is not started (`false`).
+   */
+  async function launchPrepared(): Promise<boolean> {
+    if (!prepareResult) return false
+    if (summaryEntries.some(isOmitted)) {
+      const abandonedId = prepareResult.jobId
+      const selections = filteredSelections()
+      // Best effort: a leftover draft is harmless, so a failed discard
+      // stays silent instead of blocking the import.
+      if (selections.length === 0) {
+        void iaDiscardDraft(abandonedId).catch(() => {})
+        return false
+      }
+      const again = await iaPrepareImport(targetCollectionId, selections)
+      applyPrepareResult(again)
+      void iaDiscardDraft(abandonedId).catch(() => {})
+    }
+    jobId = prepareResult.jobId
+    if (queue) await storeQueue({ ...queue, currentJobId: jobId })
+    await iaStartImport(jobId)
+    enterRunning()
+    return true
+  }
+
   async function startImport(): Promise<void> {
     if (!canStart || starting || !prepareResult) return
     starting = true
     problem = null
     try {
-      const omitted = summaryEntries.filter(
-        (entry) => isChoosable(entry) && !importChosen.has(entryKey(entry))
-      )
-      if (omitted.length > 0) {
-        // The prepared job already contains the omitted files and no command
-        // drops them, so prepare again without them and start that job.
-        const abandonedId = prepareResult.jobId
-        const again = await iaPrepareImport(targetCollectionId, filteredSelections())
-        applyPrepareResult(again)
-        // Best effort: a leftover draft is harmless, so a failed discard
-        // stays silent instead of blocking the import.
-        void iaDiscardDraft(abandonedId).catch(() => {})
+      if (!(await launchPrepared()) && queue) {
+        const closed = finishBatch(queue, 'done')
+        await storeQueue(closed)
+        await runNextQueueBatch(closed)
       }
-      jobId = prepareResult.jobId
-      await iaStartImport(jobId)
-      enterRunning()
     } catch (reason) {
       problem = describeError(reason)
     } finally {
@@ -714,6 +1121,10 @@
     if (outcome.imported.length + outcome.confirmedExisting.length > 0) {
       notifyDocumentExplorerCollectionChanged(targetCollectionId)
     }
+    if (queue) {
+      void advanceQueue(jobStatus.state === 'cancelled' || cancelRequested)
+      return
+    }
     phase = 'done'
   }
 
@@ -764,7 +1175,7 @@
   }
 
   function handleDialogConfirm(): void {
-    if (phase === 'discover' || phase === 'item') {
+    if (phase === 'discover') {
       goDestination()
     } else if (phase === 'destination') {
       void prepare()
@@ -788,8 +1199,8 @@
   )
 
   const confirmDisabled = $derived(
-    phase === 'discover' || phase === 'item'
-      ? selection.length === 0
+    phase === 'discover'
+      ? selection.length === 0 && !queuedAll
       : phase === 'destination'
         ? !validDestination || collectionsLoading
         : phase === 'summary'
@@ -854,6 +1265,7 @@
 {#if open}
   <ConfirmDialog
     title={t('internetArchive.title')}
+    size="wide"
     titleId="internet-archive-dialog-title"
     cancelLabel={$currentLocale && cancelLabel}
     {cancelDisabled}
@@ -866,11 +1278,42 @@
     onconfirm={handleDialogConfirm}
   >
     {#if phase === 'discover'}
-      {#if resumableJobs.length > 0}
+      {#if savedQueue}
+        {@const progress = queueProgress(savedQueue)}
+        <div class="ia-resume" role="status">
+          <p class="ia-resume__title">{t('internetArchive.queue.resumeTitle')}</p>
+          <div class="ia-resume__item">
+            <span class="ia-resume__label">
+              {t('internetArchive.queue.resumeDetail', {
+                label: savedQueue.label,
+                finished: formatCount(progress.finished),
+                total: formatCount(progress.total),
+              })}
+            </span>
+            <button
+              type="button"
+              class="ia-results__action"
+              disabled={queueBusy}
+              onclick={() => void continueSavedQueue()}
+            >
+              {t('internetArchive.queue.resume')}
+            </button>
+            <button
+              type="button"
+              class="ia-results__action"
+              disabled={queueBusy}
+              onclick={() => void discardSavedQueue()}
+            >
+              {t('internetArchive.queue.discard')}
+            </button>
+          </div>
+        </div>
+      {/if}
+      {#if looseJobs.length > 0}
         <div class="ia-resume" role="status">
           <p class="ia-resume__title">{t('internetArchive.resume.title')}</p>
           <ul class="ia-resume__list">
-            {#each resumableJobs as job (job.id)}
+            {#each looseJobs as job (job.id)}
               <li class="ia-resume__item">
                 <span class="ia-resume__label">
                   {t('internetArchive.resume.job', {
@@ -923,13 +1366,13 @@
 
       {#if discoverTab === 'search'}
         <form
-          class="ia-form"
+          class="ia-form ia-form--inline"
           onsubmit={(event) => {
             event.preventDefault()
             void submitSearch(1)
           }}
         >
-          <label class="ia-field">
+          <label class="ia-field ia-field--grow">
             <span class="ia-field__label">{t('internetArchive.search.text')}</span>
             <input type="text" class="ia-field__input" bind:value={searchText} />
           </label>
@@ -941,108 +1384,43 @@
             <span class="ia-field__label">{t('internetArchive.search.creator')}</span>
             <input type="text" class="ia-field__input" bind:value={searchCreator} />
           </label>
-          <div class="ia-form__row">
-            <label class="ia-field">
-              <span class="ia-field__label number-field-label"
-                >{t('internetArchive.search.yearFrom')}</span
-              >
-              <NumberField
-                min="0"
-                max="9999"
-                bind:value={searchFrom}
-                decrementLabel={t('numberField.decrease')}
-                incrementLabel={t('numberField.increase')}
-              />
-            </label>
-            <label class="ia-field">
-              <span class="ia-field__label number-field-label"
-                >{t('internetArchive.search.yearTo')}</span
-              >
-              <NumberField
-                min="0"
-                max="9999"
-                bind:value={searchTo}
-                decrementLabel={t('numberField.decrease')}
-                incrementLabel={t('numberField.increase')}
-              />
-            </label>
-          </div>
-          <button type="submit" class="ia-submit" disabled={searching}>
+          <label class="ia-field ia-field--year">
+            <span class="ia-field__label number-field-label"
+              >{t('internetArchive.search.yearFrom')}</span
+            >
+            <NumberField
+              min="0"
+              max="9999"
+              bind:value={searchFrom}
+              decrementLabel={t('numberField.decrease')}
+              incrementLabel={t('numberField.increase')}
+            />
+          </label>
+          <label class="ia-field ia-field--year">
+            <span class="ia-field__label number-field-label"
+              >{t('internetArchive.search.yearTo')}</span
+            >
+            <NumberField
+              min="0"
+              max="9999"
+              bind:value={searchTo}
+              decrementLabel={t('numberField.decrease')}
+              incrementLabel={t('numberField.increase')}
+            />
+          </label>
+          <button type="submit" class="ia-submit" disabled={searching || noKinds}>
             {searching ? t('internetArchive.search.searching') : t('internetArchive.search.submit')}
           </button>
         </form>
-        {#if searching && !searchResult}
-          <p class="ia-status" role="status" aria-live="polite">
-            {t('internetArchive.search.searching')}
-          </p>
-        {:else if searchResult}
-          {#if searchResult.numFound === 0}
-            <p class="ia-status" role="status">{t('internetArchive.search.empty')}</p>
-          {:else}
-            <p class="ia-status" role="status">
-              {searchResult.numFound === 1
-                ? t('internetArchive.search.results.one')
-                : t('internetArchive.search.results.other', {
-                    count: formatCount(searchResult.numFound),
-                  })}
-            </p>
-            <ul class="ia-results">
-              {#each searchResult.items as hit (hit.identifier)}
-                <li class="ia-results__item">
-                  <span class="ia-results__title">{hit.title ?? hit.identifier}</span>
-                  {#if hit.creators.length > 0}
-                    <span class="ia-results__meta">{hit.creators.join(', ')}</span>
-                  {/if}
-                  {#if hit.date}
-                    <span class="ia-results__meta">{hit.date}</span>
-                  {/if}
-                  <span class="ia-results__meta ia-results__identifier">{hit.identifier}</span>
-                  {#if hit.restricted}
-                    <span class="ia-badge">{t('internetArchive.restrictedBadge')}</span>
-                  {/if}
-                  <button
-                    type="button"
-                    class="ia-results__action"
-                    onclick={() => void openItem(hit.identifier)}
-                  >
-                    {t('internetArchive.search.viewFiles')}
-                  </button>
-                </li>
-              {/each}
-            </ul>
-            <div class="ia-paging">
-              <button
-                type="button"
-                disabled={searchPage <= 1 || searching}
-                onclick={() => void submitSearch(searchPage - 1)}
-              >
-                {t('internetArchive.search.prev')}
-              </button>
-              <span class="ia-paging__label" role="status">
-                {t('internetArchive.search.page', {
-                  page: formatCount(searchPage),
-                  pages: formatCount(totalPages(searchResult.numFound)),
-                })}
-              </span>
-              <button
-                type="button"
-                disabled={searchPage >= totalPages(searchResult.numFound) || searching}
-                onclick={() => void submitSearch(searchPage + 1)}
-              >
-                {t('internetArchive.search.next')}
-              </button>
-            </div>
-          {/if}
-        {/if}
       {:else if discoverTab === 'collection'}
         <form
-          class="ia-form"
+          class="ia-form ia-form--inline"
           onsubmit={(event) => {
             event.preventDefault()
             void submitCollection(1)
           }}
         >
-          <label class="ia-field">
+          <label class="ia-field ia-field--grow">
             <span class="ia-field__label">{t('internetArchive.collection.idLabel')}</span>
             <input
               type="text"
@@ -1051,77 +1429,21 @@
               bind:value={collectionInput}
             />
           </label>
-          <button type="submit" class="ia-submit" disabled={listing}>
+          <button type="submit" class="ia-submit" disabled={listing || noKinds}>
             {listing
               ? t('internetArchive.collection.loading')
               : t('internetArchive.collection.submit')}
           </button>
         </form>
-        {#if listing && !collectionResult}
-          <p class="ia-status" role="status" aria-live="polite">
-            {t('internetArchive.collection.loading')}
-          </p>
-        {:else if collectionResult}
-          {#if collectionResult.numFound === 0}
-            <p class="ia-status" role="status">{t('internetArchive.collection.empty')}</p>
-          {:else}
-            <ul class="ia-results">
-              {#each collectionResult.items as hit (hit.identifier)}
-                <li class="ia-results__item">
-                  <span class="ia-results__title">{hit.title ?? hit.identifier}</span>
-                  {#if hit.creators.length > 0}
-                    <span class="ia-results__meta">{hit.creators.join(', ')}</span>
-                  {/if}
-                  {#if hit.date}
-                    <span class="ia-results__meta">{hit.date}</span>
-                  {/if}
-                  <span class="ia-results__meta ia-results__identifier">{hit.identifier}</span>
-                  {#if hit.restricted}
-                    <span class="ia-badge">{t('internetArchive.restrictedBadge')}</span>
-                  {/if}
-                  <button
-                    type="button"
-                    class="ia-results__action"
-                    onclick={() => void openItem(hit.identifier)}
-                  >
-                    {t('internetArchive.search.viewFiles')}
-                  </button>
-                </li>
-              {/each}
-            </ul>
-            <div class="ia-paging">
-              <button
-                type="button"
-                disabled={collectionPage <= 1 || listing}
-                onclick={() => void submitCollection(collectionPage - 1)}
-              >
-                {t('internetArchive.search.prev')}
-              </button>
-              <span class="ia-paging__label" role="status">
-                {t('internetArchive.search.page', {
-                  page: formatCount(collectionPage),
-                  pages: formatCount(totalPages(collectionResult.numFound)),
-                })}
-              </span>
-              <button
-                type="button"
-                disabled={collectionPage >= totalPages(collectionResult.numFound) || listing}
-                onclick={() => void submitCollection(collectionPage + 1)}
-              >
-                {t('internetArchive.search.next')}
-              </button>
-            </div>
-          {/if}
-        {/if}
       {:else}
         <form
-          class="ia-form"
+          class="ia-form ia-form--inline"
           onsubmit={(event) => {
             event.preventDefault()
             void submitLink()
           }}
         >
-          <label class="ia-field">
+          <label class="ia-field ia-field--grow">
             <span class="ia-field__label">{t('internetArchive.link.label')}</span>
             <input
               type="text"
@@ -1130,86 +1452,80 @@
               bind:value={linkInput}
             />
           </label>
-          <p class="ia-hint">{t('internetArchive.link.hint')}</p>
           <button type="submit" class="ia-submit" disabled={resolving}>
             {resolving ? t('internetArchive.link.resolving') : t('internetArchive.link.submit')}
           </button>
         </form>
+        <p class="ia-hint">{t('internetArchive.link.hint')}</p>
       {/if}
 
-      {@render selectionPanel()}
-    {:else if phase === 'item'}
-      <button type="button" class="ia-back" onclick={() => (phase = 'discover')}>
-        {t('internetArchive.back')}
-      </button>
-      {#if itemLoading}
-        <p class="ia-status" role="status" aria-live="polite">
-          {t('internetArchive.item.loading')}
-        </p>
-      {:else if itemDetails}
-        <div class="ia-item">
-          <p class="ia-item__title">{itemDetails.title ?? itemDetails.identifier}</p>
-          {#if itemDetails.creators.length > 0}
-            <p class="ia-item__meta">{itemDetails.creators.join(', ')}</p>
-          {/if}
-          {#if itemDetails.date}
-            <p class="ia-item__meta">{itemDetails.date}</p>
-          {/if}
-          <p class="ia-item__meta ia-results__identifier">{itemDetails.identifier}</p>
-          {#if itemDetails.restricted}
-            <p><span class="ia-badge">{t('internetArchive.restrictedBadge')}</span></p>
-          {/if}
+      <div class="ia-kinds">
+        <div class="ia-segmented" role="group" aria-label={t('internetArchive.kind.label')}>
+          <span class="ia-kinds__label" aria-hidden="true">{t('internetArchive.kind.label')}</span>
+          {#each FILE_KINDS as kind (kind)}
+            <button
+              type="button"
+              class="ia-segmented__option"
+              class:ia-segmented__option--active={kinds.includes(kind)}
+              aria-pressed={kinds.includes(kind)}
+              onclick={() => toggleKind(kind)}
+            >
+              {t(`internetArchive.kind.${kind}`)}
+            </button>
+          {/each}
         </div>
-        {#if itemDetails.mediatype === 'collection'}
-          <p class="ia-status" role="status">{t('internetArchive.item.isCollection')}</p>
-          <button
-            type="button"
-            class="ia-submit"
-            onclick={() => browseItemAsCollection(itemDetails?.identifier ?? itemIdentifier)}
-          >
-            {t('internetArchive.item.browseCollection')}
-          </button>
-        {:else}
-          <h4 class="ia-heading">{t('internetArchive.item.files')}</h4>
-          {#if itemDetails.pdfs.length === 0}
-            <p class="ia-status" role="status">{t('internetArchive.item.noPdfs')}</p>
-          {:else}
-            <ul class="ia-files">
-              {#each itemDetails.pdfs as file (file.name)}
-                {@const selected = isSelected(itemDetails.identifier, file.name)}
-                {@const available = file.availability === 'available'}
-                <li class="ia-files__item">
-                  <Checkbox
-                    checked={selected}
-                    disabled={!available}
-                    label={t('internetArchive.item.select', { name: file.name })}
-                    onchange={() =>
-                      toggleFile(
-                        itemDetails?.identifier ?? itemIdentifier,
-                        file.name,
-                        itemDetails?.title ?? itemDetails?.identifier ?? itemIdentifier
-                      )}
-                  >
-                    <span class="ia-files__name">{file.name}</span>
-                  </Checkbox>
-                  <span class="ia-files__meta">
-                    {t('internetArchive.item.size', { size: formatBytes(file.size) })}
-                  </span>
-                  <span class="ia-files__meta">
-                    {t('internetArchive.item.source', { source: sourceText(file.source) })}
-                  </span>
-                  {#if !available}
-                    <span class="ia-files__reason">{availabilityText(file.availability)}</span>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-            {#if itemDetails.truncated}
-              <p class="ia-status" role="status">{t('internetArchive.item.truncated')}</p>
+        {#if noKinds}
+          <p class="ia-status ia-kinds__hint" role="status">{t('internetArchive.kind.none')}</p>
+        {/if}
+      </div>
+
+      <div class="ia-browser">
+        <section class="ia-browser__list" aria-label={t('internetArchive.results.region')}>
+          {#if discoverTab === 'search'}
+            {#if searching && !searchResult}
+              <p class="ia-status" role="status" aria-live="polite">
+                {t('internetArchive.search.searching')}
+              </p>
+            {:else if searchResult}
+              {#if searchResult.numFound === 0}
+                <p class="ia-status" role="status">{t('internetArchive.search.empty')}</p>
+              {:else}
+                {@render resultList(
+                  searchResult,
+                  searchPage,
+                  searching,
+                  submitSearch,
+                  true,
+                  searchFetcher
+                )}
+              {/if}
+            {/if}
+          {:else if discoverTab === 'collection'}
+            {#if listing && !collectionResult}
+              <p class="ia-status" role="status" aria-live="polite">
+                {t('internetArchive.collection.loading')}
+              </p>
+            {:else if collectionResult}
+              {#if collectionResult.numFound === 0}
+                <p class="ia-status" role="status">{t('internetArchive.collection.empty')}</p>
+              {:else}
+                {@render resultList(
+                  collectionResult,
+                  collectionPage,
+                  listing,
+                  submitCollection,
+                  false,
+                  collectionFetcher
+                )}
+              {/if}
             {/if}
           {/if}
-        {/if}
-      {/if}
+        </section>
+
+        <section class="ia-browser__detail" aria-label={t('internetArchive.item.region')}>
+          {@render itemPane()}
+        </section>
+      </div>
 
       {@render selectionPanel()}
     {:else if phase === 'destination'}
@@ -1258,8 +1574,10 @@
           </div>
         {/if}
       </fieldset>
+      {@render batchStepLine()}
     {:else if phase === 'summary' && prepareResult}
       <h4 class="ia-heading">{t('internetArchive.summary.heading')}</h4>
+      {@render queueBatchLine()}
       <p class="ia-status" role="status">
         {t('internetArchive.summary.toImport', { count: formatCount(willImportEntries.length) })}
       </p>
@@ -1355,6 +1673,12 @@
       {/if}
     {:else if phase === 'running'}
       <h4 class="ia-heading">{t('internetArchive.running.heading')}</h4>
+      {@render queueBatchLine()}
+      {#if batchStep}
+        {@render batchStepLine()}
+      {:else if queueBusy}
+        <p class="ia-status" role="status">{t('internetArchive.queue.preparing')}</p>
+      {/if}
       {#if runningProgress}
         <div class="ia-progress" role="status" aria-live="polite">
           <progress
@@ -1403,17 +1727,28 @@
       {#if doneCancelled}
         <p class="ia-status" role="status">{t('internetArchive.done.cancelledNote')}</p>
       {/if}
+      {#if queueEnd}
+        <p class="ia-status" role="status">
+          {queueEnd.kind === 'finished'
+            ? t('internetArchive.queue.finished', { total: formatCount(queueEnd.count) })
+            : t('internetArchive.queue.paused', { count: formatCount(queueEnd.count) })}
+        </p>
+      {/if}
       <div class="ia-counts" role="status">
         <p class="ia-status">
-          {t('internetArchive.done.imported', { count: formatCount(outcome.imported.length) })}
-        </p>
-        <p class="ia-status">
-          {t('internetArchive.done.present', {
-            count: formatCount(outcome.confirmedExisting.length),
+          {t('internetArchive.done.imported', {
+            count: formatCount(queueEnd ? queueTotals.imported : outcome.imported.length),
           })}
         </p>
         <p class="ia-status">
-          {t('internetArchive.done.failed', { count: formatCount(doneFailed.length) })}
+          {t('internetArchive.done.present', {
+            count: formatCount(queueEnd ? queueTotals.present : outcome.confirmedExisting.length),
+          })}
+        </p>
+        <p class="ia-status">
+          {t('internetArchive.done.failed', {
+            count: formatCount(queueEnd ? queueTotals.failed : doneFailed.length),
+          })}
         </p>
         {#if omittedPairs.length > 0}
           <p class="ia-status">
@@ -1445,20 +1780,282 @@
   </ConfirmDialog>
 {/if}
 
+{#snippet resultList(
+  result: IaSearchPage,
+  page: number,
+  busy: boolean,
+  go: (page: number) => Promise<void>,
+  showCount: boolean,
+  fetcher: PageFetcher | null
+)}
+  <div class="ia-results-bar">
+    {#if showCount}
+      <p class="ia-status ia-results-bar__count" role="status">
+        {result.numFound === 1
+          ? t('internetArchive.search.results.one')
+          : t('internetArchive.search.results.other', { count: formatCount(result.numFound) })}
+      </p>
+    {/if}
+    <div class="ia-segmented" role="group" aria-label={t('internetArchive.pageSize.label')}>
+      {#each PAGE_SIZES as size (size)}
+        <button
+          type="button"
+          class="ia-segmented__option"
+          class:ia-segmented__option--active={rows === size}
+          aria-pressed={rows === size}
+          disabled={busy}
+          onclick={() => setPageSize(size)}
+        >
+          {size}
+        </button>
+      {/each}
+    </div>
+  </div>
+  {@const pageSelection = pageState(result.items)}
+  <div class="ia-bulk">
+    {#key selectableRecords(result.items).length}
+      <Checkbox
+        class="ia-bulk__all"
+        checked={pageSelection === 'all'}
+        indeterminate={pageSelection === 'some'}
+        disabled={selectableRecords(result.items).length === 0}
+        label={t('internetArchive.record.selectPage')}
+        onchange={() => togglePage(result.items)}
+      >
+        <span class="ia-bulk__label">{t('internetArchive.record.selectPage')}</span>
+      </Checkbox>
+    {/key}
+    {#if pageSelection === 'all' && result.numFound > result.items.length && fetcher}
+      {@const count = bulkCount(result.numFound)}
+      <button
+        type="button"
+        class="ia-results__action"
+        disabled={loadingAll > 0 || resolvingRecords > 0}
+        onclick={() => void queueAllResults(result.numFound, fetcher)}
+      >
+        {t('internetArchive.record.selectAll', { count: formatCount(count) })}
+      </button>
+      <span class="ia-status">
+        {count < result.numFound
+          ? t('internetArchive.record.selectAllCapped', {
+              count: formatCount(count),
+              total: formatCount(result.numFound),
+            })
+          : t('internetArchive.record.selectAllNotice', { count: formatCount(count) })}
+      </span>
+    {/if}
+    {#if loadingAll > 0}
+      <span class="ia-status" role="status" aria-live="polite">
+        {t('internetArchive.record.loadingAll', { count: formatCount(loadingAll) })}
+      </span>
+    {:else if resolvingRecords > 0}
+      <span class="ia-status" role="status" aria-live="polite">
+        {t('internetArchive.record.resolving', { count: formatCount(resolvingRecords) })}
+      </span>
+    {:else if failedRecords > 0}
+      <span class="ia-status" role="alert">
+        {t('internetArchive.record.failed', { count: formatCount(failedRecords) })}
+      </span>
+    {/if}
+  </div>
+  <ul class="ia-results ia-results--dense">
+    {#each result.items as hit (hit.identifier)}
+      {@const empty = emptyRecords.includes(hit.identifier)}
+      <li class="ia-row" class:ia-row--active={hit.identifier === itemIdentifier}>
+        {#key empty}
+          <Checkbox
+            class="ia-row__check"
+            checked={isRecordSelected(hit.identifier)}
+            disabled={hit.restricted || empty}
+            label={t('internetArchive.record.select', { title: hit.title ?? hit.identifier })}
+            onchange={() => toggleRecord(hit)}
+          />
+        {/key}
+        <div class="ia-row__main">
+          <span class="ia-row__title">{hit.title ?? hit.identifier}</span>
+          <span class="ia-row__meta">
+            {#if hit.creators.length > 0}
+              <span class="ia-results__meta">{hit.creators.join(', ')}</span>
+            {/if}
+            {#if hit.date}
+              <span class="ia-results__meta">{hit.date}</span>
+            {/if}
+            <span class="ia-results__meta ia-results__identifier">{hit.identifier}</span>
+            {#if empty}
+              <span class="ia-results__meta">{t('internetArchive.record.empty')}</span>
+            {/if}
+          </span>
+        </div>
+        {#if hit.restricted}
+          <span class="ia-badge">{t('internetArchive.restrictedBadge')}</span>
+        {/if}
+        <button
+          type="button"
+          class="ia-results__action"
+          onclick={() => void openItem(hit.identifier)}
+        >
+          {t('internetArchive.search.viewFiles')}
+        </button>
+      </li>
+    {/each}
+  </ul>
+  <div class="ia-paging">
+    <button type="button" disabled={page <= 1 || busy} onclick={() => void go(page - 1)}>
+      {t('internetArchive.search.prev')}
+    </button>
+    <span class="ia-paging__label" role="status">
+      {t('internetArchive.search.page', {
+        page: formatCount(page),
+        pages: formatCount(totalPages(result.numFound)),
+      })}
+    </span>
+    <button
+      type="button"
+      disabled={page >= totalPages(result.numFound) || busy}
+      onclick={() => void go(page + 1)}
+    >
+      {t('internetArchive.search.next')}
+    </button>
+  </div>
+{/snippet}
+
+{#snippet itemPane()}
+  {#if itemLoading}
+    <p class="ia-status" role="status" aria-live="polite">
+      {t('internetArchive.item.loading')}
+    </p>
+  {:else if itemDetails}
+    <div class="ia-item">
+      <p class="ia-item__title">{itemDetails.title ?? itemDetails.identifier}</p>
+      {#if itemDetails.creators.length > 0}
+        <p class="ia-item__meta">{itemDetails.creators.join(', ')}</p>
+      {/if}
+      {#if itemDetails.date}
+        <p class="ia-item__meta">{itemDetails.date}</p>
+      {/if}
+      <p class="ia-item__meta ia-results__identifier">{itemDetails.identifier}</p>
+      {#if itemDetails.restricted}
+        <p><span class="ia-badge">{t('internetArchive.restrictedBadge')}</span></p>
+      {/if}
+    </div>
+    {#if itemDetails.mediatype === 'collection'}
+      <p class="ia-status" role="status">{t('internetArchive.item.isCollection')}</p>
+      <button
+        type="button"
+        class="ia-submit"
+        onclick={() => browseItemAsCollection(itemDetails?.identifier ?? itemIdentifier)}
+      >
+        {t('internetArchive.item.browseCollection')}
+      </button>
+    {:else}
+      <h4 class="ia-heading">{t('internetArchive.item.files')}</h4>
+      {#if itemDetails.pdfs.length === 0}
+        <p class="ia-status" role="status">{t('internetArchive.item.noPdfs')}</p>
+      {:else if visibleFiles.length === 0}
+        <p class="ia-status" role="status">{t('internetArchive.item.noMatch')}</p>
+      {:else}
+        <ul class="ia-files">
+          {#each visibleFiles as file (file.name)}
+            {@const selected = isSelected(itemDetails.identifier, file.name)}
+            {@const available = file.availability === 'available'}
+            <li class="ia-files__item">
+              <Checkbox
+                checked={selected}
+                disabled={!available}
+                label={t('internetArchive.item.select', { name: file.name })}
+                onchange={() =>
+                  toggleFile(
+                    itemDetails?.identifier ?? itemIdentifier,
+                    file.name,
+                    itemDetails?.title ?? itemDetails?.identifier ?? itemIdentifier
+                  )}
+              >
+                <span class="ia-files__name">{file.name}</span>
+              </Checkbox>
+              <span class="ia-files__meta">
+                {t('internetArchive.item.size', { size: formatBytes(file.size) })}
+              </span>
+              <span class="ia-files__meta">
+                {t('internetArchive.item.source', { source: sourceText(file.source) })}
+              </span>
+              {#if !available}
+                <span class="ia-files__reason">{availabilityText(file.availability)}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+        {#if itemDetails.truncated}
+          <p class="ia-status" role="status">{t('internetArchive.item.truncated')}</p>
+        {/if}
+      {/if}
+    {/if}
+  {:else if !itemIdentifier}
+    <p class="ia-status ia-placeholder">{t('internetArchive.item.placeholder')}</p>
+  {/if}
+{/snippet}
+
+{#snippet batchStepLine()}
+  {#if batchStep}
+    <p class="ia-status" role="status" aria-live="polite">
+      {batchStep.kind === 'checking'
+        ? t('internetArchive.queue.checking', {
+            checked: formatCount(batchStep.checked),
+            total: formatCount(batchStep.total),
+          })
+        : t('internetArchive.queue.preparingBatch', { count: formatCount(batchStep.count) })}
+    </p>
+  {/if}
+{/snippet}
+
+{#snippet queueBatchLine()}
+  {#if queue}
+    {@const progress = queueProgress(queue)}
+    <p class="ia-status" role="status">
+      {t('internetArchive.queue.batch', {
+        count: formatCount(queue.records.filter((record) => record.state === 'batched').length),
+        finished: formatCount(progress.finished),
+        total: formatCount(progress.total),
+      })}
+    </p>
+  {/if}
+{/snippet}
+
 {#snippet selectionPanel()}
   <div class="ia-selection">
-    <h4 class="ia-heading">{t('internetArchive.selection.title')}</h4>
-    <p class="ia-status" role="status">
-      {t('internetArchive.selection.count', { count: formatCount(selection.length) })}
-    </p>
-    {#if selection.length === 0}
-      <p class="ia-status">{t('internetArchive.selection.empty')}</p>
-    {:else}
-      <ul class="ia-results">
+    <div class="ia-selection__bar">
+      {#if queuedAll}
+        <p class="ia-status ia-selection__summary" role="status">
+          {t('internetArchive.queue.selected', { count: formatCount(queuedAll.records.length) })}
+        </p>
+        <button type="button" class="ia-results__action" onclick={() => (queuedAll = null)}>
+          {t('internetArchive.queue.unselect')}
+        </button>
+      {:else if selection.length === 0}
+        <p class="ia-status ia-selection__summary">{t('internetArchive.selection.empty')}</p>
+      {:else}
+        <p class="ia-status ia-selection__summary" role="status">
+          {t('internetArchive.selection.count', { count: formatCount(selection.length) })}
+        </p>
+        <button
+          type="button"
+          class="ia-results__action"
+          aria-expanded={selectionOpen}
+          onclick={() => (selectionOpen = !selectionOpen)}
+        >
+          {selectionOpen
+            ? t('internetArchive.selection.hide')
+            : t('internetArchive.selection.show')}
+        </button>
+      {/if}
+    </div>
+    {#if selectionOpen && selection.length > 0}
+      <ul class="ia-results ia-selection__list">
         {#each selection as entry (selectionKey(entry.identifier, entry.fileName))}
-          <li class="ia-results__item">
-            <span class="ia-results__title">{entry.fileName}</span>
-            <span class="ia-results__meta ia-results__identifier">{entry.identifier}</span>
+          <li class="ia-row">
+            <div class="ia-row__main">
+              <span class="ia-row__title">{entry.fileName}</span>
+              <span class="ia-results__meta ia-results__identifier">{entry.identifier}</span>
+            </div>
             <button
               type="button"
               class="ia-results__action"
@@ -1547,14 +2144,216 @@
     margin-bottom: var(--space-3);
   }
 
-  .ia-form__row {
-    display: flex;
-    gap: var(--space-2);
+  .ia-form--inline {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
   }
 
-  .ia-form__row .ia-field {
-    flex: 1;
+  .ia-form--inline .ia-field {
+    flex: 1 1 160px;
     min-width: 0;
+  }
+
+  .ia-form--inline .ia-field--grow {
+    flex: 2 1 220px;
+  }
+
+  .ia-form--inline .ia-field--year {
+    flex: 0 1 120px;
+  }
+
+  .ia-form--inline .ia-submit {
+    align-self: flex-end;
+  }
+
+  /* Master-detail: results on the left, the open item's files on the right.
+     Fixed height so each pane scrolls on its own instead of the dialog. */
+  .ia-browser {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr);
+    gap: var(--space-3);
+    height: min(56vh, 560px);
+    min-height: 260px;
+  }
+
+  .ia-browser__list,
+  .ia-browser__detail {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    padding: var(--space-2);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-control);
+    background-color: color-mix(in srgb, var(--color-surface-sunken) 60%, transparent);
+  }
+
+  .ia-browser__detail {
+    overflow-y: auto;
+  }
+
+  .ia-browser__list .ia-results {
+    flex: 1 1 auto;
+    max-height: none;
+    min-height: 0;
+  }
+
+  .ia-browser__detail .ia-files {
+    max-height: none;
+  }
+
+  @media (max-width: 860px) {
+    .ia-browser {
+      grid-template-columns: minmax(0, 1fr);
+      height: auto;
+    }
+
+    .ia-browser__list .ia-results {
+      max-height: 320px;
+    }
+  }
+
+  .ia-kinds {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+  }
+
+  .ia-kinds .ia-segmented {
+    align-items: center;
+    margin-left: 0;
+  }
+
+  .ia-kinds__label {
+    padding: 0 var(--space-2);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: 0.075em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+
+  .ia-kinds__hint {
+    margin: 0;
+  }
+
+  .ia-results-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-bottom: var(--space-1);
+  }
+
+  .ia-results-bar__count {
+    margin: 0;
+  }
+
+  .ia-segmented {
+    display: inline-flex;
+    gap: 2px;
+    margin-left: auto;
+    padding: 2px;
+    border-radius: var(--radius-control);
+    background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
+  }
+
+  .ia-segmented__option {
+    min-width: 2.5rem;
+    padding: var(--space-1) var(--space-2);
+    border: none;
+    border-radius: var(--radius-control);
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+  }
+
+  .ia-segmented__option--active {
+    background: var(--color-surface-raised);
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .ia-segmented__option:disabled {
+    cursor: not-allowed;
+  }
+
+  .ia-results--dense {
+    gap: 0;
+  }
+
+  .ia-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-control);
+  }
+
+  .ia-row:hover {
+    background: var(--color-accent-faint);
+  }
+
+  .ia-row--active {
+    background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  }
+
+  .ia-bulk {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-1);
+  }
+
+  .ia-bulk__label {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+
+  .ia-row :global(.ia-row__check) {
+    flex: 0 0 auto;
+    padding: var(--space-1);
+  }
+
+  .ia-row__main {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .ia-row__title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+  }
+
+  .ia-row__meta {
+    display: flex;
+    gap: var(--space-2);
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .ia-row__meta .ia-results__identifier {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    overflow-wrap: normal;
+  }
+
+  .ia-placeholder {
+    margin: auto 0;
+    text-align: center;
   }
 
   .ia-field {
@@ -1695,6 +2494,9 @@
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
     cursor: pointer;
+    /* Keep one line and one width, however long the row's metadata is. */
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .ia-results__action:hover {
@@ -1797,6 +2599,22 @@
 
   .ia-selection {
     margin-top: var(--space-3);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--color-hairline);
+  }
+
+  .ia-selection__bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .ia-selection__summary {
+    margin: 0;
+  }
+
+  .ia-selection__list {
+    margin-top: var(--space-2);
   }
 
   .ia-destination {

@@ -90,25 +90,7 @@ pub fn verify_staged_pdf(
     if !bytes.starts_with(b"%PDF") {
         return Err(reject(path, "el archivo no es un PDF"));
     }
-    if let Some(declared) = expected.content_length {
-        if declared != bytes.len() as u64 {
-            return Err(reject(path, "el tamaño no coincide con el declarado"));
-        }
-    }
-    if let Some(want) = present(expected.md5.as_deref()) {
-        let got = {
-            use md5::Digest as _;
-            format!("{:x}", md5::Md5::digest(&bytes))
-        };
-        if got != want.to_ascii_lowercase() {
-            return Err(reject(path, "el md5 no coincide con el publicado"));
-        }
-    }
-    if let Some(want) = present(expected.sha1.as_deref()) {
-        if sha1_hex(&bytes) != want.to_ascii_lowercase() {
-            return Err(reject(path, "el sha1 no coincide con el publicado"));
-        }
-    }
+    check_remote(path, &bytes, expected)?;
     let document =
         lopdf::Document::load_mem(&bytes).map_err(|_| reject(path, "el PDF no se puede abrir"))?;
     let page_count = u32::try_from(document.get_pages().len()).unwrap_or(u32::MAX);
@@ -128,6 +110,68 @@ pub fn verify_staged_pdf(
         page_count,
         sha256_hex,
     })
+}
+
+/// Verify a staged image (`extension` is `jpg`, `png` or `tif`) like
+/// [`verify_staged_pdf`]: its signature must match the extension, then the
+/// declared size and checksums. An image is one page. Any failure deletes
+/// the staged file.
+pub fn verify_staged_image(
+    path: &Path,
+    expected: &ExpectedRemote,
+    extension: &str,
+) -> Result<VerifiedPdf, IaError> {
+    let bytes = std::fs::read(path).map_err(|e| IaError::Io(e.to_string()))?;
+    let sha256_hex = {
+        use sha2::Digest as _;
+        format!("{:x}", sha2::Sha256::digest(&bytes))
+    };
+    let signature_ok = match extension {
+        "jpg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+        "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        // Classic TIFF (42) and BigTIFF (43), little- and big-endian.
+        "tif" => [b"II*\0", b"MM\0*", b"II+\0", b"MM\0+"]
+            .iter()
+            .any(|magic| bytes.starts_with(*magic)),
+        _ => false,
+    };
+    if !signature_ok {
+        return Err(reject(
+            path,
+            "el archivo no es una imagen del tipo esperado",
+        ));
+    }
+    check_remote(path, &bytes, expected)?;
+    Ok(VerifiedPdf {
+        size: bytes.len() as u64,
+        page_count: 1,
+        sha256_hex,
+    })
+}
+
+/// Declared size, MD5 and SHA-1 checks shared by PDFs and images; a
+/// mismatch deletes the staged file.
+fn check_remote(path: &Path, bytes: &[u8], expected: &ExpectedRemote) -> Result<(), IaError> {
+    if let Some(declared) = expected.content_length {
+        if declared != bytes.len() as u64 {
+            return Err(reject(path, "el tamaño no coincide con el declarado"));
+        }
+    }
+    if let Some(want) = present(expected.md5.as_deref()) {
+        let got = {
+            use md5::Digest as _;
+            format!("{:x}", md5::Md5::digest(bytes))
+        };
+        if got != want.to_ascii_lowercase() {
+            return Err(reject(path, "el md5 no coincide con el publicado"));
+        }
+    }
+    if let Some(want) = present(expected.sha1.as_deref()) {
+        if sha1_hex(bytes) != want.to_ascii_lowercase() {
+            return Err(reject(path, "el sha1 no coincide con el publicado"));
+        }
+    }
+    Ok(())
 }
 
 /// A declared checksum counts only when non-empty after trimming; empty
@@ -503,6 +547,77 @@ mod tests {
             !format!("{err}").contains(marker),
             "TooManyPages Display must not leak the staging path, got {err}"
         );
+        assert!(!path.exists());
+    }
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+    const JPEG: &[u8] = b"\xff\xd8\xff\xe0\0\x10JFIF\0";
+    const TIFF_LE: &[u8] = b"II*\0\x08\0\0\0";
+    const TIFF_BE: &[u8] = b"MM\0*\0\0\0\x08";
+    const BIGTIFF_LE: &[u8] = b"II+\0\x08\0\0\0";
+    const BIGTIFF_BE: &[u8] = b"MM\0+\0\x08\0\0";
+
+    fn staged(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn no_remote() -> ExpectedRemote {
+        ExpectedRemote {
+            md5: None,
+            sha1: None,
+            content_length: None,
+        }
+    }
+
+    #[test]
+    fn images_verify_by_signature_as_one_page() {
+        let dir = tempfile::tempdir().unwrap();
+        for (ext, bytes) in [
+            ("png", PNG),
+            ("jpg", JPEG),
+            ("tif", TIFF_LE),
+            ("tif", TIFF_BE),
+            ("tif", BIGTIFF_LE),
+            ("tif", BIGTIFF_BE),
+        ] {
+            let path = staged(&dir, &format!("a.{ext}"), bytes);
+            let verified = verify_staged_image(&path, &no_remote(), ext).unwrap();
+            assert_eq!(verified.page_count, 1);
+            assert_eq!(verified.size, bytes.len() as u64);
+            assert_eq!(verified.sha256_hex.len(), 64);
+        }
+    }
+
+    #[test]
+    fn image_with_the_wrong_signature_fails_and_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = staged(&dir, "a.jpg", PNG);
+        let err = verify_staged_image(&path, &no_remote(), "jpg").unwrap_err();
+        assert!(matches!(err, IaError::VerifyFailed { .. }), "{err:?}");
+        assert!(!path.exists());
+        let path = staged(&dir, "b.png", b"%PDF-1.5");
+        assert!(verify_staged_image(&path, &no_remote(), "png").is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn image_checksums_and_size_are_enforced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = staged(&dir, "a.png", PNG);
+        let wrong_md5 = ExpectedRemote {
+            md5: Some("00000000000000000000000000000000".to_string()),
+            ..no_remote()
+        };
+        assert!(verify_staged_image(&path, &wrong_md5, "png").is_err());
+        assert!(!path.exists());
+        let path = staged(&dir, "b.png", PNG);
+        let wrong_size = ExpectedRemote {
+            content_length: Some(1),
+            ..no_remote()
+        };
+        assert!(verify_staged_image(&path, &wrong_size, "png").is_err());
         assert!(!path.exists());
     }
 }

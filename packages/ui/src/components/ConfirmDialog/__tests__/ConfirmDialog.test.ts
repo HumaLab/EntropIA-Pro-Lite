@@ -38,6 +38,15 @@ describe('ConfirmDialog', () => {
     pane.remove()
   })
 
+  it('keeps the compact width unless the wide size is asked for', () => {
+    const { unmount } = render(ConfirmDialog, { props: baseProps })
+    expect(screen.getByRole('dialog')).not.toHaveClass('confirm-dialog--wide')
+    unmount()
+
+    render(ConfirmDialog, { props: { ...baseProps, size: 'wide' } })
+    expect(screen.getByRole('dialog')).toHaveClass('confirm-dialog--wide')
+  })
+
   it('cancels when the overlay is clicked', async () => {
     const oncancel = vi.fn()
     render(ConfirmDialog, { props: { ...baseProps, oncancel } })

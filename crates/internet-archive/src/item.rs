@@ -8,12 +8,17 @@
 use serde_json::Value;
 
 use crate::error::IaError;
+use crate::kind::{image_extension, is_pdf_ish, FileKind};
 use crate::search::{first_string, flag_in, scalar_string, string_list};
 
 /// How many PDF-ish entries are kept per item, in response order. The whole
 /// `files[]` array is still walked; when more PDF-ish entries existed the
 /// item reports [`ItemDetails::truncated`].
 pub const MAX_PDFS_PER_ITEM: usize = 1000;
+
+/// How many original image entries (JPEG/PNG/TIFF) are kept per item, in
+/// response order, on top of the PDF cap. Same truncation rule.
+pub const MAX_IMAGES_PER_ITEM: usize = 1000;
 
 /// Normalized item metadata with its PDF file list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +61,7 @@ impl ItemDetails {
     }
 }
 
-/// One PDF-ish file entry.
+/// One importable file entry: a PDF-ish file or an original image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdfFile {
     /// File name exactly as published by the Metadata API.
@@ -75,6 +80,14 @@ pub struct PdfFile {
     pub sha1: Option<String>,
     /// Availability decided by the first matching rule.
     pub availability: Availability,
+}
+
+impl PdfFile {
+    /// User-facing kind of this file (see [`FileKind::of_file`]).
+    #[must_use]
+    pub fn kind(&self) -> FileKind {
+        FileKind::of_file(&self.name, self.format.as_deref())
+    }
 }
 
 /// Declared `source` bucket of a file.
@@ -128,6 +141,8 @@ pub fn parse_item_value(identifier: &str, body: &Value) -> Result<ItemDetails, I
         .ok_or_else(not_found)?;
     let restricted = flag_in(metadata, "access-restricted-item");
     let mut pdf_seen = 0usize;
+    let mut image_seen = 0usize;
+    let mut images_kept = 0usize;
     let mut pdfs = Vec::new();
     if let Some(files) = body.get("files").and_then(Value::as_array) {
         for file in files {
@@ -136,18 +151,28 @@ pub fn parse_item_value(identifier: &str, body: &Value) -> Result<ItemDetails, I
             };
             let name = file_name_in(entry);
             let format = entry.get("format").and_then(scalar_string);
-            if !is_pdf_ish(&name, format.as_deref()) {
-                continue;
-            }
-            pdf_seen += 1;
-            if pdfs.len() >= MAX_PDFS_PER_ITEM {
+            let source = file_source_in(entry);
+            if is_pdf_ish(&name, format.as_deref()) {
+                pdf_seen += 1;
+                if pdfs.len() - images_kept >= MAX_PDFS_PER_ITEM {
+                    continue;
+                }
+            } else if source == FileSource::Original
+                && image_extension(&name, format.as_deref()).is_some()
+            {
+                image_seen += 1;
+                if images_kept >= MAX_IMAGES_PER_ITEM {
+                    continue;
+                }
+                images_kept += 1;
+            } else {
                 continue;
             }
             pdfs.push(PdfFile {
                 availability: availability_in(entry, &name, format.as_deref(), restricted),
                 name,
                 format,
-                source: file_source_in(entry),
+                source,
                 size: entry.get("size").and_then(decimal_u64),
                 mtime: entry.get("mtime").and_then(decimal_u64),
                 md5: entry.get("md5").and_then(scalar_string),
@@ -174,7 +199,7 @@ pub fn parse_item_value(identifier: &str, body: &Value) -> Result<ItemDetails, I
         license_url: license_url_in(metadata),
         mediatype: metadata.get("mediatype").and_then(first_string),
         restricted,
-        truncated: pdf_seen > pdfs.len(),
+        truncated: pdf_seen + image_seen > pdfs.len(),
         pdfs,
     })
 }
@@ -216,16 +241,6 @@ fn file_source_in(file: &serde_json::Map<String, Value>) -> FileSource {
         Some(raw) if raw.eq_ignore_ascii_case("derivative") => FileSource::Derivative,
         Some(raw) => FileSource::Other(raw),
     }
-}
-
-/// A file is PDF-ish when `format` mentions `pdf` (any case) or the name
-/// ends in `.pdf` or `.lcpdf` (any case).
-fn is_pdf_ish(name: &str, format: Option<&str>) -> bool {
-    if format.is_some_and(|f| f.to_ascii_lowercase().contains("pdf")) {
-        return true;
-    }
-    let lower = name.to_ascii_lowercase();
-    lower.ends_with(".pdf") || lower.ends_with(".lcpdf")
 }
 
 /// Availability by first matching rule: `Encrypted`, then `Private`, then
@@ -288,6 +303,7 @@ fn decimal_u64(value: &Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kind::FileKind;
     use crate::policy::FetchPolicy;
     use crate::test_support::TestServer;
     use crate::{Endpoints, IaClient, IaError};
@@ -493,6 +509,55 @@ mod tests {
         assert_eq!(details.pdfs.len(), 1);
         assert_eq!(details.pdfs[0].name, "book.pdf");
         assert!(!details.truncated);
+    }
+
+    #[test]
+    fn original_images_are_listed_with_their_kind() {
+        let body = json!({
+            "metadata": {"identifier": "img"},
+            "files": [
+                {"name": "photo.jpg", "format": "JPEG", "source": "original"},
+                {"name": "photo_thumb.jpg", "format": "JPEG Thumb", "source": "derivative"},
+                {"name": "plate.png", "format": "PNG", "source": "original"},
+                {"name": "map.tif", "format": "TIFF", "source": "original"},
+                {"name": "anim.gif", "format": "Animated GIF", "source": "original"},
+                {"name": "book.pdf", "format": "Text PDF", "source": "derivative"},
+            ]
+        });
+        let details = parse_item_value("img", &body).unwrap();
+        let listed: Vec<(&str, FileKind)> = details
+            .pdfs
+            .iter()
+            .map(|file| (file.name.as_str(), file.kind()))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                ("photo.jpg", FileKind::Image),
+                ("plate.png", FileKind::Image),
+                ("map.tif", FileKind::Image),
+                ("book.pdf", FileKind::PdfText),
+            ]
+        );
+        assert!(!details.truncated);
+    }
+
+    #[test]
+    fn images_have_their_own_cap() {
+        let mut files: Vec<Value> = (0..1001)
+            .map(|i| json!({"name": format!("p{i}.jpg"), "format": "JPEG", "source": "original"}))
+            .collect();
+        files.push(json!({"name": "book.pdf", "format": "Text PDF"}));
+        let body = json!({"metadata": {"identifier": "c"}, "files": files});
+        let details = parse_item_value("c", &body).unwrap();
+        let images = details
+            .pdfs
+            .iter()
+            .filter(|file| file.kind() == FileKind::Image)
+            .count();
+        assert_eq!(images, MAX_IMAGES_PER_ITEM);
+        assert!(details.pdfs.iter().any(|file| file.name == "book.pdf"));
+        assert!(details.truncated);
     }
 
     #[tokio::test]

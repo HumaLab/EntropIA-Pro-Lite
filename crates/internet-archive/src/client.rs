@@ -10,6 +10,7 @@ use url::{Host, Url};
 
 use crate::error::IaError;
 use crate::item::{parse_item_value, ItemDetails};
+use crate::kind::FileKind;
 use crate::policy::FetchPolicy;
 use crate::search::{is_valid_identifier, parse_search_value, Endpoints, SearchPage, SearchQuery};
 use crate::{
@@ -218,6 +219,21 @@ impl IaClient {
             .await
     }
 
+    /// [`IaClient::search`] sorted by identifier (`sort[]=identifier asc`),
+    /// for walking every page of a result set. The default relevance order
+    /// is not stable between requests, so paging through it repeats some
+    /// records and skips others.
+    pub async fn search_in_stable_order(
+        &self,
+        endpoints: &Endpoints,
+        query: &SearchQuery,
+        page: u32,
+        rows: u32,
+    ) -> Result<SearchPage, IaError> {
+        self.advanced_search(endpoints, query, page, rows, Some(COLLECTION_SORT))
+            .await
+    }
+
     /// List one page of a collection with Advanced Search instead of the
     /// unreliable Scraping API (plan decision D5): the query is built
     /// through [`SearchQuery`] with `collection` set and `texts_only`, so
@@ -236,6 +252,21 @@ impl IaClient {
         page: u32,
         rows: u32,
     ) -> Result<SearchPage, IaError> {
+        self.list_collection_of_kinds(endpoints, collection, &[], page, rows)
+            .await
+    }
+
+    /// [`IaClient::list_collection`] restricted to the given file kinds
+    /// (see [`SearchQuery::kinds`]); an empty slice behaves exactly like
+    /// `list_collection` (`mediatype:texts`).
+    pub async fn list_collection_of_kinds(
+        &self,
+        endpoints: &Endpoints,
+        collection: &str,
+        kinds: &[FileKind],
+        page: u32,
+        rows: u32,
+    ) -> Result<SearchPage, IaError> {
         if !is_valid_identifier(collection) {
             return Err(IaError::InvalidQuery {
                 reason: format!("invalid collection identifier: {collection:?}"),
@@ -244,6 +275,7 @@ impl IaClient {
         let query = SearchQuery {
             collection: Some(collection.to_string()),
             texts_only: true,
+            kinds: kinds.to_vec(),
             ..SearchQuery::default()
         };
         self.advanced_search(endpoints, &query, page, rows, Some(COLLECTION_SORT))
@@ -408,6 +440,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_collection_applies_the_requested_kinds() {
+        let server = TestServer::start(vec![TestServer::json(
+            "/advancedsearch.php",
+            200,
+            r#"{"response":{"numFound":0,"docs":[]}}"#,
+        )]);
+        let endpoints = Endpoints::new(Url::parse(server.base()).unwrap());
+        local_client()
+            .list_collection_of_kinds(&endpoints, "opensource", &[FileKind::Image], 1, 5)
+            .await
+            .unwrap();
+        let targets = server.targets();
+        let url = Url::parse(&format!("http://127.0.0.1{}", targets.last().unwrap())).unwrap();
+        let q = url
+            .query_pairs()
+            .find(|(k, _)| k == "q")
+            .map(|(_, v)| v.into_owned());
+        assert_eq!(
+            q.as_deref(),
+            Some(
+                "collection:(\"opensource\") AND \
+                 (mediatype:image AND format:(JPEG OR PNG OR TIFF))"
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn list_collection_request_shape_exact() {
         let server = TestServer::start(vec![TestServer::json(
             "/advancedsearch.php",
@@ -482,6 +541,42 @@ mod tests {
             pairs.iter().all(|(k, _)| k != "sort[]"),
             "search must not send sort[], got {pairs:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn search_in_stable_order_sorts_by_identifier() {
+        let server = TestServer::start(vec![TestServer::json(
+            "/advancedsearch.php",
+            200,
+            r#"{"response":{"numFound":0,"docs":[]}}"#,
+        )]);
+        let endpoints = local_endpoints(&server);
+        local_client()
+            .search_in_stable_order(
+                &endpoints,
+                &SearchQuery {
+                    title: Some("Mar del Plata".to_string()),
+                    ..SearchQuery::default()
+                },
+                3,
+                100,
+            )
+            .await
+            .unwrap();
+        let url = last_target(&server);
+        let pairs = pairs_of(&url);
+        let sorts: Vec<&str> = pairs
+            .iter()
+            .filter(|(k, _)| k == "sort[]")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(sorts, ["identifier asc"]);
+        assert_eq!(
+            get(&pairs, "q"),
+            Some("title:(\"Mar del Plata\") AND mediatype:texts")
+        );
+        assert_eq!(get(&pairs, "rows"), Some("100"));
+        assert_eq!(get(&pairs, "page"), Some("3"));
     }
 
     #[tokio::test]

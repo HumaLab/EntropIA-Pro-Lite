@@ -60,10 +60,20 @@ pub fn new_job_id() -> String {
     uuid::Uuid::new_v4().hyphenated().to_string()
 }
 
+/// Staging file extensions a job may use: `pdf` plus the image kinds.
+const STAGING_EXTENSIONS: [&str; 4] = ["pdf", "jpg", "png", "tif"];
+
 /// Opaque staging file name (`<uuid>.pdf`).
 #[must_use]
 pub fn new_staging_name() -> String {
-    format!("{}.pdf", uuid::Uuid::new_v4().hyphenated())
+    new_staging_name_with("pdf")
+}
+
+/// Opaque staging file name `<uuid>.<extension>`; `extension` is one of
+/// `pdf`, `jpg`, `png`, `tif` (see [`crate::kind::staging_extension`]).
+#[must_use]
+pub fn new_staging_name_with(extension: &str) -> String {
+    format!("{}.{extension}", uuid::Uuid::new_v4().hyphenated())
 }
 
 /// Accept only `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`.
@@ -87,13 +97,13 @@ pub fn is_valid_job_id(id: &str) -> bool {
     true
 }
 
-/// Accept only a valid job id plus `.pdf`.
+/// Accept only a valid job id plus `.pdf`, `.jpg`, `.png` or `.tif`.
 #[must_use]
 pub fn is_valid_staging_name(name: &str) -> bool {
-    if name.len() != 40 || !name.ends_with(".pdf") {
+    if name.len() != 40 || name.as_bytes()[36] != b'.' {
         return false;
     }
-    is_valid_job_id(&name[..36])
+    STAGING_EXTENSIONS.contains(&&name[37..]) && is_valid_job_id(&name[..36])
 }
 
 fn check_job_id(id: &str) -> Result<(), StoreError> {
@@ -401,6 +411,20 @@ mod tests {
     use std::fs;
 
     const VALID_ID: &str = "12345678-1234-1234-1234-1234567890ab";
+
+    #[test]
+    fn staging_names_carry_the_file_kind_extension() {
+        for ext in ["pdf", "jpg", "png", "tif"] {
+            let name = new_staging_name_with(ext);
+            assert!(name.ends_with(&format!(".{ext}")), "{name}");
+            assert!(is_valid_staging_name(&name), "{name}");
+        }
+        assert!(new_staging_name().ends_with(".pdf"));
+        assert!(is_valid_staging_name(&format!("{VALID_ID}.pdf")));
+        assert!(!is_valid_staging_name(&format!("{VALID_ID}.gif")));
+        assert!(!is_valid_staging_name(&format!("{VALID_ID}.exe")));
+        assert!(!is_valid_staging_name(&format!("{VALID_ID}.jpeg")));
+    }
     const VALID_ID_2: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const VALID_STAGING: &str = "12345678-1234-1234-1234-1234567890ab.pdf";
 

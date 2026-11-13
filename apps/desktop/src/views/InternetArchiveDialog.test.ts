@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
 import { DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT } from '$lib/document-explorer'
 import InternetArchiveDialog from './InternetArchiveDialog.svelte'
@@ -19,6 +19,9 @@ const { iaRef, importRef, storeRef } = vi.hoisted(() => ({
     iaGetImportStatus: vi.fn(),
     iaListJobs: vi.fn(),
     onIaJobUpdated: vi.fn(),
+    iaQueueLoad: vi.fn(),
+    iaQueueSave: vi.fn(),
+    iaQueueClear: vi.fn(),
   },
   importRef: {
     importVerifiedFiles: vi.fn(),
@@ -48,6 +51,9 @@ vi.mock('$lib/internet-archive', async (importOriginal) => {
     iaGetImportStatus: iaRef.iaGetImportStatus,
     iaListJobs: iaRef.iaListJobs,
     onIaJobUpdated: iaRef.onIaJobUpdated,
+    iaQueueLoad: iaRef.iaQueueLoad,
+    iaQueueSave: iaRef.iaQueueSave,
+    iaQueueClear: iaRef.iaQueueClear,
   }
 })
 
@@ -87,6 +93,7 @@ const searchItem = (patch: Record<string, unknown> = {}) => ({
 const pdf = (patch: Record<string, unknown> = {}) => ({
   name: 'doc_text.pdf',
   format: 'Text PDF',
+  kind: 'pdf_text',
   source: 'original',
   size: 1024,
   mtime: null,
@@ -117,6 +124,7 @@ const prepareEntry = (patch: Record<string, unknown> = {}) => ({
   fileName: 'doc_text.pdf',
   availability: 'available',
   size: 1024,
+  kind: 'pdf',
   duplicate: { status: 'new' },
   ...patch,
 })
@@ -210,7 +218,7 @@ async function openItem(
   await searchForResults(props)
   iaRef.iaGetItem.mockResolvedValue(itemDetails(details))
   await fireEvent.click(screen.getAllByRole('button', { name: 'Ver archivos' })[0]!)
-  await screen.findByText('Archivos PDF')
+  await screen.findByText('Archivos')
 }
 
 async function selectFirstPdf(props: Record<string, unknown> = {}) {
@@ -263,6 +271,9 @@ beforeEach(() => {
   importRef.importVerifiedFiles.mockResolvedValue(importOutcome())
   iaRef.iaDiscardDraft.mockResolvedValue(undefined)
   iaRef.iaListJobs.mockResolvedValue([])
+  iaRef.iaQueueLoad.mockResolvedValue(null)
+  iaRef.iaQueueSave.mockResolvedValue(undefined)
+  iaRef.iaQueueClear.mockResolvedValue(undefined)
   onClose.mockReset()
   onImported.mockReset()
 })
@@ -272,9 +283,9 @@ describe('InternetArchiveDialog discovery', () => {
     await searchForResults()
 
     expect(iaRef.iaSearch).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Chaplin', textsOnly: true }),
+      expect.objectContaining({ title: 'Chaplin', textsOnly: true, kinds: ['pdf'] }),
       1,
-      10
+      50
     )
     expect(screen.getByText('Some Title')).toBeInTheDocument()
     expect(screen.getByText('Some Author')).toBeInTheDocument()
@@ -309,16 +320,303 @@ describe('InternetArchiveDialog discovery', () => {
   })
 
   it('pages through search results', async () => {
-    iaRef.iaSearch.mockResolvedValue({ numFound: 25, items: [searchItem()] })
+    iaRef.iaSearch.mockResolvedValue({ numFound: 125, items: [searchItem()] })
     open()
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
     await screen.findByText('Página 1 de 3')
 
-    iaRef.iaSearch.mockResolvedValue({ numFound: 25, items: [searchItem()] })
+    iaRef.iaSearch.mockResolvedValue({ numFound: 125, items: [searchItem()] })
     await fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
     await screen.findByText('Página 2 de 3')
 
-    expect(iaRef.iaSearch).toHaveBeenLastCalledWith(expect.anything(), 2, 10)
+    expect(iaRef.iaSearch).toHaveBeenLastCalledWith(expect.anything(), 2, 50)
+  })
+
+  it('filters by file kind: PDF by default, any combination of the three', async () => {
+    iaRef.iaSearch.mockResolvedValue({ numFound: 0, items: [] })
+    open()
+    const kinds = screen.getByRole('group', { name: 'Tipo de archivo' })
+    const pdfKind = within(kinds).getByRole('button', { name: 'PDF' })
+    const textKind = within(kinds).getByRole('button', { name: 'PDF + texto' })
+    const imageKind = within(kinds).getByRole('button', { name: 'Imágenes' })
+    expect(pdfKind).toHaveAttribute('aria-pressed', 'true')
+    expect(textKind).toHaveAttribute('aria-pressed', 'false')
+    expect(imageKind).toHaveAttribute('aria-pressed', 'false')
+
+    await fireEvent.click(imageKind)
+    await fireEvent.click(textKind)
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+
+    expect(iaRef.iaSearch).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kinds: ['pdf', 'pdf_text', 'image'] }),
+      1,
+      50
+    )
+  })
+
+  it('refuses to search with no file kind and says why', async () => {
+    open()
+    const kinds = screen.getByRole('group', { name: 'Tipo de archivo' })
+    await fireEvent.click(within(kinds).getByRole('button', { name: 'PDF' }))
+
+    expect(screen.getByText('Elegí al menos un tipo de archivo.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Buscar en el archivo' })).toBeDisabled()
+  })
+
+  it('shows only the record files of the chosen kinds', async () => {
+    await searchForResults()
+    iaRef.iaGetItem.mockResolvedValue(
+      itemDetails({
+        pdfs: [pdf(), pdf({ name: 'scan.pdf', format: 'Image Container PDF', kind: 'pdf' })],
+      })
+    )
+    const kinds = screen.getByRole('group', { name: 'Tipo de archivo' })
+    await fireEvent.click(within(kinds).getByRole('button', { name: 'PDF + texto' }))
+    await fireEvent.click(within(kinds).getByRole('button', { name: 'PDF' }))
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Ver archivos' })[0]!)
+    await screen.findByText('Archivos')
+
+    expect(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Seleccionar scan.pdf' })).toBeNull()
+
+    // PDF covers every PDF, Text PDF included.
+    await fireEvent.click(within(kinds).getByRole('button', { name: 'PDF' }))
+    expect(screen.getByRole('checkbox', { name: 'Seleccionar scan.pdf' })).toBeInTheDocument()
+  })
+
+  async function searchPage(items: Array<Record<string, unknown>>) {
+    iaRef.iaSearch.mockResolvedValue({ numFound: items.length, items: items.map(searchItem) })
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+  }
+
+  const recordFiles: Record<string, ReturnType<typeof itemDetails>> = {
+    'some-id': itemDetails({
+      pdfs: [
+        pdf(),
+        pdf({ name: 'scan.pdf', format: 'Image Container PDF', kind: 'pdf' }),
+        pdf({ name: 'locked.pdf', availability: 'encrypted' }),
+        pdf({ name: 'photo.jpg', format: 'JPEG', kind: 'image' }),
+      ],
+    }),
+    'third-id': itemDetails({ identifier: 'third-id', title: 'Third', pdfs: [pdf()] }),
+  }
+
+  it('selects every matching file of a record from its row, without opening it', async () => {
+    iaRef.iaGetItem.mockImplementation(async (id: string) => recordFiles[id])
+    await searchPage([{}])
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar registro Some Title' }))
+
+    await screen.findByText('Seleccionados: 2')
+    expect(iaRef.iaGetItem).toHaveBeenCalledWith('some-id')
+    expect(screen.getByRole('checkbox', { name: 'Seleccionar registro Some Title' })).toBeChecked()
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar registro Some Title' }))
+    expect(screen.queryByText('Seleccionados: 2')).toBeNull()
+    expect(
+      screen.getByRole('checkbox', { name: 'Seleccionar registro Some Title' })
+    ).not.toBeChecked()
+  })
+
+  it('selects and deselects the whole page from the header, skipping restricted records', async () => {
+    iaRef.iaGetItem.mockImplementation(async (id: string) => recordFiles[id])
+    await searchPage([
+      {},
+      { identifier: 'other-id', title: 'Locked', restricted: true },
+      { identifier: 'third-id', title: 'Third' },
+    ])
+    expect(screen.getByRole('checkbox', { name: 'Seleccionar registro Locked' })).toBeDisabled()
+    const all = screen.getByRole('checkbox', {
+      name: 'Seleccionar todos los registros de la página',
+    })
+
+    await fireEvent.click(all)
+
+    await screen.findByText('Seleccionados: 3')
+    expect(iaRef.iaGetItem).not.toHaveBeenCalledWith('other-id')
+    expect(all).toBeChecked()
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar registro Third' }))
+    expect(all).toBePartiallyChecked()
+
+    await fireEvent.click(all)
+    await screen.findByText('Seleccionados: 3')
+    await fireEvent.click(all)
+    expect(screen.queryByText(/Seleccionados:/)).toBeNull()
+    expect(all).not.toBeChecked()
+  })
+
+  it('fetches record files a few at a time', async () => {
+    const pending: Array<() => void> = []
+    iaRef.iaGetItem.mockImplementation(
+      (id: string) =>
+        new Promise((resolve) => {
+          pending.push(() => resolve(itemDetails({ identifier: id, pdfs: [pdf()] })))
+        })
+    )
+    await searchPage(
+      Array.from({ length: 10 }, (_, i) => ({ identifier: `id-${i}`, title: `Record ${i}` }))
+    )
+
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar todos los registros de la página' })
+    )
+
+    expect(iaRef.iaGetItem).toHaveBeenCalledTimes(4)
+    while (pending.length > 0) {
+      pending.shift()!()
+      await waitFor(() => undefined)
+    }
+    await screen.findByText('Seleccionados: 10')
+    expect(iaRef.iaGetItem).toHaveBeenCalledTimes(10)
+  })
+
+  function pagedSearch(total: number) {
+    iaRef.iaSearch.mockImplementation(async (_query: unknown, page: number, rows: number) => ({
+      numFound: total,
+      items: Array.from(
+        { length: Math.max(0, Math.min(rows, total - (page - 1) * rows)) },
+        (_, i) =>
+          searchItem({
+            identifier: `id-${(page - 1) * rows + i}`,
+            title: `R${(page - 1) * rows + i}`,
+          })
+      ),
+    }))
+    iaRef.iaGetItem.mockImplementation(async (id: string) =>
+      itemDetails({ identifier: id, pdfs: [pdf()] })
+    )
+  }
+
+  async function searchAndSelectPage() {
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar todos los registros de la página' })
+    )
+    await screen.findByText('Seleccionados: 50')
+  }
+
+  it('queues every result instead of looking up their files one by one', async () => {
+    pagedSearch(2000)
+    await searchAndSelectPage()
+
+    expect(
+      screen.getByText(
+        'Se importan por tandas; si cerrás el importador, la cola se retoma al volver.'
+      )
+    ).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 2.000 resultados' }))
+
+    expect(
+      await screen.findByText('Toda la búsqueda en cola: 2.000 registros', undefined, {
+        timeout: 3000,
+      })
+    ).toBeInTheDocument()
+    // Paged in a stable order: without one, Internet Archive repeats some
+    // records across pages and drops others.
+    expect(iaRef.iaSearch).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Chaplin', kinds: ['pdf'] }),
+      20,
+      100,
+      { stableOrder: true }
+    )
+    // Only the page selection looked files up; the queue resolves them per batch.
+    expect(iaRef.iaGetItem).toHaveBeenCalledTimes(50)
+    expect(screen.queryByText(/Seleccionados:/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Continuar' })).toBeEnabled()
+  })
+
+  it('queues at most the 10,000 results Internet Archive returns', async () => {
+    pagedSearch(12000)
+    await searchAndSelectPage()
+
+    expect(
+      screen.getByText(
+        /Se ponen en cola los primeros 10.000 de 12.000 resultados \(el máximo que entrega Internet Archive\)\./
+      )
+    ).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 10.000 resultados' }))
+
+    expect(
+      await screen.findByText('Toda la búsqueda en cola: 10.000 registros', undefined, {
+        timeout: 5000,
+      })
+    ).toBeInTheDocument()
+    expect(iaRef.iaSearch).not.toHaveBeenCalledWith(expect.anything(), 101, 100)
+  })
+
+  it('takes the queue back out of the selection', async () => {
+    pagedSearch(120)
+    await searchAndSelectPage()
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 120 resultados' }))
+    await screen.findByText('Toda la búsqueda en cola: 120 registros', undefined, {
+      timeout: 3000,
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Quitar la cola' }))
+
+    expect(screen.queryByText(/Toda la búsqueda en cola/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Continuar' })).toBeDisabled()
+  })
+
+  it('does not offer every result while the page is not fully selected', async () => {
+    pagedSearch(120)
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+    expect(screen.queryByRole('button', { name: /Seleccionar los \d+ resultados/ })).toBeNull()
+  })
+
+  it('opens in the wide layout', () => {
+    open()
+
+    expect(screen.getByRole('dialog')).toHaveClass('confirm-dialog--wide')
+  })
+
+  it('changes the page size and searches again from the first page', async () => {
+    iaRef.iaSearch.mockResolvedValue({ numFound: 125, items: [searchItem()] })
+    open()
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findByText('Página 1 de 3')
+    const sizes = screen.getByRole('group', { name: 'Resultados por página' })
+    expect(within(sizes).getByRole('button', { name: '50' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+
+    await fireEvent.click(within(sizes).getByRole('button', { name: '100' }))
+    await screen.findByText('Página 1 de 2')
+
+    expect(iaRef.iaSearch).toHaveBeenLastCalledWith(expect.anything(), 1, 100)
+    expect(within(sizes).getByRole('button', { name: '100' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+  })
+
+  it('never offers a page past the 10 000-result paging limit', async () => {
+    iaRef.iaSearch.mockResolvedValue({ numFound: 4_151_546, items: [searchItem()] })
+    open()
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+
+    // 10 000 / 50 rows = 200 reachable pages, however many hits exist.
+    expect(await screen.findByText('Página 1 de 200')).toBeInTheDocument()
+  })
+
+  it('keeps the results visible beside the item files', async () => {
+    await openItem()
+
+    const results = screen.getByRole('region', { name: 'Resultados' })
+    expect(within(results).getByText('Some Title')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Ver archivos' })).toHaveLength(2)
+    expect(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' })).toBeInTheDocument()
   })
 
   it('explores a collection by id through the Colección tab', async () => {
@@ -330,7 +628,7 @@ describe('InternetArchiveDialog discovery', () => {
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Explorar' }))
 
-    expect(iaRef.iaListCollection).toHaveBeenCalledWith('opensource', 1, 10)
+    expect(iaRef.iaListCollection).toHaveBeenCalledWith('opensource', 1, 50, ['pdf'])
     expect(await screen.findByText('Some Title')).toBeInTheDocument()
   })
 
@@ -343,7 +641,7 @@ describe('InternetArchiveDialog discovery', () => {
       target: { value: 'https://archive.org/details/some-id' },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Abrir' }))
-    expect(await screen.findByText('Archivos PDF')).toBeInTheDocument()
+    expect(await screen.findByText('Archivos')).toBeInTheDocument()
 
     expect(iaRef.iaResolveIdentifier).toHaveBeenCalledWith('https://archive.org/details/some-id')
     expect(iaRef.iaGetItem).toHaveBeenCalledWith('some-id')
@@ -378,7 +676,7 @@ describe('InternetArchiveDialog item and selection', () => {
       })
     )
     await fireEvent.click(screen.getAllByRole('button', { name: 'Ver archivos' })[0]!)
-    await screen.findByText('Archivos PDF')
+    await screen.findByText('Archivos')
 
     expect(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' })).toBeEnabled()
     expect(screen.getByRole('checkbox', { name: 'Seleccionar locked.pdf' })).toBeDisabled()
@@ -408,7 +706,7 @@ describe('InternetArchiveDialog item and selection', () => {
     await screen.findByText('Esta colección no tiene resultados en esta página.')
 
     expect(screen.getByLabelText('Identificador de la colección')).toHaveValue('some-id')
-    expect(iaRef.iaListCollection).toHaveBeenCalledWith('some-id', 1, 10)
+    expect(iaRef.iaListCollection).toHaveBeenCalledWith('some-id', 1, 50, ['pdf'])
   })
 
   it('accumulates the selection across items and lets files be removed', async () => {
@@ -417,10 +715,11 @@ describe('InternetArchiveDialog item and selection', () => {
     open()
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Ver archivos' }))
-    await screen.findByText('Archivos PDF')
+    await screen.findByText('Archivos')
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' }))
     await screen.findByText('Seleccionados: 1')
 
+    await fireEvent.click(screen.getByRole('button', { name: 'Ver selección' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Quitar doc_text.pdf' }))
 
     expect(screen.queryByText('Seleccionados: 1')).toBeNull()
@@ -465,6 +764,43 @@ describe('InternetArchiveDialog destination and preparation', () => {
     await fireEvent.click(screen.getByRole('radio', { name: /Nueva colección/ }))
 
     expect(screen.getByRole('button', { name: 'Preparar importación' })).toBeDisabled()
+  })
+
+  it('counts a PDF twice and an image once in the synced volume', async () => {
+    await goToDestination()
+    iaRef.iaPrepareImport.mockResolvedValue(
+      prepareResult({
+        summary: {
+          totalFiles: 2,
+          availableFiles: 2,
+          restrictedFiles: 0,
+          knownBytes: 2 * 1024 * 1024,
+          unknownSizeFiles: 0,
+          newFiles: 2,
+          alreadyInTarget: 0,
+          inOtherCollection: 0,
+          newVersion: 0,
+          entries: [
+            prepareEntry({ fileName: 'doc.pdf', size: 1024 * 1024 }),
+            prepareEntry({ fileName: 'plate.png', size: 1024 * 1024, kind: 'image' }),
+          ],
+        },
+      })
+    )
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Preparar importación' }))
+    await screen.findByText('Revisa la preparación')
+
+    expect(screen.getByText('Volumen sincronizado estimado: 3 MB')).toBeInTheDocument()
+  })
+
+  it('asks to tick files, not only PDFs, while nothing is selected', async () => {
+    open()
+    expect(
+      await screen.findByText(
+        'Todavía no elegiste ningún archivo. Marca los archivos que quieras importar.'
+      )
+    ).toBeInTheDocument()
   })
 
   it('shows duplicate statuses, rejected files and the synced-volume warning', async () => {
@@ -674,7 +1010,7 @@ describe('InternetArchiveDialog running and done', () => {
     open()
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Ver archivos' }))
-    await screen.findByText('Archivos PDF')
+    await screen.findByText('Archivos')
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' }))
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar elsewhere.pdf' }))
     await screen.findByText('Seleccionados: 2')
@@ -781,7 +1117,7 @@ describe('InternetArchiveDialog running and done', () => {
     open()
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Ver archivos' }))
-    await screen.findByText('Archivos PDF')
+    await screen.findByText('Archivos')
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar doc_text.pdf' }))
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Seleccionar elsewhere.pdf' }))
     await screen.findByText('Seleccionados: 2')
@@ -816,6 +1152,262 @@ describe('InternetArchiveDialog running and done', () => {
 
     expect(unlisten).toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
+  })
+})
+
+describe('InternetArchiveDialog import every result (queue)', () => {
+  let statuses: Record<string, unknown> = {}
+
+  function pagedSearch(total: number) {
+    iaRef.iaSearch.mockImplementation(async (_query: unknown, page: number, rows: number) => ({
+      numFound: total,
+      items: Array.from(
+        { length: Math.max(0, Math.min(rows, total - (page - 1) * rows)) },
+        (_, i) => searchItem({ identifier: `id-${(page - 1) * rows + i}` })
+      ),
+    }))
+    iaRef.iaGetItem.mockImplementation(async (id: string) =>
+      itemDetails({ identifier: id, pdfs: [pdf()] })
+    )
+  }
+
+  async function queueAndPrepare(total: number) {
+    pagedSearch(total)
+    iaRef.iaGetImportStatus.mockImplementation(async (id: string) => statuses[id])
+    iaRef.iaStartImport.mockResolvedValue(undefined)
+    iaRef.iaPrepareImport
+      .mockResolvedValueOnce(prepareResult({ jobId: 'job-1' }))
+      .mockResolvedValueOnce(prepareResult({ jobId: 'job-2' }))
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar todos los registros de la página' })
+    )
+    await screen.findByText('Seleccionados: 50')
+    await fireEvent.click(
+      screen.getByRole('button', { name: `Seleccionar los ${total} resultados` })
+    )
+    await screen.findByText(`Toda la búsqueda en cola: ${total} registros`, undefined, {
+      timeout: 3000,
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Continuar' }))
+    await screen.findByText('Destino')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Preparar importación' }))
+    await screen.findByText('Revisa la preparación', undefined, { timeout: 3000 })
+  }
+
+  function savedQueue(): {
+    collectionId: string
+    currentJobId: string | null
+    records: Array<{ identifier: string; state: string }>
+  } {
+    const calls = iaRef.iaQueueSave.mock.calls
+    return JSON.parse(calls[calls.length - 1]![0] as string)
+  }
+
+  beforeEach(() => {
+    statuses = {}
+    // Queued once-values survive clearAllMocks; start and end each test clean.
+    iaRef.iaPrepareImport.mockReset()
+  })
+
+  afterEach(() => {
+    iaRef.iaPrepareImport.mockReset()
+  })
+
+  it('shows how far the preparation of a batch has got', async () => {
+    pagedSearch(150)
+    let releaseLookup: () => void = () => {}
+    const lookupGate = new Promise<void>((resolve) => (releaseLookup = resolve))
+    iaRef.iaGetItem.mockImplementation(async (id: string) => {
+      if (id === 'id-99') await lookupGate
+      return itemDetails({ identifier: id, pdfs: [pdf()] })
+    })
+    let finishPrepare: (value: unknown) => void = () => {}
+    iaRef.iaPrepareImport.mockImplementationOnce(
+      () => new Promise((resolve) => (finishPrepare = resolve))
+    )
+    open()
+    await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findAllByRole('button', { name: 'Ver archivos' })
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Seleccionar todos los registros de la página' })
+    )
+    await screen.findByText('Seleccionados: 50')
+    await fireEvent.click(screen.getByRole('button', { name: 'Seleccionar los 150 resultados' }))
+    await screen.findByText('Toda la búsqueda en cola: 150 registros', undefined, {
+      timeout: 3000,
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Continuar' }))
+    await screen.findByText('Destino')
+    await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Preparar importación' }))
+
+    expect(
+      await screen.findByText('Revisando los registros de la tanda: 96 de 100', undefined, {
+        timeout: 3000,
+      })
+    ).toBeInTheDocument()
+    releaseLookup()
+    expect(
+      await screen.findByText('Preparando la importación de 100 registros…', undefined, {
+        timeout: 3000,
+      })
+    ).toBeInTheDocument()
+    finishPrepare(prepareResult({ jobId: 'job-1' }))
+    await screen.findByText('Revisa la preparación', undefined, { timeout: 3000 })
+    expect(screen.queryByText(/Revisando los registros/)).toBeNull()
+    expect(screen.queryByText(/Preparando la importación de/)).toBeNull()
+  })
+
+  it('prepares the first batch of the queue and saves the queue', async () => {
+    await queueAndPrepare(150)
+
+    const [collectionId, selections] = iaRef.iaPrepareImport.mock.calls[0]!
+    expect(collectionId).toBe('col-1')
+    expect(selections).toHaveLength(100)
+    expect(selections[0]).toEqual({ identifier: 'id-0', fileNames: ['doc_text.pdf'] })
+    const queue = savedQueue()
+    expect(queue.collectionId).toBe('col-1')
+    expect(queue.currentJobId).toBe('job-1')
+    expect(queue.records).toHaveLength(150)
+    expect(queue.records.filter((record) => record.state === 'batched')).toHaveLength(100)
+    expect(screen.getByText('Tanda de 100 registros · 0 de 150 ya procesados')).toBeInTheDocument()
+  })
+
+  it('chains the next batch when one finishes and clears the queue at the end', async () => {
+    await queueAndPrepare(150)
+    statuses['job-1'] = jobStatus({ id: 'job-1', state: 'running' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Iniciar importación' }))
+    await screen.findByText('Importando…')
+
+    statuses['job-1'] = jobStatus({
+      id: 'job-1',
+      state: 'completed',
+      running: false,
+      files: [jobFile({ state: 'imported' })],
+    })
+    statuses['job-2'] = jobStatus({ id: 'job-2', state: 'running' })
+    jobHandler?.('job-1')
+
+    await waitFor(() => expect(iaRef.iaStartImport).toHaveBeenCalledWith('job-2'))
+    const [, second] = iaRef.iaPrepareImport.mock.calls[1]!
+    expect(second).toHaveLength(50)
+    expect(second[0]).toEqual({ identifier: 'id-100', fileNames: ['doc_text.pdf'] })
+    expect(savedQueue().currentJobId).toBe('job-2')
+
+    statuses['job-2'] = jobStatus({
+      id: 'job-2',
+      state: 'completed',
+      running: false,
+      files: [jobFile({ state: 'imported' })],
+    })
+    jobHandler?.('job-2')
+
+    expect(
+      await screen.findByText('Toda la búsqueda quedó importada (150 registros).')
+    ).toBeInTheDocument()
+    expect(iaRef.iaQueueClear).toHaveBeenCalled()
+  })
+
+  it('pauses the queue when its batch is cancelled', async () => {
+    await queueAndPrepare(150)
+    statuses['job-1'] = jobStatus({ id: 'job-1', state: 'running' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Iniciar importación' }))
+    await screen.findByText('Importando…')
+
+    statuses['job-1'] = jobStatus({
+      id: 'job-1',
+      state: 'cancelled',
+      running: false,
+      files: [jobFile({ state: 'cancelled' })],
+    })
+    jobHandler?.('job-1')
+
+    expect(
+      await screen.findByText(
+        'La cola quedó en pausa: faltan 150 registros. Se retoma al volver a abrir el importador.'
+      )
+    ).toBeInTheDocument()
+    const queue = savedQueue()
+    expect(queue.currentJobId).toBeNull()
+    expect(queue.records.every((record) => record.state === 'pending')).toBe(true)
+    expect(iaRef.iaQueueClear).not.toHaveBeenCalled()
+    expect(iaRef.iaPrepareImport).toHaveBeenCalledTimes(1)
+  })
+
+  const storedQueue = (patch: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      version: 1,
+      collectionId: 'col-1',
+      label: 'Chaplin',
+      kinds: ['pdf'],
+      records: [
+        { identifier: 'id-1', title: 'Uno', state: 'done' },
+        { identifier: 'id-2', title: 'Dos', state: 'pending' },
+        { identifier: 'id-3', title: 'Tres', state: 'pending' },
+      ],
+      currentJobId: null,
+      ...patch,
+    })
+
+  it('offers to resume a saved queue and runs its next batch without asking again', async () => {
+    iaRef.iaQueueLoad.mockResolvedValue(storedQueue())
+    iaRef.iaGetItem.mockImplementation(async (id: string) =>
+      itemDetails({ identifier: id, pdfs: [pdf()] })
+    )
+    iaRef.iaPrepareImport.mockResolvedValue(prepareResult({ jobId: 'job-5' }))
+    iaRef.iaStartImport.mockResolvedValue(undefined)
+    iaRef.iaGetImportStatus.mockResolvedValue(jobStatus({ id: 'job-5' }))
+    open()
+
+    expect(await screen.findByText('Importación por tandas pendiente')).toBeInTheDocument()
+    expect(screen.getByText('Chaplin: 1 de 3 registros procesados')).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Continuar la cola' }))
+
+    await waitFor(() => expect(iaRef.iaStartImport).toHaveBeenCalledWith('job-5'))
+    expect(iaRef.iaPrepareImport).toHaveBeenCalledWith('col-1', [
+      { identifier: 'id-2', fileNames: ['doc_text.pdf'] },
+      { identifier: 'id-3', fileNames: ['doc_text.pdf'] },
+    ])
+    expect(await screen.findByText('Importando…')).toBeInTheDocument()
+  })
+
+  it('resumes the running batch of a saved queue instead of preparing another', async () => {
+    iaRef.iaQueueLoad.mockResolvedValue(storedQueue({ currentJobId: 'job-7' }))
+    iaRef.iaListJobs.mockResolvedValue([
+      {
+        id: 'job-7',
+        state: 'running',
+        targetCollectionId: 'col-1',
+        totalFiles: 2,
+        verifiedFiles: 1,
+      },
+    ])
+    iaRef.iaGetImportStatus.mockResolvedValue(jobStatus({ id: 'job-7', state: 'running' }))
+    open()
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Continuar la cola' }))
+
+    expect(await screen.findByText('Importando…')).toBeInTheDocument()
+    expect(iaRef.iaGetImportStatus).toHaveBeenCalledWith('job-7')
+    expect(iaRef.iaPrepareImport).not.toHaveBeenCalled()
+    // The queue's own job is not offered a second time as a loose import.
+    expect(screen.queryByText('Importaciones en curso')).toBeNull()
+  })
+
+  it('discards a saved queue', async () => {
+    iaRef.iaQueueLoad.mockResolvedValue(storedQueue())
+    open()
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Descartar la cola' }))
+
+    expect(iaRef.iaQueueClear).toHaveBeenCalled()
+    await waitFor(() => expect(screen.queryByText('Importación por tandas pendiente')).toBeNull())
   })
 })
 
@@ -935,21 +1527,19 @@ describe('InternetArchiveDialog stale responses (28)', () => {
     })
     const buttons = screen.getAllByRole('button', { name: 'Ver archivos' })
     await fireEvent.click(buttons[0]!)
-    // The first item is still loading: go back and open the second one, so
-    // both `iaGetItem` calls overlap with the first resolving last.
-    await screen.findByRole('button', { name: 'Volver' })
-    await fireEvent.click(screen.getByRole('button', { name: 'Volver' }))
-    await screen.findByText('Some Title')
-    const again = screen.getAllByRole('button', { name: 'Ver archivos' })
-    await fireEvent.click(again[1]!)
+    // The first item is still loading: open the second one from the list
+    // that stays beside it, so both `iaGetItem` calls overlap with the first
+    // resolving last.
+    await fireEvent.click(buttons[1]!)
+    const detail = screen.getByRole('region', { name: 'Registro seleccionado' })
     resolveSecond(itemDetails({ identifier: 'other-id', title: 'Other Title' }))
-    await screen.findByText('Other Title')
+    await within(detail).findByText('Other Title')
     resolveFirst(itemDetails({ identifier: 'some-id', title: 'Some Title' }))
     // Let the stale first response settle.
     await waitFor(() => expect(iaRef.iaGetItem).toHaveBeenCalledTimes(2))
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(screen.getByText('Other Title')).toBeInTheDocument()
-    expect(screen.queryByText('some-id')).toBeNull()
+    expect(within(detail).getByText('Other Title')).toBeInTheDocument()
+    expect(within(detail).queryByText('some-id')).toBeNull()
   })
 
   it('does not let an older status overwrite a newer one', async () => {

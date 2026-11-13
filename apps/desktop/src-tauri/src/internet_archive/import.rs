@@ -63,6 +63,26 @@ pub(crate) enum Existing {
     Partial { item_id: String },
 }
 
+/// What a whole import of one remote file looks like in the collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Expected {
+    /// One parent PDF asset with page children `1..=pages`.
+    Pdf { pages: u32 },
+    /// One parent image asset with no children.
+    Image,
+}
+
+impl Expected {
+    /// Expectation for a verified job file with its recorded page count.
+    pub(crate) fn for_file(file: &JobFile, page_count: u32) -> Self {
+        if file.kind() == internet_archive::FileKind::Image {
+            Expected::Image
+        } else {
+            Expected::Pdf { pages: page_count }
+        }
+    }
+}
+
 /// Classify what the target collection already holds for one verified file.
 ///
 /// Candidates are items in `collection_id` whose provenance (via
@@ -76,7 +96,7 @@ pub(crate) fn existing_import(
     identifier: &str,
     file_name: &str,
     sha256: &str,
-    page_count: u32,
+    expected: Expected,
 ) -> rusqlite::Result<Existing> {
     // Candidates: items in the target collection whose provenance carries
     // this identifier. `json_valid` guards the extract so one malformed row
@@ -108,7 +128,7 @@ pub(crate) fn existing_import(
             continue;
         }
         // Lowest id first: the first `Complete` wins outright.
-        if is_complete(conn, data_dir, &item_id, page_count)? {
+        if is_complete(conn, data_dir, &item_id, expected)? {
             return Ok(Existing::Complete { item_id });
         }
         if partial.is_none() {
@@ -121,22 +141,29 @@ pub(crate) fn existing_import(
     })
 }
 
-/// True when `item_id` holds exactly one parent PDF asset (no parent of its
-/// own) whose children carry page numbers exactly `1..=page_count` — no
-/// duplicates, no extras — with every one of those files present on disk
-/// after [`resolve_asset_path`]. Anything else is a remnant, not an import.
+/// True when `item_id` holds exactly one parent asset of the expected type
+/// (no parent of its own) with every file present on disk after
+/// [`resolve_asset_path`]: for [`Expected::Pdf`] its children carry page
+/// numbers exactly `1..=pages` — no duplicates, no extras —, for
+/// [`Expected::Image`] it has no children. Root assets of the other type
+/// are ignored. Anything else is a remnant, not an import.
 fn is_complete(
     conn: &rusqlite::Connection,
     data_dir: &Path,
     item_id: &str,
-    page_count: u32,
+    expected: Expected,
 ) -> rusqlite::Result<bool> {
+    let asset_type = match expected {
+        Expected::Pdf { .. } => "pdf",
+        Expected::Image => "image",
+    };
     let mut stmt = conn.prepare(
-        "SELECT id, path FROM assets \
-         WHERE item_id = ?1 AND type = 'pdf' AND parent_asset_id IS NULL",
+        "SELECT id, path FROM assets          WHERE item_id = ?1 AND type = ?2 AND parent_asset_id IS NULL",
     )?;
     let parents: Vec<(String, String)> = stmt
-        .query_map([item_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .query_map(rusqlite::params![item_id, asset_type], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
         .collect::<Result<_, _>>()?;
     if parents.len() != 1 {
         return Ok(false);
@@ -150,6 +177,10 @@ fn is_complete(
     let children: Vec<(Option<i64>, String)> = stmt
         .query_map([parent_id], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<_, _>>()?;
+    let page_count = match expected {
+        Expected::Image => return Ok(children.is_empty()),
+        Expected::Pdf { pages } => pages,
+    };
     if children.len() != page_count as usize {
         return Ok(false);
     }
@@ -264,7 +295,7 @@ pub(crate) fn begin_file_import(
             &identifier,
             &file_name,
             &sha256,
-            page_count,
+            Expected::for_file(file, page_count),
         )
         .map_err(|error| format!("db: {error}"))?
     };
@@ -329,7 +360,7 @@ fn validate_confirm(
     identifier: &str,
     file_name: &str,
     sha256: Option<&str>,
-    page_count: Option<u32>,
+    expected: Option<Expected>,
     item_id: &str,
 ) -> Result<(), ConfirmError> {
     use rusqlite::OptionalExtension as _;
@@ -353,7 +384,7 @@ fn validate_confirm(
     }
     // Without the recorded fingerprint completeness cannot be established;
     // back to `Verified` like any other validation failure.
-    let (Some(sha256), Some(page_count)) = (sha256, page_count) else {
+    let (Some(sha256), Some(expected)) = (sha256, expected) else {
         return Err(ConfirmError::Validation(
             "incomplete_import: verified file lost its fingerprint".to_string(),
         ));
@@ -373,7 +404,7 @@ fn validate_confirm(
     }
     // Completeness of this exact item: another complete copy with a lower
     // id must not make a correct confirmation fail.
-    if is_complete(conn, data_dir, item_id, page_count)
+    if is_complete(conn, data_dir, item_id, expected)
         .map_err(|error| ConfirmError::Infra(format!("db: {error}")))?
     {
         Ok(())
@@ -410,7 +441,9 @@ pub(crate) fn confirm_file_imported(
     let identifier = file.identifier.clone();
     let file_name = file.file_name.clone();
     let sha256 = file.sha256.clone();
-    let page_count = file.page_count;
+    let expected = file
+        .page_count
+        .map(|page_count| Expected::for_file(file, page_count));
     let outcome = {
         let conn = ui
             .lock()
@@ -422,7 +455,7 @@ pub(crate) fn confirm_file_imported(
             &identifier,
             &file_name,
             sha256.as_deref().filter(|hash| !hash.trim().is_empty()),
-            page_count,
+            expected,
             item_id,
         )
     };
@@ -538,6 +571,8 @@ struct DurableEntry {
     collection_id: Option<String>,
     sha256: Option<String>,
     page_count: Option<u32>,
+    /// The file is an image (one image asset, no pages).
+    image: bool,
     staging_name: String,
 }
 
@@ -583,6 +618,7 @@ fn durable_entries(store: &JobStore, jobs: &Mutex<()>) -> Result<Vec<DurableEntr
                 collection_id: collection_id.clone(),
                 sha256: file.sha256.clone().filter(|hash| !hash.trim().is_empty()),
                 page_count: file.page_count,
+                image: file.kind() == internet_archive::FileKind::Image,
                 staging_name,
             });
         }
@@ -613,7 +649,11 @@ fn classify_durable(
         &entry.identifier,
         &entry.file_name,
         sha256,
-        page_count,
+        if entry.image {
+            Expected::Image
+        } else {
+            Expected::Pdf { pages: page_count }
+        },
     )
     .map_err(|error| format!("db: {error}"))
 }
@@ -701,6 +741,7 @@ pub(crate) fn finish_reconcile(
             collection_id: target_collection_id(&job),
             sha256: file.sha256.clone().filter(|hash| !hash.trim().is_empty()),
             page_count: file.page_count,
+            image: file.kind() == internet_archive::FileKind::Image,
             staging_name,
         }
     };
@@ -1045,8 +1086,16 @@ mod tests {
         let ctx = ctx();
         let conn = ctx.ui.lock().unwrap();
         assert_eq!(
-            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
-                .expect("classifies"),
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
             Existing::None,
         );
     }
@@ -1066,8 +1115,16 @@ mod tests {
         );
         let conn = ctx.ui.lock().unwrap();
         assert_eq!(
-            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
-                .expect("classifies"),
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
             Existing::Complete {
                 item_id: "item-1".to_string(),
             },
@@ -1107,8 +1164,16 @@ mod tests {
         }
         let conn = ctx.ui.lock().unwrap();
         assert_eq!(
-            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
-                .expect("classifies"),
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
             Existing::Partial {
                 item_id: "item-1".to_string(),
             },
@@ -1148,8 +1213,16 @@ mod tests {
         }
         let conn = ctx.ui.lock().unwrap();
         assert_eq!(
-            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
-                .expect("classifies"),
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
             Existing::Partial {
                 item_id: "item-1".to_string(),
             },
@@ -1188,8 +1261,16 @@ mod tests {
         }
         let conn = ctx.ui.lock().unwrap();
         assert_eq!(
-            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
-                .expect("classifies"),
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
             Existing::Partial {
                 item_id: "item-1".to_string(),
             },
@@ -1218,8 +1299,16 @@ mod tests {
         .expect("remove page file");
         let conn = ctx.ui.lock().unwrap();
         assert_eq!(
-            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
-                .expect("classifies"),
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
             Existing::Partial {
                 item_id: "item-1".to_string(),
             },
@@ -1249,8 +1338,159 @@ mod tests {
         }
         let conn = ctx.ui.lock().unwrap();
         assert_eq!(
-            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
-                .expect("classifies"),
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
+            Existing::Partial {
+                item_id: "item-1".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn existing_image_is_complete_with_one_image_asset_and_no_pages() {
+        let ctx = ctx();
+        {
+            let conn = ctx.ui.lock().unwrap();
+            insert_item(&conn, "item-1", "col-1", Some(&prov_meta(IDENT, FILE, SHA)));
+            let path = "assets/col-1/item-1/plate.png";
+            insert_asset(&conn, "a1", "item-1", path, "image", None, None);
+            touch(&ctx.data_dir, path);
+        }
+        let conn = ctx.ui.lock().unwrap();
+        assert_eq!(
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Image
+            )
+            .expect("classifies"),
+            Existing::Complete {
+                item_id: "item-1".to_string(),
+            },
+        );
+        // An image never stands in for a multi-page document.
+        assert_eq!(
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
+            Existing::Partial {
+                item_id: "item-1".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn existing_pdf_stays_complete_when_an_image_asset_is_added() {
+        let ctx = ctx();
+        {
+            let conn = ctx.ui.lock().unwrap();
+            insert_complete_item(
+                &conn,
+                &ctx.data_dir,
+                "item-1",
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                PAGES,
+            );
+            let path = "assets/col-1/item-1/extra.png";
+            insert_asset(&conn, "extra", "item-1", path, "image", None, None);
+            touch(&ctx.data_dir, path);
+        }
+        let conn = ctx.ui.lock().unwrap();
+        assert_eq!(
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
+            Existing::Complete {
+                item_id: "item-1".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn one_page_pdf_without_its_pdf_is_partial_even_with_an_image() {
+        let ctx = ctx();
+        {
+            let conn = ctx.ui.lock().unwrap();
+            insert_item(&conn, "item-1", "col-1", Some(&prov_meta(IDENT, FILE, SHA)));
+            let path = "assets/col-1/item-1/added.png";
+            insert_asset(&conn, "a1", "item-1", path, "image", None, None);
+            touch(&ctx.data_dir, path);
+        }
+        let conn = ctx.ui.lock().unwrap();
+        assert_eq!(
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: 1 }
+            )
+            .expect("classifies"),
+            Existing::Partial {
+                item_id: "item-1".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn existing_image_with_its_file_gone_is_partial() {
+        let ctx = ctx();
+        {
+            let conn = ctx.ui.lock().unwrap();
+            insert_item(&conn, "item-1", "col-1", Some(&prov_meta(IDENT, FILE, SHA)));
+            insert_asset(
+                &conn,
+                "a1",
+                "item-1",
+                "assets/col-1/item-1/plate.png",
+                "image",
+                None,
+                None,
+            );
+        }
+        let conn = ctx.ui.lock().unwrap();
+        assert_eq!(
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Image
+            )
+            .expect("classifies"),
             Existing::Partial {
                 item_id: "item-1".to_string(),
             },
@@ -1272,8 +1512,16 @@ mod tests {
         );
         let conn = ctx.ui.lock().unwrap();
         assert_eq!(
-            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
-                .expect("classifies"),
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
             Existing::None,
         );
     }
@@ -1321,8 +1569,16 @@ mod tests {
         );
         let conn = ctx.ui.lock().unwrap();
         assert_eq!(
-            existing_import(&conn, &ctx.data_dir, "col-1", IDENT, FILE, SHA, PAGES)
-                .expect("classifies"),
+            existing_import(
+                &conn,
+                &ctx.data_dir,
+                "col-1",
+                IDENT,
+                FILE,
+                SHA,
+                Expected::Pdf { pages: PAGES }
+            )
+            .expect("classifies"),
             Existing::Complete {
                 item_id: "item-2".to_string(),
             },

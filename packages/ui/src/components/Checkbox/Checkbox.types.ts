@@ -6,6 +6,8 @@ export interface CheckboxProps {
   /** Label content. Rendered inside the same `<label>` as the control. */
   children?: Snippet
   disabled?: boolean
+  /** Mixed state (some, not all, of a group): drawn as a dash, read as mixed. */
+  indeterminate?: boolean
   /** Fires after the control settles on its new value. */
   onchange?: (checked: boolean) => void
   /** Accessible name when the row renders no visible label. */

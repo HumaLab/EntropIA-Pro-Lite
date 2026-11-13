@@ -276,6 +276,9 @@ const APP_COMMANDS: &[&str] = &[
     "ia_fail_file_import",
     "ia_list_reconcile",
     "ia_finish_reconcile",
+    "ia_queue_load",
+    "ia_queue_save",
+    "ia_queue_clear",
     // The assistant endpoint's settings panel (D11).
     "agent_access_status",
     "agent_access_set_enabled",

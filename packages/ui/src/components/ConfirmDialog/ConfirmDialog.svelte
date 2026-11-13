@@ -19,6 +19,7 @@
     confirmIcon,
     confirmAriaLabel,
     variant = 'default',
+    size = 'compact',
     confirming = false,
     confirmDisabled = false,
     cancelDisabled = false,
@@ -152,6 +153,7 @@
     bind:this={dialogEl}
     class="confirm-dialog"
     class:confirm-dialog--destructive={isDestructive}
+    class:confirm-dialog--wide={size === 'wide'}
     role="dialog"
     aria-modal="true"
     aria-labelledby={titleId}
@@ -218,6 +220,23 @@
     box-shadow: var(--shadow-lg);
     font-family: var(--font-ui);
     color: var(--color-text-primary);
+  }
+
+  .confirm-dialog--wide {
+    width: min(100%, 1120px);
+    max-height: 100%;
+    padding: var(--space-5);
+  }
+
+  .confirm-dialog--wide .confirm-dialog__content {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .confirm-dialog--wide .confirm-dialog__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .confirm-dialog:focus-visible {

@@ -49,11 +49,27 @@ describe('read commands', () => {
       rows: 25,
     })
 
+    await iaSearch({ text: 'chaplin', textsOnly: true }, 3, 100, { stableOrder: true })
+    expect(invoke).toHaveBeenLastCalledWith('ia_search', {
+      query: { text: 'chaplin', textsOnly: true },
+      page: 3,
+      rows: 100,
+      stableOrder: true,
+    })
+
     await iaListCollection('opensource', 1, 50)
     expect(invoke).toHaveBeenCalledWith('ia_list_collection', {
       collection: 'opensource',
       page: 1,
       rows: 50,
+    })
+
+    await iaListCollection('opensource', 1, 50, ['pdf_text', 'image'])
+    expect(invoke).toHaveBeenLastCalledWith('ia_list_collection', {
+      collection: 'opensource',
+      page: 1,
+      rows: 50,
+      kinds: ['pdf_text', 'image'],
     })
 
     await iaGetItem('some-id')

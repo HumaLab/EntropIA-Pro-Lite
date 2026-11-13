@@ -8,8 +8,8 @@
 //! path — and [`ia_resolve_identifier`] returns an identifier, never a URL.
 
 use internet_archive::{
-    Availability, Endpoints, FileSource, IaClient, IaError, ItemDetails, PdfFile, RestrictedReason,
-    SearchPage, SearchQuery,
+    Availability, Endpoints, FileKind, FileSource, IaClient, IaError, ItemDetails, PdfFile,
+    RestrictedReason, SearchPage, SearchQuery,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -57,6 +57,37 @@ pub struct SearchQueryDto {
     /// When true (default), the query also requires `mediatype:texts`.
     #[serde(default = "default_texts_only")]
     pub texts_only: bool,
+    /// File kinds to look for; empty (or missing) keeps `textsOnly`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<FileKindDto>,
+}
+
+/// A user-facing file kind, as the frontend sends it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKindDto {
+    Pdf,
+    PdfText,
+    Image,
+}
+
+impl From<FileKindDto> for FileKind {
+    fn from(kind: FileKindDto) -> Self {
+        match kind {
+            FileKindDto::Pdf => FileKind::Pdf,
+            FileKindDto::PdfText => FileKind::PdfText,
+            FileKindDto::Image => FileKind::Image,
+        }
+    }
+}
+
+/// The stable string tag of a [`FileKind`] (`pdf`, `pdf_text`, `image`).
+pub(crate) fn file_kind_tag(kind: FileKind) -> &'static str {
+    match kind {
+        FileKind::Pdf => "pdf",
+        FileKind::PdfText => "pdf_text",
+        FileKind::Image => "image",
+    }
 }
 
 fn default_texts_only() -> bool {
@@ -74,6 +105,7 @@ impl Default for SearchQueryDto {
             year_from: None,
             year_to: None,
             texts_only: true,
+            kinds: Vec::new(),
         }
     }
 }
@@ -99,6 +131,7 @@ impl SearchQueryDto {
             year_from: self.year_from,
             year_to: self.year_to,
             texts_only: self.texts_only,
+            kinds: self.kinds.iter().copied().map(FileKind::from).collect(),
         }
     }
 }
@@ -152,6 +185,8 @@ impl From<SearchPage> for SearchPageDto {
 pub struct PdfFileDto {
     pub name: String,
     pub format: Option<String>,
+    /// `pdf` or `pdf_text` (see [`file_kind_tag`]).
+    pub kind: &'static str,
     pub source: String,
     pub size: Option<u64>,
     pub mtime: Option<u64>,
@@ -182,6 +217,7 @@ impl From<internet_archive::PdfFile> for PdfFileDto {
     fn from(file: internet_archive::PdfFile) -> Self {
         Self {
             availability: availability_tag(&file.availability).to_string(),
+            kind: file_kind_tag(file.kind()),
             name: file.name,
             format: file.format,
             source: file_source_tag(&file.source),
@@ -285,18 +321,25 @@ pub(crate) fn resolve_identifier_logic(input: &str) -> Result<String, String> {
     internet_archive::resolve_identifier(input).map_err(|error| ia_error(&error))
 }
 
-/// Run a structured search over `page` (1-based) with `rows` per page.
+/// Run a structured search over `page` (1-based) with `rows` per page;
+/// `stable_order` sorts by identifier so every page of a walk is distinct.
 pub(crate) async fn search_logic(
     client: &IaClient,
     endpoints: &Endpoints,
     query: &SearchQueryDto,
     page: u32,
     rows: u32,
+    stable_order: bool,
 ) -> Result<SearchPageDto, String> {
-    client
-        .search(endpoints, &query.to_search_query(), page, rows)
-        .await
-        .map(SearchPageDto::from)
+    let query = query.to_search_query();
+    let page = if stable_order {
+        client
+            .search_in_stable_order(endpoints, &query, page, rows)
+            .await
+    } else {
+        client.search(endpoints, &query, page, rows).await
+    };
+    page.map(SearchPageDto::from)
         .map_err(|error| ia_error(&error))
 }
 
@@ -305,11 +348,13 @@ pub(crate) async fn list_collection_logic(
     client: &IaClient,
     endpoints: &Endpoints,
     collection: &str,
+    kinds: &[FileKindDto],
     page: u32,
     rows: u32,
 ) -> Result<SearchPageDto, String> {
+    let kinds: Vec<FileKind> = kinds.iter().copied().map(FileKind::from).collect();
     client
-        .list_collection(endpoints, collection, page, rows)
+        .list_collection_of_kinds(endpoints, collection, &kinds, page, rows)
         .await
         .map(SearchPageDto::from)
         .map_err(|error| ia_error(&error))
@@ -336,25 +381,46 @@ pub async fn ia_resolve_identifier(input: String) -> Result<String, String> {
 }
 
 /// Run a structured search over `page` (1-based) with `rows` per page.
+/// `stable_order` (default off: relevance order) sorts by identifier, for
+/// walking every page of the results.
 #[tauri::command]
 pub async fn ia_search(
     query: SearchQueryDto,
     page: u32,
     rows: u32,
+    stable_order: Option<bool>,
     state: State<'_, IaState>,
 ) -> Result<SearchPageDto, String> {
-    search_logic(&state.client, &state.endpoints, &query, page, rows).await
+    search_logic(
+        &state.client,
+        &state.endpoints,
+        &query,
+        page,
+        rows,
+        stable_order.unwrap_or(false),
+    )
+    .await
 }
 
-/// List one page of a collection (identifier only, never a URL or a path).
+/// List one page of a collection (identifier only, never a URL or a path),
+/// optionally restricted to file kinds (missing = texts only, as before).
 #[tauri::command]
 pub async fn ia_list_collection(
     collection: String,
     page: u32,
     rows: u32,
+    kinds: Option<Vec<FileKindDto>>,
     state: State<'_, IaState>,
 ) -> Result<SearchPageDto, String> {
-    list_collection_logic(&state.client, &state.endpoints, &collection, page, rows).await
+    list_collection_logic(
+        &state.client,
+        &state.endpoints,
+        &collection,
+        kinds.as_deref().unwrap_or(&[]),
+        page,
+        rows,
+    )
+    .await
 }
 
 /// Fetch tolerant item metadata with its PDF availability (identifier only).
@@ -444,6 +510,9 @@ pub struct PrepareEntryDto {
     /// Availability tag (`available` here: only importable files are listed).
     pub availability: String,
     pub size: Option<u64>,
+    /// File kind tag (`pdf`, `pdf_text` or `image`): an image is synced once,
+    /// a PDF about twice (original plus its pages).
+    pub kind: String,
     /// Duplicate classification against the local provenance.
     pub duplicate: Option<DuplicateStatusDto>,
 }
@@ -455,6 +524,7 @@ impl From<&internet_archive::prepare::PrepareEntry> for PrepareEntryDto {
             file_name: entry.file_name.clone(),
             availability: availability_tag(&entry.availability).to_string(),
             size: entry.size,
+            kind: file_kind_tag(entry.kind).to_string(),
             duplicate: entry.duplicate.as_ref().map(DuplicateStatusDto::from),
         }
     }
@@ -512,6 +582,11 @@ pub struct PrepareResultDto {
     pub rejected: Vec<RejectedDto>,
 }
 
+/// Item lookups a preparation runs at once (same as the dialog's batch
+/// builder): enough to cut the wait of a 100-record batch about fourfold,
+/// few enough to stay polite with archive.org.
+pub(crate) const PREPARE_LOOKUP_CONCURRENCY: usize = 4;
+
 /// Item metadata source for import preparation. The production
 /// implementation reads through [`IaClient::get_item`]; tests substitute
 /// fixture maps, so no prepare test touches the network.
@@ -535,10 +610,49 @@ impl ItemFetcher for LiveFetcher<'_> {
     }
 }
 
+/// Look up every identifier at once and return the results in the same
+/// order. Polls the lookups in place (no spawned tasks), so the fetcher may
+/// borrow and the caller's future stays `Send` when the fetcher's is.
+async fn fetch_together<F>(fetcher: &F, identifiers: &[String]) -> Vec<Result<ItemDetails, String>>
+where
+    F: ItemFetcher,
+{
+    use std::future::Future as _;
+    use std::task::Poll;
+
+    let mut lookups: Vec<_> = identifiers
+        .iter()
+        .map(|identifier| Box::pin(fetcher.fetch_item(identifier)))
+        .collect();
+    let mut results: Vec<Option<Result<ItemDetails, String>>> =
+        identifiers.iter().map(|_| None).collect();
+    std::future::poll_fn(|cx| {
+        let mut waiting = false;
+        for (lookup, result) in lookups.iter_mut().zip(results.iter_mut()) {
+            if result.is_none() {
+                match lookup.as_mut().poll(cx) {
+                    Poll::Ready(value) => *result = Some(value),
+                    Poll::Pending => waiting = true,
+                }
+            }
+        }
+        if waiting {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    })
+    .await;
+    results
+        .into_iter()
+        .map(|result| result.expect("every lookup finished"))
+        .collect()
+}
+
 /// Prepare an import job over an existing collection: validate the request,
 /// open the provenance snapshot (synchronously, under the caller's SQLite
-/// lock — never held across an `.await`), fetch each identifier once in
-/// order, include every requested `Available` PDF via [`JobFile::from_pdf`],
+/// lock — never held across an `.await`), fetch each identifier once (a few
+/// at a time), include every requested `Available` PDF via [`JobFile::from_pdf`],
 /// report the rest as `rejected`, persist the job with [`JobStore::create`],
 /// and return the job id with its [`summarize`] summary. Fails with
 /// `nothing_to_import` (creating no job) when no requested file is
@@ -622,11 +736,12 @@ where
     if !snapshot.collection_exists {
         return Err(format!("collection_not_found: {collection_id:?}"));
     }
-    // Sequential fetches; a fetcher error already carries its own code.
+    // A few fetches at a time; a fetcher error already carries its own code.
     let mut details_by_id = HashMap::with_capacity(identifiers.len());
-    for identifier in &identifiers {
-        let details = fetcher.fetch_item(identifier).await?;
-        details_by_id.insert(identifier.clone(), details);
+    for chunk in identifiers.chunks(PREPARE_LOOKUP_CONCURRENCY) {
+        for (identifier, details) in chunk.iter().zip(fetch_together(fetcher, chunk).await) {
+            details_by_id.insert(identifier.clone(), details?);
+        }
     }
     let target = ImportTarget::ExistingCollection {
         collection_id: collection_id.to_string(),
@@ -846,9 +961,10 @@ pub(crate) fn job_to_status(job: &Job, running: bool) -> JobStatusDto {
             index,
             identifier: file.identifier.clone(),
             file_name: file.file_name.clone(),
-            display_file_name: internet_archive::display_file_name(
+            display_file_name: internet_archive::display_file_name_for(
                 &file.file_name,
                 &file.identifier,
+                file.staging_extension(),
             ),
             state: file.state,
             attempts: file.attempts,
@@ -892,11 +1008,18 @@ pub(crate) fn verified_file_entry(
     let dest = store
         .staging_path(&job.id, &staging_name)
         .map_err(|_| "io: local storage error".to_string())?;
-    let display = internet_archive::display_file_name(&file.file_name, &file.identifier);
+    let extension = file.staging_extension();
+    let display =
+        internet_archive::display_file_name_for(&file.file_name, &file.identifier, extension);
     let item_title = job
         .item(&file.identifier)
         .and_then(|snapshot| snapshot.title.clone())
-        .unwrap_or_else(|| display.strip_suffix(".pdf").unwrap_or(&display).to_string());
+        .unwrap_or_else(|| {
+            display
+                .strip_suffix(&format!(".{extension}"))
+                .unwrap_or(&display)
+                .to_string()
+        });
     let provenance = internet_archive::build_provenance(file, job.item(&file.identifier), now)
         .map_err(|_| "io: cannot build provenance".to_string())?;
     Ok(VerifiedFileDto {
@@ -1285,6 +1408,105 @@ mod tests {
     }
 
     #[test]
+    fn query_dto_reads_kinds_in_snake_case_and_defaults_to_none() {
+        let parsed: SearchQueryDto = serde_json::from_value(serde_json::json!({
+            "text": "x",
+            "kinds": ["pdf_text", "image"],
+        }))
+        .expect("dto deserializes");
+        assert_eq!(
+            parsed.to_search_query().kinds,
+            vec![
+                internet_archive::FileKind::PdfText,
+                internet_archive::FileKind::Image
+            ]
+        );
+
+        // No `kinds` keeps the previous texts-only behaviour.
+        let parsed: SearchQueryDto =
+            serde_json::from_value(serde_json::json!({ "text": "x" })).expect("dto deserializes");
+        let query = parsed.to_search_query();
+        assert!(query.kinds.is_empty());
+        assert!(query.texts_only);
+
+        // An unknown kind is refused instead of silently widening the search.
+        assert!(serde_json::from_value::<SearchQueryDto>(serde_json::json!({
+            "text": "x",
+            "kinds": ["video"],
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn pdf_dto_tags_text_pdfs_apart_from_other_pdfs() {
+        let mut text_pdf = available_pdf("doc_text.pdf");
+        text_pdf.format = Some("Text PDF".to_string());
+        let mut scan = available_pdf("doc.pdf");
+        scan.format = Some("Image Container PDF".to_string());
+        let mut unknown = available_pdf("other.pdf");
+        unknown.format = None;
+
+        let tag = |file| serde_json::to_value(PdfFileDto::from(file)).unwrap()["kind"].clone();
+        assert_eq!(tag(text_pdf), "pdf_text");
+        assert_eq!(tag(scan), "pdf");
+        assert_eq!(tag(unknown), "pdf");
+        let mut photo = available_pdf("photo.jpg");
+        photo.format = Some("JPEG".to_string());
+        assert_eq!(tag(photo), "image");
+    }
+
+    #[test]
+    fn prepare_entry_dto_carries_the_file_kind() {
+        let entry = |kind| internet_archive::prepare::PrepareEntry {
+            identifier: "some-id".to_string(),
+            file_name: "plate.png".to_string(),
+            kind,
+            availability: internet_archive::Availability::Available,
+            size: Some(10),
+            duplicate: None,
+        };
+        assert_eq!(PrepareEntryDto::from(&entry(FileKind::Image)).kind, "image");
+        assert_eq!(PrepareEntryDto::from(&entry(FileKind::Pdf)).kind, "pdf");
+    }
+
+    #[test]
+    fn verified_image_keeps_its_extension_in_names() {
+        use internet_archive::job::{FileState, ImportTarget, Job, JobFile, JobState};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = JobStore::new(dir.path().join("internet-archive"));
+        let mut photo = available_pdf("plates/Plate 1.jpeg");
+        photo.format = Some("JPEG".to_string());
+        let mut file = JobFile::from_pdf("some-id", &photo).expect("available");
+        file.state = FileState::Verified;
+        file.staging_name = Some(internet_archive::store::new_staging_name_with("jpg"));
+        file.sha256 = Some("abc123".to_string());
+        file.page_count = Some(1);
+        let mut job = Job::new(
+            uuid::Uuid::new_v4().hyphenated().to_string(),
+            1_700_000_000,
+            ImportTarget::ExistingCollection {
+                collection_id: "col-1".to_string(),
+            },
+            vec![file],
+        )
+        .expect("job");
+        job.set_job_state(JobState::Ready, 1_700_000_001).unwrap();
+        job.set_job_state(JobState::Running, 1_700_000_002).unwrap();
+        store.create(&job).unwrap();
+
+        let out = verified_files_logic(&store, &job, 1_700_000_010).expect("verified list");
+        assert_eq!(out[0].display_file_name, "Plate 1.jpg");
+        assert_eq!(out[0].item_title, "Plate 1");
+        assert!(
+            out[0].staging_path.ends_with(".jpg"),
+            "{}",
+            out[0].staging_path
+        );
+        let status = job_to_status(&job, false);
+        assert_eq!(status.files[0].display_file_name, "Plate 1.jpg");
+    }
+
+    #[test]
     fn search_page_dto_reports_num_found_in_camel_case() {
         let dto = SearchPageDto::from(SearchPage {
             num_found: 283,
@@ -1507,6 +1729,7 @@ mod tests {
                     file_name: "a.pdf".to_string(),
                     availability: "available".to_string(),
                     size: Some(10),
+                    kind: "pdf".to_string(),
                     duplicate: Some(DuplicateStatusDto::from(
                         &DuplicateStatus::AlreadyInTarget {
                             item_id: "item-1".to_string(),
@@ -1806,6 +2029,109 @@ mod tests {
         // One snapshot for the identifier that contributed the file.
         assert_eq!(job.items.len(), 1);
         assert_eq!(job.items[0].identifier, OPEN_FIXTURE_ID);
+    }
+
+    /// Returns the same open item for any identifier after a short wait,
+    /// counting how many lookups run at once.
+    #[cfg(test)]
+    struct CountingFetcher {
+        details: ItemDetails,
+        in_flight: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[cfg(test)]
+    impl ItemFetcher for CountingFetcher {
+        async fn fetch_item(&self, identifier: &str) -> Result<ItemDetails, String> {
+            use std::sync::atomic::Ordering;
+            self.calls.lock().unwrap().push(identifier.to_string());
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            if identifier == "broken-item" {
+                return Err("network: unreachable".to_string());
+            }
+            Ok(self.details.clone())
+        }
+    }
+
+    #[cfg(test)]
+    fn counting_fetcher() -> CountingFetcher {
+        CountingFetcher {
+            details: fixture_details()[OPEN_FIXTURE_ID].clone(),
+            in_flight: Default::default(),
+            peak: Default::default(),
+            calls: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn prepare_looks_up_a_few_items_at_once_and_keeps_their_order() {
+        let fetcher = counting_fetcher();
+        let pdf_name = fetcher.details.pdfs[0].name.clone();
+        let ids: Vec<String> = (0..10).map(|n| format!("item-{n}")).collect();
+        let selections: Vec<SelectionDto> = ids
+            .iter()
+            .map(|id| selection(id, &[pdf_name.as_str()]))
+            .collect();
+        let conn = test_db();
+        insert_test_collection(&conn, "col-1");
+        let (_dir, store) = prepare_store();
+        let result = prepare_import_with_fetcher(
+            &fetcher,
+            &store,
+            |identifiers| {
+                Ok(ProvenanceSnapshot::open(&conn, "col-1", identifiers).expect("snapshot"))
+            },
+            1_700_000_000,
+            "col-1",
+            &selections,
+        )
+        .await
+        .expect("prepare succeeds");
+        let peak = fetcher.peak.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(peak > 1, "lookups ran one at a time");
+        assert!(peak <= PREPARE_LOOKUP_CONCURRENCY, "peak {peak}");
+        let mut called = fetcher.calls.lock().unwrap().clone();
+        called.sort();
+        let mut expected = ids.clone();
+        expected.sort();
+        assert_eq!(called, expected, "each identifier is looked up once");
+        let job = store.load(&result.job_id).expect("job persisted");
+        let order: Vec<&str> = job.files.iter().map(|f| f.identifier.as_str()).collect();
+        assert_eq!(order, ids.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(result.summary.new_files, 10);
+    }
+
+    #[tokio::test]
+    async fn prepare_fails_when_any_lookup_fails_and_creates_no_job() {
+        let fetcher = counting_fetcher();
+        let pdf_name = fetcher.details.pdfs[0].name.clone();
+        let selections: Vec<SelectionDto> = ["item-0", "broken-item", "item-2", "item-3", "item-4"]
+            .iter()
+            .map(|id| selection(id, &[pdf_name.as_str()]))
+            .collect();
+        let conn = test_db();
+        insert_test_collection(&conn, "col-1");
+        let (dir, store) = prepare_store();
+        let error = prepare_import_with_fetcher(
+            &fetcher,
+            &store,
+            |identifiers| {
+                Ok(ProvenanceSnapshot::open(&conn, "col-1", identifiers).expect("snapshot"))
+            },
+            1_700_000_000,
+            "col-1",
+            &selections,
+        )
+        .await
+        .expect_err("a failed lookup fails the preparation");
+        assert_eq!(error, "network: unreachable");
+        let root = dir.path().join("internet-archive");
+        let jobs = std::fs::read_dir(&root).map(|dir| dir.count()).unwrap_or(0);
+        assert_eq!(jobs, 0, "no job was written");
     }
 
     #[tokio::test]

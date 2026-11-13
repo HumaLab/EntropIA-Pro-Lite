@@ -45,6 +45,12 @@ export type IaDuplicateStatus =
   | { status: 'new_version'; previousItemId: string }
   | { status: 'in_other_collection'; itemId: string; collectionId: string }
 
+/**
+ * Mirrors `FileKindDto`: `pdf` is any PDF, `pdf_text` only Internet Archive
+ * `Text PDF` files (OCR text layer), `image` JPEG/PNG/TIFF images.
+ */
+export type IaFileKind = 'pdf' | 'pdf_text' | 'image'
+
 /** Mirrors `SearchQueryDto`. Blank filters are no filter on the Rust side. */
 export type IaSearchQuery = {
   text?: string
@@ -55,6 +61,8 @@ export type IaSearchQuery = {
   yearFrom?: number
   yearTo?: number
   textsOnly?: boolean
+  /** File kinds to look for; omitted or empty keeps `textsOnly`. */
+  kinds?: IaFileKind[]
 }
 
 /** Mirrors `SearchItemDto`. */
@@ -77,6 +85,7 @@ export type IaSearchPage = {
 export type IaPdfFile = {
   name: string
   format: string | null
+  kind: IaFileKind
   source: string
   size: number | null
   mtime: number | null
@@ -113,6 +122,7 @@ export type IaPrepareEntry = {
   fileName: string
   availability: IaAvailability
   size: number | null
+  kind: IaFileKind
   duplicate: IaDuplicateStatus | null
 }
 
@@ -210,18 +220,35 @@ export function iaResolveIdentifier(input: string): Promise<string> {
   return invoke<string>('ia_resolve_identifier', { input })
 }
 
-/** Run a structured search over `page` (1-based) with `rows` per page. */
-export function iaSearch(query: IaSearchQuery, page: number, rows: number): Promise<IaSearchPage> {
-  return invoke<IaSearchPage>('ia_search', { query, page, rows })
+/**
+ * Run a structured search over `page` (1-based) with `rows` per page.
+ * `stableOrder` sorts by identifier instead of relevance: needed to walk
+ * every page, since the relevance order repeats and skips records between
+ * requests.
+ */
+export function iaSearch(
+  query: IaSearchQuery,
+  page: number,
+  rows: number,
+  options: { stableOrder?: boolean } = {}
+): Promise<IaSearchPage> {
+  return invoke<IaSearchPage>(
+    'ia_search',
+    options.stableOrder ? { query, page, rows, stableOrder: true } : { query, page, rows }
+  )
 }
 
 /** List one page of a collection by identifier. */
 export function iaListCollection(
   collection: string,
   page: number,
-  rows: number
+  rows: number,
+  kinds?: IaFileKind[]
 ): Promise<IaSearchPage> {
-  return invoke<IaSearchPage>('ia_list_collection', { collection, page, rows })
+  return invoke<IaSearchPage>(
+    'ia_list_collection',
+    kinds ? { collection, page, rows, kinds } : { collection, page, rows }
+  )
 }
 
 /** Fetch tolerant item metadata with its PDF availability. */
@@ -245,6 +272,21 @@ export function iaStartImport(jobId: string): Promise<void> {
 /** Cancel a job download. */
 export function iaCancelImport(jobId: string): Promise<void> {
   return invoke<void>('ia_cancel_import', { jobId })
+}
+
+/** The saved "import every result" queue (a JSON object), if any. */
+export function iaQueueLoad(): Promise<string | null> {
+  return invoke<string | null>('ia_queue_load')
+}
+
+/** Save the "import every result" queue so it resumes after a close. */
+export function iaQueueSave(content: string): Promise<void> {
+  return invoke<void>('ia_queue_save', { content })
+}
+
+/** Forget the "import every result" queue. */
+export function iaQueueClear(): Promise<void> {
+  return invoke<void>('ia_queue_clear')
 }
 
 /**

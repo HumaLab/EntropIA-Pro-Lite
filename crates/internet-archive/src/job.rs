@@ -30,6 +30,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::item::{Availability, FileSource, PdfFile};
+use crate::kind::FileKind;
 use crate::provenance::ItemSnapshot;
 
 /// Schema version stored in every [`Job`]; bump on incompatible change.
@@ -261,6 +262,19 @@ pub fn is_job_transition_allowed(from: JobState, to: JobState) -> bool {
 }
 
 impl JobFile {
+    /// Kind of this file, derived from its published name and format so
+    /// jobs written before kinds existed keep loading unchanged.
+    #[must_use]
+    pub fn kind(&self) -> FileKind {
+        FileKind::of_file(&self.file_name, self.format.as_deref())
+    }
+
+    /// Staging file extension for this file (`pdf`, `jpg`, `png`, `tif`).
+    #[must_use]
+    pub fn staging_extension(&self) -> &'static str {
+        crate::kind::staging_extension(&self.file_name, self.format.as_deref())
+    }
+
     /// Build a `Queued` file from an `Available` PDF; anything else is
     /// rejected so restricted/unavailable files never enter a job.
     pub fn from_pdf(
@@ -985,5 +999,30 @@ mod spec_tests {
         assert!(json2.contains("\"new_collection\""), "json: {json2}");
         let back2: Job = serde_json::from_str(&json2).unwrap();
         assert_eq!(back2, job2);
+    }
+
+    #[test]
+    fn image_files_know_their_kind_and_staging_extension() {
+        let photo = PdfFile {
+            name: "plates/photo.JPEG".to_string(),
+            format: Some("JPEG".to_string()),
+            source: FileSource::Original,
+            size: Some(10),
+            mtime: None,
+            md5: None,
+            sha1: None,
+            availability: Availability::Available,
+        };
+        let file = JobFile::from_pdf("id", &photo).unwrap();
+        assert_eq!(file.kind(), crate::kind::FileKind::Image);
+        assert_eq!(file.staging_extension(), "jpg");
+        let book = PdfFile {
+            name: "book.pdf".to_string(),
+            format: Some("Text PDF".to_string()),
+            ..photo
+        };
+        let file = JobFile::from_pdf("id", &book).unwrap();
+        assert_eq!(file.kind(), crate::kind::FileKind::PdfText);
+        assert_eq!(file.staging_extension(), "pdf");
     }
 }
