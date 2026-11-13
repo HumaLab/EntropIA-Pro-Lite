@@ -610,10 +610,12 @@ impl ItemFetcher for LiveFetcher<'_> {
     }
 }
 
-/// Look up every identifier at once and return the results in the same
-/// order. Polls the lookups in place (no spawned tasks), so the fetcher may
-/// borrow and the caller's future stays `Send` when the fetcher's is.
-async fn fetch_together<F>(fetcher: &F, identifiers: &[String]) -> Vec<Result<ItemDetails, String>>
+/// Look up every identifier at once and return the details in the same
+/// order. The first lookup to fail ends the call with its error and drops
+/// the lookups still running, so a failure does not wait for the others.
+/// Polls the lookups in place (no spawned tasks), so the fetcher may borrow
+/// and the caller's future stays `Send` when the fetcher's is.
+async fn fetch_together<F>(fetcher: &F, identifiers: &[String]) -> Result<Vec<ItemDetails>, String>
 where
     F: ItemFetcher,
 {
@@ -624,14 +626,14 @@ where
         .iter()
         .map(|identifier| Box::pin(fetcher.fetch_item(identifier)))
         .collect();
-    let mut results: Vec<Option<Result<ItemDetails, String>>> =
-        identifiers.iter().map(|_| None).collect();
+    let mut results: Vec<Option<ItemDetails>> = identifiers.iter().map(|_| None).collect();
     std::future::poll_fn(|cx| {
         let mut waiting = false;
         for (lookup, result) in lookups.iter_mut().zip(results.iter_mut()) {
             if result.is_none() {
                 match lookup.as_mut().poll(cx) {
-                    Poll::Ready(value) => *result = Some(value),
+                    Poll::Ready(Ok(details)) => *result = Some(details),
+                    Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                     Poll::Pending => waiting = true,
                 }
             }
@@ -639,14 +641,14 @@ where
         if waiting {
             Poll::Pending
         } else {
-            Poll::Ready(())
+            Poll::Ready(Ok(()))
         }
     })
-    .await;
-    results
+    .await?;
+    Ok(results
         .into_iter()
         .map(|result| result.expect("every lookup finished"))
-        .collect()
+        .collect())
 }
 
 /// Prepare an import job over an existing collection: validate the request,
@@ -739,8 +741,8 @@ where
     // A few fetches at a time; a fetcher error already carries its own code.
     let mut details_by_id = HashMap::with_capacity(identifiers.len());
     for chunk in identifiers.chunks(PREPARE_LOOKUP_CONCURRENCY) {
-        for (identifier, details) in chunk.iter().zip(fetch_together(fetcher, chunk).await) {
-            details_by_id.insert(identifier.clone(), details?);
+        for (identifier, details) in chunk.iter().zip(fetch_together(fetcher, chunk).await?) {
+            details_by_id.insert(identifier.clone(), details);
         }
     }
     let target = ImportTarget::ExistingCollection {
@@ -2129,6 +2131,66 @@ mod tests {
         .await
         .expect_err("a failed lookup fails the preparation");
         assert_eq!(error, "network: unreachable");
+        let root = dir.path().join("internet-archive");
+        let jobs = std::fs::read_dir(&root).map(|dir| dir.count()).unwrap_or(0);
+        assert_eq!(jobs, 0, "no job was written");
+    }
+
+    /// "broken-item" fails at once; every other lookup takes 5 s and counts
+    /// itself only when it finishes.
+    #[cfg(test)]
+    struct FailFastFetcher {
+        details: ItemDetails,
+        finished: std::sync::atomic::AtomicUsize,
+    }
+
+    #[cfg(test)]
+    impl ItemFetcher for FailFastFetcher {
+        async fn fetch_item(&self, identifier: &str) -> Result<ItemDetails, String> {
+            if identifier == "broken-item" {
+                return Err("network: unreachable".to_string());
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            self.finished
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.details.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn prepare_stops_at_the_first_failed_lookup_without_waiting_for_the_rest() {
+        let fetcher = FailFastFetcher {
+            details: fixture_details()[OPEN_FIXTURE_ID].clone(),
+            finished: Default::default(),
+        };
+        let pdf_name = fetcher.details.pdfs[0].name.clone();
+        let selections: Vec<SelectionDto> = ["item-0", "broken-item", "item-2", "item-3"]
+            .iter()
+            .map(|id| selection(id, &[pdf_name.as_str()]))
+            .collect();
+        let conn = test_db();
+        insert_test_collection(&conn, "col-1");
+        let (dir, store) = prepare_store();
+        let prepare = prepare_import_with_fetcher(
+            &fetcher,
+            &store,
+            |identifiers| {
+                Ok(ProvenanceSnapshot::open(&conn, "col-1", identifiers).expect("snapshot"))
+            },
+            1_700_000_000,
+            "col-1",
+            &selections,
+        );
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), prepare)
+            .await
+            .expect("the failure returns without waiting for the slow lookups")
+            .expect_err("a failed lookup fails the preparation");
+        assert_eq!(error, "network: unreachable");
+        assert_eq!(
+            fetcher.finished.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no other lookup ran to the end"
+        );
         let root = dir.path().join("internet-archive");
         let jobs = std::fs::read_dir(&root).map(|dir| dir.count()).unwrap_or(0);
         assert_eq!(jobs, 0, "no job was written");
