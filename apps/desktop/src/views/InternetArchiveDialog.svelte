@@ -552,7 +552,7 @@
     // done; a draft, a cancelled job or one that is gone goes back to the queue.
     let how: 'done' | 'requeue' = 'requeue'
     if (saved.currentJobId) {
-      let status: IaJobStatus | null = null
+      let status: IaJobStatus | null
       try {
         status = await iaGetImportStatus(saved.currentJobId)
       } catch {
