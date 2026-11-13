@@ -117,6 +117,7 @@ pub async fn llm_download_model(
     tauri::async_runtime::spawn(async move {
         let result = tokio::task::spawn_blocking(move || {
             download_model_file(
+                "llm",
                 &url,
                 managed_dir,
                 &filename,

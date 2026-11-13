@@ -100,6 +100,8 @@
     "allow-crop-pdf",
     "allow-edit-pdf",
     "allow-test-glm-ocr-connection",
+    "allow-glm-ocr-local-info",
+    "allow-glm-ocr-download-models",
     "allow-update-extraction-text-cmd",
     "allow-extraction-is-edited-by-hand",
     "allow-reocr-layout-block",

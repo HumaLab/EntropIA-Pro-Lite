@@ -1619,10 +1619,19 @@ async fn process_pdf(
                     &format!("ocr_page_{}", page_idx + 1),
                 );
 
-                // Render this page
+                // Render this page. Local GLM-OCR reads small print at full
+                // resolution; the 10 MB shrink loop in the default render
+                // only costs accuracy there (remote GLM-OCR still needs it).
+                let full_res = paddle_vl_engine
+                    .as_ref()
+                    .is_some_and(|engine| engine.uses_glm_local());
                 let pdf_bytes_for_render = bytes.to_vec();
                 let page_image = tokio::task::spawn_blocking(move || {
-                    pdf::render_pdf_page_to_image(&pdf_bytes_for_render, page_idx)
+                    if full_res {
+                        pdf::render_pdf_page_to_image_full_res(&pdf_bytes_for_render, page_idx)
+                    } else {
+                        pdf::render_pdf_page_to_image(&pdf_bytes_for_render, page_idx)
+                    }
                 })
                 .await
                 .map_err(|e| format!("PDF render task panicked: {e}"))?

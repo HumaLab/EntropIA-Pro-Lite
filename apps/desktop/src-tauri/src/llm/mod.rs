@@ -308,6 +308,7 @@ pub(crate) fn ensure_default_model_downloaded_if_missing(
     );
     let managed_dir = self::download::open_managed_models_dir(&download.models_dir)?;
     self::download::download_model_file(
+        "llm",
         &source_url,
         managed_dir,
         &filename,
@@ -654,26 +655,9 @@ pub struct LlmErrorPayload {
     pub job: String,
     pub error: String,
 }
-
-#[derive(Clone, Serialize)]
-#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
-pub struct LlmDownloadProgressPayload {
-    pub pct: u8,
-    pub downloaded_bytes: u64,
-    pub total_bytes: Option<u64>,
-}
-
-#[derive(Clone, Serialize)]
-#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
-pub struct LlmDownloadCompletePayload {
-    pub path: String,
-}
-
-#[derive(Clone, Serialize)]
-#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
-pub struct LlmDownloadErrorPayload {
-    pub error: String,
-}
+/// Failure of a managed LLM model download (`llm:download_error`).
+#[cfg(feature = "local-ml")]
+pub type LlmDownloadErrorPayload = download::ModelDownloadErrorPayload;
 
 fn emit_progress(app_handle: &AppHandle, id: &str, job: &str, pct: u8) {
     if pct == 0 || pct == 10 || pct == 100 {

@@ -10,10 +10,12 @@
       "resources/fonts/LICENSE",
       "resources/runtime-pack/linux-x86_64/**/*",
       "scripts/paddle_vl.py",
+      "scripts/glm_ocr_local.py",
       "scripts/spacy_ner.py",
       "scripts/transcribe.py",
       "resources/pdfium/libpdfium.so",
-      "resources/pdfium/LICENSE"
+      "resources/pdfium/LICENSE",
+      "resources/tools/llama-server/*"
     ]
   }
 }

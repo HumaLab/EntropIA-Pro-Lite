@@ -1736,6 +1736,7 @@ describe('settings dirty detection helpers', () => {
     llmMode: 'local',
     sttMode: 'local',
     ocrhMode: 'local',
+    ocrhLocalEngine: 'auto',
     localModelSourceUrl: '',
     localModelFilename: '',
     assemblyAiApiKey: '',

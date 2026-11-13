@@ -37,6 +37,7 @@
       "resources/runtime-pack/windows-x86_64/**/*",
       "target/release/vc-runtime/*",
       "scripts/paddle_vl.py",
+      "scripts/glm_ocr_local.py",
       "scripts/spacy_ner.py",
       "scripts/transcribe.py"
     ]

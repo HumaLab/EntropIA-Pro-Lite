@@ -92,6 +92,7 @@
       "resources/lib/LICENSE",
       "resources/fonts/LICENSE",
       "scripts/paddle_vl.py",
+      "scripts/glm_ocr_local.py",
       "scripts/spacy_ner.py",
       "scripts/transcribe.py"
     ],

@@ -534,8 +534,8 @@ pub fn which_python_for_paddle_vl(settings_db_path: Option<&std::path::Path>) ->
 ///      or fixing the driver stack.
 ///   3. On Windows, also check for `nvidia-smi.exe` in Program Files.
 ///
-/// Returns `false` if no hardware signal reports an NVIDIA GPU.
-fn detect_nvidia_gpu() -> bool {
+/// Whether an NVIDIA GPU is present (nvidia-smi plus OS inventory).
+pub(crate) fn detect_nvidia_gpu() -> bool {
     // Fast path: nvidia-smi -L lists GPUs in ~50-100ms.
     let mut cmd = Command::new("nvidia-smi");
     cmd.arg("-L");
@@ -761,18 +761,11 @@ pub fn create_paddle_vl_engine_result(
     // Auto-detect GPU and prefer it, but let the Python subprocess validate
     // software-level support and fall back to CPU if GPU init fails.
     let has_gpu = detect_nvidia_gpu();
-    let engine_setting = crate::db::open::open_archive_connection(settings_db_path)
-        .ok()
-        .and_then(|conn| {
-            crate::settings::get_setting(&conn, super::glm_ocr_local::OCRH_LOCAL_ENGINE_SETTING)
-        })
-        .unwrap_or_else(|| super::glm_ocr_local::ENGINE_AUTO.to_string());
-    let glm_assets = select_glm_local_assets(
-        &engine_setting,
+    let glm_assets = resolve_desired_backend_with_gpu(
+        settings_db_path,
+        bundled_resource_dir(app_handle).as_deref(),
         has_gpu,
-        super::glm_ocr_local::resolve_assets(settings_db_path),
     )?;
-
     if let Some(assets) = glm_assets {
         crate::app_logs::info(
             app_handle,
@@ -825,6 +818,13 @@ pub fn create_paddle_vl_engine_result(
     }
 }
 
+/// Installer-shipped server builds live under the Tauri resource directory
+/// (`resources/tools/llama-server`); `None` outside a bundled app (dev).
+fn bundled_resource_dir(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    use tauri::Manager;
+    app_handle.path().resource_dir().ok()
+}
+
 /// Decide whether OCRH local runs on GLM-OCR.
 ///
 /// `glm_ocr` demands it (missing assets is an error); `auto` uses it when the
@@ -851,6 +851,45 @@ fn select_glm_local_assets(
         },
         _ => Ok(None),
     }
+}
+
+/// Resolve which local backend OCRH should use right now, without building it.
+///
+/// Reads the `ocrh_local_engine` setting plus a filesystem check for the
+/// GLM-OCR assets. `Ok(None)` means PaddleOCR-VL, `Ok(Some(assets))` means
+/// local GLM-OCR. An `Err` (the `glm_ocr` setting demanding GLM-OCR whose
+/// assets are missing) tells the caller to keep whatever engine is already
+/// running instead of thrashing the cache on every task.
+///
+/// The server binary may ship inside the installer resources, so the Tauri
+/// resource directory is consulted alongside the managed install.
+pub fn resolve_desired_backend(
+    app_handle: &tauri::AppHandle,
+    settings_db_path: &Path,
+) -> Result<Option<super::glm_ocr_local::GlmLocalAssets>, String> {
+    resolve_desired_backend_with_gpu(
+        settings_db_path,
+        bundled_resource_dir(app_handle).as_deref(),
+        detect_nvidia_gpu(),
+    )
+}
+
+fn resolve_desired_backend_with_gpu(
+    settings_db_path: &Path,
+    resource_dir: Option<&Path>,
+    has_gpu: bool,
+) -> Result<Option<super::glm_ocr_local::GlmLocalAssets>, String> {
+    let engine_setting = crate::db::open::open_archive_connection(settings_db_path)
+        .ok()
+        .and_then(|conn| {
+            crate::settings::get_setting(&conn, super::glm_ocr_local::OCRH_LOCAL_ENGINE_SETTING)
+        })
+        .unwrap_or_else(|| super::glm_ocr_local::ENGINE_AUTO.to_string());
+    select_glm_local_assets(
+        &engine_setting,
+        has_gpu,
+        super::glm_ocr_local::resolve_assets_with_resource_dir(settings_db_path, resource_dir),
+    )
 }
 
 fn resolve_paddle_vl_script_path_from_roots(

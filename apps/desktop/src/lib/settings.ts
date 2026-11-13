@@ -124,6 +124,7 @@ export const SETTINGS_KEYS = {
   /** Vercel AI Gateway key, the fallback when OpenRouter fails (T-45). */
   VERCEL_AI_GATEWAY_API_KEY: 'vercel_ai_gateway_api_key',
   OCRH_MODE: 'ocrh_mode',
+  OCRH_LOCAL_ENGINE: 'ocrh_local_engine',
   LANGUAGE: 'language',
   UI_ZOOM_FACTOR: 'ui_zoom_factor',
   // How wide each side panel of the writing workspace is (§18). Persisted so a
@@ -223,6 +224,8 @@ export type LlmMode = 'local' | 'openrouter' | 'auto'
 export type EmbeddingProvider = 'api' | 'local'
 export type SttMode = 'local' | 'assemblyai' | 'auto'
 export type OcrhMode = 'local' | 'glm_ocr' | 'auto'
+/** Which local backend OCRH uses when `ocrh_mode` is `local`. */
+export type OcrhLocalEngine = 'auto' | 'glm_ocr' | 'paddle_vl'
 
 export const DEFAULT_OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it'
 export const DEFAULT_OPENROUTER_NER_MODEL = DEFAULT_OPENROUTER_MODEL
@@ -239,6 +242,7 @@ export const DEFAULT_LLM_MODE: LlmMode = _pro ? 'local' : 'openrouter'
 export const DEFAULT_EMBEDDING_PROVIDER: EmbeddingProvider = _pro ? 'local' : 'api'
 export const DEFAULT_STT_MODE: SttMode = _pro ? 'local' : 'assemblyai'
 export const DEFAULT_OCRH_MODE: OcrhMode = _pro ? 'local' : 'glm_ocr'
+export const DEFAULT_OCRH_LOCAL_ENGINE: OcrhLocalEngine = 'auto'
 
 export const DEFAULT_PROMPTS = {
   ocrCorrectionPrompt: `Sos un especialista en transcripción de documentos históricos. El siguiente texto fue extraído por OCR de un documento impreso y contiene errores.

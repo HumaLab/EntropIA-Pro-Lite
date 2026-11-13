@@ -107,6 +107,8 @@ const APP_COMMANDS: &[&str] = &[
     "crop_pdf",
     "edit_pdf",
     "test_glm_ocr_connection",
+    "glm_ocr_local_info",
+    "glm_ocr_download_models",
     "update_extraction_text_cmd",
     "extraction_is_edited_by_hand",
     "reocr_layout_block",

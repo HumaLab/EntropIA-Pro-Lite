@@ -744,6 +744,21 @@ const es = {
   'settings.ocrhMode.auto.summary': 'Intenta GLM-OCR y cae a local si falla o responde vacío.',
   'settings.ocrhMode.auto.description':
     'Prioriza GLM-OCR cloud y usa OCRH local como fallback controlado.',
+  'settings.ocrhLocalEngine.title': 'Motor OCRH local',
+  'settings.ocrhLocalEngine.auto.label': 'Automático',
+  'settings.ocrhLocalEngine.auto.description':
+    'GLM-OCR local con GPU NVIDIA cuando está instalado; si no, PaddleOCR-VL.',
+  'settings.ocrhLocalEngine.glm_ocr.label': 'GLM-OCR local',
+  'settings.ocrhLocalEngine.glm_ocr.description':
+    'Siempre GLM-OCR local. Requiere los modelos y GPU NVIDIA; falla si faltan.',
+  'settings.ocrhLocalEngine.paddle_vl.label': 'PaddleOCR-VL',
+  'settings.ocrhLocalEngine.paddle_vl.description': 'Siempre PaddleOCR-VL local.',
+  'settings.glmOcrLocal.modelsReady': 'Modelos GLM-OCR instalados.',
+  'settings.glmOcrLocal.modelsMissing': 'Faltan modelos:',
+  'settings.glmOcrLocal.serverMissing': 'Falta llama-server (se instala con la app).',
+  'settings.glmOcrLocal.download': 'Descargar modelos (~1,4 GB)',
+  'settings.glmOcrLocal.downloading': 'Descargando modelos…',
+  'settings.glmOcrLocal.retry': 'Reintentar descarga',
   'settings.badge.available': 'Disponible',
   'settings.badge.downloadable': 'Descargable',
   'settings.badge.notFound': 'Modelo no encontrado',
@@ -3311,6 +3326,19 @@ type ExtraI18nKey =
   | 'settings.ocrhMode.auto.label'
   | 'settings.ocrhMode.auto.summary'
   | 'settings.ocrhMode.auto.description'
+  | 'settings.ocrhLocalEngine.title'
+  | 'settings.ocrhLocalEngine.auto.label'
+  | 'settings.ocrhLocalEngine.auto.description'
+  | 'settings.ocrhLocalEngine.glm_ocr.label'
+  | 'settings.ocrhLocalEngine.glm_ocr.description'
+  | 'settings.ocrhLocalEngine.paddle_vl.label'
+  | 'settings.ocrhLocalEngine.paddle_vl.description'
+  | 'settings.glmOcrLocal.modelsReady'
+  | 'settings.glmOcrLocal.modelsMissing'
+  | 'settings.glmOcrLocal.serverMissing'
+  | 'settings.glmOcrLocal.download'
+  | 'settings.glmOcrLocal.downloading'
+  | 'settings.glmOcrLocal.retry'
   | 'settings.badge.available'
   | 'settings.badge.downloadable'
   | 'settings.badge.notFound'
@@ -4579,6 +4607,21 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Try GLM-OCR and fall back to local on failure or empty response.',
   'settings.ocrhMode.auto.description':
     'Prioritize GLM-OCR cloud and use local OCRH as a controlled fallback.',
+  'settings.ocrhLocalEngine.title': 'Local OCRH engine',
+  'settings.ocrhLocalEngine.auto.label': 'Automatic',
+  'settings.ocrhLocalEngine.auto.description':
+    'Local GLM-OCR on NVIDIA GPU when installed; otherwise PaddleOCR-VL.',
+  'settings.ocrhLocalEngine.glm_ocr.label': 'Local GLM-OCR',
+  'settings.ocrhLocalEngine.glm_ocr.description':
+    'Always local GLM-OCR. Requires the models and an NVIDIA GPU; fails when missing.',
+  'settings.ocrhLocalEngine.paddle_vl.label': 'PaddleOCR-VL',
+  'settings.ocrhLocalEngine.paddle_vl.description': 'Always local PaddleOCR-VL.',
+  'settings.glmOcrLocal.modelsReady': 'GLM-OCR models installed.',
+  'settings.glmOcrLocal.modelsMissing': 'Missing models:',
+  'settings.glmOcrLocal.serverMissing': 'llama-server missing (ships with the app).',
+  'settings.glmOcrLocal.download': 'Download models (~1.4 GB)',
+  'settings.glmOcrLocal.downloading': 'Downloading models…',
+  'settings.glmOcrLocal.retry': 'Retry download',
   'settings.badge.available': 'Available',
   'settings.badge.downloadable': 'Downloadable',
   'settings.badge.notFound': 'Model not found',

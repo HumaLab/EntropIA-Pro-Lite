@@ -26,11 +26,18 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Recognition model: Q8_0 decoder. Measured against f16 on scanned press
-/// pages, it changes ~0.2% of characters while being 1.5x faster.
+/// pages, it recovers the reference text fully while being 1.5x faster.
 pub const MODEL_FILENAME: &str = "GLM-OCR-Q8_0.gguf";
-/// Vision projector kept at f16: quantizing the image encoder is what hurts
-/// recognition most (Q8 projector tripled the disagreement with f16).
-pub const MMPROJ_FILENAME: &str = "GLM-OCR-mmproj-f16.gguf";
+/// Vision projector officially paired with the Q8_0 decoder in the same
+/// `ggml-org/GLM-OCR-GGUF` release. Validated on the same scanned press
+/// pages: identical recall to the f16 projector at half the download size.
+pub const MMPROJ_FILENAME: &str = "mmproj-GLM-OCR-Q8_0.gguf";
+/// Official release both GGUF files download from (same revision, paired).
+pub const MODELS_REPO_URL: &str = "https://huggingface.co/ggml-org/GLM-OCR-GGUF";
+pub const MODEL_URL: &str =
+    "https://huggingface.co/ggml-org/GLM-OCR-GGUF/resolve/main/GLM-OCR-Q8_0.gguf?download=true";
+pub const MMPROJ_URL: &str =
+    "https://huggingface.co/ggml-org/GLM-OCR-GGUF/resolve/main/mmproj-GLM-OCR-Q8_0.gguf?download=true";
 /// Folder under the app models directory that holds both GGUF files.
 pub const MODELS_SUBDIR: &str = "glm-ocr";
 /// Optional override for the `llama-server` binary (dev and custom builds).
@@ -40,6 +47,32 @@ pub const OCRH_LOCAL_ENGINE_SETTING: &str = "ocrh_local_engine";
 
 pub const ENGINE_AUTO: &str = "auto";
 pub const ENGINE_GLM_OCR: &str = "glm_ocr";
+
+/// What the Settings UI shows about the local GLM-OCR install.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GlmOcrLocalInfo {
+    pub model_present: bool,
+    pub mmproj_present: bool,
+    pub server_present: bool,
+    pub models_dir: String,
+    pub repo_url: String,
+}
+
+/// Inspect the install without starting anything.
+pub fn local_info(db_path: &Path) -> GlmOcrLocalInfo {
+    let models = models_dir(db_path);
+    let server = std::env::var_os(SERVER_BINARY_ENV)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| server_dir(db_path).join(server_binary_name()));
+    GlmOcrLocalInfo {
+        model_present: models.join(MODEL_FILENAME).is_file(),
+        mmproj_present: models.join(MMPROJ_FILENAME).is_file(),
+        server_present: server.is_file(),
+        models_dir: models.display().to_string(),
+        repo_url: MODELS_REPO_URL.to_string(),
+    }
+}
 
 /// Concurrent requests the server accepts; the script sends this many boxes at once.
 pub const PARALLEL_SLOTS: u32 = 4;
@@ -85,18 +118,41 @@ fn server_binary_name() -> &'static str {
 }
 
 /// Resolve every asset, or explain which ones are missing.
-pub fn resolve_assets(db_path: &Path) -> Result<GlmLocalAssets, String> {
+///
+/// Server binary resolution order: `ENTROPIA_LLAMA_SERVER` override,
+/// managed `<data>/tools/llama-server`, then bundled installer resources
+/// (`tools/llama-server`, fetched at build time, never committed).
+pub fn resolve_assets_with_resource_dir(
+    db_path: &Path,
+    resource_dir: Option<&Path>,
+) -> Result<GlmLocalAssets, String> {
     let env_server = std::env::var_os(SERVER_BINARY_ENV)
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty());
-    resolve_assets_from(db_path, env_server)
+    resolve_assets_from(db_path, env_server, resource_dir)
 }
+
+/// `tools/llama-server` inside the bundled installer resources.
+pub const BUNDLED_SERVER_SUBDIR: &str = "tools/llama-server";
 
 fn resolve_assets_from(
     db_path: &Path,
     env_server: Option<PathBuf>,
+    resource_dir: Option<&Path>,
 ) -> Result<GlmLocalAssets, String> {
-    let server = env_server.unwrap_or_else(|| server_dir(db_path).join(server_binary_name()));
+    let server = env_server.unwrap_or_else(|| {
+        let managed = server_dir(db_path).join(server_binary_name());
+        if managed.is_file() {
+            return managed;
+        }
+        if let Some(root) = resource_dir {
+            let bundled = root.join(BUNDLED_SERVER_SUBDIR).join(server_binary_name());
+            if bundled.is_file() {
+                return bundled;
+            }
+        }
+        managed
+    });
     let models = models_dir(db_path);
     let assets = GlmLocalAssets {
         server,
@@ -349,7 +405,7 @@ mod tests {
     fn missing_assets_are_listed() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("entropia.sqlite");
-        let error = resolve_assets_from(&db, None).unwrap_err();
+        let error = resolve_assets_from(&db, None, None).unwrap_err();
         assert!(error.contains(MODEL_FILENAME));
         assert!(error.contains(MMPROJ_FILENAME));
         assert!(error.contains(server_binary_name()));
@@ -365,7 +421,7 @@ mod tests {
         std::fs::write(models_dir(&db).join(MMPROJ_FILENAME), b"p").unwrap();
         std::fs::write(server_dir(&db).join(server_binary_name()), b"s").unwrap();
 
-        let assets = resolve_assets_from(&db, None).unwrap();
+        let assets = resolve_assets_from(&db, None, None).unwrap();
         assert_eq!(
             assets.model,
             dir.path().join("models/glm-ocr").join(MODEL_FILENAME)
@@ -383,8 +439,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("entropia.sqlite");
         let custom = dir.path().join("custom-server");
-        let error = resolve_assets_from(&db, Some(custom.clone())).unwrap_err();
+        let error = resolve_assets_from(&db, Some(custom.clone()), None).unwrap_err();
         assert!(error.contains(&custom.display().to_string()));
+    }
+
+    #[test]
+    fn bundled_server_is_used_when_managed_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("entropia.sqlite");
+        let resources = dir.path().join("resources");
+        let bundled_dir = resources.join(BUNDLED_SERVER_SUBDIR);
+        std::fs::create_dir_all(models_dir(&db)).unwrap();
+        std::fs::create_dir_all(&bundled_dir).unwrap();
+        std::fs::write(models_dir(&db).join(MODEL_FILENAME), b"m").unwrap();
+        std::fs::write(models_dir(&db).join(MMPROJ_FILENAME), b"p").unwrap();
+        std::fs::write(bundled_dir.join(server_binary_name()), b"s").unwrap();
+
+        let assets = resolve_assets_from(&db, None, Some(&resources)).unwrap();
+        assert_eq!(assets.server, bundled_dir.join(server_binary_name()));
     }
 
     #[test]

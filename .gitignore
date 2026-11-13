@@ -46,6 +46,10 @@ manual/**/venv/
 # apps/desktop/scripts/fetch-pdfium.sh (Windows keeps its committed pdfium.dll)
 apps/desktop/src-tauri/resources/pdfium/
 
+# llama-server for local GLM-OCR, built pinned by
+# apps/desktop/scripts/fetch-llama-server.sh (never committed: ~220 MB CUDA libs)
+apps/desktop/src-tauri/resources/tools/llama-server/
+
 # Per-target assistant-connector sidecars, built by
 # apps/desktop/scripts/build-agent-connector.mjs and declared only in the
 # tauri.connector.conf.json installer overlay (D15)
