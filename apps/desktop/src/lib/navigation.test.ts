@@ -152,6 +152,28 @@ describe('NavigationStore', () => {
     expect(nav.canGoBack).toBe(true)
   })
 
+  it('navigates to help view', () => {
+    nav.navigate({ name: 'help' })
+    expect(nav.current).toEqual({ name: 'help' })
+    expect(nav.canGoBack).toBe(true)
+  })
+
+  it('help breadcrumb is its own root: Ayuda', () => {
+    nav.navigate({ name: 'help' })
+    expect(nav.breadcrumb).toEqual(['Ayuda'])
+  })
+
+  it('openRootSection pushes help so Back returns to the previous screen', () => {
+    nav.navigate({ name: 'rag-chat' })
+    nav.openRootSection({ name: 'help' })
+
+    expect(nav.current).toEqual({ name: 'help' })
+    expect(nav.breadcrumb).toEqual(['Ayuda'])
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'rag-chat' })
+  })
+
   it('navigates to db browser view', () => {
     nav.navigate({ name: 'db-browser' })
     expect(nav.current).toEqual({ name: 'db-browser' })
@@ -196,6 +218,9 @@ describe('NavigationStore', () => {
 
     nav.navigate({ name: 'rag-chat' })
     expect(nav.breadcrumb).toEqual(['Chat'])
+
+    nav.navigate({ name: 'help' })
+    expect(nav.breadcrumb).toEqual(['Ayuda'])
 
     nav.navigate({ name: 'research' })
     expect(nav.breadcrumb).toEqual(['Investigación'])

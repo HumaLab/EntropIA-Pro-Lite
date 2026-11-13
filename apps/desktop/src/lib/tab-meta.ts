@@ -18,6 +18,8 @@ export function tabTitle(view: View): string {
       return t('nav.dbBrowser')
     case 'rag-chat':
       return t('nav.ragChat')
+    case 'help':
+      return t('nav.help')
     case 'research':
       return t('nav.research')
     case 'investigation':
@@ -52,6 +54,8 @@ export function tabIcon(view: View): ActionIconName {
       return 'database'
     case 'rag-chat':
       return 'message-circle'
+    case 'help':
+      return 'circle-help'
     case 'research':
     case 'investigation':
       return 'research'

@@ -25,6 +25,11 @@ describe('tab-meta', () => {
     expect(tabTitle({ name: 'settings' })).toBe('Configuración')
   })
 
+  it('titles and icons the help section', () => {
+    expect(tabTitle({ name: 'help' })).toBe('Ayuda')
+    expect(tabIcon({ name: 'help' })).toBe('circle-help')
+  })
+
   it('titles and icons the experimental navegador section', () => {
     expect(tabTitle({ name: 'navegador' })).toBe('Navegador')
     expect(tabIcon({ name: 'navegador' })).toBe('browser')

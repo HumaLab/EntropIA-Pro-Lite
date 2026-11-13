@@ -118,6 +118,8 @@
   const researchAria = $derived(
     $currentLocale ? translate('topbar.researchAria') : 'Abrir agente de investigación'
   )
+  const helpTitle = $derived($currentLocale ? translate('topbar.helpTitle') : 'Ayuda')
+  const helpAria = $derived($currentLocale ? translate('topbar.helpAria') : 'Abrir Ayuda')
   const navegadorTitle = $derived($currentLocale ? translate('topbar.navegadorTitle') : 'Navegador')
   const navegadorAria = $derived(
     $currentLocale ? translate('topbar.navegadorAria') : 'Abrir el Navegador'
@@ -592,6 +594,17 @@
       title={ragChatTitle}
     >
       <ActionIcon name="message-circle" size={16} />
+    </IconButton>
+
+    <IconButton
+      class="topbar__icon-btn"
+      size="md"
+      variant="secondary"
+      label={helpAria}
+      onclick={() => workspace.navigateActive({ name: 'help' })}
+      title={helpTitle}
+    >
+      <ActionIcon name="circle-help" size={16} />
     </IconButton>
 
     <IconButton

@@ -127,7 +127,7 @@ describe('AppShell', () => {
     expect(screen.queryByText('Abrí una colección para ver el explorador')).not.toBeInTheDocument()
   })
 
-  it.each(['db-browser', 'rag-chat', 'settings'] as const)(
+  it.each(['db-browser', 'help', 'rag-chat', 'settings'] as const)(
     'hides the whole sidebar on the %s root section so it reserves no width',
     async (viewName) => {
       workspace.activeNavigation.resetToPath([{ name: viewName }])
