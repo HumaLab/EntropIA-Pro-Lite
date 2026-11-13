@@ -425,7 +425,8 @@ export async function applyMigrations(client: DbClient): Promise<void> {
         // A failed BEGIN or a disconnected client has no transaction to roll back.
       }
       throw new Error(
-        `Migration "${name}" failed: ${error instanceof Error ? error.message : String(error)}`
+        `Migration "${name}" failed: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
       )
     }
   }

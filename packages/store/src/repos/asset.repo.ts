@@ -443,7 +443,8 @@ export class AssetRepo {
       ])
     } catch (e) {
       throw new Error(
-        `Failed to delete asset cascade for ${id}: ${e instanceof Error ? e.message : String(e)}`
+        `Failed to delete asset cascade for ${id}: ${e instanceof Error ? e.message : String(e)}`,
+        { cause: e }
       )
     }
 

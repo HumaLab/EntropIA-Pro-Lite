@@ -49,7 +49,7 @@
     "leaflet": "catalog:",
     "markdown-it": "^15.0.3",
     "pdfjs-dist": "^4",
-    "pdfmake": "^0.3.13",
+    "pdfmake": "^0.3.14",
     "tiptap-footnotes": "^3.0.1"
   },
   "devDependencies": {
@@ -65,7 +65,7 @@
     "jsdom": "^31.0.0",
     "svelte": "^5.57.3",
     "svelte-check": "^4",
-    "vite": "^6.4.5",
+    "vite": "^8",
     "vitest": "^4.1.11"
   }
 }

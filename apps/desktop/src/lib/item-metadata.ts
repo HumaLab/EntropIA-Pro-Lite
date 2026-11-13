@@ -180,7 +180,7 @@ export function mergeReservedMetadata(
   metadata: Record<string, string>,
   sourceMetadata?: string | null
 ): Record<string, unknown> {
-  let source: Record<string, unknown> | null = null
+  let source: Record<string, unknown> | null
   try {
     const parsed = sourceMetadata ? JSON.parse(sourceMetadata) : null
     source = parsed && typeof parsed === 'object' ? parsed : null

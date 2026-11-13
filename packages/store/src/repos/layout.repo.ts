@@ -19,7 +19,8 @@ function parseJsonArray(raw: string, field: string): unknown[] {
     parsed = JSON.parse(raw)
   } catch (error) {
     throw new Error(
-      `Failed to parse layouts.${field}: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to parse layouts.${field}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
     )
   }
 

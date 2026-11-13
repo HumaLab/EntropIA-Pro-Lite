@@ -170,7 +170,8 @@ export class CollectionRepo {
       ])
     } catch (e) {
       throw new Error(
-        `Failed to delete collection ${id}: ${e instanceof Error ? e.message : String(e)}`
+        `Failed to delete collection ${id}: ${e instanceof Error ? e.message : String(e)}`,
+        { cause: e }
       )
     }
 
@@ -211,7 +212,8 @@ export class CollectionRepo {
       return rows.length === 0
     } catch (e) {
       throw new Error(
-        `Failed to delete empty collection ${id}: ${e instanceof Error ? e.message : String(e)}`
+        `Failed to delete empty collection ${id}: ${e instanceof Error ? e.message : String(e)}`,
+        { cause: e }
       )
     }
   }

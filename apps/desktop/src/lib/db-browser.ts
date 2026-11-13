@@ -58,7 +58,7 @@ export async function queryAllDbBrowserRowsInChunks(
   chunkSize = DB_BROWSER_EXPORT_PAGE_SIZE
 ): Promise<DbBrowserQueryResponse> {
   const rows: Record<string, unknown>[] = []
-  let total = 0
+  let total: number
   let page = 1
 
   do {
