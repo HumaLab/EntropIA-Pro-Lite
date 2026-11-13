@@ -108,8 +108,9 @@ export function queueProgress(queue: IaQueue): {
  * `MAX_BATCH_FILES` or `MAX_BATCH_RECORDS`. A record with no files is
  * `empty`, one whose lookup throws is `failed`; a single record with more
  * files than a batch keeps its first `MAX_BATCH_FILES`. Returns a new queue.
- * `onProgress` hears the records checked so far against the batch's
- * expected size (pending records, at most `MAX_BATCH_RECORDS`).
+ * `onProgress` hears the records checked so far against the records the
+ * batch is expected to check: `MAX_BATCH_RECORDS` (or fewer pending) plus
+ * one for every empty or failed record. The last call has both equal.
  */
 export async function buildBatch(
   queue: IaQueue,
@@ -119,10 +120,18 @@ export async function buildBatch(
   const records = queue.records.map((record) => ({ ...record }))
   const pending = records.filter((record) => record.state === 'pending')
   const selections: IaSelection[] = []
-  const total = Math.min(pending.length, MAX_BATCH_RECORDS)
   let files = 0
   let next = 0
-  if (total > 0) onProgress?.(0, total)
+  // Records without files do not fill the batch, so each one adds a record
+  // to check.
+  let skipped = 0
+  const expected = () => Math.min(pending.length, MAX_BATCH_RECORDS + skipped)
+  let reported: [number, number] | null = null
+  const report = (checked: number, total: number) => {
+    reported = [checked, total]
+    onProgress?.(checked, total)
+  }
+  if (pending.length > 0) report(0, expected())
   batch: while (next < pending.length && selections.length < MAX_BATCH_RECORDS) {
     const chunk = pending.slice(next, next + LOOKUP_CONCURRENCY)
     const found = await Promise.allSettled(chunk.map((record) => resolveFiles(record.identifier)))
@@ -130,8 +139,10 @@ export async function buildBatch(
       const result = found[offset]!
       if (result.status === 'rejected') {
         record.state = 'failed'
+        skipped += 1
       } else if (result.value.length === 0) {
         record.state = 'empty'
+        skipped += 1
       } else {
         const names = result.value.slice(0, MAX_BATCH_FILES)
         if (selections.length >= MAX_BATCH_RECORDS) break batch
@@ -142,8 +153,11 @@ export async function buildBatch(
       }
       next += 1
     }
-    onProgress?.(Math.min(next, total), total)
+    report(next, expected())
   }
+  // The file limit can end the batch early: show it as fully checked.
+  const last = reported as [number, number] | null
+  if (last && (last[0] !== next || last[1] !== next)) report(next, next)
   return { queue: { ...queue, records }, selections }
 }
 

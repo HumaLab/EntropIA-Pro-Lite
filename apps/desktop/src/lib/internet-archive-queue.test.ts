@@ -150,6 +150,35 @@ describe('buildBatch', () => {
     expect([...totals]).toEqual([MAX_BATCH_RECORDS])
   })
 
+  it('grows the batch total for records without files instead of showing it full early', async () => {
+    const queue = queueOf(MAX_BATCH_RECORDS + 5)
+    const empty = new Set(['id-1', 'id-2', 'id-3'])
+    const progress: Array<[number, number]> = []
+    const { selections } = await buildBatch(
+      queue,
+      async (id) => (empty.has(id) ? [] : [`${id}.pdf`]),
+      (checked, total) => progress.push([checked, total])
+    )
+    expect(selections).toHaveLength(MAX_BATCH_RECORDS)
+    expect(progress.at(-1)).toEqual([MAX_BATCH_RECORDS + 3, MAX_BATCH_RECORDS + 3])
+    expect(progress.slice(0, -1).every(([checked, total]) => checked < total)).toBe(true)
+  })
+
+  it('reports the batch as fully checked when the file limit ends it', async () => {
+    const queue = queueOf(3)
+    const sizes: Record<string, number> = { 'id-1': 600, 'id-2': 500, 'id-3': 10 }
+    const progress: Array<[number, number]> = []
+    await buildBatch(
+      queue,
+      async (id) => Array.from({ length: sizes[id]! }, (_, index) => `${id}-${index}.pdf`),
+      (checked, total) => progress.push([checked, total])
+    )
+    expect(progress).toEqual([
+      [0, 3],
+      [1, 1],
+    ])
+  })
+
   it('returns no selections once nothing is pending', async () => {
     const queue = queueOf(1)
     queue.records[0]!.state = 'done'
