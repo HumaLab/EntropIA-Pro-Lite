@@ -21,6 +21,8 @@ export interface HelpSource {
 export interface HelpAnswer {
   answer: string
   sources: HelpSource[]
+  /** True when the backend answered from the bundled FAQ, with no network call (S10). */
+  local: boolean
 }
 
 export interface HelpStatus {
@@ -52,6 +54,19 @@ export function helpAsk(
     return invoke<HelpAnswer>('help_ask', { question, history: kept, diagnostics })
   }
   return invoke<HelpAnswer>('help_ask', { question, history: kept })
+}
+
+/**
+ * Every bundled FAQ entry as a starter button (S10): answered locally, so
+ * the list needs no key and no network.
+ */
+export interface HelpFaqItem {
+  group: string
+  question: string
+}
+
+export function helpFaqList(): Promise<HelpFaqItem[]> {
+  return invoke<HelpFaqItem[]>('help_faq_list')
 }
 
 /** True when the failure is the backend's missing-key rejection (S6). */

@@ -16,7 +16,7 @@ use std::path::Path;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
-use super::{manual, text};
+use super::{faq, manual, text};
 
 const CONTENT_HASH_KEY: &str = "content_hash";
 
@@ -137,8 +137,50 @@ fn match_expression(query: &str) -> String {
         .join(" OR ")
 }
 
+/// The trigram fallback for `search_in`: the accent-folded query words'
+/// trigrams OR-joined, so one misspelled word still retrieves through the
+/// trigrams it shares with the indexed text. Capped: a long question needs
+/// no more than a few dozen trigrams to find its section.
+fn trigram_expression(query: &str) -> String {
+    let mut terms: Vec<String> = Vec::new();
+    for word in text::fold(query).split(|c: char| !c.is_alphanumeric()) {
+        if word.chars().count() < 3 || text::STOPWORDS.contains(&word) {
+            continue;
+        }
+        let chars: Vec<char> = word.chars().collect();
+        for trigram in chars.windows(3) {
+            let term: String = trigram.iter().collect();
+            if !terms.contains(&term) {
+                terms.push(term);
+            }
+            if terms.len() >= 64 {
+                break;
+            }
+        }
+        if terms.len() >= 64 {
+            break;
+        }
+    }
+    terms
+        .iter()
+        .map(|term| format!("\"{term}\""))
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
+
+/// One MATCH result row: source, chapter, title, body and BM25 rank.
+fn hit_row(row: &rusqlite::Row) -> rusqlite::Result<(String, String, String, String, f64)> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+    ))
+}
+
 impl HelpIndex {
-    /// The manual sections as index documents (T9/T10 append theirs here).
+    /// The manual sections as index documents (T10 appends the screen map).
     pub(crate) fn manual_docs() -> Vec<KnowledgeDoc> {
         manual::sections()
             .iter()
@@ -149,6 +191,15 @@ impl HelpIndex {
                 body: section.body.clone(),
             })
             .collect()
+    }
+
+    /// The manual sections as index documents, plus the FAQ entries (T9):
+    /// the content hash covers both, so a new app version with new answers
+    /// rebuilds the index (S9).
+    pub(crate) fn bundled_docs() -> Vec<KnowledgeDoc> {
+        let mut docs = Self::manual_docs();
+        docs.extend(faq::faq_docs());
+        docs
     }
 
     /// Opens (or creates) the index file. When the stored content hash differs
@@ -277,38 +328,69 @@ impl HelpIndex {
         None
     }
 
-    /// The best `limit` hits for a natural-language question, best first. The
-    /// MATCH expression OR-joins the accent-folded query words (>= 3 chars,
+    /// The best `limit` hits for a natural-language question, best first,
+    /// optionally restricted to one knowledge source. The MATCH expression OR-joins the accent-folded query words (>= 3 chars,
     /// stopwords dropped) with their 5-letter stems, so a misspelled word
-    /// simply contributes nothing while the rest still retrieve. An empty or
-    /// stopword-only question matches nothing.
-    pub(crate) fn search(&self, query: &str, limit: usize) -> Vec<Hit> {
-        let expression = match_expression(query);
-        if expression.is_empty() || limit == 0 {
+    /// simply contributes nothing while the rest still retrieve. When that
+    /// word-level MATCH finds nothing (gap from L14: a single misspelled
+    /// word like «impotar» matches nothing), the query words' trigrams are
+    /// OR-joined instead, so the misspelled word still reaches its section
+    /// through the shared trigrams. An empty or stopword-only question
+    /// matches nothing.
+    ///
+    /// A `None` source searches everything; `pick_sections` passes
+    /// `Some(Source::Manual)` so FAQ entries never leak into the model prompt.
+    pub(crate) fn search_in(&self, query: &str, limit: usize, source: Option<Source>) -> Vec<Hit> {
+        if limit == 0 {
             return Vec::new();
         }
-        // Title weighted above body; a lower BM25 rank answered better, so
-        // best first is ascending. A failed query answers nothing rather than
-        // failing the whole help request: the index is a cache, rebuildable.
-        let mut stmt = match self.conn.prepare(
-            "SELECT docs.source, docs.chapter, docs.title, docs.body, bm25(docs_fts, 3.0, 1.0) AS rank
+        let expression = match_expression(query);
+        if expression.is_empty() {
+            return Vec::new();
+        }
+        let hits = self.run_match(&expression, limit, source);
+        if !hits.is_empty() {
+            return hits;
+        }
+        let fallback = trigram_expression(query);
+        if fallback.is_empty() {
+            return Vec::new();
+        }
+        self.run_match(&fallback, limit, source)
+    }
+
+    /// One MATCH query against the index, optionally restricted to a source.
+    /// Title weighted above body; a lower BM25 rank answered better, so best
+    /// first is ascending. A failed query answers nothing rather than failing
+    /// the whole help request: the index is a cache, rebuildable.
+    fn run_match(&self, expression: &str, limit: usize, source: Option<Source>) -> Vec<Hit> {
+        let stmt = match source {
+            Some(_) => self.conn.prepare(
+                "SELECT docs.source, docs.chapter, docs.title, docs.body, bm25(docs_fts, 3.0, 1.0) AS rank
+             FROM docs_fts JOIN docs ON docs.id = docs_fts.rowid
+             WHERE docs_fts MATCH ?1 AND docs.source = ?2
+             ORDER BY rank
+             LIMIT ?3",
+            ),
+            None => self.conn.prepare(
+                "SELECT docs.source, docs.chapter, docs.title, docs.body, bm25(docs_fts, 3.0, 1.0) AS rank
              FROM docs_fts JOIN docs ON docs.id = docs_fts.rowid
              WHERE docs_fts MATCH ?1
              ORDER BY rank
              LIMIT ?2",
-        ) {
+            ),
+        };
+        let mut stmt = match stmt {
             Ok(stmt) => stmt,
             Err(_) => return Vec::new(),
         };
-        let rows = match stmt.query_map(params![expression, limit as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, f64>(4)?,
-            ))
-        }) {
+        let rows = match source {
+            Some(source) => {
+                stmt.query_map(params![expression, source.as_str(), limit as i64], hit_row)
+            }
+            None => stmt.query_map(params![expression, limit as i64], hit_row),
+        };
+        let rows = match rows {
             Ok(rows) => rows,
             Err(_) => return Vec::new(),
         };
@@ -374,7 +456,7 @@ mod tests {
     fn first_open_builds_the_index() {
         let (_dir, index) = open_temp(&sample_docs());
         assert!(index.rebuilt(), "first open must rebuild");
-        let hits = index.search("importar archivos", 10);
+        let hits = index.search_in("importar archivos", 10, None);
         assert!(
             hits.iter().any(|hit| hit.title.contains("Importar")),
             "import section searchable after build: {hits:?}"
@@ -392,7 +474,7 @@ mod tests {
         let second = HelpIndex::open(&path, &docs).expect("second open");
         assert!(!second.rebuilt(), "same docs must reuse the index");
         assert!(
-            !second.search("importar archivos", 10).is_empty(),
+            !second.search_in("importar archivos", 10, None).is_empty(),
             "reused index still answers"
         );
     }
@@ -412,7 +494,7 @@ mod tests {
         assert!(second.rebuilt(), "a changed body must rebuild");
         assert!(
             second
-                .search("zambullirlos", 10)
+                .search_in("zambullirlos", 10, None)
                 .iter()
                 .any(|hit| hit.title.contains("Importar")),
             "rebuilt index answers from the new body"
@@ -422,7 +504,7 @@ mod tests {
     #[test]
     fn how_to_query_finds_the_import_section_in_the_top_three() {
         let (_dir, index) = open_real_manual();
-        let hits = index.search("¿Cómo importo archivos PDF?", 3);
+        let hits = index.search_in("¿Cómo importo archivos PDF?", 3, None);
         assert!(
             hits.iter()
                 .any(|hit| hit.title.contains("Importar archivos")),
@@ -434,7 +516,7 @@ mod tests {
     #[test]
     fn misspelled_query_still_finds_an_import_section_in_the_top_five() {
         let (_dir, index) = open_real_manual();
-        let hits = index.search("impotar archivos pdf", 5);
+        let hits = index.search_in("impotar archivos pdf", 5, None);
         assert!(
             hits.iter().any(|hit| hit.title.contains("Importar")),
             "top 5: {:?}",
@@ -445,7 +527,7 @@ mod tests {
     #[test]
     fn search_is_accent_insensitive() {
         let (_dir, index) = open_real_manual();
-        let hits = index.search("transcripcion", 10);
+        let hits = index.search_in("transcripcion", 10, None);
         assert!(
             hits.iter()
                 .any(|hit| fold(&hit.title).contains("transcripcion")
@@ -458,15 +540,72 @@ mod tests {
     #[test]
     fn search_respects_the_limit() {
         let (_dir, index) = open_real_manual();
-        let hits = index.search("colección transcripción importar", 2);
+        let hits = index.search_in("colección transcripción importar", 2, None);
         assert!(hits.len() <= 2, "{hits:?}");
     }
 
     #[test]
     fn empty_and_stopword_only_queries_return_no_hits() {
         let (_dir, index) = open_temp(&sample_docs());
-        assert!(index.search("", 10).is_empty());
-        assert!(index.search("   ", 10).is_empty());
-        assert!(index.search("¿cómo que para con los las?", 10).is_empty());
+        assert!(index.search_in("", 10, None).is_empty());
+        assert!(index.search_in("   ", 10, None).is_empty());
+        assert!(index
+            .search_in("¿cómo que para con los las?", 10, None)
+            .is_empty());
+    }
+
+    #[test]
+    fn a_single_misspelled_word_falls_back_to_trigrams() {
+        // Gap from L14: the word-level MATCH finds nothing for one
+        // misspelled word («impotar» is no indexed word or stem), so the
+        // trigram fallback must still reach the import section.
+        let (_dir, index) = open_real_manual();
+        let word_level = match_expression("impotar");
+        let direct = index.run_match(&word_level, 5, None);
+        assert!(
+            direct.is_empty(),
+            "word-level MATCH must miss a lone misspelling: {direct:?}"
+        );
+        let hits = index.search_in("impotar", 5, None);
+        assert!(
+            hits.iter().any(|hit| hit.title.contains("Importar")),
+            "trigram fallback top 5: {:?}",
+            hits.iter().map(|hit| &hit.title).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn faq_entries_are_indexed_as_faq_docs() {
+        let docs = HelpIndex::bundled_docs();
+        assert!(
+            docs.len() > HelpIndex::manual_docs().len(),
+            "bundled docs add the FAQ to the manual"
+        );
+        assert!(
+            docs.iter().any(|doc| doc.source == Source::Faq),
+            "bundled docs hold Faq entries"
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index =
+            HelpIndex::open(&dir.path().join("help-index.sqlite"), &docs).expect("open index");
+        let hits = index.search_in("colección", 10, Some(Source::Faq));
+        assert!(!hits.is_empty(), "Faq hits for a first-steps question");
+        assert!(
+            hits.iter().all(|hit| hit.source == Source::Faq),
+            "source filter holds: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn the_content_hash_covers_the_faq() {
+        // S9: new bundled answers must flip the hash and rebuild the index.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("help-index.sqlite");
+        let manual_only = HelpIndex::manual_docs();
+        let first = HelpIndex::open(&path, &manual_only).expect("first open");
+        assert!(first.rebuilt());
+        drop(first);
+        let second = HelpIndex::open(&path, &HelpIndex::bundled_docs()).expect("reopen");
+        assert!(second.rebuilt(), "adding the FAQ must rebuild the index");
     }
 }

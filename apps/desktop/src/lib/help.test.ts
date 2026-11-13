@@ -5,6 +5,7 @@ import {
   HELP_NO_OPENROUTER_KEY,
   helpAsk,
   helpDiagnosticsPreview,
+  helpFaqList,
   helpStatus,
   isNoKeyError,
   openHelpManual,
@@ -80,6 +81,33 @@ describe('help backend wrappers', () => {
     expect(args.history).toHaveLength(6)
     expect(args.history[0]?.content).toBe('turno 4')
     expect(args.history[5]?.content).toBe('turno 9')
+  })
+
+  it('helpAsk passes the local flag through', async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      answer: 'hacelo así',
+      sources: [{ chapter: 'Capítulo 1. Inicio rápido', title: '1.3. Crear colección' }],
+      local: true,
+    })
+
+    await expect(helpAsk('¿Cómo creo mi primera colección?', [], null)).resolves.toEqual({
+      answer: 'hacelo así',
+      sources: [{ chapter: 'Capítulo 1. Inicio rápido', title: '1.3. Crear colección' }],
+      local: true,
+    })
+  })
+
+  it('helpFaqList returns the starter groups and questions', async () => {
+    vi.mocked(invoke).mockResolvedValue([
+      { group: 'Primeros pasos', question: '¿Cómo importo un PDF?' },
+      { group: 'Preguntas frecuentes', question: '¿Cómo hago una copia?' },
+    ])
+
+    await expect(helpFaqList()).resolves.toEqual([
+      { group: 'Primeros pasos', question: '¿Cómo importo un PDF?' },
+      { group: 'Preguntas frecuentes', question: '¿Cómo hago una copia?' },
+    ])
+    expect(invoke).toHaveBeenCalledWith('help_faq_list')
   })
 
   it('isNoKeyError recognizes the backend missing-key rejection', () => {

@@ -4,9 +4,12 @@
 
 use std::sync::{Mutex, OnceLock};
 
+use serde::{Deserialize, Serialize};
+
 use super::diagnostics::{
     build_report, scrub_report, DiagnosticInputs, KEY_SETTINGS, SETTINGS_ALLOWLIST,
 };
+use super::faq;
 use super::index::{HelpIndex, Hit};
 use super::prompt::{
     build_help_prompt, normalize_history, pick_sections, validate_question, HelpAnswer, HelpSource,
@@ -27,7 +30,7 @@ fn help_index(app: &tauri::AppHandle) -> Result<std::sync::MutexGuard<'static, H
         let dir = crate::path_utils::cache_dir(app)?;
         std::fs::create_dir_all(&dir)
             .map_err(|error| format!("No se pudo crear la caché de ayuda: {error}"))?;
-        let fresh = HelpIndex::open(&dir.join("help-index.sqlite"), &HelpIndex::manual_docs())
+        let fresh = HelpIndex::open(&dir.join("help-index.sqlite"), &HelpIndex::bundled_docs())
             .map(Mutex::new)?;
         let _ = HELP_INDEX.set(fresh);
     }
@@ -100,6 +103,11 @@ pub async fn help_diagnostics_preview(
 /// Answers a help question from the manual excerpts (and the opted-in
 /// diagnostic report) on the user's own OpenRouter key (S1–S3, S5). The
 /// conversation lives in memory only; nothing is persisted (D4).
+///
+/// Before the key gate, a question that matches a bundled FAQ entry (S10)
+/// is answered locally with that entry's text, verbatim: no key needed, no
+/// network touched. Questions with diagnostics attached always go to the
+/// model.
 #[tauri::command]
 pub async fn help_ask(
     app: tauri::AppHandle,
@@ -117,6 +125,18 @@ pub async fn help_ask(
         _ => None,
     };
     let with_diagnostics = diagnostics.is_some();
+    // S10: deterministic local answer first, before the key gate and without
+    // any network call. It carries the entry's Fuente as its single source.
+    if let Some(local) = faq::answer_locally(diagnostics.as_deref(), &question) {
+        return Ok(HelpAnswer {
+            answer: local.answer,
+            sources: vec![HelpSource {
+                chapter: local.chapter,
+                title: local.title,
+            }],
+            local: true,
+        });
+    }
     let conn = db.ui_conn.clone();
     let (api_key, model) = tokio::task::spawn_blocking(move || {
         let guard = conn.lock().map_err(|e| e.to_string())?;
@@ -152,5 +172,31 @@ pub async fn help_ask(
     let answer = crate::llm::openrouter::OpenRouterClient::new(api_key, model)
         .generate(&prompt, &params)
         .await?;
-    Ok(HelpAnswer { answer, sources })
+    Ok(HelpAnswer {
+        answer,
+        sources,
+        local: false,
+    })
+}
+
+/// One starter button of the help chat (S10): the group it belongs to and
+/// the question it asks. The frontend shows the «Primeros pasos» group.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HelpFaqItem {
+    pub group: String,
+    pub question: String,
+}
+
+/// Every bundled FAQ entry as a starter button (S10): answered locally, so
+/// the list needs no key and no network.
+#[tauri::command]
+pub async fn help_faq_list() -> Result<Vec<HelpFaqItem>, String> {
+    Ok(faq::entries()
+        .iter()
+        .map(|entry| HelpFaqItem {
+            group: entry.group.clone(),
+            question: entry.question.clone(),
+        })
+        .collect())
 }

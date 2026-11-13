@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::index::Hit;
+use super::index::{Hit, Source};
 
 /// Longest accepted question, in characters (S1: one focused question).
 pub(crate) const QUESTION_MAX_CHARS: usize = 2000;
@@ -43,12 +43,15 @@ pub(crate) struct HelpSource {
     pub title: String,
 }
 
-/// The answer to a help question, with the sections it comes from.
+/// The answer to a help question, with the sections it comes from. A local
+/// answer (S10) carries the FAQ entry's text verbatim and never touched the
+/// network: `local` marks it for the «Respuesta local» badge.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HelpAnswer {
     pub answer: String,
     pub sources: Vec<HelpSource>,
+    pub local: bool,
 }
 
 /// The trimmed question, or why it cannot be sent.
@@ -105,9 +108,11 @@ pub(crate) fn pick_sections(
         }
     }
     // One extra candidate: a troubleshooting hit ranks but never counts as a
-    // ranked excerpt, so asking for one more keeps the bound whole.
+    // ranked excerpt, so asking for one more keeps the bound whole. Manual
+    // sections only (T9): FAQ entries answer locally, never through the
+    // model prompt.
     let mut ranked = 0;
-    for hit in index.search(question, MAX_RANKED_SECTIONS + 1) {
+    for hit in index.search_in(question, MAX_RANKED_SECTIONS + 1, Some(Source::Manual)) {
         if ranked == MAX_RANKED_SECTIONS {
             break;
         }

@@ -1686,6 +1686,7 @@ pub fn run() {
             help::commands::help_status,
             help::commands::help_diagnostics_preview,
             help::commands::help_ask,
+            help::commands::help_faq_list,
             rag::commands::rag_chunk_coverage,
             rag::commands::rag_list_conversations,
             rag::commands::rag_search_conversations,

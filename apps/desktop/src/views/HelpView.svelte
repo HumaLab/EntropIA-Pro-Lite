@@ -6,6 +6,7 @@
   import {
     helpAsk,
     helpDiagnosticsPreview,
+    helpFaqList,
     helpStatus,
     isNoKeyError,
     openHelpManual,
@@ -18,7 +19,16 @@
   const paneId = getPaneId()
   const currentLocale = locale
 
-  type HelpMessage = { role: 'user' | 'assistant'; content: string; sources?: HelpSource[] }
+  type HelpMessage = {
+    role: 'user' | 'assistant'
+    content: string
+    sources?: HelpSource[]
+    /** True when the backend answered from the bundled FAQ, with no network call (S10). */
+    local?: boolean
+  }
+
+  /** The backend's group name for the first-steps starter buttons (S10). */
+  const FIRST_STEPS_GROUP = 'Primeros pasos'
 
   // The conversation lives in component memory only: nothing is stored (D4).
   let status = $state<'loading' | 'no-key' | 'ready'>('loading')
@@ -31,8 +41,16 @@
   let preview = $state<string | null>(null)
   let previewOpen = $state(false)
   let previewLoading = $state(false)
+  // Starter buttons from the bundled FAQ (S10); built-in suggestions while
+  // the list loads or when it fails.
+  let starters = $state<string[]>([])
 
-  const canSend = $derived(status === 'ready' && !sending && draft.trim().length > 0)
+  const canSend = $derived(status !== 'loading' && !sending && draft.trim().length > 0)
+
+  /** The built-in suggestions, used until the faq list loads or when it fails. */
+  function fallbackStarters(): string[] {
+    return [t('help.suggestion1'), t('help.suggestion2'), t('help.suggestion3')]
+  }
 
   onMount(() => {
     void helpStatus().then(
@@ -46,11 +64,26 @@
         status = 'ready'
       }
     )
+    // Starter buttons need no key: the bundled FAQ answers locally (S10).
+    starters = fallbackStarters()
+    void helpFaqList().then(
+      (items) => {
+        const firstSteps = items
+          .filter((item) => item.group === FIRST_STEPS_GROUP)
+          .map((item) => item.question)
+        if (firstSteps.length > 0) starters = firstSteps
+      },
+      () => {
+        starters = fallbackStarters()
+      }
+    )
   })
 
   async function send(): Promise<void> {
     const question = draft.trim()
-    if (!question || sending || status !== 'ready') return
+    // The input stays usable with no key (S6, S10): local answers still
+    // work, and help_ask reports the key rejection for the rest.
+    if (!question || sending || status === 'loading') return
     sending = true
     error = null
     let diagnostics: string | null = null
@@ -75,11 +108,14 @@
       const answer = await helpAsk(question, history, diagnostics)
       messages = [
         ...messages,
-        { role: 'assistant', content: answer.answer, sources: answer.sources },
+        { role: 'assistant', content: answer.answer, sources: answer.sources, local: answer.local },
       ]
     } catch (sendError) {
       if (isNoKeyError(sendError)) {
-        status = 'no-key'
+        // No local answer and no key: show the key message (S6) instead of
+        // a generic error. The input stays for a local question.
+        error = t('help.noKeyBody')
+        draft = question
         return
       }
       error = t('help.sendError')
@@ -123,21 +159,25 @@
 
   {#if status === 'loading'}
     <p class="help-view__state" role="status">{$currentLocale && t('help.statusLoading')}</p>
-  {:else if status === 'no-key'}
-    <section class="help-view__no-key" aria-label={$currentLocale && t('help.noKeyTitle')}>
-      <p class="help-view__no-key-title">{$currentLocale && t('help.noKeyTitle')}</p>
-      <p class="help-view__no-key-body">{$currentLocale && t('help.noKeyBody')}</p>
-      <div class="help-view__no-key-actions">
-        <Button variant="primary" onclick={() => navigation.openRootSection({ name: 'settings' })}>
-          {$currentLocale && t('help.openSettings')}
-        </Button>
-        <Button variant="secondary" onclick={() => void openHelpManual()}>
-          <ActionIcon name="external-link" size={16} />
-          {$currentLocale && t('help.openManual')}
-        </Button>
-      </div>
-    </section>
   {:else}
+    {#if status === 'no-key'}
+      <section class="help-view__no-key" aria-label={$currentLocale && t('help.noKeyTitle')}>
+        <p class="help-view__no-key-title">{$currentLocale && t('help.noKeyTitle')}</p>
+        <p class="help-view__no-key-body">{$currentLocale && t('help.noKeyBody')}</p>
+        <div class="help-view__no-key-actions">
+          <Button
+            variant="primary"
+            onclick={() => navigation.openRootSection({ name: 'settings' })}
+          >
+            {$currentLocale && t('help.openSettings')}
+          </Button>
+          <Button variant="secondary" onclick={() => void openHelpManual()}>
+            <ActionIcon name="external-link" size={16} />
+            {$currentLocale && t('help.openManual')}
+          </Button>
+        </div>
+      </section>
+    {/if}
     <div
       class="help-view__messages"
       role="log"
@@ -149,15 +189,11 @@
         <div class="help-view__suggestions">
           <p class="help-view__suggestions-label">{$currentLocale && t('help.suggestionsLabel')}</p>
           <div class="help-view__suggestions-list">
-            <Button variant="secondary" size="sm" onclick={() => (draft = t('help.suggestion1'))}>
-              {$currentLocale && t('help.suggestion1')}
-            </Button>
-            <Button variant="secondary" size="sm" onclick={() => (draft = t('help.suggestion2'))}>
-              {$currentLocale && t('help.suggestion2')}
-            </Button>
-            <Button variant="secondary" size="sm" onclick={() => (draft = t('help.suggestion3'))}>
-              {$currentLocale && t('help.suggestion3')}
-            </Button>
+            {#each starters as starter (starter)}
+              <Button variant="secondary" size="sm" onclick={() => (draft = starter)}>
+                {starter}
+              </Button>
+            {/each}
           </div>
         </div>
       {/if}
@@ -172,6 +208,9 @@
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
               {@html renderMarkdown(message.content)}
             </div>
+            {#if message.local}
+              <p class="help-view__local">{$currentLocale && t('help.localAnswer')}</p>
+            {/if}
             {#if message.sources && message.sources.length > 0}
               <ul class="help-view__sources" aria-label={$currentLocale && t('help.sourcesLabel')}>
                 {#each message.sources as source (source.chapter + source.title)}
@@ -409,6 +448,13 @@
     list-style: none;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
+  }
+
+  .help-view__local {
+    margin: var(--space-2) 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-style: italic;
   }
 
   .help-view__sources li + li {
