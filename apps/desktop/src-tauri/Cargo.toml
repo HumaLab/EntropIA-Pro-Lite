@@ -244,3 +244,9 @@ local-ml = [
 # The build-mnn-from-source flag in the ocr-rs dependency ensures MNN compiles
 # locally via CMake, which resolves the linker symbols correctly.
 paddle-ocr = ["dep:ocr-rs"]
+
+# Opt-in CUDA offload for the local LLM (llama.cpp): offloads every layer to
+# NVIDIA GPUs. NOT part of any installer build (portability: machines without
+# CUDA drivers must still run): enable explicitly for local testing/benchmarks
+# with `--features cuda` (implies `local-ml`).
+cuda = ["local-ml", "llama-cpp-2/cuda"]

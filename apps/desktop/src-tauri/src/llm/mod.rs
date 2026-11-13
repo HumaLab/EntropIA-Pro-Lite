@@ -30,7 +30,7 @@ use crate::nlp::text_provider;
 use crate::settings;
 
 #[cfg(feature = "local-ml")]
-use self::engine::{LlmConfig, LlmEngine};
+use self::engine::{FitFailure, LlmConfig, LlmEngine};
 use self::generation::{
     generation_config_from_settings, render_prompt_from_settings, FlowGenerationConfig,
     GenerationFlow, OpenRouterGenerationParams,
@@ -341,6 +341,11 @@ pub(crate) fn get_or_init_local_gemma_engine(
         n_ctx: 4096,
         n_threads: None,
         seed: 1234,
+        // Opt-in CUDA builds offload every layer; CPU-only builds stay at 0.
+        #[cfg(feature = "cuda")]
+        n_gpu_layers: u32::MAX,
+        #[cfg(not(feature = "cuda"))]
+        n_gpu_layers: 0,
     })?;
     let engine = Arc::new(Mutex::new(engine));
     *cached = Some(Arc::clone(&engine));
@@ -2091,7 +2096,7 @@ fn max_tokens_for(job: &LlmJob) -> i32 {
         | LlmJob::ConsolidateEntitiesAsset { .. } => 1024,
         LlmJob::ExtractTriples { .. } | LlmJob::ExtractTriplesAsset { .. } => 1024,
         LlmJob::ExtractSchemaAsset { .. } => 2048,
-        LlmJob::Summarize { .. } | LlmJob::SummarizeAsset { .. } => 512,
+        LlmJob::Summarize { .. } | LlmJob::SummarizeAsset { .. } => 1024,
         LlmJob::Classify { .. } => 256,
         LlmJob::Ask { .. } => 512,
     }
@@ -2124,6 +2129,199 @@ fn truncate_to_sentence_boundary(text: &str) -> String {
     } else {
         // No sentence boundary found at all — return as-is (better than nothing)
         trimmed.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Whole-text summaries without truncation (map-reduce)
+// ---------------------------------------------------------------------------
+
+/// Ceiling for one summary pass: ~100 KB of Spanish OCR text fits in it.
+/// Anything larger is summarized per chunk and fused; input is never dropped.
+#[cfg(feature = "local-ml")]
+const SUMMARY_MAX_N_CTX: u32 = 32_768;
+
+/// Recursion cap for summary chunking: each level shrinks text ~25x, so depth
+/// 4 already covers absurd inputs; beyond that something else is wrong.
+#[cfg(feature = "local-ml")]
+const SUMMARY_MAX_DEPTH: u32 = 4;
+
+/// Split text into sentence-bounded chunks of at most `max_chars` each.
+/// Never drops text: a single block longer than the budget becomes its own
+/// chunk and the caller errors loudly instead of summarizing silently.
+#[cfg(feature = "local-ml")]
+fn split_text_for_summary(text: &str, max_chars: usize) -> Vec<String> {
+    const BOUNDARIES: [char; 5] = ['.', '!', '?', '\n', '。'];
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for sentence in text.split_inclusive(&BOUNDARIES[..]) {
+        if current.chars().count() + sentence.chars().count() > max_chars && !current.is_empty() {
+            chunks.push(std::mem::take(&mut current));
+        }
+        current.push_str(sentence);
+    }
+    if !current.trim().is_empty() {
+        chunks.push(current);
+    }
+    chunks
+        .into_iter()
+        .map(|chunk| chunk.trim().to_string())
+        .filter(|chunk| !chunk.is_empty())
+        .collect()
+}
+
+/// Text tokens each chunk may hold so its prompt fits the ceiling.
+#[cfg(feature = "local-ml")]
+fn summary_chunk_budget(
+    engine: &LlmEngine,
+    empty_prompt: &str,
+    max_tokens: i32,
+) -> Result<u32, String> {
+    let template_tokens = engine
+        .count_tokens(empty_prompt, crate::llm::engine::AddBos::Always)
+        .map_err(|error| format!("Failed to tokenize summary template: {error}"))?
+        as u32;
+    let budget = SUMMARY_MAX_N_CTX.saturating_sub(max_tokens.max(0) as u32 + 256 + template_tokens);
+    if budget < 512 {
+        return Err(format!(
+            "summary template alone needs {template_tokens} tokens: cannot chunk under the {SUMMARY_MAX_N_CTX} ceiling"
+        ));
+    }
+    Ok(budget)
+}
+
+/// Summarize `text` in full with the user's summary template: one fitted pass
+/// when it fits, otherwise one pass per chunk plus a fusion pass. Never
+/// truncates input; fails loudly when even one block cannot be split to fit.
+#[cfg(feature = "local-ml")]
+fn summarize_text_fully(
+    engine: &LlmEngine,
+    conn: &rusqlite::Connection,
+    text: &str,
+    max_tokens: i32,
+    log_prefix: &str,
+    depth: u32,
+) -> Result<String, String> {
+    let render = |part: &str| {
+        prompt::gemma_wrap(&render_prompt_from_settings(
+            conn,
+            GenerationFlow::Summary,
+            part,
+        ))
+    };
+    let prompt = render(text);
+    match engine.generate_fitted(&prompt, max_tokens, SUMMARY_MAX_N_CTX, log_prefix) {
+        Ok(generated) => {
+            if generated.hit_budget {
+                log::warn!(
+                    target: log_target(log_prefix),
+                    "summary hit the {max_tokens}-token output budget; the 10-15 line shape may end early",
+                );
+            }
+            Ok(truncate_to_sentence_boundary(&generated.text))
+        }
+        Err(FitFailure::Tokenize(error)) => Err(error),
+        Err(FitFailure::TooLong { need }) => {
+            if depth >= SUMMARY_MAX_DEPTH {
+                return Err(format!(
+                    "document needs a {need}-token window (ceiling {SUMMARY_MAX_N_CTX}): split it before summarizing"
+                ));
+            }
+            let budget = summary_chunk_budget(engine, &render(""), max_tokens)?;
+            // Conservative chars-per-token for chunking; if a chunk still
+            // overflows, recursion re-chunks it instead of dropping text.
+            let chunks = split_text_for_summary(text, budget as usize * 3);
+            if chunks.len() <= 1 {
+                return Err(format!(
+                    "single block needs a {need}-token window (ceiling {SUMMARY_MAX_N_CTX}): split it before summarizing"
+                ));
+            }
+            log::info!(
+                target: log_target(log_prefix),
+                "summary map-reduce: {} chunks (depth {depth})",
+                chunks.len(),
+            );
+            let mut partials = Vec::with_capacity(chunks.len());
+            for (index, chunk) in chunks.iter().enumerate() {
+                let part_log = format!("{log_prefix}[parte {}/{}]", index + 1, chunks.len());
+                partials.push(summarize_text_fully(
+                    engine,
+                    conn,
+                    chunk,
+                    max_tokens,
+                    &part_log,
+                    depth + 1,
+                )?);
+            }
+            summarize_partials_fully(
+                engine,
+                &partials.join("\n\n"),
+                max_tokens,
+                log_prefix,
+                depth + 1,
+            )
+        }
+    }
+}
+
+/// Fuse per-chunk summaries with the internal fusion template. Recurses the
+/// same way when the partials themselves do not fit.
+#[cfg(feature = "local-ml")]
+fn summarize_partials_fully(
+    engine: &LlmEngine,
+    joined: &str,
+    max_tokens: i32,
+    log_prefix: &str,
+    depth: u32,
+) -> Result<String, String> {
+    let prompt = prompt::gemma_wrap(&prompt::SUMMARY_FUSION_PROMPT.replace("{text}", joined));
+    match engine.generate_fitted(&prompt, max_tokens, SUMMARY_MAX_N_CTX, log_prefix) {
+        Ok(generated) => {
+            if generated.hit_budget {
+                log::warn!(
+                    target: log_target(log_prefix),
+                    "summary fusion hit the {max_tokens}-token output budget; the 10-15 line shape may end early",
+                );
+            }
+            Ok(truncate_to_sentence_boundary(&generated.text))
+        }
+        Err(FitFailure::Tokenize(error)) => Err(error),
+        Err(FitFailure::TooLong { need }) => {
+            if depth >= SUMMARY_MAX_DEPTH {
+                return Err(format!(
+                    "partials need a {need}-token window (ceiling {SUMMARY_MAX_N_CTX}): cannot fuse"
+                ));
+            }
+            let budget = summary_chunk_budget(
+                engine,
+                &prompt::gemma_wrap(&prompt::SUMMARY_FUSION_PROMPT.replace("{text}", "")),
+                max_tokens,
+            )?;
+            let chunks = split_text_for_summary(joined, budget as usize * 3);
+            if chunks.len() <= 1 {
+                return Err(format!(
+                    "partials need a {need}-token window (ceiling {SUMMARY_MAX_N_CTX}): cannot fuse"
+                ));
+            }
+            let mut partials = Vec::with_capacity(chunks.len());
+            for (index, chunk) in chunks.iter().enumerate() {
+                let part_log = format!("{log_prefix}[fusion {}/{}]", index + 1, chunks.len());
+                partials.push(summarize_partials_fully(
+                    engine,
+                    chunk,
+                    max_tokens,
+                    &part_log,
+                    depth + 1,
+                )?);
+            }
+            summarize_partials_fully(
+                engine,
+                &partials.join("\n\n"),
+                max_tokens,
+                log_prefix,
+                depth + 1,
+            )
+        }
     }
 }
 
@@ -2273,14 +2471,11 @@ fn process_job(
             if text.is_empty() {
                 return Err("No text available for summarization".to_string());
             }
-            let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::gemma_wrap(&render_prompt_from_settings(
-                conn,
-                GenerationFlow::Summary,
-                &truncated,
-            ));
-            let result = engine.generate(&p, max_tokens_for(job), &log_prefix)?;
-            Ok(truncate_to_sentence_boundary(&result))
+            // Whole item text, never truncated: one fitted pass, or
+            // per-chunk passes plus fusion when it exceeds the ceiling.
+            let output =
+                summarize_text_fully(engine, conn, &text, max_tokens_for(job), &log_prefix, 0)?;
+            Ok(output)
         }
 
         LlmJob::Classify {
@@ -2384,22 +2579,11 @@ fn process_job(
             if text.is_empty() {
                 return Err("No text available for summarization on this asset".to_string());
             }
-            let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            if truncated.chars().count() < text.chars().count() {
-                log::info!(
-                    target: log_target(&log_prefix),
-                    "summary input truncated for context: {} of {} chars kept",
-                    truncated.chars().count(),
-                    text.chars().count(),
-                );
-            }
-            let p = prompt::gemma_wrap(&render_prompt_from_settings(
-                conn,
-                GenerationFlow::Summary,
-                &truncated,
-            ));
-            let result = engine.generate(&p, max_tokens_for(job), &log_prefix)?;
-            Ok(truncate_to_sentence_boundary(&result))
+            // Whole asset text, never truncated: one fitted pass, or
+            // per-chunk passes plus fusion when it exceeds the ceiling.
+            let output =
+                summarize_text_fully(engine, conn, &text, max_tokens_for(job), &log_prefix, 0)?;
+            Ok(output)
         }
     }?;
     Ok(JobExecutionOutput {
@@ -2863,6 +3047,55 @@ mod tests {
                 None,
             ]
         );
+    }
+
+    #[test]
+    fn summary_chunks_cover_the_whole_text_without_loss() {
+        let text =
+            "Primera oración. Segunda oración con más palabras. Tercera. Cuarta oración final.";
+        let chunks = split_text_for_summary(text, 40);
+        assert!(chunks.len() > 1);
+        // Concatenation (ignoring whitespace) preserves every character.
+        let joined: String = chunks.join("");
+        let norm = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        assert_eq!(norm(&joined), norm(text));
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 40 || !chunk[..chunk.len().min(40)].contains('.'));
+        }
+    }
+
+    #[test]
+    fn summary_chunking_scales_to_hundreds_of_kb() {
+        // A ~300 KB document must split into bounded chunks without loss.
+        let paragraph = "Esta es una oración de relleno con varias palabras. ";
+        let text = paragraph.repeat(6000);
+        assert!(text.chars().count() > 200_000);
+        let chunks = split_text_for_summary(&text, 4000);
+        assert!(chunks.len() > 40, "expected many chunks, got {}", chunks.len());
+        let joined: String = chunks.join("");
+        let norm = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        assert_eq!(norm(&joined), norm(&text));
+        assert!(chunks.iter().all(|c| c.chars().count() <= 4000));
+    }
+
+    #[test]
+    fn summary_chunking_keeps_an_oversized_block_verbatim() {
+        // A single block longer than the budget becomes its own chunk: the
+        // caller errors loudly instead of dropping it.
+        let text = "Esta es una sola oración larguísima sin ningún otro corte posible en todo el texto que sigue creciendo.";
+        let chunks = split_text_for_summary(text, 20);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
+    }
+
+    #[test]
+    fn summary_max_tokens_covers_the_ten_to_fifteen_line_shape() {
+        // The 10-15 line summary shape (~350 tokens) must fit comfortably in
+        // the output budget with headroom: the budget, not truncation, ends it.
+        let job = LlmJob::Summarize {
+            item_id: "test-item".to_string(),
+        };
+        assert!(max_tokens_for(&job) >= 700);
     }
 
     /// S6: both new operations need the OpenRouter key, and a missing key is

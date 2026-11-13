@@ -141,6 +141,14 @@ NO superes las 15 líneas. NO cortes a mitad de frase.
 Texto:
 {text}"#;
 
+/// Second (and later) map-reduce pass: fuse per-chunk summaries into the same
+/// 10-15 line shape as [`DEFAULT_SUMMARY_PROMPT`]. Internal step, not a user
+/// setting: chunk summaries already follow the user's summary prompt.
+pub const SUMMARY_FUSION_PROMPT: &str = r#"Combiná estos resúmenes parciales de un mismo documento histórico en uno o dos párrafos concisos, de 10 a 15 líneas en total, sin repetir información. Preservá nombres propios, fechas, lugares y eventos clave, en el mismo idioma de los textos (por defecto, español). SIEMPRE terminá con una oración completa que termine en punto. NO superes las 15 líneas. NO cortes a mitad de frase.
+
+Resúmenes parciales:
+{text}"#;
+
 pub const DEFAULT_NER_PROMPT: &str = r#"Extraé entidades nombradas del texto histórico. Devolvé SOLO JSON válido, sin markdown. Usá exclusivamente estas categorías: PER, LOC, ORG, DATE, MISC. Formato: [{"value":"...","type":"PER|LOC|ORG|DATE|MISC","confidence":0.95}]. Si no hay entidades, devolvé []. No inventes entidades ni uses categorías fuera del contrato.
 
 Texto:
