@@ -93,7 +93,7 @@ own card later and can reuse this base.
 | T13a | S8-S14 | manual § 13.5 update + «Ayuda» row in the settings table | done | bf099db0 |
 | T13b | S5, S9-S14 | independent verify of v2 (Risk item 2) | done (static only; 2 findings fixed in T13c) | — |
 | T13c | S12, S14 | fix verify findings (TDD) | done | see git log (fix(help): keep document answers out …) |
-| T14 | S13 | TDD — bubble anchored to the bottom-right corner across resize/maximize; maximize/restore for the chat panel | pending | |
+| T14 | S13 | TDD — bubble anchored to the bottom-right corner across resize/maximize; maximize/restore for the chat panel | done | see git log (fix(help): anchor the bubble …) |
 | T6 | S8 | owner check with the real failures of S8 (needs a real OpenRouter key) | pending | |
 
 ## Log
@@ -131,3 +131,4 @@ own card later and can reuse this base.
 - L21 (2026-11-13, T13b verify, gentle-ai-verify): isolated setup refused by the safety policy (".env" sensitive path), zero runtime probes by the verifier; static verdict NOT CLEARED: S12 FAIL (an answer built from documents stayed in `messages` and was resent as history on a later unchecked question, `HelpView.svelte:107-126`, `prompt.rs:225-232`); S14 FAIL (`HelpView.svelte:108` and `help.ts:61` sliced history to 6 before Rust applied `help_history_turns` up to 12). Spot-check of 5 local answers: no invented UI names. Parent runtime checks: `cargo test --lib help::` 71/71, ACL 7/7 + 15/15, help vitest 75/75 Pro and Lite.
 - L22 (2026-11-13, T13c): document-derived answers are filtered out of history; frontend sends up to `HELP_HISTORY_MAX_TURNS` = 12 and Rust trims to the setting. RED 3 failing (verifier's S12 probe, 12-turn cap in HelpView and help.ts) -> GREEN 56/56 Pro and Lite; full desktop Pro 4348 / Lite 4312, svelte-check 0/0 both, lint, prettier clean.
 - L23 (2026-11-13, owner check v2, verbatim): "varias cosas, priemro, aparece babajo a la derecha emne l arranque minimizado pero cuando la app es mximizada queda fija en ese punto de la apntalla y no al angulo bajo derechoi, en segundo lugar, el chat es una ventana emergente y eso es correcto lo qeu falta es qeu se pueda maximizar". Cause of the first: the position is stored as absolute left/top. S13 extended, T14 added.
+- L24 (2026-11-13, T14, delegated worker): position stored as `{right, bottom}` offsets (legacy `{x, y}` converted with the current window size and rewritten), re-clamped on resize; panel maximize/restore («Maximizar» / «Restaurar», icons `expand` / new `restore`), maximized state in localStorage, HelpView not remounted. RED 31 unit + 24 component failing -> GREEN 62/62; full desktop Pro 4373 / Lite 4337, ui 963, typecheck 0/0 (Pro, Lite, ui), lint, prettier, map --check clean.
