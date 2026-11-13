@@ -46,6 +46,17 @@ pub struct PaddleVlConfig {
     /// The Python subprocess will validate GPU support and fall back to CPU
     /// if the paddlepaddle-gpu stack is not installed or GPU init fails.
     pub device: String,
+    /// When set, the engine runs `glm_ocr_local.py` (layout on CPU, GLM-OCR on
+    /// a local llama-server) instead of PaddleOCR-VL. Same output contract.
+    pub glm_local: Option<GlmLocalBackend>,
+}
+
+/// What the local GLM-OCR backend needs to start its server.
+#[derive(Clone)]
+pub struct GlmLocalBackend {
+    pub assets: super::glm_ocr_local::GlmLocalAssets,
+    /// Archive database path; the server's models, pid file and log live next to it.
+    pub db_path: PathBuf,
 }
 
 /// The PaddleOCR-VL engine — spawns Python as a child process.
@@ -85,6 +96,11 @@ impl PaddleVlEngine {
         }
 
         Ok(Self { config })
+    }
+
+    /// Whether this engine runs local GLM-OCR rather than PaddleOCR-VL.
+    pub fn uses_glm_local(&self) -> bool {
+        self.config.glm_local.is_some()
     }
 
     /// Maximum time (in seconds) to wait for PaddleVL subprocess to complete.
@@ -137,10 +153,19 @@ impl PaddleVlEngine {
         {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        cmd.arg(&self.config.script_path)
-            .arg(image_path)
-            .arg("--device")
-            .arg(&self.config.device)
+        cmd.arg(&self.config.script_path).arg(image_path);
+        if let Some(glm) = &self.config.glm_local {
+            // Layout runs on CPU inside the script; recognition goes to the
+            // persistent llama-server, started here on first use.
+            let url = super::glm_ocr_local::ensure_server(&glm.assets, &glm.db_path)?;
+            cmd.arg("--server-url")
+                .arg(url)
+                .arg("--parallel")
+                .arg(super::glm_ocr_local::PARALLEL_SLOTS.to_string());
+        } else {
+            cmd.arg("--device").arg(&self.config.device);
+        }
+        cmd
             // CPU performance tuning — must be set BEFORE the Python process starts
             // because OMP/MKL libraries read these once at import time.
             .env("OMP_NUM_THREADS", &cpu_threads)
@@ -735,7 +760,50 @@ pub fn create_paddle_vl_engine_result(
 
     // Auto-detect GPU and prefer it, but let the Python subprocess validate
     // software-level support and fall back to CPU if GPU init fails.
-    let device = if detect_nvidia_gpu() {
+    let has_gpu = detect_nvidia_gpu();
+    let engine_setting = crate::db::open::open_archive_connection(settings_db_path)
+        .ok()
+        .and_then(|conn| {
+            crate::settings::get_setting(&conn, super::glm_ocr_local::OCRH_LOCAL_ENGINE_SETTING)
+        })
+        .unwrap_or_else(|| super::glm_ocr_local::ENGINE_AUTO.to_string());
+    let glm_assets = select_glm_local_assets(
+        &engine_setting,
+        has_gpu,
+        super::glm_ocr_local::resolve_assets(settings_db_path),
+    )?;
+
+    if let Some(assets) = glm_assets {
+        crate::app_logs::info(
+            app_handle,
+            "ocrh",
+            format!(
+                "OCRH local usará GLM-OCR (llama-server: {})",
+                assets.server.display()
+            ),
+        );
+        let config = PaddleVlConfig {
+            python_path,
+            script_path: resolve_ocrh_script_path_from_roots(
+                runtime_root.as_deref(),
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                "glm_ocr_local.py",
+            ),
+            hf_cache_dir,
+            paddlex_cache_dir,
+            offline_mode,
+            // Only the layout model runs inside the script, and it runs on CPU.
+            device: "cpu".to_string(),
+            glm_local: Some(GlmLocalBackend {
+                assets,
+                db_path: settings_db_path.to_path_buf(),
+            }),
+        };
+        return PaddleVlEngine::init(config)
+            .map_err(|e| format!("❌ Failed to create GLM-OCR local engine: {e}"));
+    }
+
+    let device = if has_gpu {
         log::info!(target: "paddle_vl", "NVIDIA GPU detected — preferring GPU for PaddleOCR-VL");
         "gpu".to_string()
     } else {
@@ -750,9 +818,38 @@ pub fn create_paddle_vl_engine_result(
         paddlex_cache_dir,
         offline_mode,
         device,
+        glm_local: None,
     }) {
         Ok(engine) => Ok(engine),
         Err(e) => Err(format!("❌ Failed to create PaddleVLEngine: {e}")),
+    }
+}
+
+/// Decide whether OCRH local runs on GLM-OCR.
+///
+/// `glm_ocr` demands it (missing assets is an error); `auto` uses it when the
+/// assets are installed and an NVIDIA GPU is present, since GLM-OCR on CPU is
+/// far slower than PaddleOCR-VL; anything else keeps PaddleOCR-VL.
+fn select_glm_local_assets(
+    setting: &str,
+    has_gpu: bool,
+    assets: Result<super::glm_ocr_local::GlmLocalAssets, String>,
+) -> Result<Option<super::glm_ocr_local::GlmLocalAssets>, String> {
+    use super::glm_ocr_local::{ENGINE_AUTO, ENGINE_GLM_OCR};
+    match setting.trim().to_lowercase().as_str() {
+        ENGINE_GLM_OCR => assets.map(Some),
+        ENGINE_AUTO => match assets {
+            Ok(assets) if has_gpu => Ok(Some(assets)),
+            Ok(_) => {
+                log::info!(target: "paddle_vl", "GLM-OCR local installed but no NVIDIA GPU; using PaddleOCR-VL");
+                Ok(None)
+            }
+            Err(reason) => {
+                log::info!(target: "paddle_vl", "GLM-OCR local unavailable ({reason}); using PaddleOCR-VL");
+                Ok(None)
+            }
+        },
+        _ => Ok(None),
     }
 }
 
@@ -760,14 +857,22 @@ fn resolve_paddle_vl_script_path_from_roots(
     managed_root: Option<&Path>,
     manifest_dir: &Path,
 ) -> PathBuf {
+    resolve_ocrh_script_path_from_roots(managed_root, manifest_dir, "paddle_vl.py")
+}
+
+fn resolve_ocrh_script_path_from_roots(
+    managed_root: Option<&Path>,
+    manifest_dir: &Path,
+    script_name: &str,
+) -> PathBuf {
     if let Some(root) = managed_root {
-        let managed = managed_script_path(root, "paddle_vl.py");
+        let managed = managed_script_path(root, script_name);
         if managed.exists() {
             return managed;
         }
     }
 
-    normalize_windows_path(manifest_dir.join("scripts/paddle_vl.py"))
+    normalize_windows_path(manifest_dir.join("scripts").join(script_name))
 }
 
 fn ensure_cache_dir(label: &str, cache_dir: &Path) -> Result<(), String> {
@@ -1133,7 +1238,47 @@ mod tests {
             paddlex_cache_dir: None,
             offline_mode: false,
             device: "gpu".to_string(),
+            glm_local: None,
         };
         assert_eq!(config.device, "gpu");
+    }
+
+    fn glm_assets() -> crate::ocr::glm_ocr_local::GlmLocalAssets {
+        crate::ocr::glm_ocr_local::GlmLocalAssets {
+            server: PathBuf::from("/x/llama-server"),
+            model: PathBuf::from("/x/m.gguf"),
+            mmproj: PathBuf::from("/x/p.gguf"),
+        }
+    }
+
+    #[test]
+    fn auto_uses_glm_only_with_assets_and_gpu() {
+        assert!(select_glm_local_assets("auto", true, Ok(glm_assets()))
+            .unwrap()
+            .is_some());
+        assert!(select_glm_local_assets("auto", false, Ok(glm_assets()))
+            .unwrap()
+            .is_none());
+        assert!(select_glm_local_assets("auto", true, Err("missing".into()))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn forced_glm_reports_missing_assets() {
+        assert_eq!(
+            select_glm_local_assets("glm_ocr", false, Err("missing".into())).unwrap_err(),
+            "missing"
+        );
+        assert!(select_glm_local_assets("GLM_OCR", false, Ok(glm_assets()))
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn paddle_vl_setting_never_uses_glm() {
+        assert!(select_glm_local_assets("paddle_vl", true, Ok(glm_assets()))
+            .unwrap()
+            .is_none());
     }
 }

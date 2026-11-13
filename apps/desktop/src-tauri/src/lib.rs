@@ -1857,6 +1857,9 @@ fn stop_background_services(app_handle: &tauri::AppHandle) {
     {
         endpoint.stop();
     }
+    // The local GLM-OCR server holds GPU memory; it must not outlive the app.
+    #[cfg(feature = "paddle-ocr")]
+    ocr::glm_ocr_local::shutdown();
 }
 
 /// Every directory a previous EntropIA build may have written to, in the order

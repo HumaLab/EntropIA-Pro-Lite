@@ -11,6 +11,8 @@ pub mod paddle;
 #[cfg(feature = "local-ml")]
 pub mod layout_onnx;
 #[cfg(feature = "paddle-ocr")]
+pub mod glm_ocr_local;
+#[cfg(feature = "paddle-ocr")]
 pub mod paddle_vl;
 pub mod paddle_vl_types;
 pub(crate) mod pdf;
@@ -1646,7 +1648,11 @@ async fn process_pdf(
                             // High mode: try PaddleVL, fall back to lightweight PaddleOCR
                             if let Some(engine) = engine_clone {
                                 // Downscale large PDF page renders before PaddleVL (same reason as images)
-                                let vl_bytes = maybe_downscale_for_paddlevl(&page_image);
+                                let vl_bytes = if engine.uses_glm_local() {
+                                    page_image.clone()
+                                } else {
+                                    maybe_downscale_for_paddlevl(&page_image)
+                                };
 
                                 let temp_path = std::env::temp_dir().join(format!(
                                     "entropia_paddlevl_pdf_{}_{}.png",
@@ -1929,7 +1935,13 @@ async fn process_image_high(
             // scales with pixel count, and CPUs can take 10x longer on 2200x2575
             // images vs 1500x1756. The resized image is still sharp enough for
             // accurate OCR on typical document scans.
-            let vl_bytes = maybe_downscale_for_paddlevl(&bytes_owned);
+            // GLM-OCR reads each layout box at full resolution; shrinking the
+            // page first only costs accuracy, and its layout runs fast on CPU.
+            let vl_bytes = if engine_clone.uses_glm_local() {
+                bytes_owned.clone()
+            } else {
+                maybe_downscale_for_paddlevl(&bytes_owned)
+            };
 
             // Write bytes to a temp file for PaddleVL subprocess
             let temp_path = std::env::temp_dir()
