@@ -3084,6 +3084,12 @@ const es = {
   'internetArchive.record.selectPage': 'Seleccionar todos los registros de la página',
   'internetArchive.record.resolving': 'Buscando archivos de {count} registros…',
   'internetArchive.record.empty': 'Sin archivos de los tipos elegidos',
+  'internetArchive.record.selectAll': 'Seleccionar los {count} resultados',
+  'internetArchive.record.selectAllNotice':
+    'Se van a revisar los archivos de {count} registros; puede tardar.',
+  'internetArchive.record.selectAllCapped':
+    'Se seleccionan los primeros {count} de {total} resultados.',
+  'internetArchive.record.loadingAll': 'Buscando los {count} registros…',
   'internetArchive.record.failed':
     'No se pudieron leer los archivos de {count} registros. Probá de nuevo o abrilos de a uno.',
   'internetArchive.collection.idLabel': 'Identificador de la colección',
@@ -6385,6 +6391,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'internetArchive.record.selectPage': 'Select every record on this page',
   'internetArchive.record.resolving': 'Looking up the files of {count} records…',
   'internetArchive.record.empty': 'No files of the chosen types',
+  'internetArchive.record.selectAll': 'Select all {count} results',
+  'internetArchive.record.selectAllNotice':
+    'This looks up the files of {count} records; it may take a while.',
+  'internetArchive.record.selectAllCapped': 'Selects the first {count} of {total} results.',
+  'internetArchive.record.loadingAll': 'Looking up the {count} records…',
   'internetArchive.record.failed':
     'Could not read the files of {count} records. Try again or open them one by one.',
   'internetArchive.collection.idLabel': 'Collection identifier',
