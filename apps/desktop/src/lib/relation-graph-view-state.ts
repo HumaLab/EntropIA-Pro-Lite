@@ -23,6 +23,18 @@ export interface GraphCamera {
   zoom: number
 }
 
+/**
+ * Whether a camera can draw the graph. Framing the graph while its view has no
+ * height (a hidden tab) divides by zero and leaves NaN in the position, after
+ * which nothing is drawn although hover picking still answers; a camera on
+ * its own target has no direction to look in either.
+ */
+export function isUsableCamera(camera: GraphCamera): boolean {
+  const numbers = [...camera.position, ...camera.target, ...camera.up, camera.zoom]
+  if (!numbers.every(Number.isFinite)) return false
+  return camera.position.some((value, axis) => value !== camera.target[axis])
+}
+
 export interface GraphViewSnapshot {
   /** Identity of the graph the layout was computed for (settings and expanded entities). */
   structureKey: string

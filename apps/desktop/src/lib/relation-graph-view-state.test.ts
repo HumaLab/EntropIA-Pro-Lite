@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isUsableCamera,
   linkTouchesSelection,
   resolveSelection,
   seedNodePositions,
@@ -76,5 +77,44 @@ describe('resolveSelection', () => {
     expect(resolveSelection(graph, { kind: 'node', id: 'zz' })).toBeNull()
     expect(resolveSelection(graph, { kind: 'link', source: 'b', target: 'a' })).toBeNull()
     expect(resolveSelection(graph, null)).toBeNull()
+  })
+})
+
+describe('isUsableCamera', () => {
+  const camera = { position: [0, 0, 100], target: [0, 0, 0], up: [0, 1, 0], zoom: 1 } as const
+
+  it('accepts a camera whose numbers are all finite', () => {
+    expect(
+      isUsableCamera({
+        ...camera,
+        position: [...camera.position],
+        target: [0, 0, 0],
+        up: [0, 1, 0],
+      })
+    ).toBe(true)
+  })
+
+  it('rejects a camera framed while the view had no height (NaN position)', () => {
+    expect(
+      isUsableCamera({ ...camera, position: [NaN, NaN, NaN], target: [0, 0, 0], up: [0, 1, 0] })
+    ).toBe(false)
+  })
+
+  it('rejects a non-finite target, up vector or zoom', () => {
+    const base = {
+      position: [0, 0, 100] as [number, number, number],
+      up: [0, 1, 0] as [number, number, number],
+      target: [0, 0, 0] as [number, number, number],
+      zoom: 1,
+    }
+    expect(isUsableCamera({ ...base, target: [0, Infinity, 0] })).toBe(false)
+    expect(isUsableCamera({ ...base, up: [0, NaN, 0] })).toBe(false)
+    expect(isUsableCamera({ ...base, zoom: NaN })).toBe(false)
+  })
+
+  it('rejects a camera sitting on its own target', () => {
+    expect(isUsableCamera({ position: [1, 2, 3], target: [1, 2, 3], up: [0, 1, 0], zoom: 1 })).toBe(
+      false
+    )
   })
 })
