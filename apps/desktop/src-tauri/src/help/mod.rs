@@ -10,6 +10,7 @@ pub(crate) mod faq;
 pub(crate) mod index;
 pub(crate) mod intent;
 pub(crate) mod manual;
+pub(crate) mod mcp_bridge;
 pub(crate) mod prompt;
 pub(crate) mod screenmap;
 pub(crate) mod settings;

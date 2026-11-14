@@ -460,6 +460,14 @@ impl AgentServer {
     /// principal means the request bypassed the guard, which is a server bug:
     /// no tool may fall back to "some client".
     fn caller(context: &RequestContext<RoleServer>) -> Result<Principal, CallToolResult> {
+        // The in-process help assistant (D11) places its synthetic «Ayuda»
+        // principal directly in the request extensions on the server side.
+        // Only in-process code can do that: extensions never travel over
+        // the wire, so a remote HTTP client still arrives through the
+        // guard's `Parts` below, unchanged.
+        if let Some(principal) = context.extensions.get::<Principal>() {
+            return Ok(principal.clone());
+        }
         context
             .extensions
             .get::<http::request::Parts>()
