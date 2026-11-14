@@ -21,6 +21,13 @@
   const paneId = getPaneId()
   const currentLocale = locale
 
+  /**
+   * Compact mode for the floating panel (T15): the panel header replaces the
+   * full-page header card, and the view fills the panel body with its own
+   * scrolling middle and fixed footer. Standalone use keeps the header card.
+   */
+  let { embedded = false }: { embedded?: boolean } = $props()
+
   type HelpMessage = {
     role: 'user' | 'assistant'
     content: string
@@ -172,13 +179,15 @@
   }
 </script>
 
-<div class="help-view page-shell">
-  <section class="page-header help-view__header" aria-labelledby="help-title-{paneId}">
-    <div class="page-header__content">
-      <h1 id="help-title-{paneId}">{$currentLocale && t('help.title')}</h1>
-      <p>{$currentLocale && t('help.subtitle')}</p>
-    </div>
-  </section>
+<div class="help-view page-shell" class:help-view--embedded={embedded}>
+  {#if !embedded}
+    <section class="page-header help-view__header" aria-labelledby="help-title-{paneId}">
+      <div class="page-header__content">
+        <h1 id="help-title-{paneId}">{$currentLocale && t('help.title')}</h1>
+        <p>{$currentLocale && t('help.subtitle')}</p>
+      </div>
+    </section>
+  {/if}
 
   {#if status === 'loading'}
     <p class="help-view__state" role="status">{$currentLocale && t('help.statusLoading')}</p>
@@ -257,6 +266,16 @@
       {#if sending}
         <p class="help-view__state" role="status">{$currentLocale && t('help.thinking')}</p>
       {/if}
+
+      {#if previewOpen}
+        {#if previewLoading}
+          <p class="help-view__state" role="status">
+            {$currentLocale && t('help.diagnosticsLoading')}
+          </p>
+        {:else if preview !== null}
+          <pre class="help-view__preview">{preview}</pre>
+        {/if}
+      {/if}
     </div>
 
     {#if error}
@@ -286,15 +305,6 @@
           {$currentLocale && (previewOpen ? t('help.previewHide') : t('help.previewToggle'))}
         </button>
         <p class="help-view__hint">{$currentLocale && t('help.diagnosticsHint')}</p>
-        {#if previewOpen}
-          {#if previewLoading}
-            <p class="help-view__state" role="status">
-              {$currentLocale && t('help.diagnosticsLoading')}
-            </p>
-          {:else if preview !== null}
-            <pre class="help-view__preview">{preview}</pre>
-          {/if}
-        {/if}
       </div>
       <div class="help-view__documents">
         <Checkbox
@@ -336,6 +346,13 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
+  }
+
+  /* Compact mode inside the floating panel (T15): the panel header replaces
+     the full-page header card, so the view only needs a tighter gap here. */
+  .help-view--embedded {
+    gap: var(--space-2);
+    padding-block-end: 0;
   }
 
   .help-view__header {
@@ -554,8 +571,10 @@
     font-size: var(--font-size-xs);
   }
 
+  /* Bounded (T15): its own scroll, so a long dump scrolls inside the
+     messages middle instead of pushing the footer out of the panel. */
   .help-view__preview {
-    flex-basis: 100%;
+    flex-shrink: 0;
     max-height: 12rem;
     overflow: auto;
     margin: 0;

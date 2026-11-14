@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { invoke } from '@tauri-apps/api/core'
 import { locale } from '$lib/i18n'
 import { HELP_BUBBLE_MAXIMIZED_KEY, HELP_BUBBLE_STORAGE_KEY } from '$lib/help-bubble'
@@ -28,9 +30,12 @@ function bubbleButton(): HTMLElement {
   return screen.getByRole('button', { name: 'Ayuda' })
 }
 
+const PREVIEW_TEXT = 'Producto: EntropIA Lite\n- llaves: configurada / no configurada'
+
 function backend(): void {
   mockInvoke.mockImplementation(async (command: string) => {
     if (command === 'help_status') return { hasOpenrouterKey: true }
+    if (command === 'help_diagnostics_preview') return PREVIEW_TEXT
     if (command === 'help_faq_list') return []
     return undefined
   })
@@ -432,5 +437,102 @@ describe('HelpBubble (S13, D9)', () => {
     // Reopening keeps the last maximized state.
     await openPanel()
     expect(screen.getByRole('button', { name: 'Restaurar' })).toBeInTheDocument()
+  })
+
+  describe('panel layout (T15)', () => {
+    it('shows a real header row with the title, maximize and close before the chat', async () => {
+      render(HelpBubble)
+      await openPanel()
+
+      const panel = screen.getByRole('dialog', { name: 'Ayuda' })
+      const header = panel.querySelector('.help-bubble__header')
+      expect(header).not.toBeNull()
+      expect(header?.querySelector('.help-bubble__title')).toHaveTextContent('Ayuda')
+
+      const maximize = screen.getByRole('button', { name: 'Maximizar' })
+      const close = screen.getByRole('button', { name: 'Cerrar ayuda' })
+      const input = screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })
+      expect(header).toContainElement(maximize)
+      expect(header).toContainElement(close)
+      // DOM order: title, maximize, close, then the chat content.
+      const title = header?.querySelector('.help-bubble__title')
+      expect(title?.compareDocumentPosition(maximize)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+      expect(maximize.compareDocumentPosition(close)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+      expect(close.compareDocumentPosition(input)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    })
+
+    it('embeds HelpView without its big header card', async () => {
+      render(HelpBubble)
+      await openPanel()
+
+      const panel = screen.getByRole('dialog', { name: 'Ayuda' })
+      expect(panel.querySelector('.help-view--embedded')).not.toBeNull()
+      expect(panel.querySelector('.help-view__header')).toBeNull()
+    })
+
+    it('keeps the composer in the footer and the preview in the scrolling middle', async () => {
+      render(HelpBubble)
+      await openPanel()
+
+      const input = screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })
+      expect(input.closest('.help-view__composer')).not.toBeNull()
+      expect(
+        screen.getByRole('button', { name: 'Enviar' }).closest('.help-view__composer')
+      ).not.toBeNull()
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Ver qué se envía' }))
+      const pre = await screen.findByText(
+        (_content, element) => element?.textContent === PREVIEW_TEXT
+      )
+      expect(pre.closest('.help-view__messages')).not.toBeNull()
+      expect(pre.closest('.help-view__composer')).toBeNull()
+    })
+  })
+
+  describe('panel stylesheet contracts (T15)', () => {
+    const bubbleStyles = readFileSync(resolve(import.meta.dirname, 'HelpBubble.svelte'), 'utf-8')
+      .split('<style>')[1]
+      ?.replace(/\/\*[\s\S]*?\*\//g, '')
+    const helpStyles = readFileSync(
+      resolve(import.meta.dirname, '../views/HelpView.svelte'),
+      'utf-8'
+    )
+      .split('<style>')[1]
+      ?.replace(/\/\*[\s\S]*?\*\//g, '')
+
+    function styleRule(styles: string | undefined, selector: string): string {
+      const match = new RegExp(
+        `(^|\\n)\\s*${selector.replace(/[.]/g, '\\.')}\\s*\\{([^}]*)\\}`
+      ).exec(styles ?? '')
+      expect(match, `${selector} is no longer in the stylesheet`).not.toBeNull()
+      return match?.[2] ?? ''
+    }
+
+    it('lays the header out as a real row, never absolutely positioned', () => {
+      const header = styleRule(bubbleStyles, '.help-bubble__header')
+      expect(header).toMatch(/display:\s*flex/)
+      expect(header).not.toMatch(/position:\s*absolute/)
+      expect(styleRule(bubbleStyles, '.help-bubble__actions')).not.toMatch(/position:\s*absolute/)
+    })
+
+    it('lets the body fill the panel without clipping controls', () => {
+      const body = styleRule(bubbleStyles, '.help-bubble__body')
+      expect(body).toMatch(/flex:\s*1/)
+      expect(body).toMatch(/min-height:\s*0/)
+      expect(body).not.toMatch(/overflow:\s*hidden/)
+    })
+
+    it('scrolls the messages middle and pins the composer footer', () => {
+      const messages = styleRule(helpStyles, '.help-view__messages')
+      expect(messages).toMatch(/overflow-y:\s*auto/)
+      expect(messages).toMatch(/min-height:\s*0/)
+      expect(styleRule(helpStyles, '.help-view__composer')).toMatch(/flex-shrink:\s*0/)
+    })
+
+    it('bounds the diagnostics preview with its own scroll', () => {
+      const preview = styleRule(helpStyles, '.help-view__preview')
+      expect(preview).toMatch(/max-height:/)
+      expect(preview).toMatch(/overflow:\s*auto/)
+    })
   })
 })

@@ -247,29 +247,32 @@
   tabindex="-1"
   {@attach portal}
 >
-  <div class="help-bubble__actions">
-    <IconButton
-      size="sm"
-      variant="ghost"
-      label={$currentLocale && t(maximized ? 'help.restorePanel' : 'help.maximizePanel')}
-      title={$currentLocale && t(maximized ? 'help.restorePanel' : 'help.maximizePanel')}
-      onclick={toggleMaximized}
-    >
-      <ActionIcon name={maximized ? 'restore' : 'expand'} size={14} />
-    </IconButton>
-    <IconButton
-      size="sm"
-      variant="ghost"
-      label={$currentLocale && t('help.closePanel')}
-      title={$currentLocale && t('help.closePanel')}
-      onclick={closePanel}
-    >
-      <ActionIcon name="close" size={14} />
-    </IconButton>
+  <div class="help-bubble__header">
+    <span class="help-bubble__title">{$currentLocale && t('help.title')}</span>
+    <div class="help-bubble__actions">
+      <IconButton
+        size="sm"
+        variant="ghost"
+        label={$currentLocale && t(maximized ? 'help.restorePanel' : 'help.maximizePanel')}
+        title={$currentLocale && t(maximized ? 'help.restorePanel' : 'help.maximizePanel')}
+        onclick={toggleMaximized}
+      >
+        <ActionIcon name={maximized ? 'restore' : 'expand'} size={14} />
+      </IconButton>
+      <IconButton
+        size="sm"
+        variant="ghost"
+        label={$currentLocale && t('help.closePanel')}
+        title={$currentLocale && t('help.closePanel')}
+        onclick={closePanel}
+      >
+        <ActionIcon name="close" size={14} />
+      </IconButton>
+    </div>
   </div>
   <div class="help-bubble__body">
     {#if chatMounted}
-      <HelpView />
+      <HelpView embedded />
     {/if}
   </div>
 </div>
@@ -339,23 +342,42 @@
     display: none;
   }
 
-  .help-bubble__actions {
-    position: absolute;
-    top: var(--space-2);
-    right: var(--space-2);
-    z-index: 1;
+  /* Real header row (T15): always visible, never over the chat content. */
+  .help-bubble__header {
     display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4) var(--space-2);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .help-bubble__title {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    color: var(--color-text-primary);
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-semibold);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .help-bubble__actions {
+    display: flex;
+    flex-shrink: 0;
     gap: var(--space-1);
   }
 
+  /* The body fills the panel below the header; HelpView inside owns the
+     scrolling middle and the fixed footer, so nothing here may clip. */
   .help-bubble__body {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-height: 0;
-    padding: var(--space-4);
-    padding-top: var(--space-2);
-    overflow: hidden;
+    padding: var(--space-1) var(--space-4) var(--space-4);
   }
 
   @media (prefers-reduced-motion: reduce) {

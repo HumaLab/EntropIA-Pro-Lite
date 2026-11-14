@@ -505,4 +505,52 @@ describe('HelpView', () => {
       )
     ).toBeInTheDocument()
   })
+
+  describe('embedded in the floating panel (T15)', () => {
+    it('hides the big header card but keeps the chat usable', async () => {
+      backend({ hasKey: true })
+      render(HelpView, { props: { embedded: true } })
+      await composer()
+
+      expect(document.querySelector('.help-view--embedded')).not.toBeNull()
+      expect(document.querySelector('.help-view__header')).toBeNull()
+      expect(
+        screen.queryByText('Preguntá cómo usar EntropIA o qué hacer cuando algo falla')
+      ).not.toBeInTheDocument()
+    })
+
+    it('without the prop the full-page header card stays', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      expect(document.querySelector('.help-view__header')).not.toBeNull()
+      expect(
+        screen.getByText('Preguntá cómo usar EntropIA o qué hacer cuando algo falla')
+      ).toBeInTheDocument()
+    })
+
+    it('the composer lives in the fixed footer region', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      const input = await composer()
+
+      expect(input.closest('.help-view__composer')).not.toBeNull()
+      expect(
+        screen.getByRole('button', { name: 'Enviar' }).closest('.help-view__composer')
+      ).not.toBeNull()
+    })
+
+    it('the diagnostics preview renders inside the scrolling messages region', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Ver qué se envía' }))
+
+      const pre = await previewBlock()
+      expect(pre.closest('.help-view__messages')).not.toBeNull()
+      expect(pre.closest('.help-view__composer')).toBeNull()
+    })
+  })
 })
