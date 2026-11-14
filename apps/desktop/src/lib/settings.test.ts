@@ -134,6 +134,7 @@ describe('settings', () => {
     it('exports well-known setting keys', () => {
       expect(SETTINGS_KEYS.OPENROUTER_API_KEY).toBe('openrouter_api_key')
       expect(SETTINGS_KEYS.OPENROUTER_MODEL).toBe('openrouter_model')
+      expect(SETTINGS_KEYS.OPENAI_COMPATIBLE_BASE_URL).toBe('openai_compatible_base_url')
       expect(SETTINGS_KEYS.LLM_MODE).toBe('llm_mode')
       expect(SETTINGS_KEYS.ASSEMBLYAI_API_KEY).toBe('assemblyai_api_key')
       expect(SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS).toBe('assemblyai_role_speaker_identification')

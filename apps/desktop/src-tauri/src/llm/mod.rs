@@ -5,11 +5,11 @@ pub mod download;
 pub mod engine;
 pub mod generation;
 pub(crate) mod ocr_correction;
-#[cfg(feature = "paddle-ocr")]
-pub(crate) mod qwen_correction;
 pub mod openrouter;
 pub mod project_context;
 pub mod prompt;
+#[cfg(feature = "paddle-ocr")]
+pub(crate) mod qwen_correction;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -35,7 +35,7 @@ use self::generation::{
     generation_config_from_settings, render_prompt_from_settings, FlowGenerationConfig,
     GenerationFlow, OpenRouterGenerationParams,
 };
-use self::openrouter::{OpenRouterClient, OpenRouterImage};
+use self::openrouter::{resolve_custom_endpoint, OpenRouterClient, OpenRouterImage};
 
 const LLM_PREFIX: &str = "[llm]";
 const LLM_LOCAL_PREFIX: &str = "[llm-local]";
@@ -1483,9 +1483,13 @@ pub(crate) fn correct_ocr_for_asset_blocking(
         asset_id: asset_id.to_string(),
     };
     let conn = crate::db::open::open_archive_connection(db_path)?;
+    // A custom OpenAI-compatible endpoint (local vLLM/Ollama) needs no API
+    // key and bypasses the local-Qwen fallback: the user pointed remote
+    // traffic at their own server on purpose.
+    let custom_endpoint = resolve_custom_endpoint(&conn)?;
     // No remote key: correct on the local Qwen server when available,
     // instead of failing like every other remote-only job.
-    if require_openrouter_key(&conn).is_err() {
+    if custom_endpoint.is_none() && require_openrouter_key(&conn).is_err() {
         #[cfg(feature = "paddle-ocr")]
         if qwen_correction::local_correction_available_for(app_handle, db_path) {
             drop(conn);
@@ -1495,7 +1499,11 @@ pub(crate) fn correct_ocr_for_asset_blocking(
             "OpenRouter API key no configurada. Andá a Configuración para agregarla.".to_string(),
         );
     }
-    let api_key = require_openrouter_key(&conn)?;
+    let api_key = if custom_endpoint.is_some() {
+        String::new()
+    } else {
+        require_openrouter_key(&conn)?
+    };
     let request = prepare_remote_job_request(
         &conn,
         &job,
@@ -1508,7 +1516,8 @@ pub(crate) fn correct_ocr_for_asset_blocking(
     let expected_extraction = request.ocr_extraction_snapshot.clone().ok_or_else(|| {
         "OCR correction completion is missing its extraction snapshot".to_string()
     })?;
-    let client = OpenRouterClient::new(api_key, request.generation.model.clone());
+    let client = OpenRouterClient::new(api_key, request.generation.model.clone())
+        .with_custom_endpoint(custom_endpoint);
     let generated =
         tauri::async_runtime::block_on(execute_remote_job_request(&client, &request, app_handle))?;
     Ok(AssetCorrectionRun {
@@ -1600,6 +1609,7 @@ fn run_asset_job_blocking(
 ) -> Result<(String, &'static str), String> {
     let conn = crate::db::open::open_archive_connection(db_path)?;
     let api_key = settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
+    let custom_endpoint = resolve_custom_endpoint(&conn)?;
     #[cfg(feature = "local-ml")]
     {
         let llm_mode =
@@ -1620,7 +1630,10 @@ fn run_asset_job_blocking(
             match local {
                 Ok(generated) => return Ok((generated.output, LLM_LOCAL_PREFIX)),
                 // Same fallback as the worker: only "auto" with a key goes remote.
-                Err(error) if llm_mode != "auto" || api_key.is_empty() => {
+                // A custom endpoint counts as a remote route (it needs no key).
+                Err(error)
+                    if llm_mode != "auto" || (api_key.is_empty() && custom_endpoint.is_none()) =>
+                {
                     return Err(format!("Local LLM unavailable: {error}"))
                 }
                 Err(error) => log::warn!(
@@ -1630,7 +1643,7 @@ fn run_asset_job_blocking(
             }
         }
     }
-    if api_key.trim().is_empty() {
+    if custom_endpoint.is_none() && api_key.trim().is_empty() {
         return Err(
             "OpenRouter API key no configurada. Configure OpenRouter API key/model.".to_string(),
         );
@@ -1644,7 +1657,8 @@ fn run_asset_job_blocking(
             .unwrap_or_else(|| std::path::Path::new(".")),
     )?;
     drop(conn);
-    let client = OpenRouterClient::new(api_key, request.generation.model.clone());
+    let client = OpenRouterClient::new(api_key, request.generation.model.clone())
+        .with_custom_endpoint(custom_endpoint);
     let generated =
         tauri::async_runtime::block_on(execute_remote_job_request(&client, &request, app_handle))?;
     Ok((generated.output, LLM_CLOUD_PREFIX))
@@ -1818,6 +1832,13 @@ impl LlmQueue {
 
                 let api_key =
                     settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
+                let custom_endpoint = match resolve_custom_endpoint(&conn) {
+                    Ok(endpoint) => endpoint,
+                    Err(error) => {
+                        emit_error(&app_handle, &id, job_name, &error);
+                        continue;
+                    }
+                };
                 let force_remote_ocr_correction = matches!(&job, LlmJob::CorrectOcrAsset { .. });
                 #[cfg(feature = "local-ml")]
                 let local_can_initialize = local_model_can_initialize_from_conn(&conn, &db_path);
@@ -1839,7 +1860,7 @@ impl LlmQueue {
                 let result = if use_openrouter {
                     // OpenRouter remote path
 
-                    if api_key.is_empty() {
+                    if custom_endpoint.is_none() && api_key.is_empty() {
                         match local_qwen_correction_fallback(&app_handle, &db_path, &job).await {
                             Some(generated) => {
                                 log::info!(
@@ -1875,7 +1896,8 @@ impl LlmQueue {
                                 let client = OpenRouterClient::new(
                                     api_key.clone(),
                                     request.generation.model.clone(),
-                                );
+                                )
+                                .with_custom_endpoint(custom_endpoint);
                                 execute_remote_job_request(&client, &request, &app_handle).await
                             }
                             Err(e) => Err(e),
@@ -1954,7 +1976,9 @@ impl LlmQueue {
                                 })
                             }
                             None => {
-                                if llm_mode == "auto" && !api_key.is_empty() {
+                                if llm_mode == "auto"
+                                    && (custom_endpoint.is_some() || !api_key.is_empty())
+                                {
                                     let fallback_log_prefix = llm_job_prefix(true, &job);
                                     log::warn!(
                                         target: log_target(&fallback_log_prefix),
@@ -1972,7 +1996,8 @@ impl LlmQueue {
                                             let client = OpenRouterClient::new(
                                                 api_key.clone(),
                                                 request.generation.model.clone(),
-                                            );
+                                            )
+                                            .with_custom_endpoint(custom_endpoint);
                                             execute_remote_job_request(
                                                 &client,
                                                 &request,
@@ -3071,7 +3096,11 @@ mod tests {
         let text = paragraph.repeat(6000);
         assert!(text.chars().count() > 200_000);
         let chunks = split_text_for_summary(&text, 4000);
-        assert!(chunks.len() > 40, "expected many chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() > 40,
+            "expected many chunks, got {}",
+            chunks.len()
+        );
         let joined: String = chunks.join("");
         let norm = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
         assert_eq!(norm(&joined), norm(&text));

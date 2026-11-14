@@ -806,6 +806,9 @@ const es = {
   'settings.openrouter.title': 'OpenRouter',
   'settings.openrouter.description':
     'Configurá la cuenta remota, validá el acceso y elegí los modelos de generación y embeddings.',
+  'settings.openaiCompatibleBaseUrl.label': 'Servidor OpenAI-compatible (opcional)',
+  'settings.openaiCompatibleBaseUrl.description':
+    'Si lo completás, la generación remota va a ese servidor (vLLM, Ollama, pasarela propia) en vez de OpenRouter, usando el modelo ya configurado. Sin clave: ideal para un servidor local.',
   'settings.assemblyai.title': 'AssemblyAI',
   'settings.assemblyai.description':
     'Configurá la cuenta remota para transcripción, validá el acceso y usala como proveedor STT cloud.',
@@ -4703,6 +4706,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.openrouter.title': 'OpenRouter',
   'settings.openrouter.description':
     'Configure the remote account, validate access, and choose the generative and embedding models.',
+  'settings.openaiCompatibleBaseUrl.label': 'OpenAI-compatible server (optional)',
+  'settings.openaiCompatibleBaseUrl.description':
+    'When set, remote generation goes to that server (vLLM, Ollama, own gateway) instead of OpenRouter, using the already configured model. No key: ideal for a local server.',
   'settings.assemblyai.title': 'AssemblyAI',
   'settings.assemblyai.description':
     'Configure the remote transcription account, validate access, and use it as the cloud STT provider.',

@@ -11,6 +11,7 @@
     embeddingModel: string
     embeddingProvider: string
     localEmbeddingModelDir: string
+    openaiCompatibleBaseUrl: string
     llmMode: string
     sttMode: string
     sttLocalEngine: string
@@ -205,6 +206,7 @@
   let embeddingProvider = $state<EmbeddingProvider>(DEFAULT_EMBEDDING_PROVIDER)
   let embeddingModel = $state(DEFAULT_OPENROUTER_EMBEDDING_MODEL)
   let localEmbeddingModelDir = $state('')
+  let openaiCompatibleBaseUrl = $state('')
   let localEmbeddingModel = $state<LocalEmbeddingModelInfo | null>(null)
   let llmMode = $state<LlmMode>(DEFAULT_LLM_MODE)
   let sttMode = $state<SttMode>(DEFAULT_STT_MODE)
@@ -557,6 +559,7 @@
       embeddingModel,
       embeddingProvider,
       localEmbeddingModelDir,
+      openaiCompatibleBaseUrl,
       llmMode,
       sttMode,
       sttLocalEngine,
@@ -637,6 +640,7 @@
         storedEmbeddingProvider,
         storedEmbeddingModel,
         storedLocalEmbeddingModelDir,
+        storedOpenaiCompatibleBaseUrl,
         storedMode,
         storedSttMode,
         storedSttLocalEngine,
@@ -662,6 +666,7 @@
         settingsGet(SETTINGS_KEYS.EMBEDDING_PROVIDER),
         settingsGet(SETTINGS_KEYS.OPENROUTER_EMBEDDING_MODEL),
         settingsGet(SETTINGS_KEYS.LOCAL_EMBEDDING_MODEL_DIR),
+        settingsGet(SETTINGS_KEYS.OPENAI_COMPATIBLE_BASE_URL),
         settingsGet(SETTINGS_KEYS.LLM_MODE),
         settingsGet(SETTINGS_KEYS.STT_MODE),
         settingsGet(SETTINGS_KEYS.STT_LOCAL_ENGINE),
@@ -705,6 +710,7 @@
       ) {
         localEmbeddingModelDir = storedLocalEmbeddingModelDir
       }
+      if (storedOpenaiCompatibleBaseUrl) openaiCompatibleBaseUrl = storedOpenaiCompatibleBaseUrl
       if (storedMode) llmMode = storedMode as LlmMode
       if (storedSttMode) sttMode = storedSttMode as SttMode
       if (storedSttLocalEngine === 'parakeet' || storedSttLocalEngine === 'whisper') {
@@ -1477,6 +1483,7 @@
           embeddingModel.trim() || DEFAULT_OPENROUTER_EMBEDDING_MODEL
         ),
         settingsSet(SETTINGS_KEYS.LOCAL_EMBEDDING_MODEL_DIR, localEmbeddingModelDir.trim()),
+        settingsSet(SETTINGS_KEYS.OPENAI_COMPATIBLE_BASE_URL, openaiCompatibleBaseUrl.trim()),
         settingsSet(SETTINGS_KEYS.LLM_MODE, llmMode),
         settingsSet(SETTINGS_KEYS.STT_MODE, sttMode),
         settingsSet(SETTINGS_KEYS.STT_LOCAL_ENGINE, sttLocalEngine),
@@ -2374,6 +2381,19 @@
               {/if}
             </div>
 
+            <div class="settings__field settings__field--stacked">
+              <label class="settings__label" for="openai-base-url-{paneId}"
+                >{t('settings.openaiCompatibleBaseUrl.label')}</label
+              >
+              <input
+                id="openai-base-url-{paneId}"
+                type="text"
+                class="settings__input"
+                bind:value={openaiCompatibleBaseUrl}
+                placeholder="http://127.0.0.1:11434"
+              />
+              <p class="settings__hint">{t('settings.openaiCompatibleBaseUrl.description')}</p>
+            </div>
             <div class="settings__field settings__field--stacked">
               <!-- The two model names are short and belong together, so they
                  share a row once the card is wide enough for both and fall

@@ -401,6 +401,24 @@ describe('SettingsView', () => {
     }
   )
 
+  it('saves a custom OpenAI-compatible base URL for remote generation', async () => {
+    settingsGetMock.mockImplementation(async () => null)
+    const { unmount } = render(SettingsView)
+    try {
+      const input = await screen.findByLabelText(/Servidor OpenAI-compatible/i)
+      await fireEvent.input(input, { target: { value: 'http://127.0.0.1:11434' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+      await waitFor(() =>
+        expect(settingsSetMock).toHaveBeenCalledWith(
+          'openai_compatible_base_url',
+          'http://127.0.0.1:11434'
+        )
+      )
+    } finally {
+      unmount()
+    }
+  })
+
   it.runIf(LOCAL_ML)(
     'exposes the LLM mode, embedding provider, STT and OCR-H local selectors',
     async () => {
@@ -1756,6 +1774,7 @@ describe('settings dirty detection helpers', () => {
     embeddingModel: 'baai/bge-m3',
     embeddingProvider: 'api',
     localEmbeddingModelDir: '',
+    openaiCompatibleBaseUrl: '',
     llmMode: 'local',
     sttMode: 'local',
     sttLocalEngine: 'parakeet',

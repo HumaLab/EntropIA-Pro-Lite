@@ -111,6 +111,7 @@ export function verifyZoteroKey(apiKey: string): Promise<ZoteroKeyCheck> {
 export const SETTINGS_KEYS = {
   OPENROUTER_API_KEY: 'openrouter_api_key',
   OPENROUTER_MODEL: 'openrouter_model',
+  OPENAI_COMPATIBLE_BASE_URL: 'openai_compatible_base_url',
   OPENROUTER_EMBEDDING_MODEL: 'openrouter_embedding_model',
   LLM_MODE: 'llm_mode',
   EMBEDDING_PROVIDER: 'embedding_provider',
