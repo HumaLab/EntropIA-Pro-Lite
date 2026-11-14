@@ -96,7 +96,7 @@ own card later and can reuse this base.
 | T14 | S13 | TDD — bubble anchored to the bottom-right corner across resize/maximize; maximize/restore for the chat panel | done | see git log (fix(help): anchor the bubble …) |
 | T15 | S13 | panel layout: real header row with close/maximize, compact HelpView inside the panel, messages scroll, diagnostics preview bounded, composer and send always visible | done | see git log (fix(help): give the help panel a real header …) |
 | T16 | S13 | TDD — bubble always starts at the bottom-right default (no position restored across restarts); dragging stays session-only; old stored positions cleared | done | e3fef246 |
-| T17 | S13 | TDD — default position centred just above the GitHub logo of the status bar, in every window state | pending | |
+| T17 | S13 | TDD — default position centred just above the GitHub logo of the status bar, in every window state | done | see git log (feat(help): place the bubble just above the GitHub logo …) |
 | T6 | S8 | owner check with the real failures of S8 (needs a real OpenRouter key) | pending | |
 
 ## Log
@@ -140,3 +140,4 @@ own card later and can reuse this base.
 - L27 (2026-11-13, owner check v3, verbatim): "ahora si, solo que ahora no aparece en el angulo inferior derecho, ya que volvió a fallar eso te pido que cambiemos la ubicacion inicial pro degfecto en version minimizada y en maximizada siempre en el mismo lugar por defecto". Panel layout (T15) confirmed. Supersedes the persisted position of D9: the bubble starts at the bottom-right default on every launch, whatever the window state; a drag lasts for the session only. T16 added.
 - L28 (2026-11-13, T16, delegated worker): position no longer persisted; stale key `entropia.help-bubble.position` removed on mount; drag session-only; manual § 13.5 updated. RED 12 failing -> GREEN 58/58; full desktop Pro 4373 / Lite 4337, typecheck 0/0 both, lint clean, `cargo test --lib help::` 71/71. Commit e3fef246.
 - L29 (2026-11-13, owner, verbatim): "uiero que ubique la burbuja en el centro justo arriba del logo de github". The GitHub link sits in `.statusbar__center` of AppShell. Supersedes the bottom-right default of L27: the default is centred horizontally on the GitHub logo, just above the status bar, in every window state. T17 added.
+- L30 (2026-11-13, T17, delegated worker): `data-help-bubble-anchor` on the GitHub link; default centred on it, 8 px above the status bar, re-measured on resize, rAF retry while the footer mounts, window-centred fallback; a session drag wins over the anchor. Panel keeps its inward logic (opens upward, to the right of the bubble). RED 22 failing -> GREEN 132/132; full desktop Pro 4383 / Lite 4347, typecheck 0/0 both, lint, prettier clean, `cargo test --lib help::` 71/71.
