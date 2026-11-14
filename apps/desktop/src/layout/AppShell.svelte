@@ -1295,10 +1295,17 @@
   }
 
   /* ── Status bar (compact, replaces footer) ── */
+  /* Three columns with equal sides, so the centre group (the GitHub link, the
+     help bubble's anchor) sits at the true centre of the bar whatever the
+     widths of the left and right groups. The right side never shrinks below
+     its content (`max-content`); when it needs more than half, the sides stop
+     being equal and the centre shifts left instead of overlapping. The left
+     side is the one that yields (`minmax(0, …)`), as before. */
   .statusbar {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
     align-items: center;
-    justify-content: space-between;
+    column-gap: var(--space-2);
     height: var(--statusbar-height);
     padding: 0 var(--space-3);
     border-top: 1px solid var(--border-subtle);

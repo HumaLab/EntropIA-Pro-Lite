@@ -260,6 +260,21 @@ describe('AppShell', () => {
     expect(source).toMatch(/\.statusbar\s*\{[\s\S]*?height: var\(--statusbar-height\);/)
   })
 
+  it('keeps the status bar centre group (GitHub link) at the true centre of the bar', () => {
+    // With `space-between` the centre group sat wherever the left and right
+    // groups left room for it, off to the right; the help bubble is anchored
+    // on that link (L29-L31), so it drifted with it.
+    const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
+    const statusbar = source.match(/\.statusbar\s*\{([^}]*)\}/)?.[1] ?? ''
+
+    expect(statusbar).toContain('display: grid;')
+    expect(statusbar).toContain(
+      'grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);'
+    )
+    expect(statusbar).not.toContain('justify-content: space-between;')
+    expect(source).toMatch(/\.statusbar__right\s*\{\s*justify-content: flex-end;/)
+  })
+
   describe('split view: pane inner spacing', () => {
     // `.content`'s own padding only ever reached the two edges touching the
     // window — the edge each pane shares with the divider got none, so a
