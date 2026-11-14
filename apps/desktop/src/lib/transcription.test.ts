@@ -125,6 +125,29 @@ describe('TranscriptionStore', () => {
       segmentsCount: 2,
     })
   })
+  it('surfaces the backend diarization warning on completion', async () => {
+    const callbacks = new Map<string, (e: { payload: unknown }) => void>()
+    const store = new TranscriptionStore()
+
+    await store.startListening(async (event, callback) => {
+      callbacks.set(event, callback)
+      return vi.fn<() => void>()
+    })
+
+    callbacks.get('transcription:complete')?.({
+      payload: {
+        asset_id: 'asset-1',
+        text: 'Hablante A: hola',
+        warning: 'Se detectaron 6 hablantes y el modo local asigna hasta 4',
+      },
+    })
+
+    expect(store.getState('asset-1')).toMatchObject({
+      status: 'done',
+      text: 'Hablante A: hola',
+      warning: 'Se detectaron 6 hablantes y el modo local asigna hasta 4',
+    })
+  })
 
   it('accepts the legacy text_content completion payload', async () => {
     const callbacks = new Map<string, (e: { payload: unknown }) => void>()

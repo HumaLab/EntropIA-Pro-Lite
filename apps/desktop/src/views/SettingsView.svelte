@@ -14,6 +14,7 @@
     llmMode: string
     sttMode: string
     sttLocalEngine: string
+    sttLocalDiarize: boolean
     ocrhMode: string
     ocrhLocalEngine: string
     localModelSourceUrl: string
@@ -137,6 +138,7 @@
     ActionIcon,
     Button,
     Card,
+    Checkbox,
     ConfirmDialog,
     Input,
     TabButton,
@@ -207,6 +209,7 @@
   let llmMode = $state<LlmMode>(DEFAULT_LLM_MODE)
   let sttMode = $state<SttMode>(DEFAULT_STT_MODE)
   let sttLocalEngine = $state<SttLocalEngine>(DEFAULT_STT_LOCAL_ENGINE)
+  let sttLocalDiarize = $state(false)
   let ocrhMode = $state<OcrhMode>(DEFAULT_OCRH_MODE)
   let ocrhLocalEngine = $state<OcrhLocalEngine>(DEFAULT_OCRH_LOCAL_ENGINE)
   let glmOcrLocal = $state<GlmOcrLocalInfo | null>(null)
@@ -557,6 +560,7 @@
       llmMode,
       sttMode,
       sttLocalEngine,
+      sttLocalDiarize,
       ocrhMode,
       ocrhLocalEngine,
       localModelSourceUrl,
@@ -636,6 +640,7 @@
         storedMode,
         storedSttMode,
         storedSttLocalEngine,
+        storedSttLocalDiarize,
         storedOcrhMode,
         storedOcrhLocalEngine,
         storedAssemblyAiKey,
@@ -660,6 +665,7 @@
         settingsGet(SETTINGS_KEYS.LLM_MODE),
         settingsGet(SETTINGS_KEYS.STT_MODE),
         settingsGet(SETTINGS_KEYS.STT_LOCAL_ENGINE),
+        settingsGet(SETTINGS_KEYS.STT_LOCAL_DIARIZE),
         settingsGet(SETTINGS_KEYS.OCRH_MODE),
         settingsGet(SETTINGS_KEYS.OCRH_LOCAL_ENGINE),
         settingsGet(SETTINGS_KEYS.ASSEMBLYAI_API_KEY),
@@ -704,6 +710,7 @@
       if (storedSttLocalEngine === 'parakeet' || storedSttLocalEngine === 'whisper') {
         sttLocalEngine = storedSttLocalEngine
       }
+      sttLocalDiarize = storedSttLocalDiarize === 'true'
       if (storedOcrhMode) ocrhMode = storedOcrhMode as OcrhMode
       if (
         storedOcrhLocalEngine === 'auto' ||
@@ -941,6 +948,7 @@
     embeddingProvider = DEFAULT_EMBEDDING_PROVIDER
     sttMode = DEFAULT_STT_MODE
     sttLocalEngine = DEFAULT_STT_LOCAL_ENGINE
+    sttLocalDiarize = false
     ocrhMode = DEFAULT_OCRH_MODE
   }
 
@@ -1472,6 +1480,7 @@
         settingsSet(SETTINGS_KEYS.LLM_MODE, llmMode),
         settingsSet(SETTINGS_KEYS.STT_MODE, sttMode),
         settingsSet(SETTINGS_KEYS.STT_LOCAL_ENGINE, sttLocalEngine),
+        settingsSet(SETTINGS_KEYS.STT_LOCAL_DIARIZE, sttLocalDiarize ? 'true' : 'false'),
         settingsSet(
           SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS,
           assemblyAiCollectionSpeakerLabels ? 'true' : 'false'
@@ -2484,6 +2493,16 @@
                       </div>
                     </label>
                   </div>
+                  {#if sttLocalEngine === 'parakeet'}
+                    <label class="settings__check">
+                      <Checkbox bind:checked={sttLocalDiarize}>
+                        <strong>{t('settings.sttLocalDiarize.label')}</strong>
+                        <span class="settings__radio-desc"
+                          >{t('settings.sttLocalDiarize.description')}</span
+                        >
+                      </Checkbox>
+                    </label>
+                  {/if}
                 </div>
               {/if}
               {#if sttMode !== 'local'}

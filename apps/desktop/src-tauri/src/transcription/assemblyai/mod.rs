@@ -241,6 +241,7 @@ impl AssemblyAiClient {
                             start: 0.0,
                             end: duration_ms as f64 / 1000.0,
                             text: text.clone(),
+                            speaker: None,
                         }]
                     };
 

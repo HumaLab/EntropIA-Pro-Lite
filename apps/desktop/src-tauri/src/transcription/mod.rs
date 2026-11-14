@@ -34,10 +34,14 @@ const STT_SETTING_ASSEMBLYAI_API_KEY: &str = "assemblyai_api_key";
 const STT_SETTING_LOCAL_ENGINE: &str = "stt_local_engine";
 const STT_LOCAL_ENGINE_PARAKEET: &str = "parakeet";
 const STT_LOCAL_ENGINE_WHISPER: &str = "whisper";
+/// Optional local diarization toggle (FASE 2): "true" runs the Sortformer
+/// pass and labels segments Hablante A/B/… (max 4, else warning).
+const STT_SETTING_LOCAL_DIARIZE: &str = "stt_local_diarize";
 
 pub(super) struct ManagedTranscriptionResult {
     pub(super) transcription: TranscriptionResult,
     pub(super) model_name: &'static str,
+    pub(super) warning: Option<String>,
 }
 
 // ── Event payloads ──────────────────────────────────────────────────────────
@@ -56,6 +60,8 @@ pub struct TranscriptionCompletePayload {
     pub language: String,
     pub duration_ms: u64,
     pub segments_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -203,24 +209,32 @@ impl TranscriptionQueue {
                         }
                     };
 
-                    match result {
-                        Ok(transcription) => {
-                            crate::app_logs::info(
-                                &app_handle,
-                                "transcription",
-                                format!("Transcripción completada: asset_id={asset_id}, segmentos={}", transcription.segments.len()),
-                            );
-                            let _ = app_handle.emit(
-                                "transcription:complete",
-                                TranscriptionCompletePayload {
-                                    asset_id: asset_id.clone(),
-                                    text: transcription.text.clone(),
-                                    language: transcription.language.clone(),
-                                    duration_ms: transcription.duration_ms,
-                                    segments_count: transcription.segments.len(),
-                                },
-                            );
-                        }
+                     match result {
+                         Ok((transcription, warning)) => {
+                             crate::app_logs::info(
+                                 &app_handle,
+                                 "transcription",
+                                 format!("Transcripción completada: asset_id={asset_id}, segmentos={}", transcription.segments.len()),
+                             );
+                             if let Some(warning) = &warning {
+                                 crate::app_logs::warn(
+                                     &app_handle,
+                                     "transcription",
+                                     format!("Transcripción asset_id={asset_id} con aviso: {warning}"),
+                                 );
+                             }
+                             let _ = app_handle.emit(
+                                 "transcription:complete",
+                                 TranscriptionCompletePayload {
+                                     asset_id: asset_id.clone(),
+                                     text: transcription.text.clone(),
+                                     language: transcription.language.clone(),
+                                     duration_ms: transcription.duration_ms,
+                                     segments_count: transcription.segments.len(),
+                                     warning,
+                                 },
+                             );
+                         }
                         Err(err) => {
                             crate::app_logs::error(
                                 &app_handle,
@@ -450,11 +464,14 @@ fn transcribe_with_local_provider(
     if get_local_engine(conn) == STT_LOCAL_ENGINE_PARAKEET
         && parakeet_supports_language(TRANSCRIPTION_LANGUAGE)
     {
-        match transcribe_with_parakeet(app_handle, settings_db_path, audio_path, &progress) {
-            Ok(result) => {
+        let diarize = get_bool_setting(conn, STT_SETTING_LOCAL_DIARIZE);
+        match transcribe_with_parakeet(app_handle, settings_db_path, audio_path, diarize, &progress)
+        {
+            Ok((result, warning)) => {
                 return Ok(ManagedTranscriptionResult {
                     transcription: result,
                     model_name: PARAKEET_MODEL_NAME,
+                    warning,
                 });
             }
             Err(error) => {
@@ -469,7 +486,15 @@ fn transcribe_with_local_provider(
     Ok(ManagedTranscriptionResult {
         transcription: result,
         model_name: "faster-whisper/base",
+        warning: None,
     })
+}
+
+#[cfg(feature = "local-ml")]
+fn get_bool_setting(conn: &rusqlite::Connection, key: &str) -> bool {
+    crate::settings::get_setting(conn, key)
+        .map(|v| v.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 /// Load (once) + transcribe via the resident Parakeet engine.
@@ -478,8 +503,9 @@ fn transcribe_with_parakeet(
     app_handle: &AppHandle,
     _settings_db_path: Option<&Path>,
     audio_path: &str,
+    diarize: bool,
     on_progress: &dyn Fn(u8, &str),
-) -> Result<TranscriptionResult, String> {
+) -> Result<(TranscriptionResult, Option<String>), String> {
     let mut guard = PARAKEET_ENGINE
         .lock()
         .map_err(|_| "Parakeet engine lock poisoned".to_string())?;
@@ -497,7 +523,7 @@ fn transcribe_with_parakeet(
     guard
         .as_mut()
         .expect("Parakeet engine just initialized")
-        .transcribe(audio_path, on_progress)
+        .transcribe(audio_path, diarize, on_progress)
 }
 
 fn transcribe_with_assemblyai_provider(
@@ -518,6 +544,7 @@ fn transcribe_with_assemblyai_provider(
     Ok(ManagedTranscriptionResult {
         transcription: result,
         model_name: "assemblyai/universal",
+        warning: None,
     })
 }
 
@@ -941,7 +968,7 @@ fn process_job(
     job: &TranscriptionJob,
     settings_db_path: &Path,
     app_handle: &AppHandle,
-) -> Result<TranscriptionResult, String> {
+) -> Result<(TranscriptionResult, Option<String>), String> {
     emit_progress(app_handle, &job.asset_id, 10, "reading");
 
     log::info!(target: "transcription", "Transcribing: {}", job.asset_path);
@@ -950,6 +977,7 @@ fn process_job(
     let ManagedTranscriptionResult {
         transcription: result,
         model_name,
+        warning,
     } = transcribe_with_selected_provider(
         app_handle,
         Some(settings_db_path),
@@ -997,7 +1025,7 @@ fn process_job(
 
     emit_progress(app_handle, &job.asset_id, 100, "done");
 
-    Ok(result)
+    Ok((result, warning))
 }
 
 /// Emit a `transcription:progress` event to the frontend.

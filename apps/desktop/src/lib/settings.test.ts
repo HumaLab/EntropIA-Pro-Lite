@@ -139,6 +139,7 @@ describe('settings', () => {
       expect(SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS).toBe('assemblyai_role_speaker_identification')
       expect(SETTINGS_KEYS.STT_MODE).toBe('stt_mode')
       expect(SETTINGS_KEYS.STT_LOCAL_ENGINE).toBe('stt_local_engine')
+      expect(SETTINGS_KEYS.STT_LOCAL_DIARIZE).toBe('stt_local_diarize')
       expect(SETTINGS_KEYS.GLM_OCR_API_KEY).toBe('glm_ocr_api_key')
       expect(SETTINGS_KEYS.ZOTERO_API_KEY).toBe('zotero_api_key')
       expect(SETTINGS_KEYS.OCRH_MODE).toBe('ocrh_mode')

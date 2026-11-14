@@ -28,6 +28,7 @@ Before signing or publishing a final installer, verify:
 | Python wheelhouse | Offline install for AI dependencies | release runtime payload `wheelhouse/` | Must be generated from reviewed packages. |
  | Hugging Face caches | faster-whisper/model cache seeds | release runtime payload `caches/hf/` | Each model license must be reviewed. |
  | Parakeet TDT 0.6B v3 (ONNX fp32, 2.5 GB) | Local transcription via `parakeet-rs` (25 languages) | First-use download from `altunenes/parakeet-rs` rev `664cc74` into `caches/hf/parakeet-tdt-0.6b-v3/` (per-file sha256 in `transcription/parakeet.rs`) | **CC-BY-4.0** (NVIDIA) — attribution required; no official int8 (`Orukeet` int8 is a community finetune under CC-BY-SA-4.0, not used). |
+ | Nemotron-3 Diarization Sortformer v3 (ONNX fp32, ~400 MB) | Optional local diarization via `parakeet-rs` (`sortformer`) | First-use download with diarization from `altunenes/parakeet-rs` rev `664cc74` into `caches/hf/nemotron-3-diarization/` (sha256 + LICENSE pinned in `transcription/parakeet.rs`) | **OpenMDW-1.1** (NVIDIA) — unrestricted use including commercial; retain the agreement and origin notices on distribution; no restrictions on outputs. |
 | PaddleX caches | PaddleOCR-VL/layout model cache seeds | release runtime payload `caches/paddlex/` | Each model license must be reviewed. |
 | Gemma GGUF | Local LLM downloaded by user/app | Hugging Face URL configured in LLM settings | Downloaded model terms must be visible to users before relying on redistribution. |
 

@@ -119,6 +119,7 @@ export const SETTINGS_KEYS = {
   ASSEMBLYAI_SPEAKER_LABELS: 'assemblyai_role_speaker_identification',
   STT_MODE: 'stt_mode',
   STT_LOCAL_ENGINE: 'stt_local_engine',
+  STT_LOCAL_DIARIZE: 'stt_local_diarize',
   GLM_OCR_API_KEY: 'glm_ocr_api_key',
   ZOTERO_API_KEY: 'zotero_api_key',
   HLAB_PUBLISH_KEY: 'hlab_publish_key',

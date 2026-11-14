@@ -414,6 +414,9 @@
             >{transcriptionEditedText}</textarea
           >
         </details>
+        {#if transcriptionState.warning}
+          <p class="ocr-status-text" role="note">{transcriptionState.warning}</p>
+        {/if}
       {/if}
     </div>
   </section>

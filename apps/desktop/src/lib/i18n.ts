@@ -739,6 +739,9 @@ const es = {
   'settings.sttLocalEngine.whisper.label': 'Whisper',
   'settings.sttLocalEngine.whisper.description':
     'faster-whisper local (respaldo si el idioma no está entre los 25 de Parakeet).',
+  'settings.sttLocalDiarize.label': 'Detectar hablantes',
+  'settings.sttLocalDiarize.description':
+    'Etiqueta cada segmento con Hablante A, B… (máximo 4, solo Parakeet). Requiere descargar el modelo de diarización (~400 MB).',
   'settings.ocrhModeTitle': 'Modo OCRH',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Usa el pipeline local actual de OCR de alta precisión.',
@@ -3336,6 +3339,8 @@ type ExtraI18nKey =
   | 'settings.sttLocalEngine.parakeet.description'
   | 'settings.sttLocalEngine.whisper.label'
   | 'settings.sttLocalEngine.whisper.description'
+  | 'settings.sttLocalDiarize.label'
+  | 'settings.sttLocalDiarize.description'
   | 'settings.ocrhMode.local.label'
   | 'settings.ocrhMode.local.summary'
   | 'settings.ocrhMode.local.description'
@@ -4627,6 +4632,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.sttLocalEngine.whisper.label': 'Whisper',
   'settings.sttLocalEngine.whisper.description':
     'Local faster-whisper (fallback when the language is outside Parakeet’s 25).',
+  'settings.sttLocalDiarize.label': 'Detect speakers',
+  'settings.sttLocalDiarize.description':
+    'Tag each segment with its speaker (Hablante A, B…, max 4, Parakeet only). Requires downloading the diarization model (~400 MB).',
   'settings.ocrhModeTitle': 'OCRH mode',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Use the current local high-accuracy OCR pipeline.',

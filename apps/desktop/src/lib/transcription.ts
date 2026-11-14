@@ -36,6 +36,7 @@ export interface AssetTranscriptionState {
   progress: number
   stage?: string
   error?: string
+  warning?: string
   text?: string
   language?: string
   durationMs?: number
@@ -97,6 +98,7 @@ interface CompletePayload {
   language?: string
   duration_ms?: number
   segments_count?: number
+  warning?: string
 }
 
 interface ErrorPayload {
@@ -155,6 +157,7 @@ export class TranscriptionStore {
         language: p.language,
         durationMs: p.duration_ms ?? 0,
         segmentsCount: p.segments_count ?? 0,
+        warning: p.warning,
       })
       // Notify caller so views can refresh visible transcription-dependent state.
       this.onComplete?.(p.asset_id)
