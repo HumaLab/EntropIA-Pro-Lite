@@ -26,7 +26,9 @@ Antes de firmar o publicar un instalador final, verificar:
 | uv | Bootstrap del entorno Python administrado (Pro) | `resources/tools/uv/*`, runtime payload `uv/` | `resources/tools/uv/*` fijado a uv 0.6.14 (MIT OR Apache-2.0) en `binary-provenance.json`; el del runtime payload sigue el manifest del runtime-pack. |
 | Runtime Python | Runtime subprocess para OCR/NLP/transcripción | release runtime payload `python/` | Debe ser redistribuible y estar versionado. |
 | Wheelhouse Python | Instalación offline para dependencias IA | release runtime payload `wheelhouse/` | Debe generarse desde paquetes revisados. |
-| Caches Hugging Face | Seeds de faster-whisper/model cache | release runtime payload `caches/hf/` | Cada licencia de modelo debe revisarse. |
+ | Caches Hugging Face | Seeds de faster-whisper/model cache | release runtime payload `caches/hf/` | Cada licencia de modelo debe revisarse. |
+ | Parakeet TDT 0.6B v3 (ONNX fp32, 2,5 GB) | Transcripción local vía `parakeet-rs` (25 idiomas) | Descarga al primer uso desde `altunenes/parakeet-rs` rev `664cc74` a `caches/hf/parakeet-tdt-0.6b-v3/` (sha256 por archivo en `transcription/parakeet.rs`) | **CC-BY-4.0** (NVIDIA) — requiere atribución; sin int8 oficial (el int8 `Orukeet` es un finetune comunitario CC-BY-SA-4.0, no usado). |
+ | Nemotron-3 Diarization Sortformer v3 (ONNX fp32, ~400 MB) | Diarización local opcional vía `parakeet-rs` (`sortformer`) | Descarga al primer uso con diarización desde `altunenes/parakeet-rs` rev `664cc74` a `caches/hf/nemotron-3-diarization/` (sha256 + LICENSE pineados en `transcription/parakeet.rs`) | **OpenMDW-1.1** (NVIDIA) — uso sin restricción incluyendo comercial; al distribuir, conservar el acuerdo y los avisos de origen; sin restricciones sobre los outputs. |
 | Caches PaddleX | Seeds de PaddleOCR-VL/layout model cache | release runtime payload `caches/paddlex/` | Cada licencia de modelo debe revisarse. |
 | Gemma GGUF | LLM local descargado por usuario/app | URL de Hugging Face configurada en LLM settings | Los términos del modelo descargado deben ser visibles para usuarios antes de depender de redistribución. |
 
@@ -38,7 +40,8 @@ Estas no viajan como archivos separados del runtime payload: se compilan o empaq
 | ---------- | --------- | -------- |
 | `keyring` | Guarda el token de sesión de sincronización en el gestor de credenciales del sistema operativo | MIT OR Apache-2.0 |
 | `ed25519-dalek` | Verifica la firma del bootstrap del runtime managed | BSD-3-Clause |
-| `symphonia` | Decodificación de audio para la previsualización | **MPL-2.0** |
+ | `symphonia` | Decodificación de audio para la previsualización | **MPL-2.0** |
+ | `parakeet-rs` (0.3.x) | Runtime Rust de Parakeet TDT (transcripción local) | MIT |
 | `hound` | Lectura/escritura WAV para el camino de audio | Apache-2.0 |
 | `leaflet` | Mapa de ubicaciones | BSD-2-Clause |
 | `@tiptap/*` | Editor de texto enriquecido de las notas y de Escritura | MIT |

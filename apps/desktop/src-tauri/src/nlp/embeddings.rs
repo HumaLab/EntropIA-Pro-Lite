@@ -1425,7 +1425,7 @@ impl LocalBgeM3EmbeddingEngine {
             .lock()
             .map_err(|_| "Local BGE-M3 ONNX session mutex poisoned".to_string())?;
 
-        let outputs = match session.inputs.len() {
+        let outputs = match session.inputs().len() {
             2 => session
                 .run(inputs![
                     TensorRef::from_array_view(&input_ids).map_err(|e| format!(
@@ -1863,28 +1863,28 @@ pub(crate) fn ensure_local_ort_init(model_dir: &Path) -> Result<(), String> {
 
 #[cfg(feature = "local-ml")]
 fn initialize_local_ort(model_dir: PathBuf) -> Result<(), String> {
+    // rc.13: `commit()` returns whether this call initialized (no error);
+    // double init is benign, the OnceLock above still serializes first setup.
     if std::env::var_os("ORT_DYLIB_PATH").is_some() {
-        ort::init()
-            .commit()
-            .map_err(|e| format!("Failed to initialize ORT from ORT_DYLIB_PATH: {e}"))?;
+        ort::init().commit();
         return Ok(());
     }
 
     let dylib_path = find_ort_dylib(&model_dir).ok_or_else(|| {
-        format!(
-            "No ONNX Runtime dynamic library found near local BGE-M3 model directory {}. Expected onnxruntime.dll / libonnxruntime.* or set ORT_DYLIB_PATH.",
-            model_dir.display()
-        )
-    })?;
+         format!(
+             "No ONNX Runtime dynamic library found near local BGE-M3 model directory {}. Expected onnxruntime.dll / libonnxruntime.* or set ORT_DYLIB_PATH.",
+             model_dir.display()
+         )
+     })?;
 
     ort::init_from(dylib_path.display().to_string())
-        .commit()
         .map_err(|e| {
             format!(
                 "Failed to initialize ORT from {}: {e}",
                 dylib_path.display()
             )
-        })?;
+        })?
+        .commit();
 
     Ok(())
 }
@@ -2003,15 +2003,29 @@ fn managed_venv_onnxruntime_capi_dirs(managed_root: &Path) -> Vec<PathBuf> {
 fn app_data_root_from_local_model_dir(model_dir: &Path) -> Option<PathBuf> {
     let category_dir = model_dir.parent()?;
     let models_dir = category_dir.parent()?;
-    if !models_dir
+    if models_dir
         .file_name()?
         .to_string_lossy()
         .eq_ignore_ascii_case("models")
     {
-        return None;
+        // BGE layout: <app-data>/models/<category>/<model>
+        return models_dir.parent().map(Path::to_path_buf);
     }
-
-    models_dir.parent().map(Path::to_path_buf)
+    // Hugging Face cache layout: <app-data>/caches/hf/<model>
+    // (Parakeet and other runtime-downloaded models). Same runtime-root
+    // scan below applies once the root is known.
+    if category_dir
+        .file_name()?
+        .to_string_lossy()
+        .eq_ignore_ascii_case("hf")
+        && models_dir
+            .file_name()?
+            .to_string_lossy()
+            .eq_ignore_ascii_case("caches")
+    {
+        return models_dir.parent().map(Path::to_path_buf);
+    }
+    None
 }
 
 #[cfg(feature = "local-ml")]
@@ -2452,6 +2466,25 @@ mod tests {
 
     fn sqlite_failure(code: i32) -> rusqlite::Error {
         rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)
+    }
+
+    #[test]
+    #[cfg(feature = "local-ml")]
+    fn app_data_root_supports_models_and_hf_cache_layouts() {
+        // BGE layout: <root>/models/<category>/<model>
+        assert_eq!(
+            app_data_root_from_local_model_dir(Path::new("/data/models/nlp/bge-m3")),
+            Some(PathBuf::from("/data"))
+        );
+        // HF cache layout: <root>/caches/hf/<model> (Parakeet et al.)
+        assert_eq!(
+            app_data_root_from_local_model_dir(Path::new("/data/caches/hf/parakeet-tdt-0.6b-v3")),
+            Some(PathBuf::from("/data"))
+        );
+        assert_eq!(
+            app_data_root_from_local_model_dir(Path::new("/data/other/place")),
+            None
+        );
     }
 
     #[test]

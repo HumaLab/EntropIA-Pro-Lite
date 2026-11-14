@@ -12,6 +12,20 @@ use crate::db::state::AppDbState;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+/// [`super::ensure_nlp_runtime_ready`] off the async worker thread.
+///
+/// The readiness check may fetch the remote bootstrap catalog with
+/// `reqwest::blocking`, whose internal tokio runtime panics when dropped on an
+/// async-context thread — the command's future dies mid-flight and the invoke
+/// never resolves. Running it on the blocking pool (the same context the
+/// processing executors already use) keeps the drop legal.
+async fn ensure_nlp_runtime_ready_off_thread(app_handle: &AppHandle) -> Result<(), String> {
+    let app_handle = app_handle.clone();
+    tokio::task::spawn_blocking(move || super::ensure_nlp_runtime_ready(&app_handle))
+        .await
+        .map_err(|e| format!("NLP runtime readiness task failed: {e}"))?
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetEmbeddingBackfillFailure {
@@ -44,6 +58,25 @@ fn triples_retired_error(target: &str) -> String {
     format!(
         "NLP triples extraction was retired for {target}. Use the LLM triples commands instead."
     )
+}
+/// Synchronous twin of [`local_embedding_model_dir`] for callers without the
+/// UI connection (the assistant `models_setup` tool opens the archive from
+/// its path, like every other tool).
+pub(crate) fn resolve_embedding_model_dir_for(
+    db_path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let cache_dir = crate::path_utils::remembered_cache_dir();
+    let app_data_dir = cache_dir.as_deref().or_else(|| db_path.parent());
+    let conn = crate::db::open::open_archive_connection(db_path)
+        .map_err(|e| format!("Failed to open DB: {e}"))?;
+    let configured = crate::settings::get_raw_setting(
+        &conn,
+        super::embeddings::LOCAL_EMBEDDING_MODEL_DIR_SETTING_KEY,
+    );
+    Ok(super::embeddings::resolve_local_embedding_model_dir(
+        configured.as_deref(),
+        app_data_dir,
+    ))
 }
 
 /// The configured local embedding model directory, read on the blocking pool:
@@ -112,7 +145,16 @@ pub async fn embedding_download_model(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
-    let model_dir = local_embedding_model_dir(&db).await;
+    start_embedding_download(&db.db_path, app_handle)
+}
+
+/// Shared starter behind the Settings button and the assistant `models_setup`
+/// tool: queue the local BGE-M3 install in the background.
+pub(crate) fn start_embedding_download(
+    db_path: &std::path::Path,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    let model_dir = resolve_embedding_model_dir_for(db_path)?;
     crate::app_logs::info(
         &app_handle,
         "embedding/download",
@@ -180,7 +222,7 @@ pub async fn extract_entities(
     app_handle: AppHandle,
     nlp_queue: State<'_, NlpQueue>,
 ) -> Result<String, String> {
-    super::ensure_nlp_runtime_ready(&app_handle)?;
+    ensure_nlp_runtime_ready_off_thread(&app_handle).await?;
     super::enqueue_entity_refresh_for_item(&nlp_queue, &item_id).map(|_| "queued".to_string())
 }
 
@@ -383,7 +425,7 @@ pub async fn extract_entities_for_asset(
     app_handle: AppHandle,
     nlp_queue: State<'_, NlpQueue>,
 ) -> Result<String, String> {
-    super::ensure_nlp_runtime_ready(&app_handle)?;
+    ensure_nlp_runtime_ready_off_thread(&app_handle).await?;
     enqueue(
         &nlp_queue,
         NlpJob::ExtractEntitiesForAsset { item_id, asset_id },

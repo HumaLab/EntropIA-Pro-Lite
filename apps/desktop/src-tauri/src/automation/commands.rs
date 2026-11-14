@@ -447,6 +447,7 @@ mod tests {
             dir.path().to_path_buf(),
             dir.path().join("archive.db"),
             dir.path().join("cache"),
+            None,
         );
         Harness {
             dir,
@@ -487,6 +488,7 @@ mod tests {
                 dir.path(),
                 dir.path().join("archive.db"),
                 dir.path().join("cache"),
+                None,
             );
             let existing = create_client(&access, &endpoint, "Existing").unwrap();
             let token = secrets.token(&existing.client.id).unwrap();
@@ -687,6 +689,7 @@ mod tests {
             dir.path().to_path_buf(),
             db_path.clone(),
             dir.path().join("cache"),
+            None,
         );
         let conn = batches::open_ready(&db_path).unwrap();
         let job = batches::prepare_batch(

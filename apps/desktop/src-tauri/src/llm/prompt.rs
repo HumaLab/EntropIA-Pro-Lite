@@ -54,7 +54,7 @@ Tu tarea:
 4. No resumas ni reescribas. Mantené el contenido y el nivel de detalle, pero restablecé el orden natural de lectura y unificá los cortes de línea causados por columnas para que no queden oraciones ni párrafos cortados.
 5. Si una palabra quedó cortada por un guion de fin de línea, reconstruila únicamente cuando el guion sea un corte de layout y no parte del contenido.
 
-Devolvé únicamente el contenido corregido.
+Devolvé únicamente el contenido corregido y detenete exactamente donde termina el texto dado: no continúes la redacción ni agregues cierre.
 No agregues explicaciones, títulos, comillas, bloques de código ni JSON.
 No repitas la consigna.
 
@@ -131,8 +131,7 @@ Ejemplo válido:
 Texto:
 {text}"#;
 
-pub const DEFAULT_SUMMARY_PROMPT: &str = r#"Resumí este texto de documento histórico en un ÚNICO párrafo conciso. El resumen debe:
-- Tener entre 10 y 15 líneas
+pub const DEFAULT_SUMMARY_PROMPT: &str = r#"Resumí este texto de documento histórico en uno o dos párrafos concisos, de 10 a 15 líneas en total. El resumen debe:
 - Preservar nombres propios, fechas, lugares y eventos clave
 - Estar escrito en el mismo idioma que el texto original (por defecto, español)
 - SIEMPRE terminar con una oración completa que termine en punto
@@ -140,6 +139,16 @@ pub const DEFAULT_SUMMARY_PROMPT: &str = r#"Resumí este texto de documento hist
 NO superes las 15 líneas. NO cortes a mitad de frase.
 
 Texto:
+{text}"#;
+
+/// Second (and later) map-reduce pass: fuse per-chunk summaries into the same
+/// 10-15 line shape as [`DEFAULT_SUMMARY_PROMPT`]. Internal step, not a user
+/// setting: chunk summaries already follow the user's summary prompt.
+/// Local-only: the only caller is the local-ml map-reduce summarizer.
+#[cfg(feature = "local-ml")]
+pub const SUMMARY_FUSION_PROMPT: &str = r#"Combiná estos resúmenes parciales de un mismo documento histórico en uno o dos párrafos concisos, de 10 a 15 líneas en total, sin repetir información. Preservá nombres propios, fechas, lugares y eventos clave, en el mismo idioma de los textos (por defecto, español). SIEMPRE terminá con una oración completa que termine en punto. NO superes las 15 líneas. NO cortes a mitad de frase.
+
+Resúmenes parciales:
 {text}"#;
 
 pub const DEFAULT_NER_PROMPT: &str = r#"Extraé entidades nombradas del texto histórico. Devolvé SOLO JSON válido, sin markdown. Usá exclusivamente estas categorías: PER, LOC, ORG, DATE, MISC. Formato: [{"value":"...","type":"PER|LOC|ORG|DATE|MISC","confidence":0.95}]. Si no hay entidades, devolvé []. No inventes entidades ni uses categorías fuera del contrato.

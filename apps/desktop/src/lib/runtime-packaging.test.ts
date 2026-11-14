@@ -164,11 +164,13 @@ describe('runtime pack packaging', () => {
       ).bundle?.resources ?? []
 
     // Bundle resource arrays replace each other when configs merge, so the Pro
-    // overlay must restate every Pro Linux resource and add only Pdfium.
+    // overlay must restate every Pro Linux resource and add only Pdfium plus
+    // the local LLM server (Pro-only payload).
     expect(proLinuxResources).toEqual([
       ...linuxResources,
       'resources/pdfium/libpdfium.so',
       'resources/pdfium/LICENSE',
+      'resources/tools/llama-server/*',
     ])
 
     for (const resources of [proLinuxResources, liteLinuxResources]) {

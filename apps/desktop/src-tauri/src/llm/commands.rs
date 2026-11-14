@@ -19,12 +19,26 @@ pub async fn llm_is_available(llm_queue: State<'_, LlmQueue>) -> Result<bool, St
     Ok(llm_queue.is_available())
 }
 
-/// Returns `true` when the remote provider required by OCRC is configured.
+/// Returns `true` when OCR correction can run: remote provider configured, or
+/// local Qwen3-VL assets installed (managed or installer-bundled).
 #[tauri::command]
+#[cfg_attr(not(feature = "paddle-ocr"), allow(unused_variables))]
 pub async fn llm_ocr_correction_is_available(
     llm_queue: State<'_, LlmQueue>,
+    app_handle: tauri::AppHandle,
 ) -> Result<bool, String> {
-    Ok(llm_queue.is_ocr_correction_available())
+    if llm_queue.is_ocr_correction_available() {
+        return Ok(true);
+    }
+    #[cfg(feature = "paddle-ocr")]
+    {
+        Ok(super::qwen_correction::local_correction_available_for(
+            &app_handle,
+            &llm_queue.db_path,
+        ))
+    }
+    #[cfg(not(feature = "paddle-ocr"))]
+    Ok(false)
 }
 
 /// Return the current status of the local Gemma GGUF model file.
@@ -91,7 +105,17 @@ pub async fn llm_download_model(
     db: State<'_, AppDbState>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    let db_path = db.db_path.clone();
+    start_local_model_download(&db.db_path, app_handle)
+}
+
+/// Shared starter behind the Settings button and the assistant `models_setup`
+/// tool: queue the configured local-model (Gemma) download in the background.
+#[cfg(feature = "local-ml")]
+pub(crate) fn start_local_model_download(
+    db_path: &std::path::Path,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    let db_path = db_path.to_path_buf();
     let conn = crate::db::open::open_archive_connection(&db_path)
         .map_err(|e| format!("Failed to open DB: {e}"))?;
     let url = super::resolve_local_model_source_url(Some(&conn));
@@ -117,6 +141,7 @@ pub async fn llm_download_model(
     tauri::async_runtime::spawn(async move {
         let result = tokio::task::spawn_blocking(move || {
             download_model_file(
+                "llm",
                 &url,
                 managed_dir,
                 &filename,

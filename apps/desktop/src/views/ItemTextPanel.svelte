@@ -3,13 +3,19 @@
     ActionIcon,
     Button,
     ConfirmDialog,
+    Input,
     StatusBadge,
     type StatusBadgeVariant,
   } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { Asset } from '@entropia/store'
   import type { AssetOcrState, OcrMode } from '$lib/ocr'
-  import { transcriptionIsEditedByHand, type AssetTranscriptionState } from '$lib/transcription'
+  import {
+    extractSpeakerLabels,
+    renameSpeakers,
+    transcriptionIsEditedByHand,
+    type AssetTranscriptionState,
+  } from '$lib/transcription'
   import type { ItemLlmState } from '$lib/llm'
   import { getAssetPathLabel } from '$lib/item-metadata'
 
@@ -66,6 +72,8 @@
   let pendingTranscription = $state<Asset | null>(null)
   let checkingTranscription = $state(false)
   let transcriptionCheckError = $state<string | null>(null)
+  let renamingSpeakers = $state(false)
+  let speakerEdits = $state<Array<{ old: string; next: string }>>([])
 
   async function requestTranscription(asset: Asset) {
     if (checkingTranscription) return
@@ -210,12 +218,13 @@
           >
             {translate('item.ocrHighAction')}
           </Button>
-          {#if ocrCorrectionAvailable && !isOcrCorrected}
+          {#if !isOcrCorrected}
             <Button
               variant="secondary"
               size="sm"
               class="ocr-btn"
-              disabled={ocrEditingDisabled ||
+              disabled={!ocrCorrectionAvailable ||
+                ocrEditingDisabled ||
                 llmState.status === 'running' ||
                 ocrState.status !== 'done'}
               onclick={onCorrectOcr}
@@ -413,6 +422,54 @@
             >{transcriptionEditedText}</textarea
           >
         </details>
+        {#if transcriptionState.warning}
+          <p class="ocr-status-text" role="note">{transcriptionState.warning}</p>
+        {/if}
+        {@const speakerLabels = extractSpeakerLabels(transcriptionEditedText)}
+        {#if speakerLabels.length > 0}
+          <div class="ocr-speaker-rename">
+            <Button
+              variant="secondary"
+              size="sm"
+              onclick={() => {
+                renamingSpeakers = !renamingSpeakers
+                if (renamingSpeakers) {
+                  speakerEdits = speakerLabels.map((label) => ({ old: label, next: label }))
+                }
+              }}
+            >
+              {renamingSpeakers
+                ? translate('item.renameSpeakersHide')
+                : translate('item.renameSpeakers')}
+            </Button>
+            {#if renamingSpeakers}
+              {#each speakerEdits as entry (entry.old)}
+                <label class="ocr-speaker-row">
+                  <span class="ocr-speaker-old">{entry.old}</span>
+                  <Input bind:value={entry.next} />
+                </label>
+              {/each}
+              <Button
+                variant="secondary"
+                size="sm"
+                onclick={() => {
+                  if (selectedAsset) {
+                    onTranscriptionTextInput(
+                      selectedAsset.id,
+                      renameSpeakers(
+                        transcriptionEditedText,
+                        Object.fromEntries(speakerEdits.map((entry) => [entry.old, entry.next]))
+                      )
+                    )
+                  }
+                  renamingSpeakers = false
+                }}
+              >
+                {translate('item.renameSpeakersApply')}
+              </Button>
+            {/if}
+          </div>
+        {/if}
       {/if}
     </div>
   </section>

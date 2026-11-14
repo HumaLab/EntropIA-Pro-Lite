@@ -9,6 +9,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "EntropIA Pro",
@@ -91,6 +92,8 @@
       "resources/lib/LICENSE",
       "resources/fonts/LICENSE",
       "scripts/paddle_vl.py",
+      "scripts/glm_ocr_local.py",
+      "scripts/layout_v3.py",
       "scripts/spacy_ner.py",
       "scripts/transcribe.py"
     ],

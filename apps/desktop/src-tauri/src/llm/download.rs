@@ -4,7 +4,28 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
-use super::{LlmDownloadCompletePayload, LlmDownloadProgressPayload};
+/// Progress payload for managed GGUF downloads. The `download_model_file`
+/// `event_scope` decides the event name (`{scope}:download_progress`); the
+/// JSON shape is the same for every model kind.
+#[derive(Clone, serde::Serialize)]
+pub struct ModelDownloadProgressPayload {
+    pub pct: u8,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+}
+
+/// Completion payload for managed GGUF downloads (`{scope}:download_complete`).
+#[derive(Clone, serde::Serialize)]
+pub struct ModelDownloadCompletePayload {
+    pub path: String,
+}
+
+/// Error payload for managed GGUF downloads (`{scope}:download_error`).
+/// Emitted by the download callers, which own the failure context.
+#[derive(Clone, serde::Serialize)]
+pub struct ModelDownloadErrorPayload {
+    pub error: String,
+}
 
 const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024;
 const DOWNLOAD_TIMEOUT_SECS: u64 = 600;
@@ -173,7 +194,12 @@ pub(crate) fn build_model_download_client() -> Result<reqwest::blocking::Client,
 
 /// Download a GGUF model into an already-opened managed directory capability,
 /// emitting progress events via the Tauri event bus.
+///
+/// `event_scope` prefixes the emitted events (`{scope}:download_progress`,
+/// `{scope}:download_complete`); the LLM flow passes `"llm"`, other model
+/// downloads pass their own scope and define matching payload structs.
 pub fn download_model_file(
+    event_scope: &str,
     url: &str,
     managed_dir: cap_std::fs::Dir,
     filename: &str,
@@ -224,8 +250,8 @@ pub fn download_model_file(
             if pct >= last_reported_pct.saturating_add(5) || pct == 100 {
                 last_reported_pct = pct;
                 let _ = app_handle.emit(
-                    "llm:download_progress",
-                    LlmDownloadProgressPayload {
+                    &format!("{event_scope}:download_progress"),
+                    ModelDownloadProgressPayload {
                         pct,
                         downloaded_bytes,
                         total_bytes,
@@ -233,7 +259,7 @@ pub fn download_model_file(
                 );
                 crate::app_logs::info(
                     app_handle,
-                    "llm/download",
+                    format!("{event_scope}/download"),
                     format!("Descarga de modelo local {pct}%"),
                 );
             }
@@ -243,12 +269,12 @@ pub fn download_model_file(
     temporary.finish(filename)?;
     let display_path = display_destination.to_string_lossy().to_string();
     let _ = app_handle.emit(
-        "llm:download_complete",
-        LlmDownloadCompletePayload { path: display_path },
+        &format!("{event_scope}:download_complete"),
+        ModelDownloadCompletePayload { path: display_path },
     );
     crate::app_logs::info(
         app_handle,
-        "llm/download",
+        format!("{event_scope}/download"),
         format!(
             "Descarga de modelo local completada: {}",
             display_destination.display()

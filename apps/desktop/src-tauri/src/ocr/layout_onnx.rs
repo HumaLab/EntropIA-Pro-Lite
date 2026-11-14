@@ -87,27 +87,25 @@ fn ensure_ort_init(model_dir: &Path) -> Result<(), String> {
 
 fn initialize_ort(model_dir: PathBuf) -> Result<(), String> {
     if std::env::var_os("ORT_DYLIB_PATH").is_some() {
-        ort::init()
-            .commit()
-            .map_err(|e| format!("Failed to initialize ORT from ORT_DYLIB_PATH: {e}"))?;
+        ort::init().commit();
         return Ok(());
     }
 
     let dylib_path = find_ort_dylib(&model_dir).ok_or_else(|| {
-        format!(
-            "No ONNX Runtime dynamic library found near {}. Expected onnxruntime.dll or set ORT_DYLIB_PATH.",
-            model_dir.display()
-        )
-    })?;
+         format!(
+             "No ONNX Runtime dynamic library found near {}. Expected onnxruntime.dll or set ORT_DYLIB_PATH.",
+             model_dir.display()
+         )
+     })?;
 
     ort::init_from(dylib_path.display().to_string())
-        .commit()
         .map_err(|e| {
             format!(
                 "Failed to initialize ORT from {}: {e}",
                 dylib_path.display()
             )
-        })?;
+        })?
+        .commit();
 
     Ok(())
 }
@@ -302,8 +300,8 @@ impl OnnxLayoutEngine {
         // PP-DocLayout-L expects [?, 3, 640, 640] for the "image" input (dynamic batch).
         // If the model reports dynamic dims (-1 or 0), we default to DEFAULT_INPUT_SIZE.
         let model_input_size = {
-            let input_info = &session.inputs[0];
-            match &input_info.input_type {
+            let input_info = &session.inputs()[0];
+            match input_info.dtype() {
                 ort::value::ValueType::Tensor { shape, .. } => {
                     let h = shape
                         .get(2)
@@ -368,11 +366,18 @@ impl OnnxLayoutEngine {
                 .map_err(|_| "Layout session mutex poisoned")?;
 
             // Get output names before inference (they're session metadata)
-            let output_names: Vec<String> =
-                session.outputs.iter().map(|o| o.name.clone()).collect();
+            let output_names: Vec<String> = session
+                .outputs()
+                .iter()
+                .map(|o| o.name().to_string())
+                .collect();
 
             // Get input names so we can bind tensors by name
-            let input_names: Vec<String> = session.inputs.iter().map(|i| i.name.clone()).collect();
+            let input_names: Vec<String> = session
+                .inputs()
+                .iter()
+                .map(|i| i.name().to_string())
+                .collect();
             log::info!(target: "ocr/layout_onnx", "Model expects inputs: {input_names:?}");
 
             let image_ref = TensorRef::from_array_view(&input_tensor)

@@ -11,9 +11,13 @@
     embeddingModel: string
     embeddingProvider: string
     localEmbeddingModelDir: string
+    openaiCompatibleBaseUrl: string
     llmMode: string
     sttMode: string
+    sttLocalEngine: string
+    sttLocalDiarize: boolean
     ocrhMode: string
+    ocrhLocalEngine: string
     localModelSourceUrl: string
     localModelFilename: string
     assemblyAiApiKey: string
@@ -67,7 +71,9 @@
     DEFAULT_LLM_MODE,
     DEFAULT_EMBEDDING_PROVIDER,
     DEFAULT_STT_MODE,
+    DEFAULT_STT_LOCAL_ENGINE,
     DEFAULT_OCRH_MODE,
+    DEFAULT_OCRH_LOCAL_ENGINE,
     DEFAULT_PROMPTS,
     DEFAULT_MODEL_PARAMS_BY_FLOW,
     DEFAULT_RAG_PARAMS,
@@ -75,6 +81,8 @@
     type EmbeddingProvider,
     type LlmMode,
     type OcrhMode,
+    type OcrhLocalEngine,
+    type SttLocalEngine,
     type SttMode,
     type ModelInfo,
   } from '$lib/settings'
@@ -105,6 +113,22 @@
     type RerankerDownloadCompletePayload,
     type RerankerDownloadErrorPayload,
   } from '$lib/reranker'
+  import {
+    glmOcrLocalInfo,
+    glmOcrDownloadModels,
+    type GlmOcrLocalInfo,
+    type GlmOcrDownloadProgressPayload,
+    type GlmOcrDownloadCompletePayload,
+    type GlmOcrDownloadErrorPayload,
+  } from '$lib/glm-ocr-local'
+  import {
+    qwenCorrectionLocalInfo,
+    qwenCorrectionDownloadModels,
+    type QwenLocalInfo,
+    type QwenCorrectionDownloadProgressPayload,
+    type QwenCorrectionDownloadCompletePayload,
+    type QwenCorrectionDownloadErrorPayload,
+  } from '$lib/qwen-correction'
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
   import { registerListeners } from '$lib/register-listeners'
@@ -115,6 +139,7 @@
     ActionIcon,
     Button,
     Card,
+    Checkbox,
     ConfirmDialog,
     Input,
     TabButton,
@@ -181,10 +206,16 @@
   let embeddingProvider = $state<EmbeddingProvider>(DEFAULT_EMBEDDING_PROVIDER)
   let embeddingModel = $state(DEFAULT_OPENROUTER_EMBEDDING_MODEL)
   let localEmbeddingModelDir = $state('')
+  let openaiCompatibleBaseUrl = $state('')
   let localEmbeddingModel = $state<LocalEmbeddingModelInfo | null>(null)
   let llmMode = $state<LlmMode>(DEFAULT_LLM_MODE)
   let sttMode = $state<SttMode>(DEFAULT_STT_MODE)
+  let sttLocalEngine = $state<SttLocalEngine>(DEFAULT_STT_LOCAL_ENGINE)
+  let sttLocalDiarize = $state(false)
   let ocrhMode = $state<OcrhMode>(DEFAULT_OCRH_MODE)
+  let ocrhLocalEngine = $state<OcrhLocalEngine>(DEFAULT_OCRH_LOCAL_ENGINE)
+  let glmOcrLocal = $state<GlmOcrLocalInfo | null>(null)
+  let qwenLocal = $state<QwenLocalInfo | null>(null)
   let localAvailable = $state(false)
   let localModel = $state<LocalModelInfo | null>(null)
   let assemblyAiApiKey = $state('')
@@ -480,6 +511,12 @@
   let rerankerDownloadPct = $state(0)
   let rerankerDownloadFile = $state('')
   let rerankerDownloadError = $state<string | null>(null)
+  let glmOcrDownloading = $state(false)
+  let glmOcrDownloadPct = $state(0)
+  let glmOcrDownloadError = $state<string | null>(null)
+  let qwenDownloading = $state(false)
+  let qwenDownloadPct = $state(0)
+  let qwenDownloadError = $state<string | null>(null)
 
   // Save state
   let saving = $state(false)
@@ -522,9 +559,13 @@
       embeddingModel,
       embeddingProvider,
       localEmbeddingModelDir,
+      openaiCompatibleBaseUrl,
       llmMode,
       sttMode,
+      sttLocalEngine,
+      sttLocalDiarize,
       ocrhMode,
+      ocrhLocalEngine,
       localModelSourceUrl,
       localModelFilename,
       assemblyAiApiKey,
@@ -599,9 +640,13 @@
         storedEmbeddingProvider,
         storedEmbeddingModel,
         storedLocalEmbeddingModelDir,
+        storedOpenaiCompatibleBaseUrl,
         storedMode,
         storedSttMode,
+        storedSttLocalEngine,
+        storedSttLocalDiarize,
         storedOcrhMode,
+        storedOcrhLocalEngine,
         storedAssemblyAiKey,
         storedAssemblyAiSpeakerLabels,
         storedGlmOcrKey,
@@ -613,15 +658,21 @@
         modelInfo,
         embeddingModelInfo,
         rerankerModelInfo,
+        glmOcrModelInfo,
+        qwenModelInfo,
       ] = await Promise.all([
         settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY),
         settingsGet(SETTINGS_KEYS.OPENROUTER_MODEL),
         settingsGet(SETTINGS_KEYS.EMBEDDING_PROVIDER),
         settingsGet(SETTINGS_KEYS.OPENROUTER_EMBEDDING_MODEL),
         settingsGet(SETTINGS_KEYS.LOCAL_EMBEDDING_MODEL_DIR),
+        settingsGet(SETTINGS_KEYS.OPENAI_COMPATIBLE_BASE_URL),
         settingsGet(SETTINGS_KEYS.LLM_MODE),
         settingsGet(SETTINGS_KEYS.STT_MODE),
+        settingsGet(SETTINGS_KEYS.STT_LOCAL_ENGINE),
+        settingsGet(SETTINGS_KEYS.STT_LOCAL_DIARIZE),
         settingsGet(SETTINGS_KEYS.OCRH_MODE),
+        settingsGet(SETTINGS_KEYS.OCRH_LOCAL_ENGINE),
         settingsGet(SETTINGS_KEYS.ASSEMBLYAI_API_KEY),
         settingsGet(SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS),
         settingsGet(SETTINGS_KEYS.GLM_OCR_API_KEY),
@@ -633,6 +684,8 @@
         llmLocalModelInfo().catch(() => null),
         embeddingLocalModelInfo().catch(() => null),
         rerankerLocalModelInfo().catch(() => null),
+        glmOcrLocalInfo().catch(() => null),
+        qwenCorrectionLocalInfo().catch(() => null),
       ])
       const settingsMap = new Map((await settingsGetAll()).map((entry) => [entry.key, entry.value]))
 
@@ -657,9 +710,21 @@
       ) {
         localEmbeddingModelDir = storedLocalEmbeddingModelDir
       }
+      if (storedOpenaiCompatibleBaseUrl) openaiCompatibleBaseUrl = storedOpenaiCompatibleBaseUrl
       if (storedMode) llmMode = storedMode as LlmMode
       if (storedSttMode) sttMode = storedSttMode as SttMode
+      if (storedSttLocalEngine === 'parakeet' || storedSttLocalEngine === 'whisper') {
+        sttLocalEngine = storedSttLocalEngine
+      }
+      sttLocalDiarize = storedSttLocalDiarize === 'true'
       if (storedOcrhMode) ocrhMode = storedOcrhMode as OcrhMode
+      if (
+        storedOcrhLocalEngine === 'auto' ||
+        storedOcrhLocalEngine === 'glm_ocr' ||
+        storedOcrhLocalEngine === 'paddle_vl'
+      ) {
+        ocrhLocalEngine = storedOcrhLocalEngine
+      }
       if (storedAssemblyAiKey?.startsWith(SECRET_REF_PREFIX)) {
         assemblyAiApiKey = ''
         maskedAssemblyAiApiKey = t('settings.keyStoredInCredentialManager')
@@ -697,6 +762,8 @@
       localModelFilename = modelInfo?.filename ?? ''
       localEmbeddingModel = embeddingModelInfo
       localRerankerModel = rerankerModelInfo
+      glmOcrLocal = glmOcrModelInfo
+      qwenLocal = qwenModelInfo
       ocrCorrectionPrompt = storedOcrCorrectionPrompt?.trim() || DEFAULT_PROMPTS.ocrCorrectionPrompt
       summaryPrompt = storedSummaryPrompt?.trim() || DEFAULT_PROMPTS.summaryPrompt
       nerPrompt = storedNerPrompt?.trim() || DEFAULT_PROMPTS.nerPrompt
@@ -801,6 +868,62 @@
               rerankerDownloadFile = ''
               rerankerDownloadError = event.payload.error
             }),
+          () =>
+            listen<GlmOcrDownloadProgressPayload>('glm-ocr:download_progress', (event) => {
+              if (destroyed) return
+              glmOcrDownloading = true
+              glmOcrDownloadPct = event.payload.pct
+              glmOcrDownloadError = null
+            }),
+          () =>
+            listen<GlmOcrDownloadCompletePayload>('glm-ocr:download_complete', async () => {
+              if (destroyed) return
+              glmOcrLocal = await glmOcrLocalInfo().catch(() => null)
+              // Two files download in sequence with one `complete` each; stop
+              // the spinner only when both are on disk.
+              if (glmOcrLocal?.model_present && glmOcrLocal?.mmproj_present) {
+                glmOcrDownloading = false
+                glmOcrDownloadPct = 100
+              }
+              glmOcrDownloadError = null
+            }),
+          () =>
+            listen<GlmOcrDownloadErrorPayload>('glm-ocr:download_error', (event) => {
+              glmOcrDownloadPct = 0
+              glmOcrDownloadError = event.payload.error
+            }),
+          () =>
+            listen<QwenCorrectionDownloadProgressPayload>(
+              'qwen-correct:download_progress',
+              (event) => {
+                if (destroyed) return
+                qwenDownloading = true
+                qwenDownloadPct = event.payload.pct
+                qwenDownloadError = null
+              }
+            ),
+          () =>
+            listen<QwenCorrectionDownloadCompletePayload>(
+              'qwen-correct:download_complete',
+              async () => {
+                if (destroyed) return
+                qwenLocal = await qwenCorrectionLocalInfo().catch(() => null)
+                // Two files download in sequence with one `complete` each; stop
+                // the spinner only when both are on disk.
+                if (qwenLocal?.model_present && qwenLocal?.mmproj_present) {
+                  qwenDownloading = false
+                  qwenDownloadPct = 100
+                }
+                qwenDownloadError = null
+              }
+            ),
+          () =>
+            listen<QwenCorrectionDownloadErrorPayload>('qwen-correct:download_error', (event) => {
+              if (destroyed) return
+              qwenDownloading = false
+              qwenDownloadPct = 0
+              qwenDownloadError = event.payload.error
+            }),
         ],
         () => destroyed
       )
@@ -830,6 +953,8 @@
     llmMode = DEFAULT_LLM_MODE
     embeddingProvider = DEFAULT_EMBEDDING_PROVIDER
     sttMode = DEFAULT_STT_MODE
+    sttLocalEngine = DEFAULT_STT_LOCAL_ENGINE
+    sttLocalDiarize = false
     ocrhMode = DEFAULT_OCRH_MODE
   }
 
@@ -1358,13 +1483,17 @@
           embeddingModel.trim() || DEFAULT_OPENROUTER_EMBEDDING_MODEL
         ),
         settingsSet(SETTINGS_KEYS.LOCAL_EMBEDDING_MODEL_DIR, localEmbeddingModelDir.trim()),
+        settingsSet(SETTINGS_KEYS.OPENAI_COMPATIBLE_BASE_URL, openaiCompatibleBaseUrl.trim()),
         settingsSet(SETTINGS_KEYS.LLM_MODE, llmMode),
         settingsSet(SETTINGS_KEYS.STT_MODE, sttMode),
+        settingsSet(SETTINGS_KEYS.STT_LOCAL_ENGINE, sttLocalEngine),
+        settingsSet(SETTINGS_KEYS.STT_LOCAL_DIARIZE, sttLocalDiarize ? 'true' : 'false'),
         settingsSet(
           SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS,
           assemblyAiCollectionSpeakerLabels ? 'true' : 'false'
         ),
         settingsSet(SETTINGS_KEYS.OCRH_MODE, ocrhMode),
+        settingsSet(SETTINGS_KEYS.OCRH_LOCAL_ENGINE, ocrhLocalEngine),
         settingsSet(SETTINGS_KEYS.LOCAL_MODEL_SOURCE_URL, localModelSourceUrl.trim()),
         settingsSet(
           SETTINGS_KEYS.LOCAL_MODEL_FILENAME,
@@ -1604,6 +1733,42 @@
     } catch (e) {
       rerankerDownloading = false
       rerankerDownloadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function handleDownloadGlmOcrModels() {
+    if (glmOcrDownloading) return
+    glmOcrDownloading = true
+    glmOcrDownloadPct = 0
+    glmOcrDownloadError = null
+    try {
+      const state = await glmOcrDownloadModels()
+      // 'already complete' means nothing was queued; refresh and stop.
+      if (state !== 'started') {
+        glmOcrLocal = await glmOcrLocalInfo().catch(() => null)
+        glmOcrDownloading = false
+      }
+    } catch (e) {
+      glmOcrDownloading = false
+      glmOcrDownloadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function handleDownloadQwenModels() {
+    if (qwenDownloading) return
+    qwenDownloading = true
+    qwenDownloadPct = 0
+    qwenDownloadError = null
+    try {
+      const state = await qwenCorrectionDownloadModels()
+      // 'already complete' means nothing was queued; refresh and stop.
+      if (state !== 'started') {
+        qwenLocal = await qwenCorrectionLocalInfo().catch(() => null)
+        qwenDownloading = false
+      }
+    } catch (e) {
+      qwenDownloading = false
+      qwenDownloadError = e instanceof Error ? e.message : String(e)
     }
   }
 
@@ -2217,6 +2382,19 @@
             </div>
 
             <div class="settings__field settings__field--stacked">
+              <label class="settings__label" for="openai-base-url-{paneId}"
+                >{t('settings.openaiCompatibleBaseUrl.label')}</label
+              >
+              <input
+                id="openai-base-url-{paneId}"
+                type="text"
+                class="settings__input"
+                bind:value={openaiCompatibleBaseUrl}
+                placeholder="http://127.0.0.1:11434"
+              />
+              <p class="settings__hint">{t('settings.openaiCompatibleBaseUrl.description')}</p>
+            </div>
+            <div class="settings__field settings__field--stacked">
               <!-- The two model names are short and belong together, so they
                  share a row once the card is wide enough for both and fall
                  back to one column when it is not. -->
@@ -2302,6 +2480,51 @@
                 </label>
               </div>
 
+              {#if sttMode === 'local'}
+                <div class="settings__field settings__field--stacked">
+                  <span class="settings__label">{t('settings.sttLocalEngine.title')}</span>
+                  <div class="settings__mode-options">
+                    <label class="settings__radio" class:active={sttLocalEngine === 'parakeet'}>
+                      <input
+                        type="radio"
+                        name="stt_local_engine"
+                        value="parakeet"
+                        bind:group={sttLocalEngine}
+                      />
+                      <div class="settings__radio-content">
+                        <strong>{t('settings.sttLocalEngine.parakeet.label')}</strong>
+                        <span class="settings__radio-desc"
+                          >{t('settings.sttLocalEngine.parakeet.description')}</span
+                        >
+                      </div>
+                    </label>
+                    <label class="settings__radio" class:active={sttLocalEngine === 'whisper'}>
+                      <input
+                        type="radio"
+                        name="stt_local_engine"
+                        value="whisper"
+                        bind:group={sttLocalEngine}
+                      />
+                      <div class="settings__radio-content">
+                        <strong>{t('settings.sttLocalEngine.whisper.label')}</strong>
+                        <span class="settings__radio-desc"
+                          >{t('settings.sttLocalEngine.whisper.description')}</span
+                        >
+                      </div>
+                    </label>
+                  </div>
+                  {#if sttLocalEngine === 'parakeet'}
+                    <label class="settings__check">
+                      <Checkbox bind:checked={sttLocalDiarize}>
+                        <strong>{t('settings.sttLocalDiarize.label')}</strong>
+                        <span class="settings__radio-desc"
+                          >{t('settings.sttLocalDiarize.description')}</span
+                        >
+                      </Checkbox>
+                    </label>
+                  {/if}
+                </div>
+              {/if}
               {#if sttMode !== 'local'}
                 <p class="settings__hint settings__hint--privacy">
                   {t('settings.sttPrivacyNotice')}
@@ -2485,6 +2708,158 @@
                 <p class="settings__hint settings__hint--privacy">
                   {t('settings.ocrhPrivacyNotice')}
                 </p>
+              {/if}
+
+              {#if ocrhMode === 'local'}
+                <div class="settings__field settings__field--stacked">
+                  <span class="settings__label">{t('settings.ocrhLocalEngine.title')}</span>
+                  <div class="settings__mode-options">
+                    <label class="settings__radio" class:active={ocrhLocalEngine === 'auto'}>
+                      <input
+                        type="radio"
+                        name="ocrh_local_engine"
+                        value="auto"
+                        bind:group={ocrhLocalEngine}
+                      />
+                      <div class="settings__radio-content">
+                        <strong>{t('settings.ocrhLocalEngine.auto.label')}</strong>
+                        <span class="settings__radio-desc"
+                          >{t('settings.ocrhLocalEngine.auto.description')}</span
+                        >
+                      </div>
+                    </label>
+
+                    <label class="settings__radio" class:active={ocrhLocalEngine === 'glm_ocr'}>
+                      <input
+                        type="radio"
+                        name="ocrh_local_engine"
+                        value="glm_ocr"
+                        bind:group={ocrhLocalEngine}
+                      />
+                      <div class="settings__radio-content">
+                        <strong>{t('settings.ocrhLocalEngine.glm_ocr.label')}</strong>
+                        <span class="settings__radio-desc"
+                          >{t('settings.ocrhLocalEngine.glm_ocr.description')}</span
+                        >
+                      </div>
+                    </label>
+
+                    <label class="settings__radio" class:active={ocrhLocalEngine === 'paddle_vl'}>
+                      <input
+                        type="radio"
+                        name="ocrh_local_engine"
+                        value="paddle_vl"
+                        bind:group={ocrhLocalEngine}
+                      />
+                      <div class="settings__radio-content">
+                        <strong>{t('settings.ocrhLocalEngine.paddle_vl.label')}</strong>
+                        <span class="settings__radio-desc"
+                          >{t('settings.ocrhLocalEngine.paddle_vl.description')}</span
+                        >
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                {#if glmOcrLocal}
+                  <div class="settings__local-model">
+                    <div class="settings__local-model-row">
+                      {#if glmOcrLocal.model_present && glmOcrLocal.mmproj_present}
+                        <span class="settings__badge settings__badge--ok"
+                          >{t('settings.glmOcrLocal.modelsReady')}</span
+                        >
+                      {:else}
+                        <span class="settings__badge settings__badge--warn">
+                          {t('settings.glmOcrLocal.modelsMissing')}
+                          {!glmOcrLocal.model_present
+                            ? ' GLM-OCR-Q8_0.gguf'
+                            : ''}{!glmOcrLocal.mmproj_present ? ' mmproj-GLM-OCR-Q8_0.gguf' : ''}
+                        </span>
+                      {/if}
+                    </div>
+
+                    {#if !glmOcrLocal.server_present}
+                      <p class="settings__hint">{t('settings.glmOcrLocal.serverMissing')}</p>
+                    {/if}
+
+                    {#if glmOcrDownloading}
+                      <div class="settings__download-progress">
+                        <span
+                          class="settings__download-progress-bar"
+                          style="width: {glmOcrDownloadPct}%"
+                        ></span>
+                        <span class="settings__download-progress-text">
+                          {glmOcrDownloadPct}% — {t('settings.glmOcrLocal.downloading')}
+                        </span>
+                      </div>
+                    {:else if !glmOcrLocal.model_present || !glmOcrLocal.mmproj_present}
+                      <Button variant="primary" size="sm" onclick={handleDownloadGlmOcrModels}>
+                        {t('settings.glmOcrLocal.download')}
+                      </Button>
+                    {/if}
+
+                    {#if glmOcrDownloadError}
+                      <p class="surface-message surface-message--error">
+                        {glmOcrDownloadError}
+                        <Button variant="secondary" size="sm" onclick={handleDownloadGlmOcrModels}>
+                          {t('settings.glmOcrLocal.retry')}
+                        </Button>
+                      </p>
+                    {/if}
+                  </div>
+                {/if}
+
+                {#if qwenLocal}
+                  <div class="settings__local-model">
+                    <div class="settings__local-model-row">
+                      <span class="settings__label">{t('settings.qwenCorrectLocal.title')}</span>
+                      {#if qwenLocal.model_present && qwenLocal.mmproj_present}
+                        <span class="settings__badge settings__badge--ok"
+                          >{t('settings.qwenCorrectLocal.modelsReady')}</span
+                        >
+                      {:else}
+                        <span class="settings__badge settings__badge--warn">
+                          {t('settings.qwenCorrectLocal.modelsMissing')}
+                          {!qwenLocal.model_present
+                            ? ' Qwen3VL-4B-Instruct-Q4_K_M.gguf'
+                            : ''}{!qwenLocal.mmproj_present
+                            ? ' mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf'
+                            : ''}
+                        </span>
+                      {/if}
+                    </div>
+                    <p class="settings__hint">{t('settings.qwenCorrectLocal.description')}</p>
+
+                    {#if !qwenLocal.server_present}
+                      <p class="settings__hint">{t('settings.glmOcrLocal.serverMissing')}</p>
+                    {/if}
+
+                    {#if qwenDownloading}
+                      <div class="settings__download-progress">
+                        <span
+                          class="settings__download-progress-bar"
+                          style="width: {qwenDownloadPct}%"
+                        ></span>
+                        <span class="settings__download-progress-text">
+                          {qwenDownloadPct}% — {t('settings.qwenCorrectLocal.downloading')}
+                        </span>
+                      </div>
+                    {:else if !qwenLocal.model_present || !qwenLocal.mmproj_present}
+                      <Button variant="primary" size="sm" onclick={handleDownloadQwenModels}>
+                        {t('settings.qwenCorrectLocal.download')}
+                      </Button>
+                    {/if}
+
+                    {#if qwenDownloadError}
+                      <p class="surface-message surface-message--error">
+                        {qwenDownloadError}
+                        <Button variant="secondary" size="sm" onclick={handleDownloadQwenModels}>
+                          {t('settings.qwenCorrectLocal.retry')}
+                        </Button>
+                      </p>
+                    {/if}
+                  </div>
+                {/if}
               {/if}
             </section>
           </Card>

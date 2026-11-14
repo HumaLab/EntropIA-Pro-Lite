@@ -13,6 +13,22 @@ fn ensure_selected_cloud_key_blocking(db: &AppDbState) -> Result<(), String> {
     super::ensure_selected_cloud_key(&conn)
 }
 
+/// [`super::ensure_transcription_runtime_ready`] off the async worker thread.
+///
+/// The readiness check may fetch the remote bootstrap catalog with
+/// `reqwest::blocking`, whose internal tokio runtime panics when dropped on an
+/// async-context thread — the command's future dies mid-flight and the invoke
+/// never resolves. Running it on the blocking pool (the same context the OCR
+/// executor already uses) keeps the drop legal.
+async fn ensure_transcription_runtime_ready_off_thread(
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    let app_handle = app_handle.clone();
+    tokio::task::spawn_blocking(move || super::ensure_transcription_runtime_ready(&app_handle))
+        .await
+        .map_err(|e| format!("Transcription runtime readiness task failed: {e}"))?
+}
+
 #[tauri::command]
 pub async fn test_assemblyai_connection(
     api_key: String,
@@ -55,7 +71,7 @@ pub async fn transcribe_audio(
     // by the worker and by each provider.
     let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
 
-    super::ensure_transcription_runtime_ready(&app_handle)?;
+    ensure_transcription_runtime_ready_off_thread(&app_handle).await?;
     {
         let db = db.inner().clone();
         run_blocking_db_task(move || ensure_selected_cloud_key_blocking(&db)).await?;
@@ -147,7 +163,7 @@ pub async fn transcribe_dictation(
     app_handle: AppHandle,
     db: State<'_, AppDbState>,
 ) -> Result<String, String> {
-    super::ensure_transcription_runtime_ready(&app_handle)?;
+    ensure_transcription_runtime_ready_off_thread(&app_handle).await?;
     crate::app_logs::info(
         &app_handle,
         "transcription",

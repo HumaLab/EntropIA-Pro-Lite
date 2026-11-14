@@ -132,6 +132,16 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: bash apps/desktop/scripts/fetch-pdfium.sh linux-x64
 
+      # llama-server backing local GLM-OCR, built pinned from the vendored
+      # llama.cpp revision into resources/tools/llama-server and bundled by
+      # the explicit tauri.pro.linux.conf.json overlay. Same rule as Pdfium:
+      # not in tauri.linux.conf.json, which merges into every Linux build
+      # (cargo test included) and fails on a missing resource. Windows Pro
+      # still pending (needs CUDA toolkit in CI + overlay entry).
+      - name: Fetch llama-server (linux-x64)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: bash apps/desktop/scripts/fetch-llama-server.sh linux-x64
+
       # No runtime-pack injection: the committed fixture ships as-is so the app
       # detects "runtime not ready" and bootstraps it from the baked signed source.
       #

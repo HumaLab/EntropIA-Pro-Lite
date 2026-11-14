@@ -25,6 +25,7 @@ import {
   DEFAULT_LLM_MODE,
   DEFAULT_EMBEDDING_PROVIDER,
   DEFAULT_STT_MODE,
+  DEFAULT_STT_LOCAL_ENGINE,
   DEFAULT_OCRH_MODE,
   DEFAULT_PROMPTS,
   DEFAULT_MODEL_PARAMS,
@@ -133,10 +134,13 @@ describe('settings', () => {
     it('exports well-known setting keys', () => {
       expect(SETTINGS_KEYS.OPENROUTER_API_KEY).toBe('openrouter_api_key')
       expect(SETTINGS_KEYS.OPENROUTER_MODEL).toBe('openrouter_model')
+      expect(SETTINGS_KEYS.OPENAI_COMPATIBLE_BASE_URL).toBe('openai_compatible_base_url')
       expect(SETTINGS_KEYS.LLM_MODE).toBe('llm_mode')
       expect(SETTINGS_KEYS.ASSEMBLYAI_API_KEY).toBe('assemblyai_api_key')
       expect(SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS).toBe('assemblyai_role_speaker_identification')
       expect(SETTINGS_KEYS.STT_MODE).toBe('stt_mode')
+      expect(SETTINGS_KEYS.STT_LOCAL_ENGINE).toBe('stt_local_engine')
+      expect(SETTINGS_KEYS.STT_LOCAL_DIARIZE).toBe('stt_local_diarize')
       expect(SETTINGS_KEYS.GLM_OCR_API_KEY).toBe('glm_ocr_api_key')
       expect(SETTINGS_KEYS.ZOTERO_API_KEY).toBe('zotero_api_key')
       expect(SETTINGS_KEYS.OCRH_MODE).toBe('ocrh_mode')
@@ -191,6 +195,7 @@ describe('settings', () => {
       expect(DEFAULT_LLM_MODE).toBe(LOCAL_ML ? 'local' : 'openrouter')
       expect(DEFAULT_EMBEDDING_PROVIDER).toBe(LOCAL_ML ? 'local' : 'api')
       expect(DEFAULT_STT_MODE).toBe(LOCAL_ML ? 'local' : 'assemblyai')
+      expect(DEFAULT_STT_LOCAL_ENGINE).toBe('parakeet')
       expect(DEFAULT_OCRH_MODE).toBe(LOCAL_ML ? 'local' : 'glm_ocr')
     })
 

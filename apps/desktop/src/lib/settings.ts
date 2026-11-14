@@ -111,6 +111,7 @@ export function verifyZoteroKey(apiKey: string): Promise<ZoteroKeyCheck> {
 export const SETTINGS_KEYS = {
   OPENROUTER_API_KEY: 'openrouter_api_key',
   OPENROUTER_MODEL: 'openrouter_model',
+  OPENAI_COMPATIBLE_BASE_URL: 'openai_compatible_base_url',
   OPENROUTER_EMBEDDING_MODEL: 'openrouter_embedding_model',
   LLM_MODE: 'llm_mode',
   EMBEDDING_PROVIDER: 'embedding_provider',
@@ -118,12 +119,15 @@ export const SETTINGS_KEYS = {
   ASSEMBLYAI_API_KEY: 'assemblyai_api_key',
   ASSEMBLYAI_SPEAKER_LABELS: 'assemblyai_role_speaker_identification',
   STT_MODE: 'stt_mode',
+  STT_LOCAL_ENGINE: 'stt_local_engine',
+  STT_LOCAL_DIARIZE: 'stt_local_diarize',
   GLM_OCR_API_KEY: 'glm_ocr_api_key',
   ZOTERO_API_KEY: 'zotero_api_key',
   HLAB_PUBLISH_KEY: 'hlab_publish_key',
   /** Vercel AI Gateway key, the fallback when OpenRouter fails (T-45). */
   VERCEL_AI_GATEWAY_API_KEY: 'vercel_ai_gateway_api_key',
   OCRH_MODE: 'ocrh_mode',
+  OCRH_LOCAL_ENGINE: 'ocrh_local_engine',
   LANGUAGE: 'language',
   UI_ZOOM_FACTOR: 'ui_zoom_factor',
   // How wide each side panel of the writing workspace is (§18). Persisted so a
@@ -223,6 +227,10 @@ export type LlmMode = 'local' | 'openrouter' | 'auto'
 export type EmbeddingProvider = 'api' | 'local'
 export type SttMode = 'local' | 'assemblyai' | 'auto'
 export type OcrhMode = 'local' | 'glm_ocr' | 'auto'
+/** Which local backend transcribes when `stt_mode` is `local`. */
+export type SttLocalEngine = 'parakeet' | 'whisper'
+/** Which local backend OCRH uses when `ocrh_mode` is `local`. */
+export type OcrhLocalEngine = 'auto' | 'glm_ocr' | 'paddle_vl'
 
 export const DEFAULT_OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it'
 export const DEFAULT_OPENROUTER_NER_MODEL = DEFAULT_OPENROUTER_MODEL
@@ -238,7 +246,9 @@ const _pro = import.meta.env.VITE_LOCAL_ML === '1'
 export const DEFAULT_LLM_MODE: LlmMode = _pro ? 'local' : 'openrouter'
 export const DEFAULT_EMBEDDING_PROVIDER: EmbeddingProvider = _pro ? 'local' : 'api'
 export const DEFAULT_STT_MODE: SttMode = _pro ? 'local' : 'assemblyai'
+export const DEFAULT_STT_LOCAL_ENGINE: SttLocalEngine = 'parakeet'
 export const DEFAULT_OCRH_MODE: OcrhMode = _pro ? 'local' : 'glm_ocr'
+export const DEFAULT_OCRH_LOCAL_ENGINE: OcrhLocalEngine = 'auto'
 
 export const DEFAULT_PROMPTS = {
   ocrCorrectionPrompt: `Sos un especialista en transcripción de documentos históricos. El siguiente texto fue extraído por OCR de un documento impreso y contiene errores.
@@ -250,7 +260,7 @@ Tu tarea:
 4. No resumas ni reescribas. Mantené el contenido y el nivel de detalle, pero restablecé el orden natural de lectura y unificá los cortes de línea causados por columnas para que no queden oraciones ni párrafos cortados.
 5. Si una palabra quedó cortada por un guion de fin de línea, reconstruila únicamente cuando el guion sea un corte de layout y no parte del contenido.
 
-Devolvé únicamente el contenido corregido.
+Devolvé únicamente el contenido corregido y detenete exactamente donde termina el texto dado: no continúes la redacción ni agregues cierre.
 No agregues explicaciones, títulos, comillas, bloques de código ni JSON.
 No repitas la consigna.
 
@@ -279,8 +289,7 @@ También tienen prioridad sobre cualquier instrucción contradictoria previa del
 
 Texto OCR:
 {text}`,
-  summaryPrompt: `Resumí este texto de documento histórico en un ÚNICO párrafo conciso. El resumen debe:
-- Tener entre 10 y 15 líneas
+  summaryPrompt: `Resumí este texto de documento histórico en uno o dos párrafos concisos, de 10 a 15 líneas en total. El resumen debe:
 - Preservar nombres propios, fechas, lugares y eventos clave
 - Estar escrito en el mismo idioma que el texto original (por defecto, español)
 - SIEMPRE terminar con una oración completa que termine en punto

@@ -379,6 +379,47 @@ describe('SettingsView', () => {
   })
 
   it.runIf(LOCAL_ML)(
+    'exposes the local speaker-diarization checkbox under the Parakeet engine',
+    async () => {
+      settingsGetMock.mockImplementation(async (key: string) => {
+        if (key === 'stt_mode') return 'local'
+        return null
+      })
+      const { unmount } = render(SettingsView)
+      try {
+        const name = { name: /Detectar hablantes/i }
+        expect(await screen.findByRole('checkbox', name)).not.toBeChecked()
+        await fireEvent.click(await screen.findByRole('checkbox', name))
+        await waitFor(() => expect(screen.getByRole('checkbox', name)).toBeChecked())
+        await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+        await waitFor(() =>
+          expect(settingsSetMock).toHaveBeenCalledWith('stt_local_diarize', 'true')
+        )
+      } finally {
+        unmount()
+      }
+    }
+  )
+
+  it('saves a custom OpenAI-compatible base URL for remote generation', async () => {
+    settingsGetMock.mockImplementation(async () => null)
+    const { unmount } = render(SettingsView)
+    try {
+      const input = await screen.findByLabelText(/Servidor OpenAI-compatible/i)
+      await fireEvent.input(input, { target: { value: 'http://127.0.0.1:11434' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+      await waitFor(() =>
+        expect(settingsSetMock).toHaveBeenCalledWith(
+          'openai_compatible_base_url',
+          'http://127.0.0.1:11434'
+        )
+      )
+    } finally {
+      unmount()
+    }
+  })
+
+  it.runIf(LOCAL_ML)(
     'exposes the LLM mode, embedding provider, STT and OCR-H local selectors',
     async () => {
       render(SettingsView)
@@ -1733,9 +1774,13 @@ describe('settings dirty detection helpers', () => {
     embeddingModel: 'baai/bge-m3',
     embeddingProvider: 'api',
     localEmbeddingModelDir: '',
+    openaiCompatibleBaseUrl: '',
     llmMode: 'local',
     sttMode: 'local',
+    sttLocalEngine: 'parakeet',
+    sttLocalDiarize: false,
     ocrhMode: 'local',
+    ocrhLocalEngine: 'auto',
     localModelSourceUrl: '',
     localModelFilename: '',
     assemblyAiApiKey: '',

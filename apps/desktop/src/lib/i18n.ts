@@ -722,7 +722,8 @@ const es = {
   'settings.reranker.downloading': 'Instalando reranker…',
   'settings.sttModeTitle': 'Modo STT',
   'settings.sttMode.local.label': 'Local',
-  'settings.sttMode.local.summary': 'Procesa el audio con faster-whisper en este equipo.',
+  'settings.sttMode.local.summary':
+    'Procesa el audio en este equipo, sin subirlo a ningún servicio.',
   'settings.sttMode.local.description': 'Audio local. No sale de tu dispositivo.',
   'settings.sttMode.assemblyai.label': 'AssemblyAI',
   'settings.sttMode.assemblyai.summary':
@@ -730,8 +731,17 @@ const es = {
   'settings.sttMode.assemblyai.description': 'API remota. Requiere API key y conexión a internet.',
   'settings.sttMode.auto.label': 'Automático',
   'settings.sttMode.auto.summary': 'Intenta local primero y cae a AssemblyAI si hace falta.',
-  'settings.sttMode.auto.description':
-    'Prioriza faster-whisper local y usa AssemblyAI como fallback.',
+  'settings.sttMode.auto.description': 'Prioriza el motor local y usa AssemblyAI como fallback.',
+  'settings.sttLocalEngine.title': 'Motor STT local',
+  'settings.sttLocalEngine.parakeet.label': 'Parakeet (rápido)',
+  'settings.sttLocalEngine.parakeet.description':
+    'Transcripción local con Parakeet TDT. Descarga el modelo una vez (~2,5 GB).',
+  'settings.sttLocalEngine.whisper.label': 'Whisper',
+  'settings.sttLocalEngine.whisper.description':
+    'faster-whisper local (respaldo si el idioma no está entre los 25 de Parakeet).',
+  'settings.sttLocalDiarize.label': 'Detectar hablantes',
+  'settings.sttLocalDiarize.description':
+    'Etiqueta cada segmento con Hablante A, B… (máximo 4, solo Parakeet). Requiere descargar el modelo de diarización (~400 MB).',
   'settings.ocrhModeTitle': 'Modo OCRH',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Usa el pipeline local actual de OCR de alta precisión.',
@@ -744,6 +754,29 @@ const es = {
   'settings.ocrhMode.auto.summary': 'Intenta GLM-OCR y cae a local si falla o responde vacío.',
   'settings.ocrhMode.auto.description':
     'Prioriza GLM-OCR cloud y usa OCRH local como fallback controlado.',
+  'settings.ocrhLocalEngine.title': 'Motor OCRH local',
+  'settings.ocrhLocalEngine.auto.label': 'Automático',
+  'settings.ocrhLocalEngine.auto.description':
+    'GLM-OCR local con GPU NVIDIA cuando está instalado; si no, PaddleOCR-VL.',
+  'settings.ocrhLocalEngine.glm_ocr.label': 'GLM-OCR local',
+  'settings.ocrhLocalEngine.glm_ocr.description':
+    'Siempre GLM-OCR local. Requiere los modelos y GPU NVIDIA; falla si faltan.',
+  'settings.ocrhLocalEngine.paddle_vl.label': 'PaddleOCR-VL',
+  'settings.ocrhLocalEngine.paddle_vl.description': 'Siempre PaddleOCR-VL local.',
+  'settings.glmOcrLocal.modelsReady': 'Modelos GLM-OCR instalados.',
+  'settings.glmOcrLocal.modelsMissing': 'Faltan modelos:',
+  'settings.glmOcrLocal.serverMissing': 'Falta llama-server (se instala con la app).',
+  'settings.glmOcrLocal.download': 'Descargar modelos (~1,4 GB)',
+  'settings.glmOcrLocal.downloading': 'Descargando modelos…',
+  'settings.glmOcrLocal.retry': 'Reintentar descarga',
+  'settings.qwenCorrectLocal.title': 'Corrector local (Qwen3-VL)',
+  'settings.qwenCorrectLocal.description':
+    'Corrige OCR con un modelo local de 4B cuando no hay API key remota.',
+  'settings.qwenCorrectLocal.modelsReady': 'Modelos Qwen instalados.',
+  'settings.qwenCorrectLocal.modelsMissing': 'Faltan modelos:',
+  'settings.qwenCorrectLocal.download': 'Descargar modelos (~2,9 GB)',
+  'settings.qwenCorrectLocal.downloading': 'Descargando modelos…',
+  'settings.qwenCorrectLocal.retry': 'Reintentar descarga',
   'settings.badge.available': 'Disponible',
   'settings.badge.downloadable': 'Descargable',
   'settings.badge.notFound': 'Modelo no encontrado',
@@ -773,6 +806,9 @@ const es = {
   'settings.openrouter.title': 'OpenRouter',
   'settings.openrouter.description':
     'Configurá la cuenta remota, validá el acceso y elegí los modelos de generación y embeddings.',
+  'settings.openaiCompatibleBaseUrl.label': 'Servidor OpenAI-compatible (opcional)',
+  'settings.openaiCompatibleBaseUrl.description':
+    'Si lo completás, la generación remota va a ese servidor (vLLM, Ollama, pasarela propia) en vez de OpenRouter, usando el modelo ya configurado. Sin clave: ideal para un servidor local.',
   'settings.assemblyai.title': 'AssemblyAI',
   'settings.assemblyai.description':
     'Configurá la cuenta remota para transcripción, validá el acceso y usala como proveedor STT cloud.',
@@ -2416,6 +2452,9 @@ const es = {
   'item.transcriptionStarting': 'Iniciando transcripción…',
   'item.transcriptionFailed': 'Falló la transcripción: {error}',
   'item.transcription': 'Transcripción',
+  'item.renameSpeakers': 'Renombrar hablantes',
+  'item.renameSpeakersApply': 'Aplicar nombres',
+  'item.renameSpeakersHide': 'Ocultar',
   'item.summary': 'Resumen',
   'item.generatingSummary': 'Generando resumen…',
   'item.embeddingError': 'Error de embeddings: {error}',
@@ -2482,7 +2521,7 @@ const es = {
   'item.ocrHighTitle': 'OCR de alta precisión',
   'item.ocrHighBusyTitle': 'Extracción en progreso…',
   'item.ocrCorrectTitle': 'Corrección OCR',
-  'item.ocrCorrectUnavailable': 'OpenRouter no configurado',
+  'item.ocrCorrectUnavailable': 'Configurá OpenRouter o instalá el corrector local',
   'item.ocrCorrectNeedsText': 'Extraé texto primero',
   'item.llmUnavailableHint':
     'Corrección, resumen y triples requieren OpenRouter. Configuralo en Configuración.',
@@ -3340,7 +3379,13 @@ type ExtraI18nKey =
   | 'settings.sttMode.auto.label'
   | 'settings.sttMode.auto.summary'
   | 'settings.sttMode.auto.description'
-  | 'settings.ocrhModeTitle'
+  | 'settings.sttLocalEngine.title'
+  | 'settings.sttLocalEngine.parakeet.label'
+  | 'settings.sttLocalEngine.parakeet.description'
+  | 'settings.sttLocalEngine.whisper.label'
+  | 'settings.sttLocalEngine.whisper.description'
+  | 'settings.sttLocalDiarize.label'
+  | 'settings.sttLocalDiarize.description'
   | 'settings.ocrhMode.local.label'
   | 'settings.ocrhMode.local.summary'
   | 'settings.ocrhMode.local.description'
@@ -3350,6 +3395,26 @@ type ExtraI18nKey =
   | 'settings.ocrhMode.auto.label'
   | 'settings.ocrhMode.auto.summary'
   | 'settings.ocrhMode.auto.description'
+  | 'settings.ocrhLocalEngine.title'
+  | 'settings.ocrhLocalEngine.auto.label'
+  | 'settings.ocrhLocalEngine.auto.description'
+  | 'settings.ocrhLocalEngine.glm_ocr.label'
+  | 'settings.ocrhLocalEngine.glm_ocr.description'
+  | 'settings.ocrhLocalEngine.paddle_vl.label'
+  | 'settings.ocrhLocalEngine.paddle_vl.description'
+  | 'settings.glmOcrLocal.modelsReady'
+  | 'settings.glmOcrLocal.modelsMissing'
+  | 'settings.glmOcrLocal.serverMissing'
+  | 'settings.glmOcrLocal.download'
+  | 'settings.glmOcrLocal.downloading'
+  | 'settings.glmOcrLocal.retry'
+  | 'settings.qwenCorrectLocal.title'
+  | 'settings.qwenCorrectLocal.description'
+  | 'settings.qwenCorrectLocal.modelsReady'
+  | 'settings.qwenCorrectLocal.modelsMissing'
+  | 'settings.qwenCorrectLocal.download'
+  | 'settings.qwenCorrectLocal.downloading'
+  | 'settings.qwenCorrectLocal.retry'
   | 'settings.badge.available'
   | 'settings.badge.downloadable'
   | 'settings.badge.notFound'
@@ -4594,7 +4659,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.reranker.downloading': 'Installing reranker…',
   'settings.sttModeTitle': 'STT mode',
   'settings.sttMode.local.label': 'Local',
-  'settings.sttMode.local.summary': 'Process audio with faster-whisper on this machine.',
+  'settings.sttMode.local.summary': 'Process audio on this machine, without uploading it anywhere.',
   'settings.sttMode.local.description': 'Local audio processing. Audio never leaves your device.',
   'settings.sttMode.assemblyai.label': 'AssemblyAI',
   'settings.sttMode.assemblyai.summary':
@@ -4604,7 +4669,17 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.sttMode.auto.label': 'Automatic',
   'settings.sttMode.auto.summary': 'Try local first and fall back to AssemblyAI when needed.',
   'settings.sttMode.auto.description':
-    'Prioritize local faster-whisper and use AssemblyAI as fallback.',
+    'Prioritize the local engine and use AssemblyAI as fallback.',
+  'settings.sttLocalEngine.title': 'Local STT engine',
+  'settings.sttLocalEngine.parakeet.label': 'Parakeet (fast)',
+  'settings.sttLocalEngine.parakeet.description':
+    'Local transcription with Parakeet TDT. Downloads the model once (~2.5 GB).',
+  'settings.sttLocalEngine.whisper.label': 'Whisper',
+  'settings.sttLocalEngine.whisper.description':
+    'Local faster-whisper (fallback when the language is outside Parakeet’s 25).',
+  'settings.sttLocalDiarize.label': 'Detect speakers',
+  'settings.sttLocalDiarize.description':
+    'Tag each segment with its speaker (Hablante A, B…, max 4, Parakeet only). Requires downloading the diarization model (~400 MB).',
   'settings.ocrhModeTitle': 'OCRH mode',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Use the current local high-accuracy OCR pipeline.',
@@ -4618,6 +4693,29 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Try GLM-OCR and fall back to local on failure or empty response.',
   'settings.ocrhMode.auto.description':
     'Prioritize GLM-OCR cloud and use local OCRH as a controlled fallback.',
+  'settings.ocrhLocalEngine.title': 'Local OCRH engine',
+  'settings.ocrhLocalEngine.auto.label': 'Automatic',
+  'settings.ocrhLocalEngine.auto.description':
+    'Local GLM-OCR on NVIDIA GPU when installed; otherwise PaddleOCR-VL.',
+  'settings.ocrhLocalEngine.glm_ocr.label': 'Local GLM-OCR',
+  'settings.ocrhLocalEngine.glm_ocr.description':
+    'Always local GLM-OCR. Requires the models and an NVIDIA GPU; fails when missing.',
+  'settings.ocrhLocalEngine.paddle_vl.label': 'PaddleOCR-VL',
+  'settings.ocrhLocalEngine.paddle_vl.description': 'Always local PaddleOCR-VL.',
+  'settings.glmOcrLocal.modelsReady': 'GLM-OCR models installed.',
+  'settings.glmOcrLocal.modelsMissing': 'Missing models:',
+  'settings.glmOcrLocal.serverMissing': 'llama-server missing (ships with the app).',
+  'settings.glmOcrLocal.download': 'Download models (~1.4 GB)',
+  'settings.glmOcrLocal.downloading': 'Downloading models…',
+  'settings.glmOcrLocal.retry': 'Retry download',
+  'settings.qwenCorrectLocal.title': 'Local corrector (Qwen3-VL)',
+  'settings.qwenCorrectLocal.description':
+    'Corrects OCR with a local 4B model when no remote API key is set.',
+  'settings.qwenCorrectLocal.modelsReady': 'Qwen models installed.',
+  'settings.qwenCorrectLocal.modelsMissing': 'Missing models:',
+  'settings.qwenCorrectLocal.download': 'Download models (~2.9 GB)',
+  'settings.qwenCorrectLocal.downloading': 'Downloading models…',
+  'settings.qwenCorrectLocal.retry': 'Retry download',
   'settings.badge.available': 'Available',
   'settings.badge.downloadable': 'Downloadable',
   'settings.badge.notFound': 'Model not found',
@@ -4647,6 +4745,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.openrouter.title': 'OpenRouter',
   'settings.openrouter.description':
     'Configure the remote account, validate access, and choose the generative and embedding models.',
+  'settings.openaiCompatibleBaseUrl.label': 'OpenAI-compatible server (optional)',
+  'settings.openaiCompatibleBaseUrl.description':
+    'When set, remote generation goes to that server (vLLM, Ollama, own gateway) instead of OpenRouter, using the already configured model. No key: ideal for a local server.',
   'settings.assemblyai.title': 'AssemblyAI',
   'settings.assemblyai.description':
     'Configure the remote transcription account, validate access, and use it as the cloud STT provider.',
@@ -5742,6 +5843,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.transcriptionStarting': 'Starting transcription…',
   'item.transcriptionFailed': 'Transcription failed: {error}',
   'item.transcription': 'Transcription',
+  'item.renameSpeakers': 'Rename speakers',
+  'item.renameSpeakersApply': 'Apply names',
+  'item.renameSpeakersHide': 'Hide',
   'item.summary': 'Summary',
   'item.generatingSummary': 'Generating summary…',
   'item.embeddingError': 'Embedding error: {error}',
@@ -5807,7 +5911,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.ocrHighTitle': 'High-accuracy OCR',
   'item.ocrHighBusyTitle': 'Extraction in progress…',
   'item.ocrCorrectTitle': 'OCR correction',
-  'item.ocrCorrectUnavailable': 'OpenRouter not configured',
+  'item.ocrCorrectUnavailable': 'Configure OpenRouter or install the local corrector',
   'item.ocrCorrectNeedsText': 'Extract text first',
   'item.llmUnavailableHint':
     'Correction, summary, and triples require OpenRouter. Configure it in Settings.',

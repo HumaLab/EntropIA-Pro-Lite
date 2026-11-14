@@ -29,6 +29,15 @@ ignore = [
     # at 2 MB (MAX_STYLE_BYTES, writing/csl/render.rs) and parsed on a
     # blocking thread. The worst case is that thread hanging or allocating
     # heavily on a malicious stylesheet the user loaded; no code execution.
-    # Accepted 2026-10-10. Drop both lines when citationberg publishes a
-    # release on quick-xml >= 0.41 (its main branch already uses 0.41).
+     # Accepted 2026-10-10. Drop both lines when citationberg publishes a
+     # release on quick-xml >= 0.41 (its main branch already uses 0.41).
+     # core2 0.4.0: unmaintained and yanked upstream (no core2 release fixes
+     # it; the ecosystem moved to core3). Reaches us only through
+     # image 0.25 -> ravif -> rav1e -> bitstream-io 4.9.0, for AVIF
+     # encode/decode in thumbnails and OCR-adjacent image handling. No code
+     # execution surface: pure in-memory pixel-codec math on files the user
+     # opened. Accepted 2026-11-14 after the yank started failing CI.
+     # Drop when image/ravif move off bitstream-io 4.9 (or bitstream-io
+     # itself moves to core3).
+     "RUSTSEC-2026-0105",
 ]

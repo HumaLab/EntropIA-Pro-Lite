@@ -801,9 +801,19 @@ pub fn run() {
         }
     }
 
-    tauri::Builder::default()
+    // `mut` is only exercised by the debug-only plugin below; release builds
+    // never reassign it.
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+    // Debug-only automation bridge (Tauri MCP driver). Compiled out of release
+    // builds, so production behavior is untouched.
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    }
+    builder
         .setup(|app| {
             #[cfg(debug_assertions)]
             apply_development_window_title(app)?;
@@ -1122,6 +1132,7 @@ pub fn run() {
                         app_dir.clone(),
                         db_path.clone(),
                         cache_dir.clone(),
+                        Some(app.handle().clone()),
                     ),
                 );
                 // A request from an assistant reaches the person at once: the
@@ -1625,6 +1636,10 @@ pub fn run() {
             ocr::commands::crop_pdf,
             ocr::commands::edit_pdf,
             ocr::commands::test_glm_ocr_connection,
+            ocr::commands::glm_ocr_local_info,
+            ocr::commands::glm_ocr_download_models,
+            ocr::commands::qwen_correction_local_info,
+            ocr::commands::qwen_correction_download_models,
             ocr::commands::update_extraction_text_cmd,
             ocr::commands::extraction_is_edited_by_hand,
             ocr::block_reocr::reocr_layout_block,
@@ -1850,6 +1865,9 @@ fn stop_background_services(app_handle: &tauri::AppHandle) {
     {
         endpoint.stop();
     }
+    // The local GLM-OCR server holds GPU memory; it must not outlive the app.
+    #[cfg(feature = "paddle-ocr")]
+    ocr::glm_ocr_local::shutdown();
 }
 
 /// Every directory a previous EntropIA build may have written to, in the order

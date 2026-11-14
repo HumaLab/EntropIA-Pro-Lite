@@ -43,7 +43,18 @@ where
 }
 
 fn parse_intent_route(raw: &str) -> Option<IntentRoute> {
-    let decision: IntentDecision = serde_json::from_str(raw.trim()).ok()?;
+    // Greedy decoding often wraps the JSON in prose; try the whole output
+    // first, then each balanced {...} span inside it.
+    if let Some(route) = decide_json(raw.trim()) {
+        return Some(route);
+    }
+    crate::llm::extract_json_objects(raw)
+        .iter()
+        .find_map(|candidate| decide_json(candidate))
+}
+
+fn decide_json(text: &str) -> Option<IntentRoute> {
+    let decision: IntentDecision = serde_json::from_str(text).ok()?;
     Some(match (decision.needs_retrieval, decision.intent) {
         (false, IntentKind::Conversational) => IntentRoute::Direct,
         _ => IntentRoute::Retrieval,
@@ -307,5 +318,22 @@ mod tests {
         assert!(!prompt.contains("OLDEST_USER_SENTINEL"));
         assert!(!prompt.contains("OLDEST_ASSISTANT_SENTINEL"));
         assert!(!prompt.contains("plus discarded detail"));
+    }
+
+    #[test]
+    fn json_wrapped_in_prose_still_routes() {
+        // Greedy decoding often adds prose around the JSON contract.
+        assert_eq!(
+            route_classifier_result(Ok::<_, ()>(
+                r#"Claro, aquí va: {"needs_retrieval":false,"intent":"conversational"} Espero que sirva."#,
+            )),
+            IntentRoute::Direct,
+        );
+        assert_eq!(
+            route_classifier_result(Ok::<_, ()>(
+                "```json\n{\"needs_retrieval\":true,\"intent\":\"corpus_question\"}\n```",
+            )),
+            IntentRoute::Retrieval,
+        );
     }
 }
