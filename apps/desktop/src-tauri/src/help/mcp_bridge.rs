@@ -442,9 +442,17 @@ impl HelpMcpBridge {
         approvals: Arc<ApprovalStore>,
         corpus_events: Arc<CorpusEvents>,
         access: Arc<AgentAccess>,
+        app_handle: Option<tauri::AppHandle>,
     ) -> Result<Self, String> {
         let service = InProcessHelpServer {
-            inner: AgentServer::new(db_path, cache_dir, approvals, corpus_events, access),
+            inner: AgentServer::new(
+                db_path,
+                cache_dir,
+                approvals,
+                corpus_events,
+                access,
+                app_handle,
+            ),
             principal: Principal::in_app_help(),
         };
         let (server_io, client_io) = tokio::io::duplex(64 * 1024);
@@ -522,9 +530,10 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    /// The 22 tools D10 serves, in `tools/list` order (mirrors the HTTP
-    /// endpoint's list in `automation::server::tests`).
-    const EXPECTED_TOOLS: [&str; 22] = [
+    /// The 23 tools D10 serves, in `tools/list` order (mirrors the HTTP
+    /// endpoint's list in `automation::server::tests`; `models_setup` came
+    /// from main, 42c1bd4f).
+    const EXPECTED_TOOLS: [&str; 23] = [
         "approvals_status",
         "collections_create",
         "collections_delete",
@@ -542,6 +551,7 @@ mod tests {
         "items_update",
         "jobs_get",
         "jobs_list",
+        "models_setup",
         "processing_control",
         "processing_prepare",
         "processing_start",
@@ -557,9 +567,10 @@ mod tests {
         let corpus_events = Arc::new(CorpusEvents::default());
         let secrets = Arc::new(MemorySecrets::default());
         let access = Arc::new(AgentAccess::load(dir.path(), secrets));
-        let bridge = HelpMcpBridge::start(db_path, cache_dir, approvals, corpus_events, access)
-            .await
-            .expect("the bridge starts against a seeded archive");
+        let bridge =
+            HelpMcpBridge::start(db_path, cache_dir, approvals, corpus_events, access, None)
+                .await
+                .expect("the bridge starts against a seeded archive");
         (dir, bridge)
     }
 
@@ -782,6 +793,7 @@ mod tests {
                 dir.path(),
                 Arc::new(MemorySecrets::default()),
             )),
+            None,
         );
         let (server_io, client_io) = tokio::io::duplex(64 * 1024);
         let server_task = tokio::spawn(async move { server.serve(server_io).await });

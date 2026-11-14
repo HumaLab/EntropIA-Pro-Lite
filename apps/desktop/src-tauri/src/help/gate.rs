@@ -97,6 +97,15 @@ pub(crate) fn classify_call(name: &str, args: &serde_json::Value) -> ToolClass {
     if MCP_APPROVAL_TOOLS.contains(&name) {
         return ToolClass::McpApproval;
     }
+    if name == "models_setup" {
+        // `status` only reads the installed models; `install` starts
+        // downloads of several GB, so the owner approves it first. Anything
+        // else asks first: fail closed.
+        return match args.get("action").and_then(|action| action.as_str()) {
+            Some("status") => ToolClass::Read,
+            _ => ToolClass::LocalWrite,
+        };
+    }
     if name == "processing_control" {
         // pause/cancel apply at once (the gate asks inline); resume/retry
         // spend again (the MCP asks in its dialog). Anything else asks
@@ -178,6 +187,21 @@ pub(crate) fn approval_summary(tool: &str, args: &serde_json::Value) -> String {
                 fallback()
             } else {
                 format!("Preparar un procesamiento ({operations})")
+            }
+        }
+        "models_setup" => {
+            let components: Vec<&str> = args
+                .get("components")
+                .and_then(|value| value.as_array())
+                .map(|list| list.iter().filter_map(|value| value.as_str()).collect())
+                .unwrap_or_default();
+            if components.is_empty() {
+                "Instalar los modelos locales que faltan (puede bajar varios GB)".to_string()
+            } else {
+                format!(
+                    "Instalar modelos locales: {} (puede bajar varios GB)",
+                    components.join(", ")
+                )
             }
         }
         "processing_control" => {
@@ -578,6 +602,7 @@ mod tests {
         "processing_prepare",
         "processing_start",
         "processing_control",
+        "models_setup",
     ];
 
     // -- Behaviour through the executor -------------------------------------
@@ -1046,6 +1071,34 @@ mod tests {
             ),
             ToolClass::LocalWrite,
             "an unknown control action must ask, never run freely"
+        );
+    }
+
+    #[test]
+    fn models_setup_status_reads_freely_and_install_asks_first() {
+        assert_eq!(
+            classify_call("models_setup", &serde_json::json!({"action": "status"})),
+            ToolClass::Read
+        );
+        assert_eq!(
+            classify_call("models_setup", &serde_json::json!({"action": "install"})),
+            ToolClass::LocalWrite
+        );
+        // Anything else (missing or unknown action) asks first: fail closed.
+        assert_eq!(
+            classify_call("models_setup", &serde_json::json!({})),
+            ToolClass::LocalWrite
+        );
+        assert_eq!(
+            approval_summary("models_setup", &serde_json::json!({"action": "install"})),
+            "Instalar los modelos locales que faltan (puede bajar varios GB)"
+        );
+        assert_eq!(
+            approval_summary(
+                "models_setup",
+                &serde_json::json!({"action": "install", "components": ["llm", "glm_ocr"]})
+            ),
+            "Instalar modelos locales: llm, glm_ocr (puede bajar varios GB)"
         );
     }
 

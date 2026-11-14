@@ -551,6 +551,7 @@ pub async fn help_ask(
         endpoint.approvals(),
         endpoint.corpus_events(),
         Arc::clone(&access),
+        Some(app.clone()),
     )
     .await?;
     let transport = OpenRouterChatTransport::new(api_key.clone());

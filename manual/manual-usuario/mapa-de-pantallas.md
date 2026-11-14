@@ -1673,6 +1673,7 @@
 - «Agregar tripleta» `item.addTriple`
 - «Ajustar caja» `item.layoutBoxEditAdjust`
 - «Análisis» `item.analysisTab`
+- «Aplicar nombres» `item.renameSpeakersApply`
 - «Arrastrá los bordes o las esquinas de la caja resaltada en el documento; arrastrá el interior para moverla.» `item.layoutBoxEditDragHint`
 - «Audio» `item.audioLabel`
 - «Avanzar 5 segundos» `item.audioSkipForward`
@@ -1696,6 +1697,7 @@
 - «Cargando versiones…» `item.imageVersionsLoading`
 - «Cargando...» `item.loading, item.loadingStatus`
 - «Clave» `item.metadataKeyPlaceholder`
+- «Configurá OpenRouter o instalá el corrector local» `item.ocrCorrectUnavailable`
 - «Confirmar eliminación de entidad {value}» `item.entityConfirmDeleteAria`
 - «Confirmar eliminación de nota» `item.confirmDeleteNote`
 - «Confirmar eliminación de tripleta {subject}» `item.tripleConfirmDeleteAria`
@@ -1712,11 +1714,11 @@
 - «Descargar» `item.downloadExtractedText`
 - «Descargar texto extraído» `item.downloadExtractedTextAria`
 - «Descartar la nueva entidad» `item.newEntityCancelAria`
-- «Descartar la nueva tripleta» `item.newTripleCancelAria`
-- «Disponible después de corregir el OCR» `item.restoreOriginalOcrUnavailable`
 
 ### Varios (2/6)
 
+- «Descartar la nueva tripleta» `item.newTripleCancelAria`
+- «Disponible después de corregir el OCR» `item.restoreOriginalOcrUnavailable`
 - «Documento» `item.documentTab, item.viewerImageAlt`
 - «Documento activo» `item.activeDocument`
 - «EMBED» `item.embedAction`
@@ -1761,12 +1763,12 @@
 - «Generando resumen…» `item.generatingSummary`
 - «Generar resumen» `item.summaryTitle`
 - «Grupo» `item.layoutGroup`
-- «Guardando...» `item.saving`
-- «Guardar cambios» `item.entitySaveTitle, item.tripleSaveTitle`
-- «Guardar entidad» `item.entitySaveAria`
 
 ### Varios (3/6)
 
+- «Guardando...» `item.saving`
+- «Guardar cambios» `item.entitySaveTitle, item.tripleSaveTitle`
+- «Guardar entidad» `item.entitySaveAria`
 - «Guardar la nueva entidad» `item.newEntitySaveAria`
 - «Guardar la nueva tripleta» `item.newTripleSaveAria`
 - «Guardar nota» `item.saveNote`
@@ -1813,15 +1815,16 @@
 - «OCR de alta precisión» `item.ocrHighTitle`
 - «OCRC» `item.ocrCorrectAction, item.pdfCorrectAction`
 - «OCRH» `item.ocrHighAction`
-- «OCRL» `item.ocrFastAction`
-- «OCRR» `item.summaryAction, item.summaryPdfAction`
-- «Objeto de la nueva tripleta» `item.newTripleObjectAria`
 
 ### Varios (4/6)
 
+- «OCRL» `item.ocrFastAction`
+- «OCRR» `item.summaryAction, item.summaryPdfAction`
+- «Objeto de la nueva tripleta» `item.newTripleObjectAria`
 - «Objeto de la tripleta» `item.tripleObjectAria`
+- «Ocultar» `item.renameSpeakersHide`
 - «Ocultar overlay» `item.layoutToggleHide`
-- «OpenRouter no configurado» `item.ocrCorrectUnavailable, item.summaryUnavailable, item.triplesUnavailable`
+- «OpenRouter no configurado» `item.summaryUnavailable, item.triplesUnavailable`
 - «Orden» `item.layoutOrder`
 - «Original» `item.imageVersionOriginal`
 - «Overlay de anotaciones de imagen» `item.viewerImageOverlay`
@@ -1854,6 +1857,7 @@
 - «Región a borrar» `item.viewerEraseRegion`
 - «Región de layout {label}» `item.viewerLayoutRegion`
 - «Región de recorte» `item.viewerCropRegion`
+- «Renombrar hablantes» `item.renameSpeakers`
 - «Reproducir» `item.audioPlay`
 - «Restaurando OCR original…» `item.restoreOriginalOcrWorking`
 - «Restaurar OCR original» `item.restoreOriginalOcr`
@@ -1865,11 +1869,11 @@
 - «Salida (SHA-256)» `item.processHistoryOutput`
 - «Seleccionar anotación {id}» `item.viewerAnnotation`
 - «Seleccionar página del layout» `item.layoutPageSelect`
-- «Seleccioná un bloque para ver label, orden, página, bbox, source y texto completo.» `item.layoutEmptyInspector`
-- «Seleccioná una página antes de generar embeddings y similitud a nivel página.» `item.analysisNeedAsset`
 
 ### Varios (5/6)
 
+- «Seleccioná un bloque para ver label, orden, página, bbox, source y texto completo.» `item.layoutEmptyInspector`
+- «Seleccioná una página antes de generar embeddings y similitud a nivel página.» `item.analysisNeedAsset`
 - «Seleccioná una página para ver resultados de similitud por página.» `item.similarAssetsNeedSelection`
 - «Si GLM-OCR cortó o no detectó texto, ajustá la caja sobre el documento y volvé a reconocerla. El bloque conserva su lugar en el orden de lectura.» `item.layoutBoxEditHelp`
 - «Si la búsqueda no trae resultados, indexá el texto desde Análisis.» `item.searchReadiness.ftsIndexNeeded`
@@ -1906,13 +1910,13 @@
 - «Tripletas semánticas» `item.semanticTriples`
 - «Tópicos» `item.topics`
 - «Usar esta versión» `item.imageVersionUse`
+
+### Varios (6/6)
+
 - «Valor» `item.metadataValueLabel, item.metadataValuePlaceholder`
 - «Versiones de la imagen» `item.imageVersions`
 - «Versión {n}» `item.imageVersionNumber`
 - «Volumen» `item.audioVolume`
-
-### Varios (6/6)
-
 - «Volver a correr el OCR» `item.textRerun`
 - «Volver a correr el layout» `item.layoutRerun`
 - «Word (.docx)» `item.exportExtractedTextDocx`
@@ -2419,6 +2423,15 @@
 - «{product} instala los archivos ONNX desde {repo} y conserva los nombres esperados por el proveedor local.»
 - «{product} vectoriza por API usando OpenRouter con el contrato BGE-M3 de 1024 dimensiones.»
 
+### glmOcrLocal
+
+- «Descargando modelos…»
+- «Descargar modelos (~1,4 GB)»
+- «Falta llama-server (se instala con la app).»
+- «Faltan modelos:»
+- «Modelos GLM-OCR instalados.»
+- «Reintentar descarga»
+
 ### Ayuda
 
 - «Ayuda»
@@ -2529,6 +2542,16 @@
 - «Top P: limita opciones según probabilidad acumulada (0-1)»
 - «Una secuencia por línea»
 
+### ocrhLocalEngine
+
+- «Automático»
+- «GLM-OCR local»
+- «GLM-OCR local con GPU NVIDIA cuando está instalado; si no, PaddleOCR-VL.»
+- «Motor OCRH local»
+- «PaddleOCR-VL»
+- «Siempre GLM-OCR local. Requiere los modelos y GPU NVIDIA; falla si faltan.»
+- «Siempre PaddleOCR-VL local.»
+
 ### ocrhMode
 
 - «API remota. Requiere API key y conexión a internet.»
@@ -2558,6 +2581,16 @@
 - «Restaurar default»
 - «Validar cambios»
 - «para insertar el texto activo.»
+
+### qwenCorrectLocal
+
+- «Corrector local (Qwen3-VL)»
+- «Corrige OCR con un modelo local de 4B cuando no hay API key remota.»
+- «Descargando modelos…»
+- «Descargar modelos (~2,9 GB)»
+- «Faltan modelos:»
+- «Modelos Qwen instalados.»
+- «Reintentar descarga»
 
 ### RAG Params
 
@@ -2595,6 +2628,14 @@
 - «Modelo sin instalar»
 - «Reranker RAG local»
 
+### sttLocalEngine
+
+- «Motor STT local»
+- «Parakeet (rápido)»
+- «Transcripción local con Parakeet TDT. Descarga el modelo una vez (~2,5 GB).»
+- «Whisper»
+- «faster-whisper local (respaldo si el idioma no está entre los 25 de Parakeet).»
+
 ### sttMode
 
 - «API remota. Requiere API key y conexión a internet.»
@@ -2603,8 +2644,8 @@
 - «Automático»
 - «Intenta local primero y cae a AssemblyAI si hace falta.»
 - «Local»
-- «Prioriza faster-whisper local y usa AssemblyAI como fallback.»
-- «Procesa el audio con faster-whisper en este equipo.»
+- «Prioriza el motor local y usa AssemblyAI como fallback.»
+- «Procesa el audio en este equipo, sin subirlo a ningún servicio.»
 - «Usa exclusivamente AssemblyAI como proveedor cloud de voz a texto.»
 
 ### vercel
@@ -2671,23 +2712,25 @@
 - «Descargable» `settings.badge.downloadable`
 - «Descartar» `settings.discardConfirm`
 - «Descartar cambios» `settings.discardTitle`
+- «Detectar hablantes» `settings.sttLocalDiarize.label`
 - «Disponible» `settings.badge.available`
 - «Elegí el idioma de la UI. El contenido del usuario no se traduce.» `settings.languageDescription`
 - «English» `settings.languageOptionEn`
 - «Español» `settings.languageOptionEs`
+- «Etiqueta cada segmento con Hablante A, B… (máximo 4, solo Parakeet). Requiere descargar el modelo de diarización (~400 MB).» `settings.sttLocalDiarize.description`
 - «GLM-OCR (z.ai)» `settings.glmOcr.title`
 - «Guardar cambios» `settings.save`
 - «Identificación de hablantes en audio de colección» `settings.assemblyAiSpeakerLabels`
 - «Idioma» `settings.languageLabel`
 - «Idioma de la interfaz» `settings.languageTitle`
 - «Ingresá una API key antes de probar la conexión.» `settings.enterApiKey`
+
+### Varios (2/3)
+
 - «Ingresá una API key de AssemblyAI antes de probar la conexión.» `settings.enterAssemblyAiApiKey`
 - «Ingresá una API key de GLM-OCR antes de probar la conexión.» `settings.enterGlmOcrApiKey`
 - «Ir a Configuración» `settings.modelList.openSettings`
 - «Logs» `settings.logsTab`
-
-### Varios (2/3)
-
 - «Lotes» `settings.batchTab`
 - «Mantenimiento» `settings.maintenanceTab`
 - «Model Params» `settings.modelParamsTab`
@@ -2718,8 +2761,13 @@
 - «Se va a eliminar la clave guardada de {service}. Las funciones que dependan de ella van a quedar sin configurar hasta que cargues una nueva.» `settings.clearKeyMessage`
 - «Secciones de configuración» `settings.tabsAria`
 - «Seguir editando» `settings.discardCancel`
+- «Servidor OpenAI-compatible (opcional)» `settings.openaiCompatibleBaseUrl.label`
+- «Si lo completás, la generación remota va a ese servidor (vLLM, Ollama, pasarela propia) en vez de OpenRouter, usando el modelo ya configurado. Sin clave: ideal para un servidor local.» `settings.openaiCompatibleBaseUrl.description`
 - «Sin clave guardada» `settings.keyNotConfigured`
 - «Sincronización» `settings.syncTab`
+
+### Varios (3/3)
+
 - «Sólo aplica a transcripciones STT de audios de colección. El dictado de notas siempre envía speaker_labels=false.» `settings.assemblyAiSpeakerLabelsHint`
 - «Tema» `settings.appearance.themeLabel`
 - «Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y volver?» `settings.discardMessage`
@@ -2727,9 +2775,6 @@
 - «google/gemma-4-26b-a4b-it» `settings.modelPlaceholder`
 - «sk-or-v1-...» `settings.apiKeyPlaceholder`
 - «zai-... / sk-...» `settings.glmOcrApiKeyPlaceholder`
-
-### Varios (3/3)
-
 - «{count} más: seguí escribiendo para acotar» `settings.modelList.moreMatches`
 - «¿Quitar la clave de {service}?» `settings.clearKeyTitle`
 
