@@ -22,10 +22,13 @@ use crate::ocr::qwen_local;
 
 /// Server request timeout: a dense page can generate up to 8k tokens.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
-/// Repetition penalty: greedy decoding loops on long repetitive OCR without
-/// it; 1.18 breaks loops without distorting corrections (llama.cpp default
-/// 1.1 proved too weak on dense newspaper pages).
-const REPEAT_PENALTY: f32 = 1.18;
+/// Repetition penalty kept near-neutral on purpose: correction MUST reuse
+/// the source wording, and penalizing repetition pushes the model to
+/// paraphrase (word-count drift) or dodge termination (budget fills).
+/// Loops are stopped deterministically by the repetition-loop detector and
+/// the output-budget guard instead (they caught the 20x La Protesta loop
+/// that 1.1 could not prevent).
+const REPEAT_PENALTY: f32 = 1.05;
 /// Word-count band for the corrected text relative to the source. Outside it
 /// the model deleted or invented content instead of correcting: fail loudly
 /// instead of committing.
