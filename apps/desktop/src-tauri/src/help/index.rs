@@ -22,7 +22,7 @@ const CONTENT_HASH_KEY: &str = "content_hash";
 
 /// Where the bundled knowledge comes from: the manual, the FAQ (T9) and the
 /// generated screen map (T10, S11).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Source {
     Manual,
     ScreenMap,

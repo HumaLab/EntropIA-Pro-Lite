@@ -11,6 +11,7 @@
 use std::sync::{Arc, Mutex};
 
 use super::agent_llm::{HelpToolExecutor, ToolOutcome, ToolSpec};
+use super::manual_tool::{is_manual_tool, manual_tool_spec, ManualSearch};
 use super::web_tools::{is_web_tool, HttpFetch, ReqwestFetch, WebTools};
 
 /// What a tool may do, and whose approval a call needs.
@@ -46,6 +47,9 @@ const READ_TOOLS: &[&str] = &[
     "repo_tree",
     "repo_read",
     "hlab_entropia_page",
+    // The on-demand manual reader (S22, D19): answered from the local
+    // index, no approval, with or without the documents box.
+    "manual_search",
 ];
 
 /// CONTENT tools: they return the user's document text (`documents_get_text`
@@ -261,10 +265,11 @@ pub(crate) struct HelpGateExecutor<E, A, H = ReqwestFetch> {
     content_titles: Arc<Mutex<Vec<String>>>,
     pending: Arc<Mutex<Vec<super::outcome::PendingApproval>>>,
     web: WebTools<H>,
+    manual: ManualSearch,
 }
 
 impl<E, A> HelpGateExecutor<E, A, ReqwestFetch> {
-    pub(crate) fn new(inner: E, approver: A, with_documents: bool) -> Self {
+    pub(crate) fn new(inner: E, approver: A, with_documents: bool, manual: ManualSearch) -> Self {
         Self {
             inner,
             approver,
@@ -272,6 +277,7 @@ impl<E, A> HelpGateExecutor<E, A, ReqwestFetch> {
             content_titles: Arc::new(Mutex::new(Vec::new())),
             pending: Arc::new(Mutex::new(Vec::new())),
             web: WebTools::new(ReqwestFetch::default()),
+            manual,
         }
     }
 }
@@ -285,6 +291,7 @@ impl<E, A, H: HttpFetch> HelpGateExecutor<E, A, H> {
         approver: A,
         with_documents: bool,
         web: WebTools<H>,
+        manual: ManualSearch,
     ) -> Self {
         Self {
             inner,
@@ -293,6 +300,7 @@ impl<E, A, H: HttpFetch> HelpGateExecutor<E, A, H> {
             content_titles: Arc::new(Mutex::new(Vec::new())),
             pending: Arc::new(Mutex::new(Vec::new())),
             web,
+            manual,
         }
     }
 
@@ -304,6 +312,12 @@ impl<E, A, H: HttpFetch> HelpGateExecutor<E, A, H> {
             .unwrap_or_default()
     }
 
+    /// Every manual/screen-map section `manual_search` returned so far,
+    /// deduplicated, in first-seen order (S22, D19): the run's
+    /// `HelpAnswer.sources` come from here and nowhere else.
+    pub(crate) fn consulted_manual_sections(&self) -> Vec<super::index::Hit> {
+        self.manual.consulted_sections()
+    }
     /// Pending MCP approvals (T26) recorded so far, in call order: the
     /// id parsed from each pending tool result plus the human target.
     pub(crate) fn pending_approvals(&self) -> Vec<super::outcome::PendingApproval> {
@@ -332,8 +346,10 @@ where
                 .collect()
         };
         // The read-only web tools (T23, D14): always offered, with or
-        // without the documents box, and never gated by it.
+        // without the documents box, and never gated by it. So is the
+        // on-demand manual reader (S22, D19).
         out.extend(super::web_tools::tool_specs());
+        out.extend([manual_tool_spec()]);
         out
     }
 
@@ -342,6 +358,12 @@ where
         // neither the documents box nor the owner is asked (T23, D14).
         if is_web_tool(name) {
             return self.web.call(name, args).await;
+        }
+        // The manual reader (S22, D19): the local index answers, so
+        // neither the bridge nor the owner is asked, and what it returns
+        // is recorded for `HelpAnswer.sources`.
+        if is_manual_tool(name) {
+            return self.manual.call(args).await;
         }
         if !self.inner.tools().iter().any(|tool| tool.name == name) {
             return ToolOutcome::Denied {
@@ -571,8 +593,74 @@ mod tests {
     ) {
         let bridge = MockBridge::new(ALL_TOOLS);
         let approver = MockApprover::new(answers);
-        let executor = HelpGateExecutor::new(bridge.clone(), approver.clone(), with_documents);
+        let executor =
+            HelpGateExecutor::new(bridge.clone(), approver.clone(), with_documents, manual());
         (executor, bridge, approver)
+    }
+
+    /// One searcher over a tiny in-memory index for gate tests: no temp
+    /// dir, no files, the same dispatch code as production.
+    fn manual() -> super::super::manual_tool::ManualSearch {
+        super::super::manual_tool::memory_searcher()
+    }
+
+    #[test]
+    fn manual_search_is_read_and_always_offered() {
+        // S22/D19: `manual_search` runs freely (READ class in the gate,
+        // no approval) and is always offered, with or without the
+        // documents box.
+        for with_documents in [false, true] {
+            let (executor, _, _) = harness(with_documents, vec![]);
+            let names: Vec<String> = executor
+                .tools()
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect();
+            assert!(
+                names.contains(&"manual_search".to_string()),
+                "con documentos={with_documents}: falta manual_search"
+            );
+        }
+        assert_eq!(
+            classify_call("manual_search", &serde_json::Value::Null),
+            ToolClass::Read,
+            "manual_search lee el índice local: corre sin aprobación"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_search_runs_without_approval_and_records_sections() {
+        // S22/D19: the gate answers from the local index — the bridge is
+        // never touched, the owner is never asked — and records what it
+        // returned for `HelpAnswer.sources`.
+        let (executor, bridge, approver) = harness(false, vec![]);
+        match executor
+            .call(
+                "manual_search",
+                serde_json::json!({"query": "importar archivos pdf"}),
+            )
+            .await
+        {
+            ToolOutcome::Ok { content } => assert!(
+                content.contains("1.1. Importar archivos"),
+                "the excerpt travels headed: {content}"
+            ),
+            other => panic!("manual_search must run: {other:?}"),
+        }
+        assert!(
+            bridge.calls().is_empty(),
+            "the index answers, never the bridge"
+        );
+        assert!(approver.requests().is_empty(), "leer nunca pregunta");
+        let consulted = executor.consulted_manual_sections();
+        assert!(!consulted.is_empty(), "what it returned is recorded");
+        assert!(
+            consulted
+                .iter()
+                .all(|hit| hit.source == super::super::index::Source::Manual
+                    || hit.source == super::super::index::Source::ScreenMap),
+            "kinds as today: {consulted:?}"
+        );
     }
 
     #[test]
@@ -599,7 +687,11 @@ mod tests {
             .collect();
         assert!(names.contains(&"documents_get_text".to_string()));
         assert!(names.contains(&"search_passages".to_string()));
-        assert_eq!(names.len(), ALL_TOOLS.len() + 3, "más las tres web");
+        assert_eq!(
+            names.len(),
+            ALL_TOOLS.len() + 4,
+            "más las tres web y manual_search"
+        );
     }
 
     #[tokio::test]
@@ -819,7 +911,7 @@ mod tests {
             .collect();
         let bridge = MockBridge::new(&tools);
         let approver = MockApprover::new(vec![ApprovalAnswer::Approved]);
-        let executor = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let executor = HelpGateExecutor::new(bridge.clone(), approver.clone(), false, manual());
         match executor
             .call("futura_herramienta", serde_json::json!({"a": 1}))
             .await
@@ -1053,7 +1145,8 @@ mod tests {
         let web = WebTools::new(fetch);
         let bridge = MockBridge::new(ALL_TOOLS);
         let approver = MockApprover::new(vec![]);
-        let executor = HelpGateExecutor::new_with_web(bridge.clone(), approver.clone(), false, web);
+        let executor =
+            HelpGateExecutor::new_with_web(bridge.clone(), approver.clone(), false, web, manual());
         match executor.call("repo_tree", serde_json::json!({})).await {
             ToolOutcome::Ok { content } => assert!(content.contains("README.md")),
             other => panic!("repo_tree debe correr libre: {other:?}"),

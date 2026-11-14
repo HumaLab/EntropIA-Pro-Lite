@@ -3,6 +3,7 @@
 //! scrubbed diagnostic snapshot, on the user's own OpenRouter key.
 
 pub(crate) mod agent_llm;
+pub(crate) mod clock;
 pub(crate) mod commands;
 pub(crate) mod diagnostics;
 pub(crate) mod faq;
@@ -11,10 +12,12 @@ pub(crate) mod history;
 pub(crate) mod index;
 pub(crate) mod intent;
 pub(crate) mod manual;
+pub(crate) mod manual_tool;
 pub(crate) mod mcp_bridge;
 pub(crate) mod outcome;
 pub(crate) mod prompt;
 pub(crate) mod screenmap;
 pub(crate) mod settings;
+pub(crate) mod smalltalk;
 pub(crate) mod text;
 pub(crate) mod web_tools;

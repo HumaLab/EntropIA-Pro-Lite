@@ -24,6 +24,7 @@ use super::diagnostics::{
 use super::faq;
 use super::gate::{ApprovalAnswer, HelpApprover, HelpGateExecutor};
 use super::index::{HelpIndex, Hit};
+use super::manual_tool::ManualSearch;
 use super::mcp_bridge::HelpMcpBridge;
 use super::prompt::{
     agent_step_status_wire, build_agent_system, build_help_prompt, normalize_history_capped,
@@ -305,10 +306,12 @@ pub(crate) fn tools_unsupported_error(message: &str) -> bool {
 /// The help index, opened lazily once per process (D6): the first question
 /// after start hashes the bundled manual and rebuilds
 /// `<cache_dir>/help-index.sqlite` when it changed, later questions reuse it.
-/// A plain mutex is enough — `search` is a millisecond local SELECT.
-static HELP_INDEX: OnceLock<Mutex<HelpIndex>> = OnceLock::new();
+/// Shared as an `Arc`, so the agent run answers `manual_search` from the
+/// same handle with only a per-call lock (S22, D19): no long-held guard
+/// across awaits, no second open.
+static HELP_INDEX: OnceLock<Arc<Mutex<HelpIndex>>> = OnceLock::new();
 
-fn help_index(app: &tauri::AppHandle) -> Result<std::sync::MutexGuard<'static, HelpIndex>, String> {
+fn help_index_shared(app: &tauri::AppHandle) -> Result<Arc<Mutex<HelpIndex>>, String> {
     // Built at most twice under a race (both open the same file, the loser
     // is dropped); opening is idempotent, so no fallible once-cell API is
     // needed.
@@ -317,14 +320,13 @@ fn help_index(app: &tauri::AppHandle) -> Result<std::sync::MutexGuard<'static, H
         std::fs::create_dir_all(&dir)
             .map_err(|error| format!("No se pudo crear la caché de ayuda: {error}"))?;
         let fresh = HelpIndex::open(&dir.join("help-index.sqlite"), &HelpIndex::bundled_docs())
-            .map(Mutex::new)?;
+            .map(|index| Arc::new(Mutex::new(index)))?;
         let _ = HELP_INDEX.set(fresh);
     }
     HELP_INDEX
         .get()
-        .ok_or_else(|| "help index unavailable".to_string())?
-        .lock()
-        .map_err(|error| format!("help index lock poisoned: {error}"))
+        .cloned()
+        .ok_or_else(|| "help index unavailable".to_string())
 }
 
 /// Whether the assistant can run on the user's own OpenRouter key (S3, S6).
@@ -386,18 +388,22 @@ pub async fn help_diagnostics_preview(
     .map_err(|e| format!("help diagnostics task panicked: {e}"))?
 }
 
-/// Answers a help question through the help agent (T22, S15): the manual
-/// excerpts (and the opted-in diagnostic report) ground the system prompt on
-/// the user's own OpenRouter key (S1–S3, S5), and the model drives the
-/// in-process agent MCP behind the help gate (D11, D12). The question and
-/// the final answer are stored in the `conversationId` conversation (S19,
-/// D17) when the frontend sends one, creating it when missing.
+/// Answers a help question through the help agent (T22, S15): the system
+/// prompt carries the local date and time (and the opted-in diagnostic
+/// report) on the user's own OpenRouter key (S1–S3, S5), and the model
+/// drives the in-process agent MCP behind the help gate (D11, D12),
+/// consulting the manual on demand through `manual_search` (S22, D19). The
+/// question and the final answer are stored in the `conversationId`
+/// conversation (S19, D17) when the frontend sends one, creating it when
+/// missing.
 ///
-/// Before the key gate, a question that matches a bundled FAQ entry (S10)
-/// is answered locally with that entry's text, verbatim: no key needed, no
-/// network touched — unless `help_local_answers` is off, which sends every
-/// question to the model. Questions with diagnostics attached always go to
-/// the model. `documents` (S12) opts into the CONTENT tools for this question
+/// Before the key gate, greetings, thanks and date/time questions (S22)
+/// are answered locally and deterministically with no key, no network and
+/// no sources — and a question that matches a bundled FAQ entry (S10) is
+/// answered locally with that entry's text, verbatim — unless
+/// `help_local_answers` is off, which sends every question to the model.
+/// Questions with diagnostics attached or documents on always go to the
+/// model. `documents` (S12) opts into the CONTENT tools for this question
 /// only, camelCase on the wire, absent means off: document text reaches the
 /// model only through those tools (D16), and a question with documents on
 /// never gets a local FAQ answer. `requestId` (T24) is the frontend-generated
@@ -440,6 +446,30 @@ pub async fn help_ask(
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty());
     let with_diagnostics = diagnostics.is_some();
+    // S22/D19: greetings, thanks and date/time questions are answered
+    // locally and deterministically — no API call, no key, no sources —
+    // before anything else. Never with diagnostics or documents on: those
+    // need the model and the archive, so they go to the normal path.
+    let now = super::clock::now_local();
+    if !with_diagnostics && !with_documents {
+        if let Some(answer) = super::smalltalk::answer_small_talk(&question, &now) {
+            return Ok(super::history::attach_history(
+                &app,
+                conversation_id.clone(),
+                &question,
+                HelpAnswer {
+                    answer,
+                    sources: Vec::new(),
+                    local: true,
+                    documents: Vec::new(),
+                    steps: Vec::new(),
+                    round_limit_reached: false,
+                    tools_unavailable: false,
+                    conversation_id: None,
+                },
+            ));
+        }
+    }
     // One settings read (S14, D10): the model override with its fallback
     // chain, the clamped budgets and the local-answers switch. The key gate
     // stays below the local answer, so it is attempted here but only
@@ -486,17 +516,26 @@ pub async fn help_ask(
     }
     let api_key = key_result?;
     let history = normalize_history_capped(history, help.history_turns)?;
+    // Excerpts for the no-tools fallback only (D19): when the provider
+    // rejects tool use, the plain prompt injects these as before. The
+    // agent path consults the same index on demand through `manual_search`.
     let picked: Vec<Hit> = {
         // The guard drops before the network calls below: the index is only
         // borrowed to rank, never across an await.
-        let index = help_index(&app)?;
+        let shared = help_index_shared(&app)?;
+        let index = shared
+            .lock()
+            .map_err(|error| format!("help index lock poisoned: {error}"))?;
         pick_sections_with_budget(&index, &question, with_diagnostics, help.context_chars)
     };
-    // The agent system prompt (T22): manual/map excerpts plus diagnostics
-    // when opted in. Document text is never injected here (D16): with the
-    // box ticked the model reads it through the CONTENT tools instead.
-    let system = build_agent_system(&picked, diagnostics.as_deref());
-    let sources = picked
+    // The agent system prompt (T22, S22): the local date and time plus
+    // diagnostics when opted in. Manual excerpts travel only through
+    // `manual_search` (D19). Document text is never injected here (D16):
+    // with the box ticked the model reads it through the CONTENT tools.
+    let system = build_agent_system(&now, diagnostics.as_deref());
+    // The fallback's sources: the excerpts the plain prompt injects. The
+    // agent path reports only what `manual_search` returned instead.
+    let fallback_sources = picked
         .iter()
         .map(|section| HelpSource {
             chapter: section.chapter.clone(),
@@ -533,7 +572,12 @@ pub async fn help_ask(
         pending: (*pending).clone(),
         stop: Arc::clone(&stop),
     };
-    let gate = HelpGateExecutor::new(bridge, approver, with_documents);
+    let gate = HelpGateExecutor::new(
+        bridge,
+        approver,
+        with_documents,
+        ManualSearch::new(help_index_shared(&app)?, help.context_chars),
+    );
     let inputs = AgentInputs {
         system,
         history: history.clone(),
@@ -626,10 +670,23 @@ pub async fn help_ask(
             });
         }
     }
+    // S22/D19: `HelpAnswer.sources` lists ONLY what the model actually
+    // consulted through `manual_search` — nothing injected, nothing
+    // guessed — deduplicated, in call order, `kind` manual/screenMap as
+    // today. An answer with no consulted sections returns `sources: []`.
+    let consulted_sources: Vec<HelpSource> = gate
+        .consulted_manual_sections()
+        .iter()
+        .map(|section| HelpSource {
+            chapter: section.chapter.clone(),
+            title: section.title.clone(),
+            kind: section.source.wire_kind().to_string(),
+        })
+        .collect();
     let answer = match outcome {
         Ok(outcome) => Ok(HelpAnswer {
             answer: outcome.answer,
-            sources,
+            sources: consulted_sources,
             local: false,
             documents: gate
                 .content_titles()
@@ -647,7 +704,7 @@ pub async fn help_ask(
             let stopped = stopped_answer(live_steps);
             Ok(HelpAnswer {
                 answer: stopped.answer,
-                sources,
+                sources: consulted_sources,
                 local: false,
                 documents: gate
                     .content_titles()
@@ -675,7 +732,7 @@ pub async fn help_ask(
                 .await?;
             Ok(HelpAnswer {
                 answer,
-                sources,
+                sources: fallback_sources,
                 local: false,
                 documents: Vec::new(),
                 steps: Vec::new(),
@@ -918,7 +975,12 @@ mod tests {
         ]);
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![]);
-        let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let gate = HelpGateExecutor::new(
+            bridge.clone(),
+            approver.clone(),
+            false,
+            super::super::manual_tool::memory_searcher(),
+        );
         let outcome = run_help_agent(
             &transport,
             &gate,
@@ -935,6 +997,144 @@ mod tests {
         assert!(!outcome.round_limit_reached);
         assert_eq!(bridge.calls().len(), 1);
         assert!(approver.requests().is_empty(), "reads never ask");
+    }
+
+    /// Saturday, 14 November 2026, 14:05: the fixed clock the date-line
+    /// tests run on.
+    fn fixed_now() -> super::super::clock::LocalDateTime {
+        super::super::clock::LocalDateTime {
+            year: 2026,
+            month: 11,
+            day: 14,
+            weekday: super::super::clock::Weekday::Saturday,
+            hour: 14,
+            minute: 5,
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_request_offers_manual_search_with_date_line_but_no_excerpts() {
+        // S22/D19: the agent request offers `manual_search`; the system
+        // prompt carries the local date and time, never manual text. The
+        // agent calls the tool before answering, without any approval.
+        let transport = MockTransport::new(vec![
+            tool_call(
+                "id-1",
+                "manual_search",
+                r#"{"query": "importar archivos pdf"}"#,
+            ),
+            answer("Arrastrá los PDF a la colección."),
+        ]);
+        let bridge = MockBridge::new(BRIDGE_TOOLS);
+        let approver = MockApprover::new(vec![]);
+        let gate = HelpGateExecutor::new(
+            bridge.clone(),
+            approver.clone(),
+            false,
+            super::super::manual_tool::memory_searcher(),
+        );
+        let mut request = inputs("¿cómo importo un pdf?");
+        request.system = build_agent_system(&fixed_now(), None);
+        let outcome = run_help_agent(&transport, &gate, request, &AtomicBool::new(false), |_| {})
+            .await
+            .expect("debe responder");
+        assert_eq!(outcome.answer, "Arrastrá los PDF a la colección.");
+        assert_eq!(outcome.steps.len(), 1);
+        assert_eq!(outcome.steps[0].tool, "manual_search");
+        assert_eq!(outcome.steps[0].status, "ok");
+        assert!(approver.requests().is_empty(), "manual_search never asks");
+        assert!(
+            bridge.calls().is_empty(),
+            "the index answers, never the bridge"
+        );
+        let names = transport.tool_names(0);
+        assert!(
+            names.contains(&"manual_search".to_string()),
+            "manual_search is offered: {names:?}"
+        );
+        let body = super::super::agent_llm::chat_request_body(
+            &transport.recorded.lock().expect("lock")[0],
+        );
+        let system = body
+            .pointer("/messages/0/content")
+            .and_then(|value| value.as_str())
+            .expect("the system travels first");
+        assert!(
+            system.contains("manual_search"),
+            "the system tells the model to consult: {system}"
+        );
+        assert!(
+            system.contains("14 de noviembre de 2026"),
+            "the date line travels: {system}"
+        );
+        assert!(system.contains("14:05"), "the time travels: {system}");
+        assert!(
+            !system.contains("Arrastrá los PDF"),
+            "no excerpt is injected: {system}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sources_list_only_what_manual_search_returned() {
+        // S22/D19: `HelpAnswer.sources` are exactly the sections the
+        // `manual_search` calls returned — one call lists those sources,
+        // no call lists none — `kind` manual/screenMap as today.
+        let transport = MockTransport::new(vec![
+            tool_call(
+                "id-1",
+                "manual_search",
+                r#"{"query": "importar archivos pdf"}"#,
+            ),
+            answer("Arrastrá los PDF a la colección."),
+        ]);
+        let bridge = MockBridge::new(BRIDGE_TOOLS);
+        let approver = MockApprover::new(vec![]);
+        let gate = HelpGateExecutor::new(
+            bridge.clone(),
+            approver.clone(),
+            false,
+            super::super::manual_tool::memory_searcher(),
+        );
+        let mut request = inputs("¿cómo importo un pdf?");
+        request.system = build_agent_system(&fixed_now(), None);
+        run_help_agent(&transport, &gate, request, &AtomicBool::new(false), |_| {})
+            .await
+            .expect("debe responder");
+        let sources: Vec<HelpSource> = gate
+            .consulted_manual_sections()
+            .iter()
+            .map(|section| HelpSource {
+                chapter: section.chapter.clone(),
+                title: section.title.clone(),
+                kind: section.source.wire_kind().to_string(),
+            })
+            .collect();
+        assert!(!sources.is_empty(), "one call lists its sources");
+        assert!(sources[0].title.contains("Importar"), "{sources:?}");
+        assert_eq!(sources[0].kind, "manual", "{sources:?}");
+        assert!(
+            sources
+                .iter()
+                .all(|source| source.kind == "manual" || source.kind == "screenMap"),
+            "kinds as today: {sources:?}"
+        );
+
+        let transport = MockTransport::new(vec![answer("¡Hola!")]);
+        let gate = HelpGateExecutor::new(
+            MockBridge::new(BRIDGE_TOOLS),
+            MockApprover::new(vec![]),
+            false,
+            super::super::manual_tool::memory_searcher(),
+        );
+        let mut request = inputs("hola");
+        request.system = build_agent_system(&fixed_now(), None);
+        run_help_agent(&transport, &gate, request, &AtomicBool::new(false), |_| {})
+            .await
+            .expect("debe responder");
+        assert!(
+            gate.consulted_manual_sections().is_empty(),
+            "no call means no sources"
+        );
     }
 
     #[tokio::test]
@@ -965,7 +1165,12 @@ mod tests {
             },
         );
         let approver = MockApprover::new(vec![]);
-        let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let gate = HelpGateExecutor::new(
+            bridge.clone(),
+            approver.clone(),
+            false,
+            super::super::manual_tool::memory_searcher(),
+        );
         let outcome = run_help_agent(
             &transport,
             &gate,
@@ -997,7 +1202,12 @@ mod tests {
         ]);
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![ApprovalAnswer::Approved]);
-        let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let gate = HelpGateExecutor::new(
+            bridge.clone(),
+            approver.clone(),
+            false,
+            super::super::manual_tool::memory_searcher(),
+        );
         let outcome = run_help_agent(
             &transport,
             &gate,
@@ -1035,7 +1245,12 @@ mod tests {
         ]);
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![ApprovalAnswer::Rejected]);
-        let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let gate = HelpGateExecutor::new(
+            bridge.clone(),
+            approver.clone(),
+            false,
+            super::super::manual_tool::memory_searcher(),
+        );
         let outcome = run_help_agent(
             &transport,
             &gate,
@@ -1063,7 +1278,12 @@ mod tests {
         let transport = MockTransport::new(vec![answer("listo")]);
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![]);
-        let gate = HelpGateExecutor::new(bridge, approver, false);
+        let gate = HelpGateExecutor::new(
+            bridge,
+            approver,
+            false,
+            super::super::manual_tool::memory_searcher(),
+        );
         run_help_agent(
             &transport,
             &gate,
@@ -1085,7 +1305,12 @@ mod tests {
         let transport = MockTransport::new(vec![answer("listo")]);
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![]);
-        let gate = HelpGateExecutor::new(bridge, approver, true);
+        let gate = HelpGateExecutor::new(
+            bridge,
+            approver,
+            true,
+            super::super::manual_tool::memory_searcher(),
+        );
         run_help_agent(
             &transport,
             &gate,
@@ -1210,7 +1435,12 @@ mod tests {
         ]);
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![]);
-        let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let gate = HelpGateExecutor::new(
+            bridge.clone(),
+            approver.clone(),
+            false,
+            super::super::manual_tool::memory_searcher(),
+        );
         let stop = AtomicBool::new(false);
         let result = run_help_agent(
             &transport,

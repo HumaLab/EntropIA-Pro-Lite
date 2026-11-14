@@ -431,6 +431,14 @@ mod tests {
     }
 
     #[test]
+    fn a_capabilities_question_falls_through_to_the_agent() {
+        // S22: «¿En qué me puedes ayudar?» is not small talk and matches
+        // no FAQ entry: it goes to the agent, not to a local answer.
+        assert_eq!(find_local_answer("¿En qué me puedes ayudar?"), None);
+        assert_eq!(find_local_answer("en que me puedes ayudar"), None);
+    }
+
+    #[test]
     fn empty_and_stopword_only_questions_have_no_local_answer() {
         assert_eq!(find_local_answer(""), None);
         assert_eq!(find_local_answer("   "), None);

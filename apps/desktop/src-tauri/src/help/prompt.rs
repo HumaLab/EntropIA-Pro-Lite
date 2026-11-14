@@ -4,15 +4,17 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::clock::{date_es, time_es, LocalDateTime};
 use super::index::{Hit, Source};
 
 /// Longest accepted question, in characters (S1: one focused question).
 pub(crate) const QUESTION_MAX_CHARS: usize = 2000;
 /// Longest single history turn sent to the model, in characters (D4).
 pub(crate) const HISTORY_TURN_MAX_CHARS: usize = 4000;
-/// Manual characters sent with a question (D2).
-/// Most excerpts besides the troubleshooting chapter.
-const MAX_RANKED_SECTIONS: usize = 4;
+/// Manual sections kept per question (D2).
+/// Most excerpts besides the troubleshooting chapter. Shared with
+/// `manual_tool`: one `manual_search` call returns at most this many.
+pub(crate) const MAX_RANKED_SECTIONS: usize = 4;
 
 /// Whether the assistant can run: the user's own OpenRouter key (S3, S6).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -297,18 +299,26 @@ fn push_diagnostics(out: &mut String, diagnostics: Option<&str>) {
     }
 }
 
-/// The agent system prompt (T22, S15): the same grounding excerpts and
-/// diagnostics as the plain prompt, but the assistant MAY act through its
-/// tools. No history and no question here: they travel as messages, and
-/// document text reaches the model only through the CONTENT tools when the
-/// box is ticked (D16), never as injected fragments.
-pub(crate) fn build_agent_system(picked: &[Hit], diagnostics: Option<&str>) -> String {
+/// The agent system prompt (T22, S15, D19): the current local date and time
+/// plus the opted-in diagnostic report. Manual and screen-map excerpts are
+/// NOT injected here: the agent reads them on demand through `manual_search`
+/// and `HelpAnswer.sources` lists only what it actually consulted. No
+/// history and no question here: they travel as messages, and document text
+/// reaches the model only through the CONTENT tools when the box is ticked
+/// (D16), never as injected fragments.
+pub(crate) fn build_agent_system(now: &LocalDateTime, diagnostics: Option<&str>) -> String {
     let mut out = String::new();
     out.push_str(
         "Eres el asistente de ayuda de EntropIA, la aplicación de escritorio para organizar, leer y estudiar documentos.\nResponde siempre en el idioma de la pregunta.\n\n",
     );
+    out.push_str(&format!(
+        "Hoy es {} y son las {} (hora local del equipo).\n\n",
+        date_es(now),
+        time_es(now)
+    ));
     out.push_str("Reglas que debes cumplir:\n");
-    out.push_str("- Usa los fragmentos del manual y lo que leas con las herramientas para responder. Si no cubren la pregunta, dilo con claridad y sugiere el capítulo del manual más cercano, en lugar de inventar menús, botones o pasos.\n");
+    out.push_str("- Para preguntas sobre cómo usar EntropIA (funciones, botones, menús, pasos, errores), consultá primero el manual con la herramienta manual_search —podés llamarla varias veces con distintas consultas— y basá tu respuesta en los fragmentos devueltos, citando cada dato como «capítulo › título».\n");
+    out.push_str("- Los saludos, las gracias, la hora o la fecha, la conversación general y las preguntas ajenas a EntropIA se responden directamente con tus propias palabras, sin llamar a ninguna herramienta.\n");
     out.push_str(
         "- Ante un fallo, explica qué pasó probablemente y guía la solución con pasos numerados.\n",
     );
@@ -329,7 +339,6 @@ pub(crate) fn build_agent_system(picked: &[Hit], diagnostics: Option<&str>) -> S
     out.push_str(
         "- Avisá que el repositorio puede describir una versión más nueva que la instalada.\n\n",
     );
-    push_excerpts(&mut out, picked);
     push_diagnostics(&mut out, diagnostics);
     out
 }
@@ -344,6 +353,19 @@ mod tests {
         HelpTurn {
             role: role.to_string(),
             content: content.to_string(),
+        }
+    }
+
+    /// Saturday, 14 November 2026, 14:05: the fixed clock the agent-system
+    /// tests run on.
+    fn fixed_now() -> LocalDateTime {
+        LocalDateTime {
+            year: 2026,
+            month: 11,
+            day: 14,
+            weekday: super::super::clock::Weekday::Saturday,
+            hour: 14,
+            minute: 5,
         }
     }
 
@@ -546,14 +568,24 @@ mod tests {
 
     #[test]
     fn prompt_system_for_the_agent_grounds_and_may_act() {
-        // T22/D16: the same excerpts and diagnostics, but the assistant may
-        // act through its tools; no history, no question and no injected
-        // document fragments travel in the system prompt.
-        let picked = sample_picked();
-        let system = build_agent_system(&picked, Some("Producto: EntropIA Lite"));
-        for section in &picked {
-            assert!(system.contains(&section.body), "{system}");
+        // T22/D16/D19: the current date and time plus the diagnostics, but
+        // the assistant may act through its tools; manual excerpts travel
+        // only through `manual_search` (S22), so none are injected here.
+        // No history, no question and no injected document fragments travel
+        // in the system prompt.
+        let now = fixed_now();
+        let system = build_agent_system(&now, Some("Producto: EntropIA Lite"));
+        for section in &sample_picked() {
+            assert!(
+                !system.contains(&section.body),
+                "no injected excerpts (D19): {system}"
+            );
         }
+        assert!(
+            !system.contains("Fragmentos del manual"),
+            "the agent consults on demand: {system}"
+        );
+        assert!(system.contains("manual_search"), "{system}");
         assert!(system.contains("Informe de diagnóstico"), "{system}");
         assert!(system.contains("Herramientas disponibles"), "{system}");
         assert!(system.contains("nunca inventes IDs"), "{system}");
@@ -571,6 +603,27 @@ mod tests {
         assert!(
             !system.contains("tus propios documentos"),
             "no injected fragments (D16): {system}"
+        );
+    }
+
+    #[test]
+    fn agent_system_carries_the_local_date_and_time_but_no_excerpts() {
+        // S22/D19: the system prompt carries the current local date and
+        // time so «¿qué hora es?» needs no tool — and no manual text.
+        let now = fixed_now();
+        let system = build_agent_system(&now, None);
+        assert!(
+            system.contains("14 de noviembre de 2026"),
+            "the date line travels: {system}"
+        );
+        assert!(system.contains("14:05"), "the time travels: {system}");
+        assert!(
+            !system.contains("Arrastrá los PDF"),
+            "no manual body travels: {system}"
+        );
+        assert!(
+            system.contains("sin llamar a ninguna herramienta"),
+            "greetings and unrelated questions skip tools: {system}"
         );
     }
 
@@ -662,7 +715,7 @@ mod tests {
     fn agent_system_points_beyond_the_manual_to_hlab_and_the_repo() {
         // T23/D14: questions the manual does not answer go to the HLab
         // page first and then the live repo, with sources cited.
-        let system = build_agent_system(&sample_picked(), None);
+        let system = build_agent_system(&fixed_now(), None);
         assert!(
             system.contains("https://hlab.com.ar/herramientas/entropia-lite"),
             "{system}"
