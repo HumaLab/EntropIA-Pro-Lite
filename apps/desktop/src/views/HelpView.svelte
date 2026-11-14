@@ -242,8 +242,13 @@
     }
   })
 
-  async function send(): Promise<void> {
-    const question = draft.trim()
+  /**
+   * Sends the composer's draft, or `direct` when a starter button asks its
+   * question at once (S18): then the draft the user was typing is left alone.
+   */
+  async function send(direct?: string): Promise<void> {
+    const fromDraft = direct === undefined
+    const question = (direct ?? draft).trim()
     // The input stays usable with no key (S6, S10): local answers still
     // work, and help_ask reports the key rejection for the rest.
     if (!question || sending || status === 'loading') return
@@ -274,7 +279,7 @@
       .slice(-HELP_HISTORY_MAX_TURNS)
       .map((message) => ({ role: message.role, content: message.content }))
     messages = [...messages, { role: 'user', content: question }]
-    draft = ''
+    if (fromDraft) draft = ''
     // Same pattern as diagnostics (S5): every send starts unsubscribed again.
     const withDocuments = includeDocuments
     includeDocuments = false
@@ -301,11 +306,11 @@
         // No local answer and no key: show the key message (S6) instead of
         // a generic error. The input stays for a local question.
         error = t('help.noKeyBody')
-        draft = question
+        if (fromDraft) draft = question
         return
       }
       error = t('help.sendError')
-      draft = question
+      if (fromDraft) draft = question
     } finally {
       sending = false
       stopping = false
@@ -400,7 +405,7 @@
           <p class="help-view__suggestions-label">{$currentLocale && t('help.suggestionsLabel')}</p>
           <div class="help-view__suggestions-list">
             {#each starters as starter (starter)}
-              <Button variant="secondary" size="sm" onclick={() => (draft = starter)}>
+              <Button variant="secondary" size="sm" onclick={() => void send(starter)}>
                 {starter}
               </Button>
             {/each}

@@ -329,12 +329,39 @@ describe('HelpView', () => {
     expect(
       screen.queryByRole('button', { name: '¿Cómo hago una copia de seguridad?' })
     ).not.toBeInTheDocument()
+  })
 
-    await fireEvent.click(screen.getByRole('button', { name: '¿Cómo creo mi primera colección?' }))
+  it('S18: a starter button asks its question at once, without copying it into the composer', async () => {
+    const calls = backend({ hasKey: true, ask: answer('Pasos locales', [], true) })
+    render(HelpView)
+    await composer()
 
-    expect(screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })).toHaveValue(
-      '¿Cómo creo mi primera colección?'
+    await fireEvent.click(
+      await screen.findByRole('button', { name: '¿Cómo creo mi primera colección?' })
     )
+
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect((calls[0] as { question: string }).question).toBe('¿Cómo creo mi primera colección?')
+    expect(await screen.findByText('Pasos locales')).toBeInTheDocument()
+    expect(
+      screen.getByText('¿Cómo creo mi primera colección?', { selector: '.help-view__bubble--user' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })).toHaveValue('')
+  })
+
+  it('S18: a starter button keeps a draft the user was typing', async () => {
+    const calls = backend({ hasKey: true, ask: answer('Pasos locales', [], true) })
+    render(HelpView)
+    const input = await composer()
+    await fireEvent.input(input, { target: { value: 'mi borrador' } })
+
+    await fireEvent.click(
+      await screen.findByRole('button', { name: '¿Cómo creo mi primera colección?' })
+    )
+
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect((calls[0] as { question: string }).question).toBe('¿Cómo creo mi primera colección?')
+    expect(input).toHaveValue('mi borrador')
   })
 
   it('falls back to built-in suggestions when the faq list fails', async () => {
