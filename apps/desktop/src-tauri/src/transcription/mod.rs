@@ -31,11 +31,15 @@ const STT_MODE_AUTO: &str = "auto";
 const STT_SETTING_MODE: &str = "stt_mode";
 const STT_SETTING_ASSEMBLYAI_API_KEY: &str = "assemblyai_api_key";
 /// Local engine selector (Pro settings): "parakeet" (default) or "whisper".
+#[cfg(feature = "local-ml")]
 const STT_SETTING_LOCAL_ENGINE: &str = "stt_local_engine";
+#[cfg(feature = "local-ml")]
 const STT_LOCAL_ENGINE_PARAKEET: &str = "parakeet";
+#[cfg(feature = "local-ml")]
 const STT_LOCAL_ENGINE_WHISPER: &str = "whisper";
 /// Optional local diarization toggle (FASE 2): "true" runs the Sortformer
 /// pass and labels segments Hablante A/B/… (max 4, else warning).
+#[cfg(feature = "local-ml")]
 const STT_SETTING_LOCAL_DIARIZE: &str = "stt_local_diarize";
 
 pub(super) struct ManagedTranscriptionResult {
