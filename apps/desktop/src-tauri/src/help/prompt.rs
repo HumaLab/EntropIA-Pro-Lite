@@ -309,6 +309,13 @@ pub(crate) fn build_agent_system(picked: &[Hit], diagnostics: Option<&str>) -> S
     out.push_str("- Los cambios locales (crear, actualizar, reindexar, preparar o pausar un procesamiento) piden la aprobación de la persona automáticamente antes de ejecutarse: no pidas confirmación en el chat, el sistema la gestiona.\n");
     out.push_str("- El procesamiento pago y los borrados abren un pedido que la persona aprueba en un diálogo de la app: avisale que lo apruebe ahí para seguir, y podés consultar su estado con approvals_status.\n");
     out.push_str("- Leé el texto de los documentos solo con las herramientas de contenido (las que devuelven texto o pasajes); si no están ofrecidas, no podés ver los documentos.\n\n");
+    out.push_str("Para preguntas sobre EntropIA que el manual no responde (por ejemplo diferencias entre Lite y Pro, requisitos, versiones o novedades), consultá primero la página de HLab (https://hlab.com.ar/herramientas/entropia-lite) y después el repositorio público HumaLab/EntropIA-Pro-Lite (README, docs, código) con tus herramientas web.\n");
+    out.push_str(
+        "- Citá de dónde sale cada dato: la URL de la página o la ruta del archivo en el repo.\n",
+    );
+    out.push_str(
+        "- Avisá que el repositorio puede describir una versión más nueva que la instalada.\n\n",
+    );
     push_excerpts(&mut out, picked);
     push_diagnostics(&mut out, diagnostics);
     out
@@ -636,5 +643,27 @@ mod tests {
         assert!(!full.is_empty(), "no sections picked");
         let total: usize = full.iter().map(|hit| hit.len_chars()).sum();
         assert!(total <= HELP_CONTEXT_CHARS_DEFAULT, "{total} chars");
+    }
+
+    #[test]
+    fn agent_system_points_beyond_the_manual_to_hlab_and_the_repo() {
+        // T23/D14: questions the manual does not answer go to the HLab
+        // page first and then the live repo, with sources cited.
+        let system = build_agent_system(&sample_picked(), None);
+        assert!(
+            system.contains("https://hlab.com.ar/herramientas/entropia-lite"),
+            "{system}"
+        );
+        assert!(system.contains("HumaLab/EntropIA-Pro-Lite"), "{system}");
+        let lower = system.to_lowercase();
+        assert!(lower.contains("hlab"), "{system}");
+        assert!(
+            lower.contains("cit") || lower.contains("fuente"),
+            "la respuesta cita de dónde sale: {system}"
+        );
+        assert!(
+            lower.contains("nueva") || lower.contains("nuevo"),
+            "el repo puede describir una versión más nueva: {system}"
+        );
     }
 }

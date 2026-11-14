@@ -15,3 +15,4 @@ pub(crate) mod prompt;
 pub(crate) mod screenmap;
 pub(crate) mod settings;
 pub(crate) mod text;
+pub(crate) mod web_tools;

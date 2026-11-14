@@ -11,6 +11,7 @@
 use std::sync::{Arc, Mutex};
 
 use super::agent_llm::{HelpToolExecutor, ToolOutcome, ToolSpec};
+use super::web_tools::{is_web_tool, HttpFetch, ReqwestFetch, WebTools};
 
 /// What a tool may do, and whose approval a call needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +41,11 @@ const READ_TOOLS: &[&str] = &[
     "jobs_get",
     "jobs_list",
     "search_items",
+    // The read-only web tools (T23, S16, D14): public repo and HLab page,
+    // no approval, with or without the documents box.
+    "repo_tree",
+    "repo_read",
+    "hlab_entropia_page",
 ];
 
 /// CONTENT tools: they return the user's document text (`documents_get_text`
@@ -244,21 +250,44 @@ pub(crate) trait HelpApprover: Send + Sync {
 
 /// The gate around a bridge executor: `tools()` hides CONTENT without the
 /// documents box, `call()` enforces the class of every call and records
-/// the document titles CONTENT results carried.
-pub(crate) struct HelpGateExecutor<E, A> {
+/// the document titles CONTENT results carried. The read-only web tools
+/// travel inside the gate (T23, S16, D14): they run freely like READ.
+pub(crate) struct HelpGateExecutor<E, A, H = ReqwestFetch> {
     inner: E,
     approver: A,
     with_documents: bool,
     content_titles: Arc<Mutex<Vec<String>>>,
+    web: WebTools<H>,
 }
 
-impl<E, A> HelpGateExecutor<E, A> {
+impl<E, A> HelpGateExecutor<E, A, ReqwestFetch> {
     pub(crate) fn new(inner: E, approver: A, with_documents: bool) -> Self {
         Self {
             inner,
             approver,
             with_documents,
             content_titles: Arc::new(Mutex::new(Vec::new())),
+            web: WebTools::new(ReqwestFetch::default()),
+        }
+    }
+}
+
+impl<E, A, H: HttpFetch> HelpGateExecutor<E, A, H> {
+    /// The same gate over an injected web layer: tests script the HTTP
+    /// answers instead of touching the net.
+    #[cfg(test)]
+    pub(crate) fn new_with_web(
+        inner: E,
+        approver: A,
+        with_documents: bool,
+        web: WebTools<H>,
+    ) -> Self {
+        Self {
+            inner,
+            approver,
+            with_documents,
+            content_titles: Arc::new(Mutex::new(Vec::new())),
+            web,
         }
     }
 
@@ -271,24 +300,35 @@ impl<E, A> HelpGateExecutor<E, A> {
     }
 }
 
-impl<E, A> HelpToolExecutor for HelpGateExecutor<E, A>
+impl<E, A, H> HelpToolExecutor for HelpGateExecutor<E, A, H>
 where
     E: HelpToolExecutor,
     A: HelpApprover,
+    H: HttpFetch,
 {
     fn tools(&self) -> Vec<ToolSpec> {
         let all = self.inner.tools();
-        if self.with_documents {
-            return all;
-        }
-        all.into_iter()
-            .filter(|tool| {
-                classify_call(&tool.name, &serde_json::Value::Null) != ToolClass::Content
-            })
-            .collect()
+        let mut out: Vec<ToolSpec> = if self.with_documents {
+            all
+        } else {
+            all.into_iter()
+                .filter(|tool| {
+                    classify_call(&tool.name, &serde_json::Value::Null) != ToolClass::Content
+                })
+                .collect()
+        };
+        // The read-only web tools (T23, D14): always offered, with or
+        // without the documents box, and never gated by it.
+        out.extend(super::web_tools::tool_specs());
+        out
     }
 
     async fn call(&self, name: &str, args: serde_json::Value) -> ToolOutcome {
+        // The web tools run freely (READ): public repo and HLab page, so
+        // neither the documents box nor the owner is asked (T23, D14).
+        if is_web_tool(name) {
+            return self.web.call(name, args).await;
+        }
         if !self.inner.tools().iter().any(|tool| tool.name == name) {
             return ToolOutcome::Denied {
                 reason: format!("herramienta desconocida '{name}'"),
@@ -505,7 +545,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"documents_get_text".to_string()));
         assert!(names.contains(&"search_passages".to_string()));
-        assert_eq!(names.len(), ALL_TOOLS.len());
+        assert_eq!(names.len(), ALL_TOOLS.len() + 3, "más las tres web");
     }
 
     #[tokio::test]
@@ -852,5 +892,61 @@ mod tests {
             collect_content_titles("search_passages", "no es json").is_empty(),
             "unparsable content yields no titles, never an error"
         );
+    }
+
+    // -- Web tools (T23, S16, D14): the READ class --------------------------
+
+    #[test]
+    fn gate_offers_the_three_web_tools_with_and_without_the_box() {
+        for with_documents in [false, true] {
+            let (executor, _, _) = harness(with_documents, vec![]);
+            let names: Vec<String> = executor
+                .tools()
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect();
+            for tool in ["repo_tree", "repo_read", "hlab_entropia_page"] {
+                assert!(
+                    names.contains(&tool.to_string()),
+                    "con documentos={with_documents}: falta {tool}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn web_tools_classify_as_read() {
+        for tool in ["repo_tree", "repo_read", "hlab_entropia_page"] {
+            assert_eq!(
+                classify_call(tool, &serde_json::Value::Null),
+                ToolClass::Read,
+                "{tool} es de solo lectura: corre sin aprobación"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn web_tools_run_without_asking() {
+        use super::super::web_tools::test_support::{tree_body, MockFetch};
+        use super::super::web_tools::{WebTools, GITHUB_API_TREE_URL};
+        let fetch = MockFetch::new();
+        fetch.respond(
+            GITHUB_API_TREE_URL,
+            200,
+            GITHUB_API_TREE_URL,
+            &tree_body(&[("README.md", Some(3))]),
+        );
+        let log = fetch.log();
+        let web = WebTools::new(fetch);
+        let bridge = MockBridge::new(ALL_TOOLS);
+        let approver = MockApprover::new(vec![]);
+        let executor = HelpGateExecutor::new_with_web(bridge.clone(), approver.clone(), false, web);
+        match executor.call("repo_tree", serde_json::json!({})).await {
+            ToolOutcome::Ok { content } => assert!(content.contains("README.md")),
+            other => panic!("repo_tree debe correr libre: {other:?}"),
+        }
+        assert!(bridge.calls().is_empty(), "la web no toca el puente");
+        assert!(approver.requests().is_empty(), "leer nunca pregunta");
+        assert_eq!(log.lock().expect("lock").len(), 1);
     }
 }
