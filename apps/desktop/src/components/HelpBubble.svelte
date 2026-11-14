@@ -346,7 +346,7 @@
   </div>
   <div class="help-bubble__body">
     {#if chatMounted}
-      <HelpView embedded />
+      <HelpView embedded {maximized} />
     {/if}
   </div>
 </div>

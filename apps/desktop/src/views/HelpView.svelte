@@ -6,7 +6,6 @@
   import {
     HELP_HISTORY_MAX_TURNS,
     describeHelpStep,
-    helpApprovalAnswer,
     helpAsk,
     helpDiagnosticsPreview,
     helpFaqList,
@@ -25,7 +24,8 @@
     type HelpStep,
     type HelpTurn,
   } from '$lib/help'
-  import { ActionIcon, Button, Checkbox } from '@entropia/ui'
+  import { ActionIcon, Button, Checkbox, tooltip } from '@entropia/ui'
+  import HelpApprovalDialog from '../components/HelpApprovalDialog.svelte'
 
   const navigation = getNavigation()
   const paneId = getPaneId()
@@ -35,8 +35,11 @@
    * Compact mode for the floating panel (T15): the panel header replaces the
    * full-page header card, and the view fills the panel body with its own
    * scrolling middle and fixed footer. Standalone use keeps the header card.
+   * `maximized` (T28) drives the single-line opt-in row: the panel owns the
+   * state (HelpBubble) and the view only renders the contract.
    */
-  let { embedded = false }: { embedded?: boolean } = $props()
+  let { embedded = false, maximized = false }: { embedded?: boolean; maximized?: boolean } =
+    $props()
 
   /** One decided MCP approval following an answer (T26): how it ended
    * and the backend's clear Spanish message naming the target. */
@@ -97,28 +100,29 @@
     return [t('help.suggestion1'), t('help.suggestion2'), t('help.suggestion3')]
   }
 
-  // Inline approval from the help agent (T22, D12): one card per request,
-  // answered once. The backend emits `help://approval` while `help_ask` waits.
-  let pendingApproval = $state<(HelpApprovalRequest & { answered: boolean }) | null>(null)
-  let approvalCard: HTMLElement | null = $state(null)
+  // The live inline approval (T27, D12): the `help://approval` payload the
+  // backend waits on. Rendered as a modal HelpApprovalDialog, never as a
+  // card in the conversation; answering adds a short line instead.
+  let pendingApproval = $state<HelpApprovalRequest | null>(null)
   let destroyed = false
 
-  // Focus Rechazar, like the MCP approval dialog does: a stray Enter never approves.
-  $effect(() => {
-    if (pendingApproval && !pendingApproval.answered) {
-      approvalCard?.querySelector<HTMLButtonElement>('[data-help-reject]')?.focus()
-    }
-  })
-
-  async function answerApproval(approved: boolean): Promise<void> {
-    const card = pendingApproval
-    if (!card || card.answered) return
-    try {
-      await helpApprovalAnswer(card.id, approved)
-      pendingApproval = { ...card, answered: true }
-    } catch {
-      error = t('help.approvalAnswerError')
-    }
+  /** One decided inline approval (T27): the dialog closes and a short line
+   * stays in the conversation («Aprobaste: …» / «Rechazaste: …»). */
+  function handleApprovalDecided(decision: {
+    id: string
+    approved: boolean
+    summary: string
+  }): void {
+    pendingApproval = null
+    messages = [
+      ...messages,
+      {
+        role: 'assistant',
+        content: decision.approved
+          ? t('help.approvalApproved', { summary: decision.summary })
+          : t('help.approvalRejected', { summary: decision.summary }),
+      },
+    ]
   }
 
   /** The mark shown before an outcome notice, in the UI language. */
@@ -173,7 +177,7 @@
     let unlistenSteps: (() => void) | null = null
     let unlistenOutcomes: (() => void) | null = null
     void listenHelpApproval((request) => {
-      pendingApproval = { ...request, answered: false }
+      pendingApproval = request
     }).then((stop) => {
       if (destroyed) stop()
       else unlisten = stop
@@ -308,6 +312,10 @@
       // The answer's final steps replace the live list (same content).
       currentRequestId = null
       liveSteps = []
+      // The run settled while an inline approval was still open («Detener»
+      // or the request timing out): the dialog disappears with the run, and
+      // the answer above («Detenido.» or the denial) says what happened.
+      pendingApproval = null
     }
   }
 
@@ -459,37 +467,6 @@
         {/if}
       {/each}
 
-      {#if pendingApproval}
-        <article
-          class="help-view__bubble help-view__bubble--approval"
-          bind:this={approvalCard}
-          aria-live="polite"
-          aria-label={$currentLocale && t('help.approvalTitle')}
-        >
-          <p class="help-view__approval-title">{$currentLocale && t('help.approvalTitle')}</p>
-          <p class="help-view__approval-summary">{pendingApproval.summary}</p>
-          <div class="help-view__approval-actions">
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={pendingApproval.answered}
-              onclick={() => void answerApproval(true)}
-            >
-              {$currentLocale && t('help.approve')}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              data-help-reject=""
-              disabled={pendingApproval.answered}
-              onclick={() => void answerApproval(false)}
-            >
-              {$currentLocale && t('help.reject')}
-            </Button>
-          </div>
-        </article>
-      {/if}
-
       {#if sending}
         <p class="help-view__state" role="status">{$currentLocale && t('help.thinking')}</p>
         {#if liveSteps.length > 0}
@@ -523,32 +500,56 @@
         void send()
       }}
     >
-      <div class="help-view__diagnostics">
-        <Checkbox
-          bind:checked={includeDiagnostics}
-          disabled={sending}
-          label={$currentLocale && t('help.includeDiagnostics')}
-        >
-          {$currentLocale && t('help.includeDiagnostics')}
-        </Checkbox>
-        <button
-          type="button"
-          class="help-view__preview-toggle"
-          onclick={() => void togglePreview()}
-        >
-          {$currentLocale && (previewOpen ? t('help.previewHide') : t('help.previewToggle'))}
-        </button>
-        <p class="help-view__hint">{$currentLocale && t('help.diagnosticsHint')}</p>
-      </div>
-      <div class="help-view__documents">
-        <Checkbox
-          bind:checked={includeDocuments}
-          disabled={sending}
-          label={$currentLocale && t('help.includeDocuments')}
-        >
-          {$currentLocale && t('help.includeDocuments')}
-        </Checkbox>
-        <p class="help-view__hint">{$currentLocale && t('help.documentsHint')}</p>
+      <div class="help-view__optins" class:help-view__optins--single={maximized}>
+        <div class="help-view__optin">
+          <Checkbox
+            bind:checked={includeDiagnostics}
+            disabled={sending}
+            label={$currentLocale && t('help.includeDiagnostics')}
+          >
+            {$currentLocale && t('help.includeDiagnostics')}
+          </Checkbox>
+          <button
+            type="button"
+            class="help-view__info"
+            aria-label={$currentLocale && t('help.diagnosticsInfo')}
+            aria-describedby="help-diagnostics-hint-{paneId}"
+            use:tooltip={$currentLocale && t('help.diagnosticsHint')}
+          >
+            <ActionIcon name="info" size={12} />
+          </button>
+          <span id="help-diagnostics-hint-{paneId}" class="help-view__visually-hidden">
+            {$currentLocale && t('help.diagnosticsHint')}
+          </span>
+          <button
+            type="button"
+            class="help-view__preview-toggle"
+            onclick={() => void togglePreview()}
+          >
+            {$currentLocale && (previewOpen ? t('help.previewHide') : t('help.previewToggle'))}
+          </button>
+        </div>
+        <div class="help-view__optin">
+          <Checkbox
+            bind:checked={includeDocuments}
+            disabled={sending}
+            label={$currentLocale && t('help.includeDocuments')}
+          >
+            {$currentLocale && t('help.includeDocuments')}
+          </Checkbox>
+          <button
+            type="button"
+            class="help-view__info"
+            aria-label={$currentLocale && t('help.documentsInfo')}
+            aria-describedby="help-documents-hint-{paneId}"
+            use:tooltip={$currentLocale && t('help.documentsHint')}
+          >
+            <ActionIcon name="info" size={12} />
+          </button>
+          <span id="help-documents-hint-{paneId}" class="help-view__visually-hidden">
+            {$currentLocale && t('help.documentsHint')}
+          </span>
+        </div>
       </div>
       <div class="help-view__input-row">
         <textarea
@@ -584,6 +585,11 @@
         {/if}
       </div>
     </form>
+
+    <!-- Inline LOCAL_WRITE approval (T27, D12): a modal dialog like the MCP
+      one, portalled out of the panel so it shows even maximized. Answering
+      adds a short line to the conversation above. -->
+    <HelpApprovalDialog request={pendingApproval} onanswered={handleApprovalDecided} />
   {/if}
 </div>
 
@@ -822,32 +828,6 @@
     color: var(--color-danger);
   }
 
-  .help-view__bubble--approval {
-    align-self: flex-start;
-    background: var(--surface-panel);
-    border-color: color-mix(in srgb, var(--color-accent) 32%, var(--border-subtle));
-  }
-
-  .help-view__approval-title {
-    margin: 0;
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-  }
-
-  .help-view__approval-summary {
-    margin: var(--space-1) 0 0;
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    overflow-wrap: anywhere;
-  }
-
-  .help-view__approval-actions {
-    display: flex;
-    gap: var(--space-2);
-    margin-top: var(--space-2);
-  }
-
   .help-view__sources li + li {
     margin-top: var(--space-1);
   }
@@ -866,18 +846,60 @@
     padding-top: var(--space-2);
   }
 
-  .help-view__diagnostics {
+  /* Opt-ins (T28): one wrapping row by default; a single line only with the
+     maximized contract below. The maximized panel is wide enough for both. */
+  .help-view__optins {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     gap: var(--space-1) var(--space-3);
   }
 
-  .help-view__documents {
+  .help-view__optins--single {
+    flex-wrap: nowrap;
+    align-items: center;
+    overflow-x: auto;
+  }
+
+  .help-view__optin {
     display: flex;
-    flex-wrap: wrap;
     align-items: baseline;
-    gap: var(--space-1) var(--space-3);
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  /* The small superscript hint (T28): the hint paragraph is gone and the
+     sentence lives on this button's tooltip, its accessible name and the
+     description below. Inline, so it never forces the row to wrap. A button
+     (no action on press) so keyboard focus reaches it and shows the
+     tooltip; the label beside it keeps the checkbox meaning. */
+  .help-view__info {
+    display: inline-flex;
+    flex-shrink: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    vertical-align: super;
+    color: var(--color-text-muted);
+    cursor: help;
+  }
+
+  .help-view__info:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .help-view__visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .help-view__preview-toggle {
@@ -890,13 +912,6 @@
     text-decoration: underline;
     text-underline-offset: 0.15em;
     cursor: pointer;
-  }
-
-  .help-view__hint {
-    flex-basis: 100%;
-    margin: 0;
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
   }
 
   /* Bounded (T15): its own scroll, so a long dump scrolls inside the

@@ -87,6 +87,7 @@ export const ACTION_ICON_NAMES = [
   'home',
   'heading-3',
   'import',
+  'info',
   'insert-image',
   'italic',
   'languages',

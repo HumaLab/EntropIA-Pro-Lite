@@ -70,6 +70,7 @@
   import IconFolderPlus from '@tabler/icons-svelte-runes/icons/folder-plus'
   import IconHistory from '@tabler/icons-svelte-runes/icons/history'
   import IconHome from '@tabler/icons-svelte-runes/icons/home'
+  import IconInfoCircle from '@tabler/icons-svelte-runes/icons/info-circle'
   import IconH1 from '@tabler/icons-svelte-runes/icons/h-1'
   import IconH2 from '@tabler/icons-svelte-runes/icons/h-2'
   import IconH3 from '@tabler/icons-svelte-runes/icons/h-3'
@@ -261,6 +262,9 @@
     'heading-2': IconH2,
     'heading-3': IconH3,
     import: IconFileDownload,
+    // The small superscript hint after the help opt-ins (T28): a lowercase
+    // `i` in a circle, distinct from the `?` of `circle-help` above.
+    info: IconInfoCircle,
     'insert-image': IconPhotoPlus,
     italic: IconItalic,
     languages: IconLanguage,

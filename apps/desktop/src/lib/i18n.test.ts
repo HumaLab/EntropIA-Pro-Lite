@@ -411,6 +411,14 @@ describe('i18n', () => {
     expect(t('help.approvalOutcomeRejected')).toBe('Rechazado')
     expect(t('help.approvalOutcomeFailed')).toBe('No se pudo hacer')
     expect(t('help.approvalOutcomeExpired')).toBe('Venció')
+    expect(t('help.approvalApproved', { summary: 'Crear la colección «SIMAPE»' })).toBe(
+      'Aprobaste: Crear la colección «SIMAPE»'
+    )
+    expect(t('help.approvalRejected', { summary: 'Crear la colección «SIMAPE»' })).toBe(
+      'Rechazaste: Crear la colección «SIMAPE»'
+    )
+    expect(t('help.diagnosticsInfo')).toBe('Más información sobre Incluir diagnóstico')
+    expect(t('help.documentsInfo')).toBe('Más información sobre Buscar en mis documentos')
 
     locale.set('en')
 
@@ -480,6 +488,14 @@ describe('i18n', () => {
     expect(t('help.approvalOutcomeRejected')).toBe('Rejected')
     expect(t('help.approvalOutcomeFailed')).toBe('Failed')
     expect(t('help.approvalOutcomeExpired')).toBe('Expired')
+    expect(t('help.approvalApproved', { summary: 'Create the "SIMAPE" collection' })).toBe(
+      'You approved: Create the "SIMAPE" collection'
+    )
+    expect(t('help.approvalRejected', { summary: 'Create the "SIMAPE" collection' })).toBe(
+      'You rejected: Create the "SIMAPE" collection'
+    )
+    expect(t('help.diagnosticsInfo')).toBe('More about Include diagnostics')
+    expect(t('help.documentsInfo')).toBe('More about Search my documents')
   })
 
   it('exposes the API key clearing copy in both locales', async () => {

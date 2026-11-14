@@ -1025,6 +1025,7 @@
 - «Abrir Configuración» `help.openSettings`
 - «Aprobado» `help.approvalOutcomeApproved`
 - «Aprobar» `help.approve`
+- «Aprobaste: {summary}» `help.approvalApproved`
 - «Ayuda» `help.title`
 - «Buscando en el manual…» `help.thinking`
 - «Buscar en mis documentos» `help.includeDocuments`
@@ -1046,12 +1047,15 @@
 - «La ayuda usa tu cuenta de OpenRouter» `help.noKeyTitle`
 - «Llegó al límite de rondas de herramientas; la respuesta puede estar incompleta.» `help.roundLimitReached`
 - «Maximizar» `help.maximizePanel`
+- «Más información sobre Buscar en mis documentos» `help.documentsInfo`
+- «Más información sobre Incluir diagnóstico» `help.diagnosticsInfo`
 - «Ocultar» `help.previewHide`
 - «Preguntá cómo usar EntropIA o qué hacer cuando algo falla» `help.subtitle`
 - «Preguntá, por ejemplo, cómo importar un PDF o qué hacer si falla una transcripción.» `help.emptyState`
 - «Probá con:» `help.suggestionsLabel`
 - «Rechazado» `help.approvalOutcomeRejected`
 - «Rechazar» `help.reject`
+- «Rechazaste: {summary}» `help.approvalRejected`
 - «Respuesta local, sin consultar a OpenRouter» `help.localAnswer`
 - «Restaurar» `help.restorePanel`
 - «Usó» `help.stepsUsed`

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import { locale } from '$lib/i18n'
@@ -142,14 +142,17 @@ describe('HelpView', () => {
     expect(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })).not.toBeChecked()
   })
 
-  it('explains that document fragments go to OpenRouter for this question only', async () => {
+  it('hints at the document opt-in through its info icon tooltip, not a paragraph', async () => {
     backend({ hasKey: true })
     render(HelpView)
     await composer()
 
     expect(
-      screen.getByText('Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.')
-    ).toBeInTheDocument()
+      screen.getByRole('button', { name: 'Más información sobre Buscar en mis documentos' })
+    ).toHaveAttribute(
+      'data-tooltip',
+      'Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.'
+    )
   })
 
   it('checkbox on: the send passes documents:true, then resets to off', async () => {
@@ -524,16 +527,17 @@ describe('HelpView', () => {
     expect(last.history[0]?.content).toBe('pregunta 1')
   })
 
-  it('explains that diagnostics travel to OpenRouter without keys or document content', async () => {
+  it('hints at the diagnostics opt-in through its info icon tooltip, not a paragraph', async () => {
     backend({ hasKey: true })
     render(HelpView)
     await composer()
 
     expect(
-      screen.getByText(
-        'Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.'
-      )
-    ).toBeInTheDocument()
+      screen.getByRole('button', { name: 'Más información sobre Incluir diagnóstico' })
+    ).toHaveAttribute(
+      'data-tooltip',
+      'Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.'
+    )
   })
 
   describe('embedded in the floating panel (T15)', () => {
@@ -585,78 +589,6 @@ describe('HelpView', () => {
   })
 
   describe('agent approvals and steps (T22)', () => {
-    /** Fires a help://approval request the way the backend emits it. */
-    async function approvalRequest(request: { id: string; tool: string; summary: string }) {
-      const { listen } = await import('@tauri-apps/api/event')
-      // Renders accumulate listeners across tests: the live one is the last.
-      const handlers = vi
-        .mocked(listen)
-        .mock.calls.filter(([name]) => name === 'help://approval')
-        .map(([, handler]) => handler) as Array<(event: { payload: typeof request }) => void>
-      const handler = handlers.at(-1)
-      if (!handler) throw new Error('HelpView is not listening to help://approval')
-      handler({ payload: request })
-    }
-
-    it('shows an inline approval card with the summary and focuses Rechazar', async () => {
-      backend({ hasKey: true })
-      render(HelpView)
-      await composer()
-
-      await approvalRequest({
-        id: 'help-apr-1',
-        tool: 'collections_create',
-        summary: 'Crear la colección «SIMAPE»',
-      })
-
-      expect(await screen.findByText('Crear la colección «SIMAPE»')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Aprobar' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Rechazar' })).toHaveFocus()
-    })
-
-    it('Aprobar answers the card and disables the buttons', async () => {
-      const askCalls = backend({ hasKey: true })
-      render(HelpView)
-      await composer()
-
-      await approvalRequest({
-        id: 'help-apr-2',
-        tool: 'collections_create',
-        summary: 'Crear la colección «SIMAPE»',
-      })
-      await fireEvent.click(await screen.findByRole('button', { name: 'Aprobar' }))
-
-      await waitFor(() =>
-        expect(mockInvoke).toHaveBeenCalledWith('help_approval_answer', {
-          id: 'help-apr-2',
-          approved: true,
-        })
-      )
-      expect(screen.getByRole('button', { name: 'Aprobar' })).toBeDisabled()
-      expect(screen.getByRole('button', { name: 'Rechazar' })).toBeDisabled()
-      expect(askCalls).toHaveLength(0)
-    })
-
-    it('Rechazar answers the card negatively', async () => {
-      backend({ hasKey: true })
-      render(HelpView)
-      await composer()
-
-      await approvalRequest({
-        id: 'help-apr-3',
-        tool: 'processing_control',
-        summary: 'Pausar el procesamiento «job-1»',
-      })
-      await fireEvent.click(await screen.findByRole('button', { name: 'Rechazar' }))
-
-      await waitFor(() =>
-        expect(mockInvoke).toHaveBeenCalledWith('help_approval_answer', {
-          id: 'help-apr-3',
-          approved: false,
-        })
-      )
-    })
-
     it('lists the tool steps under the answer', async () => {
       backend({
         hasKey: true,
@@ -1040,6 +972,188 @@ describe('HelpView', () => {
 
       expect(screen.queryByText('Se eliminó la colección «Otra».')).not.toBeInTheDocument()
       expect(screen.getByText('Usó: Pidió borrar la colección «SIMAPE»')).toBeInTheDocument()
+    })
+  })
+
+  describe('inline approvals as a dialog (T27)', () => {
+    /** Fires a help://approval request the way the backend emits it. */
+    async function approvalRequest(request: { id: string; tool: string; summary: string }) {
+      const { listen } = await import('@tauri-apps/api/event')
+      const handlers = vi
+        .mocked(listen)
+        .mock.calls.filter(([name]) => name === 'help://approval')
+        .map(([, handler]) => handler) as Array<(event: { payload: typeof request }) => void>
+      const handler = handlers.at(-1)
+      if (!handler) throw new Error('HelpView is not listening to help://approval')
+      handler({ payload: request })
+    }
+
+    it('the approval arrives as a modal dialog, not a card in the conversation', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      await approvalRequest({
+        id: 'help-apr-1',
+        tool: 'collections_create',
+        summary: 'Crear la colección «SIMAPE»',
+      })
+
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog).toHaveTextContent('La ayuda pide aprobación')
+      expect(dialog).toHaveTextContent('Crear la colección «SIMAPE»')
+      expect(screen.getByRole('button', { name: 'Aprobar' })).toBeInTheDocument()
+      // No card stays pinned in the conversation.
+      expect(document.querySelector('.help-view__bubble--approval')).toBeNull()
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Rechazar' })).toHaveFocus())
+    })
+
+    it('Aprobar answers, closes the dialog and adds an approved line', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      await approvalRequest({
+        id: 'help-apr-2',
+        tool: 'collections_create',
+        summary: 'Crear la colección «SIMAPE»',
+      })
+      await fireEvent.click(await screen.findByRole('button', { name: 'Aprobar' }))
+
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('help_approval_answer', {
+          id: 'help-apr-2',
+          approved: true,
+        })
+      )
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      expect(await screen.findByText('Aprobaste: Crear la colección «SIMAPE»')).toBeInTheDocument()
+      expect(document.querySelector('.help-view__bubble--approval')).toBeNull()
+    })
+
+    it('Rechazar answers negatively and adds a rejected line', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      await approvalRequest({
+        id: 'help-apr-3',
+        tool: 'collections_create',
+        summary: 'Crear la colección «SIMAPE»',
+      })
+      await fireEvent.click(await screen.findByRole('button', { name: 'Rechazar' }))
+
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('help_approval_answer', {
+          id: 'help-apr-3',
+          approved: false,
+        })
+      )
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      expect(await screen.findByText('Rechazaste: Crear la colección «SIMAPE»')).toBeInTheDocument()
+      expect(document.querySelector('.help-view__bubble--approval')).toBeNull()
+    })
+
+    it('Escape rejects, closes the dialog and adds a rejected line', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      await approvalRequest({
+        id: 'help-apr-4',
+        tool: 'collections_create',
+        summary: 'Crear la colección «SIMAPE»',
+      })
+      await screen.findByRole('dialog')
+      await fireEvent.keyDown(window, { key: 'Escape' })
+
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('help_approval_answer', {
+          id: 'help-apr-4',
+          approved: false,
+        })
+      )
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      expect(await screen.findByText('Rechazaste: Crear la colección «SIMAPE»')).toBeInTheDocument()
+    })
+  })
+
+  describe('responsive opt-ins (T28)', () => {
+    const DIAG_HINT =
+      'Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.'
+    const DOCS_HINT = 'Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.'
+
+    it('maximized: both opt-ins share one single-line row', async () => {
+      backend({ hasKey: true })
+      render(HelpView, { props: { embedded: true, maximized: true } })
+      await composer()
+
+      const row = document.querySelector('.help-view__optins--single')
+      expect(row).not.toBeNull()
+      expect(
+        within(row as HTMLElement).getByRole('checkbox', { name: 'Incluir diagnóstico' })
+      ).toBeInTheDocument()
+      expect(
+        within(row as HTMLElement).getByRole('checkbox', { name: 'Buscar en mis documentos' })
+      ).toBeInTheDocument()
+    })
+
+    it('normal size: the opt-ins wrap instead of forcing one line', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      const row = document.querySelector('.help-view__optins')
+      expect(row).not.toBeNull()
+      expect(row?.classList.contains('help-view__optins--single')).toBe(false)
+    })
+
+    it('hints live on superscript info icons as tooltips, not in paragraphs', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      expect(document.querySelector('.help-view__hint')).toBeNull()
+
+      const diagIcon = screen.getByRole('button', {
+        name: 'Más información sobre Incluir diagnóstico',
+      })
+      const docsIcon = screen.getByRole('button', {
+        name: 'Más información sobre Buscar en mis documentos',
+      })
+      expect(diagIcon).toHaveAttribute('data-tooltip', DIAG_HINT)
+      expect(docsIcon).toHaveAttribute('data-tooltip', DOCS_HINT)
+      for (const [icon, hint] of [
+        [diagIcon, DIAG_HINT],
+        [docsIcon, DOCS_HINT],
+      ] as const) {
+        const describedBy = icon.getAttribute('aria-describedby')
+        expect(describedBy).toBeTruthy()
+        expect(document.getElementById(describedBy!)?.textContent).toBe(hint)
+      }
+      expect(diagIcon.querySelector('svg[data-action-icon="info"]')).not.toBeNull()
+      expect(docsIcon.querySelector('svg[data-action-icon="info"]')).not.toBeNull()
+    })
+
+    it('the maximized panel drives the single-line row (stylesheet contract)', async () => {
+      const { readFileSync } = await import('node:fs')
+      const { resolve } = await import('node:path')
+      const styles = readFileSync(resolve(import.meta.dirname, 'HelpView.svelte'), 'utf-8')
+        .split('<style>')[1]
+        ?.replace(/\/\*[\s\S]*?\*\//g, '')
+      const rule = (selector: string): string => {
+        const match = new RegExp(
+          `(^|\\n)\\s*${selector.replace(/[.]/g, '\\.')}\\s*\\{([^}]*)\\}`
+        ).exec(styles ?? '')
+        expect(match, `${selector} is no longer in the stylesheet`).not.toBeNull()
+        return match?.[2] ?? ''
+      }
+      // The row wraps by default (the normal floating size) and only the
+      // maximized contract forces one line.
+      expect(rule('.help-view__optins')).toMatch(/flex-wrap:\s*wrap/)
+      expect(rule('.help-view__optins--single')).toMatch(/flex-wrap:\s*nowrap/)
+      // The hint icon reads as a superscript, not a paragraph.
+      expect(rule('.help-view__info')).toMatch(/vertical-align:\s*super/)
     })
   })
 })

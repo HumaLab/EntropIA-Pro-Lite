@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -483,6 +483,27 @@ describe('HelpBubble (S13, T17)', () => {
     render(HelpBubble)
     await openPanel()
     expect(screen.getByRole('button', { name: 'Restaurar' })).toBeInTheDocument()
+  })
+
+  it('maximizing the panel puts the help opt-ins on one single-line row', async () => {
+    render(HelpBubble)
+    await openPanel()
+
+    expect(document.querySelector('.help-view__optins--single')).toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Maximizar' }))
+
+    const row = document.querySelector('.help-view__optins--single')
+    expect(row).not.toBeNull()
+    expect(
+      within(row as HTMLElement).getByRole('checkbox', { name: 'Incluir diagnóstico' })
+    ).toBeInTheDocument()
+    expect(
+      within(row as HTMLElement).getByRole('checkbox', { name: 'Buscar en mis documentos' })
+    ).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Restaurar' }))
+    expect(document.querySelector('.help-view__optins--single')).toBeNull()
   })
 
   it('toggling maximize keeps the conversation: a typed draft survives', async () => {
