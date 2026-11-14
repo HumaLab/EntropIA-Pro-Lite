@@ -652,3 +652,45 @@ describe('i18n — biblioteca copy', () => {
     expect(t('bibliographyWork.textPage', { page: 3 })).toBe('Page 3')
   })
 })
+
+describe('i18n — help history copy (S19)', () => {
+  it('exposes the history copy in both locales', async () => {
+    const { locale, t } = await import('./i18n')
+
+    locale.set('es')
+
+    expect(t('help.history')).toBe('Historial')
+    expect(t('help.historyCount', { count: 2 })).toBe('Historial (2)')
+    expect(t('help.historyEmpty')).toBe('Todavía no hay conversaciones guardadas.')
+    expect(t('help.historyLoading')).toBe('Cargando el historial…')
+    expect(t('help.historyError')).toBe('No se pudo cargar el historial.')
+    expect(t('help.historyNow')).toBe('ahora mismo')
+    expect(t('help.newConversation')).toBe('Nueva conversación')
+    expect(t('help.deleteConversation')).toBe('Eliminar conversación')
+    expect(t('help.clearHistory')).toBe('Borrar historial')
+    expect(t('help.clearHistoryTitle')).toBe('¿Borrar el historial?')
+    expect(t('help.clearHistoryMessage')).toBe(
+      'Se eliminan todas las conversaciones guardadas en este equipo. No se puede deshacer.'
+    )
+    expect(t('help.confirmDelete')).toBe('Borrar')
+    expect(t('help.cancel')).toBe('Cancelar')
+
+    locale.set('en')
+
+    expect(t('help.history')).toBe('History')
+    expect(t('help.historyCount', { count: 2 })).toBe('History (2)')
+    expect(t('help.historyEmpty')).toBe('No saved conversations yet.')
+    expect(t('help.historyLoading')).toBe('Loading history…')
+    expect(t('help.historyError')).toBe('Could not load the history.')
+    expect(t('help.historyNow')).toBe('just now')
+    expect(t('help.newConversation')).toBe('New conversation')
+    expect(t('help.deleteConversation')).toBe('Delete conversation')
+    expect(t('help.clearHistory')).toBe('Clear history')
+    expect(t('help.clearHistoryTitle')).toBe('Clear the history?')
+    expect(t('help.clearHistoryMessage')).toBe(
+      'All conversations saved on this device will be deleted. This cannot be undone.'
+    )
+    expect(t('help.confirmDelete')).toBe('Delete')
+    expect(t('help.cancel')).toBe('Cancel')
+  })
+})

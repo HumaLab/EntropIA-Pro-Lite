@@ -6,25 +6,34 @@
   import {
     HELP_HISTORY_MAX_TURNS,
     describeHelpStep,
+    formatHistoryDate,
     helpAsk,
     helpDiagnosticsPreview,
     helpFaqList,
+    helpHistoryAppend,
+    helpHistoryClear,
+    helpHistoryDelete,
+    helpHistoryGet,
+    helpHistoryList,
     helpStatus,
     helpStop,
     isNoKeyError,
     listenHelpApproval,
     listenHelpApprovalOutcome,
     listenHelpSteps,
+    newHelpConversationId,
     newHelpRequestId,
     openHelpManual,
     type HelpApprovalOutcome,
     type HelpApprovalRequest,
     type HelpDocument,
+    type HelpHistoryItem,
+    type HelpHistoryMessage,
     type HelpSource,
     type HelpStep,
     type HelpTurn,
   } from '$lib/help'
-  import { ActionIcon, Button, Checkbox, tooltip } from '@entropia/ui'
+  import { ActionIcon, Button, Checkbox, ConfirmDialog, tooltip } from '@entropia/ui'
   import HelpApprovalDialog from '../components/HelpApprovalDialog.svelte'
 
   const navigation = getNavigation()
@@ -100,6 +109,28 @@
     return [t('help.suggestion1'), t('help.suggestion2'), t('help.suggestion3')]
   }
 
+  /** One stored turn back into a panel message (S19): user turns stay
+   * plain; assistant turns recover the sources, documents, steps and
+   * flags stored in their meta. Notices (T26) and approval lines (T27)
+   * were stored as plain assistant text and render as such. */
+  function historyMessageToMessage(entry: HelpHistoryMessage): HelpMessage {
+    if (entry.role === 'user') return { role: 'user', content: entry.content }
+    const meta = (entry.meta ?? {}) as Record<string, unknown>
+    const sources = Array.isArray(meta['sources']) ? (meta['sources'] as HelpSource[]) : []
+    const documents = Array.isArray(meta['documents']) ? (meta['documents'] as HelpDocument[]) : []
+    const steps = Array.isArray(meta['steps']) ? (meta['steps'] as HelpStep[]) : []
+    return {
+      role: 'assistant',
+      content: entry.content,
+      sources,
+      documents,
+      steps,
+      local: meta['local'] === true,
+      roundLimitReached: meta['roundLimitReached'] === true,
+      toolsUnavailable: meta['toolsUnavailable'] === true,
+    }
+  }
+
   // The live inline approval (T27, D12): the `help://approval` payload the
   // backend waits on. Rendered as a modal HelpApprovalDialog, never as a
   // card in the conversation; answering adds a short line instead.
@@ -114,15 +145,17 @@
     summary: string
   }): void {
     pendingApproval = null
-    messages = [
-      ...messages,
-      {
-        role: 'assistant',
-        content: decision.approved
-          ? t('help.approvalApproved', { summary: decision.summary })
-          : t('help.approvalRejected', { summary: decision.summary }),
-      },
-    ]
+    const line = decision.approved
+      ? t('help.approvalApproved', { summary: decision.summary })
+      : t('help.approvalRejected', { summary: decision.summary })
+    messages = [...messages, { role: 'assistant', content: line }]
+    // T27: the line joins the stored conversation while the run is still
+    // in flight, so a reopened conversation keeps it (S19).
+    if (conversationId) {
+      helpHistoryAppend(conversationId, 'assistant', line).catch(() => {
+        error = t('help.historyError')
+      })
+    }
   }
 
   /** The mark shown before an outcome notice, in the UI language. */
@@ -170,6 +203,86 @@
       }
     })
     if (!changed) return
+  }
+
+  // The stored conversation (S19, D17): created with the first
+  // question, continued by every following one. Null until the first
+  // send; «Nueva conversación» clears it back to null.
+  let conversationId = $state<string | null>(null)
+  // «Historial» (S19): collapsed by default, never persisted open —
+  // every mount starts collapsed.
+  let historyOpen = $state(false)
+  let conversations = $state<HelpHistoryItem[]>([])
+  let historyLoading = $state(false)
+  let historyError = $state<string | null>(null)
+  let clearingHistory = $state(false)
+
+  /** Reloads the «Historial» list, silently: the count on the toggle
+   * stays current after every answer and every deletion. */
+  async function refreshHistory(): Promise<void> {
+    try {
+      conversations = (await helpHistoryList()) ?? []
+    } catch {
+      conversations = []
+      historyError = t('help.historyError')
+    }
+  }
+
+  /** Loads a stored conversation into the panel (S19): following
+   * questions continue it. The list collapses once it is open. */
+  async function openConversation(id: string): Promise<void> {
+    if (sending) return
+    historyLoading = true
+    historyError = null
+    try {
+      const detail = await helpHistoryGet(id)
+      conversationId = detail.id
+      messages = (detail.messages ?? []).map(historyMessageToMessage)
+      error = null
+      historyOpen = false
+    } catch {
+      historyError = t('help.historyError')
+    } finally {
+      historyLoading = false
+    }
+  }
+
+  /** Starts an empty conversation (S19): the next question creates it. */
+  function startNewConversation(): void {
+    if (sending) return
+    messages = []
+    conversationId = null
+    error = null
+  }
+
+  /** Soft-deletes one stored conversation (S19); deleting the open one
+   * clears the panel. */
+  async function deleteConversation(id: string): Promise<void> {
+    if (sending) return
+    try {
+      await helpHistoryDelete(id)
+      if (id === conversationId) {
+        messages = []
+        conversationId = null
+      }
+      await refreshHistory()
+    } catch {
+      historyError = t('help.historyError')
+    }
+  }
+
+  /** Soft-deletes every stored conversation (S19), after confirmation. */
+  async function confirmClearHistory(): Promise<void> {
+    clearingHistory = false
+    try {
+      await helpHistoryClear()
+      messages = []
+      conversationId = null
+      error = null
+      await refreshHistory()
+    } catch {
+      historyError = t('help.historyError')
+    }
   }
 
   onMount(() => {
@@ -223,6 +336,7 @@
     )
     // Starter buttons need no key: the bundled FAQ answers locally (S10).
     starters = fallbackStarters()
+    void refreshHistory()
     void helpFaqList().then(
       (items) => {
         const firstSteps = items
@@ -254,6 +368,9 @@
     if (!question || sending || status === 'loading') return
     sending = true
     error = null
+    // S19: the conversation is created with the first question; every
+    // following question continues it.
+    if (conversationId === null) conversationId = newHelpConversationId()
     // One id per question (T24): the live steps and `helpStop` belong to it.
     const requestId = newHelpRequestId()
     currentRequestId = requestId
@@ -287,7 +404,9 @@
       const answer = await helpAsk(question, history, diagnostics, {
         ...(withDocuments ? { documents: true as const } : {}),
         requestId,
+        conversationId,
       })
+      if (answer.conversationId) conversationId = answer.conversationId
       messages = [
         ...messages,
         {
@@ -301,6 +420,7 @@
           toolsUnavailable: answer.toolsUnavailable ?? false,
         },
       ]
+      void refreshHistory()
     } catch (sendError) {
       if (isNoKeyError(sendError)) {
         // No local answer and no key: show the key message (S6) instead of
@@ -393,6 +513,72 @@
         </div>
       </section>
     {/if}
+    <!-- Stored conversations (S19, D17): collapsed by default, never
+      persisted open; opening one loads it into the panel and the next
+      questions continue it. -->
+    <div class="help-view__history">
+      <div class="help-view__history-row">
+        <Button
+          variant="secondary"
+          size="sm"
+          aria-expanded={historyOpen}
+          onclick={() => (historyOpen = !historyOpen)}
+        >
+          <ActionIcon name="history" size={14} />
+          {$currentLocale && t('help.historyCount', { count: conversations.length })}
+        </Button>
+        <Button variant="secondary" size="sm" onclick={() => startNewConversation()}>
+          {$currentLocale && t('help.newConversation')}
+        </Button>
+      </div>
+      {#if historyOpen}
+        {#if historyLoading}
+          <p class="help-view__state" role="status">
+            {$currentLocale && t('help.historyLoading')}
+          </p>
+        {:else if historyError}
+          <p class="help-view__error" role="alert">{historyError}</p>
+        {:else if conversations.length === 0}
+          <p class="help-view__state">{$currentLocale && t('help.historyEmpty')}</p>
+        {:else}
+          <ul class="help-view__history-list">
+            {#each conversations as conv (conv.id)}
+              <li class="help-view__history-item">
+                <button
+                  type="button"
+                  class="help-view__history-open"
+                  class:help-view__history-open--current={conv.id === conversationId}
+                  aria-current={conv.id === conversationId ? 'true' : undefined}
+                  onclick={() => void openConversation(conv.id)}
+                >
+                  <span class="help-view__history-title">{conv.title}</span>
+                  <span class="help-view__history-date">
+                    {formatHistoryDate(
+                      conv.updatedAt,
+                      $currentLocale,
+                      $currentLocale && t('help.historyNow')
+                    )}
+                  </span>
+                </button>
+                <Button
+                  variant="secondary"
+                  iconOnly
+                  size="sm"
+                  aria-label={$currentLocale && t('help.deleteConversation')}
+                  title={$currentLocale && t('help.deleteConversation')}
+                  onclick={() => void deleteConversation(conv.id)}
+                >
+                  <ActionIcon name="delete" size={20} />
+                </Button>
+              </li>
+            {/each}
+          </ul>
+          <Button variant="secondary" size="sm" onclick={() => (clearingHistory = true)}>
+            {$currentLocale && t('help.clearHistory')}
+          </Button>
+        {/if}
+      {/if}
+    </div>
     <div
       class="help-view__messages"
       role="log"
@@ -595,6 +781,20 @@
       one, portalled out of the panel so it shows even maximized. Answering
       adds a short line to the conversation above. -->
     <HelpApprovalDialog request={pendingApproval} onanswered={handleApprovalDecided} />
+
+    <!-- «Borrar historial» (S19): soft-deletes every stored conversation,
+      after confirmation. -->
+    {#if clearingHistory}
+      <ConfirmDialog
+        title={$currentLocale && t('help.clearHistoryTitle')}
+        message={$currentLocale && t('help.clearHistoryMessage')}
+        cancelLabel={$currentLocale && t('help.cancel')}
+        confirmLabel={$currentLocale && t('help.confirmDelete')}
+        variant="destructive"
+        oncancel={() => (clearingHistory = false)}
+        onconfirm={() => void confirmClearHistory()}
+      />
+    {/if}
   {/if}
 </div>
 
@@ -934,6 +1134,79 @@
     font-family: var(--font-mono);
     font-size: var(--font-size-xs);
     white-space: pre-wrap;
+  }
+
+  /* Stored conversations (S19): collapsed by default, above the
+     conversation; the list scrolls on its own. */
+  .help-view__history {
+    display: flex;
+    flex-shrink: 0;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .help-view__history-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .help-view__history-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    max-height: 12rem;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    list-style: none;
+  }
+
+  .help-view__history-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .help-view__history-open {
+    display: flex;
+    flex: 1;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-input);
+    background: none;
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .help-view__history-open--current {
+    border-color: var(--color-accent);
+  }
+
+  .help-view__history-open:focus-visible {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: var(--focus-ring);
+  }
+
+  .help-view__history-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .help-view__history-date {
+    flex-shrink: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
   }
 
   .help-view__input-row {

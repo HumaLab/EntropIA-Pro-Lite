@@ -56,6 +56,8 @@ export interface HelpAnswer {
   roundLimitReached: boolean
   /** True when the provider rejected tool use and the answer is plain, without actions (T22). */
   toolsUnavailable: boolean
+  /** The stored conversation the question and answer joined (S19); absent when nothing was sent. */
+  conversationId?: string
 }
 
 export interface HelpStatus {
@@ -90,13 +92,19 @@ export function helpAsk(
   question: string,
   history: HelpTurn[] = [],
   diagnostics?: string | null,
-  options?: { documents?: boolean; requestId?: string }
+  options?: { documents?: boolean; requestId?: string; conversationId?: string }
 ): Promise<HelpAnswer> {
   const kept = history.slice(-HELP_HISTORY_MAX_TURNS)
-  const extra: { diagnostics?: string; documents?: boolean; requestId?: string } = {}
+  const extra: {
+    diagnostics?: string
+    documents?: boolean
+    requestId?: string
+    conversationId?: string
+  } = {}
   if (diagnostics) extra.diagnostics = diagnostics
   if (options?.documents) extra.documents = true
   if (options?.requestId) extra.requestId = options.requestId
+  if (options?.conversationId) extra.conversationId = options.conversationId
   return invoke<HelpAnswer>('help_ask', { question, history: kept, ...extra })
 }
 
@@ -519,6 +527,96 @@ function approvalStepLabel(
     default:
       return null
   }
+}
+
+/** One stored conversation of «Historial» (S19): id, title, last
+ * write and how many live messages it holds. Newest first, capped. */
+export interface HelpHistoryItem {
+  id: string
+  title: string
+  updatedAt: number
+  messageCount: number
+}
+
+/** One stored turn of a conversation (S19): the role, the text and the
+ * answer metadata (sources, steps, documents, local flag) as JSON. */
+export interface HelpHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+  meta: Record<string, unknown>
+}
+
+/** One stored conversation with every live message in order (S19). */
+export interface HelpHistoryDetail {
+  id: string
+  title: string
+  messages: HelpHistoryMessage[]
+}
+
+/** Every stored conversation, newest first, capped (S19). */
+export function helpHistoryList(): Promise<HelpHistoryItem[]> {
+  return invoke<HelpHistoryItem[]>('help_history_list')
+}
+
+/** One stored conversation with every live message in order (S19). */
+export function helpHistoryGet(id: string): Promise<HelpHistoryDetail> {
+  return invoke<HelpHistoryDetail>('help_history_get', { id })
+}
+
+/** Soft-deletes one stored conversation and all its messages (S19). */
+export function helpHistoryDelete(id: string): Promise<void> {
+  return invoke<void>('help_history_delete', { id })
+}
+
+/** Soft-deletes every stored conversation and message (S19). */
+export function helpHistoryClear(): Promise<void> {
+  return invoke<void>('help_history_clear')
+}
+
+/** Appends one line to a stored conversation (S19): the inline-approval
+ * decisions (T27) the panel adds while the run is still in flight. */
+export function helpHistoryAppend(
+  conversationId: string,
+  role: 'user' | 'assistant',
+  content: string
+): Promise<void> {
+  return invoke<void>('help_history_append', { conversationId, role, content })
+}
+
+/** A fresh id for one stored help conversation (S19): created on the
+ * first question, then sent with every following one. */
+export function newHelpConversationId(): string {
+  try {
+    const uuid = crypto.randomUUID()
+    if (uuid) return uuid
+  } catch {
+    return `help-${Date.now().toString(36)}-${Math.floor(Math.random() * 0xffffff).toString(36)}`
+  }
+  return `help-${Date.now().toString(36)}-${Math.floor(Math.random() * 0xffffff).toString(36)}`
+}
+
+/** A relative label for a stored conversation (S19): «ahora mismo» under
+ * 45 seconds, then minutes, hours and days in the UI locale, then a
+ * short date. `nowLabel` is the translated «now» and `nowMs` only exists
+ * so tests pin the clock. Pure: no stores, no I/O. */
+export function formatHistoryDate(
+  updatedAt: number,
+  locale: HelpStepLocale,
+  nowLabel: string,
+  nowMs: number = Date.now()
+): string {
+  const diffMs = Math.max(0, nowMs - updatedAt)
+  if (diffMs < 45_000) return nowLabel
+  const tag = locale === 'en' ? 'en' : 'es'
+  const minutes = Math.floor(diffMs / 60_000)
+  if (minutes < 60)
+    return new Intl.RelativeTimeFormat(tag, { numeric: 'auto' }).format(-minutes, 'minute')
+  const hours = Math.floor(diffMs / 3_600_000)
+  if (hours < 24)
+    return new Intl.RelativeTimeFormat(tag, { numeric: 'auto' }).format(-hours, 'hour')
+  const days = Math.floor(diffMs / 86_400_000)
+  if (days < 7) return new Intl.RelativeTimeFormat(tag, { numeric: 'auto' }).format(-days, 'day')
+  return new Intl.DateTimeFormat(tag, { day: 'numeric', month: 'short' }).format(updatedAt)
 }
 
 /** One inline approval the help agent asks the owner for (T22, D12). */

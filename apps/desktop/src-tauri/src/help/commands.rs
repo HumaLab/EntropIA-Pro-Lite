@@ -389,8 +389,9 @@ pub async fn help_diagnostics_preview(
 /// Answers a help question through the help agent (T22, S15): the manual
 /// excerpts (and the opted-in diagnostic report) ground the system prompt on
 /// the user's own OpenRouter key (S1–S3, S5), and the model drives the
-/// in-process agent MCP behind the help gate (D11, D12). The conversation
-/// lives in memory only; nothing is persisted (D4).
+/// in-process agent MCP behind the help gate (D11, D12). The question and
+/// the final answer are stored in the `conversationId` conversation (S19,
+/// D17) when the frontend sends one, creating it when missing.
 ///
 /// Before the key gate, a question that matches a bundled FAQ entry (S10)
 /// is answered locally with that entry's text, verbatim: no key needed, no
@@ -403,7 +404,10 @@ pub async fn help_diagnostics_preview(
 /// id of this question: while the agent runs, every executed tool call is
 /// emitted live as a `help://step` `{ requestId, tool, args, status }`
 /// event, and `help_stop` ends the run through it. Absent means no live
-/// events and no stopping (older clients keep working).
+/// events and no stopping (older clients keep working). `conversationId`
+/// (S19) is the stored conversation the question and the final answer are
+/// appended to, creating it when missing; the id is echoed back in
+/// `HelpAnswer.conversationId`. Absent means nothing is stored.
 // A Tauri command: one State per shared service it touches.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -414,6 +418,7 @@ pub async fn help_ask(
     diagnostics: Option<String>,
     documents: Option<bool>,
     request_id: Option<String>,
+    conversation_id: Option<String>,
     db: tauri::State<'_, crate::db::state::AppDbState>,
     endpoint: tauri::State<'_, Arc<AgentEndpointState>>,
     access: tauri::State<'_, Arc<AgentAccess>>,
@@ -429,6 +434,11 @@ pub async fn help_ask(
         Some(text) if !text.trim().is_empty() => Some(scrub_report(&text)),
         _ => None,
     };
+    // S19: the stored conversation the question and the final answer are
+    // appended to. Blank travels as absent (older clients send nothing).
+    let conversation_id = conversation_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty());
     let with_diagnostics = diagnostics.is_some();
     // One settings read (S14, D10): the model override with its fallback
     // chain, the clamped budgets and the local-answers switch. The key gate
@@ -454,19 +464,25 @@ pub async fn help_ask(
     if let Some(local) =
         super::settings::local_answer_for(&help, diagnostics.as_deref(), with_documents, &question)
     {
-        return Ok(HelpAnswer {
-            answer: local.answer,
-            sources: vec![HelpSource {
-                chapter: local.chapter,
-                title: local.title,
-                kind: super::index::Source::Faq.wire_kind().to_string(),
-            }],
-            local: true,
-            documents: Vec::new(),
-            steps: Vec::new(),
-            round_limit_reached: false,
-            tools_unavailable: false,
-        });
+        return Ok(super::history::attach_history(
+            &app,
+            conversation_id.clone(),
+            &question,
+            HelpAnswer {
+                answer: local.answer,
+                sources: vec![HelpSource {
+                    chapter: local.chapter,
+                    title: local.title,
+                    kind: super::index::Source::Faq.wire_kind().to_string(),
+                }],
+                local: true,
+                documents: Vec::new(),
+                steps: Vec::new(),
+                round_limit_reached: false,
+                tools_unavailable: false,
+                conversation_id: None,
+            },
+        ));
     }
     let api_key = key_result?;
     let history = normalize_history_capped(history, help.history_turns)?;
@@ -565,15 +581,27 @@ pub async fn help_ask(
     // followed in the background through the shared store — the same one
     // the MCP dialog decides — and reported as `help://approval-outcome`
     // with a clear Spanish message. The watch outlives the answer (up to
-    // 10 minutes) because the owner usually decides after reading it.
+    // 10 minutes) because the owner usually decides after reading it. With
+    // a stored conversation (S19), the message is also appended there, so
+    // a reopened conversation still shows what happened.
     {
         let mut pendings = gate.pending_approvals();
         for pending in &mut pendings {
             pending.request_id = run_id.clone();
+            pending.conversation_id = conversation_id.clone();
         }
         if !pendings.is_empty() {
             let watch_app = app.clone();
             let watch_store = endpoint.approvals();
+            let notice_conversations: std::collections::HashMap<String, String> = pendings
+                .iter()
+                .filter_map(|pending| {
+                    pending
+                        .conversation_id
+                        .clone()
+                        .map(|conversation| (pending.approval_id.clone(), conversation))
+                })
+                .collect();
             tokio::spawn(async move {
                 let reader = super::outcome::StoreApprovals::new(watch_store);
                 super::outcome::watch_pending_approvals(
@@ -582,7 +610,16 @@ pub async fn help_ask(
                     super::outcome::OUTCOME_WATCH_TIMEOUT,
                     super::outcome::OUTCOME_POLL_INTERVAL,
                     |event| {
-                        let _ = watch_app.emit(super::outcome::HELP_APPROVAL_OUTCOME_EVENT, event);
+                        let _ = watch_app.emit(super::outcome::HELP_APPROVAL_OUTCOME_EVENT, &event);
+                        if let Some(conversation) = notice_conversations.get(&event.approval_id) {
+                            if let Err(error) = super::history::append_notice(
+                                &watch_app,
+                                conversation,
+                                &event.message,
+                            ) {
+                                log::warn!(target: "help", "history notice failed: {error}");
+                            }
+                        }
                     },
                 )
                 .await;
@@ -602,6 +639,7 @@ pub async fn help_ask(
             steps: outcome.steps,
             round_limit_reached: outcome.round_limit_reached,
             tools_unavailable: false,
+            conversation_id: None,
         }),
         Err(error) if is_stop_error(&error) => {
             // «Detener» (T24): a clear message plus the steps done so far,
@@ -619,6 +657,7 @@ pub async fn help_ask(
                 steps: stopped.steps,
                 round_limit_reached: false,
                 tools_unavailable: false,
+                conversation_id: None,
             })
         }
         Err(error) if tools_unsupported_error(&error) => {
@@ -642,6 +681,7 @@ pub async fn help_ask(
                 steps: Vec::new(),
                 round_limit_reached: false,
                 tools_unavailable: true,
+                conversation_id: None,
             })
         }
         Err(error) => Err(error),
@@ -649,7 +689,9 @@ pub async fn help_ask(
     if let Some(run) = run_id.as_deref() {
         runs.finish(run);
     }
-    answer
+    // S19: the question and the final answer join the stored
+    // conversation when the frontend sent one.
+    answer.map(|answer| super::history::attach_history(&app, conversation_id, &question, answer))
 }
 
 /// Stops a running help agent turn (T24 «Detener»): flips the stop flag of

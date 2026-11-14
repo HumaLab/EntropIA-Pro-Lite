@@ -39,11 +39,38 @@ function backend(options: {
   preview?: string
   faq?: unknown
   askCalls?: unknown[]
+  historyCalls?: unknown[]
+  list?: unknown
+  detail?: unknown
 }) {
   const askCalls: unknown[] = options.askCalls ?? []
+  const historyCalls: unknown[] = options.historyCalls ?? []
+  // A faithful fake of the history store: list serves the live rows, so
+  // delete and clear are visible to the panel like against the backend.
+  const liveList: Array<{ id: string }> = Array.isArray(options.list)
+    ? [...(options.list as Array<{ id: string }>)]
+    : []
   mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
     if (command === 'help_status') return { hasOpenrouterKey: options.hasKey }
     if (command === 'help_diagnostics_preview') return options.preview ?? PREVIEW_TEXT
+    if (command === 'help_history_list') return liveList
+    if (command === 'help_history_get') {
+      const detail = options.detail
+      if (detail instanceof Error) throw detail
+      return detail ?? { id: 'c-1', title: 'Guardada', messages: [] }
+    }
+    if (command === 'help_history_delete') {
+      historyCalls.push({ command, args })
+      const id = (args as { id?: string } | undefined)?.id
+      const at = liveList.findIndex((item) => item.id === id)
+      if (at !== -1) liveList.splice(at, 1)
+      return undefined
+    }
+    if (command === 'help_history_clear' || command === 'help_history_append') {
+      historyCalls.push({ command, args })
+      if (command === 'help_history_clear') liveList.length = 0
+      return undefined
+    }
     if (command === 'help_faq_list') {
       const faq = options.faq
       if (faq instanceof Error) throw faq
@@ -129,6 +156,7 @@ describe('HelpView', () => {
       question: '¿Cómo importo un PDF?',
       history: [],
       requestId: expect.any(String),
+      conversationId: expect.any(String),
     })
     expect('diagnostics' in (askCalls[0] as Record<string, unknown>)).toBe(false)
     expect(await screen.findByText('Respuesta de ayuda')).toBeInTheDocument()
@@ -169,6 +197,7 @@ describe('HelpView', () => {
       history: [],
       documents: true,
       requestId: expect.any(String),
+      conversationId: expect.any(String),
     })
     expect(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })).not.toBeChecked()
   })
@@ -408,6 +437,7 @@ describe('HelpView', () => {
       history: [],
       diagnostics: PREVIEW_TEXT,
       requestId: expect.any(String),
+      conversationId: expect.any(String),
     })
     // The preview is reused, not fetched again for the send.
     expect(
@@ -430,6 +460,7 @@ describe('HelpView', () => {
       history: [],
       diagnostics: PREVIEW_TEXT,
       requestId: expect.any(String),
+      conversationId: expect.any(String),
     })
   })
 
@@ -1182,5 +1213,224 @@ describe('HelpView', () => {
       // The hint icon reads as a superscript, not a paragraph.
       expect(rule('.help-view__info')).toMatch(/vertical-align:\s*super/)
     })
+  })
+})
+
+describe('conversation history (S19)', () => {
+  const NOW = Date.UTC(2026, 5, 15, 12, 0, 0)
+  const SAVED = [
+    { id: 'c-1', title: '¿Cómo importo un PDF?', updatedAt: NOW - 5 * 60_000, messageCount: 2 },
+    { id: 'c-2', title: 'Falló la transcripción', updatedAt: NOW - 3 * 3_600_000, messageCount: 4 },
+  ]
+
+  beforeEach(() => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW)
+  })
+
+  async function toggleHistory() {
+    await composer()
+    await fireEvent.click(screen.getByRole('button', { name: /Historial/ }))
+  }
+
+  it('is collapsed by default, with the count on the toggle', async () => {
+    backend({ hasKey: true, list: SAVED })
+    render(HelpView)
+    await composer()
+
+    expect(screen.getByRole('button', { name: 'Historial (2)' })).toBeInTheDocument()
+    expect(document.querySelector('.help-view__history-list')).toBeNull()
+    // The starter shares the title; the collapsed list shows no date.
+    expect(screen.queryByText(/hace 5/)).not.toBeInTheDocument()
+  })
+
+  it('the toggle shows the list with title and relative date', async () => {
+    backend({ hasKey: true, list: SAVED })
+    render(HelpView)
+    await toggleHistory()
+
+    const list = document.querySelector('.help-view__history-list') as HTMLElement
+    expect(list).not.toBeNull()
+    // Scoped to the list: the starters share these titles.
+    expect(within(list).getByText('¿Cómo importo un PDF?')).toBeInTheDocument()
+    expect(within(list).getByText('Falló la transcripción')).toBeInTheDocument()
+    // A relative date next to the title, in the UI language.
+    expect(within(list).getByText(/hace 5/)).toBeInTheDocument()
+  })
+
+  it('opening a conversation loads its messages and the next question continues it', async () => {
+    const askCalls: unknown[] = []
+    backend({
+      hasKey: true,
+      list: SAVED,
+      detail: {
+        id: 'c-1',
+        title: '¿Cómo importo un PDF?',
+        messages: [
+          { role: 'user', content: '¿Cómo importo un PDF?', meta: {} },
+          {
+            role: 'assistant',
+            content: 'Arrastrá el PDF.',
+            meta: {
+              kind: 'answer',
+              sources: [{ chapter: 'Capítulo 1', title: '1.1', kind: 'manual' }],
+              documents: [],
+              steps: [],
+              local: true,
+            },
+          },
+        ],
+      },
+      ask: answer('Otra respuesta', []),
+      askCalls,
+    })
+    render(HelpView)
+    await toggleHistory()
+
+    // Scoped to the list: «¿Cómo importo un PDF?» is also a starter button.
+    const list = document.querySelector('.help-view__history-list') as HTMLElement
+    await fireEvent.click(within(list).getByRole('button', { name: /¿Cómo importo un PDF\?/ }))
+
+    expect(await screen.findByText('Arrastrá el PDF.')).toBeInTheDocument()
+    expect(screen.getByText('Respuesta local, sin consultar a OpenRouter')).toBeInTheDocument()
+    // The list collapses once the conversation is open.
+    expect(document.querySelector('.help-view__history-list')).toBeNull()
+
+    await sendQuestion('¿Y después?')
+
+    await waitFor(() => expect(askCalls).toHaveLength(1))
+    expect((askCalls[0] as { conversationId?: unknown }).conversationId).toBe('c-1')
+  })
+
+  it('the first answer brings the conversation id and later questions continue it', async () => {
+    const askCalls: unknown[] = []
+    backend({
+      hasKey: true,
+      ask: { answer: 'Listo', sources: [], conversationId: 'c-9' },
+      askCalls,
+    })
+    render(HelpView)
+    await composer()
+
+    await sendQuestion('Primera pregunta')
+    await screen.findByText('Listo')
+    await sendQuestion('Segunda pregunta')
+
+    await waitFor(() => expect(askCalls).toHaveLength(2))
+    // The first question generated the id it sent: a non-empty string.
+    const first = (askCalls[0] as { conversationId?: unknown }).conversationId
+    expect(typeof first).toBe('string')
+    expect((first as string).length).toBeGreaterThan(0)
+    // The answer echoed the stored id; the second question continues it.
+    expect((askCalls[1] as { conversationId?: unknown }).conversationId).toBe('c-9')
+  })
+
+  it('a new conversation starts empty and drops the stored id', async () => {
+    const askCalls: unknown[] = []
+    backend({
+      hasKey: true,
+      ask: { answer: 'Listo', sources: [], conversationId: 'c-9' },
+      askCalls,
+    })
+    render(HelpView)
+    await composer()
+
+    await sendQuestion('Primera pregunta')
+    await screen.findByText('Listo')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Nueva conversación' }))
+
+    expect(screen.queryByText('Listo')).not.toBeInTheDocument()
+    expect(screen.getByText('Probá con:')).toBeInTheDocument()
+
+    await sendQuestion('Otra cosa')
+
+    await waitFor(() => expect(askCalls).toHaveLength(2))
+    const second = (askCalls[1] as { conversationId?: unknown }).conversationId
+    expect(typeof second).toBe('string')
+    expect(second).not.toBe('c-9')
+  })
+
+  it('deleting the open conversation clears the panel', async () => {
+    const historyCalls: unknown[] = []
+    backend({
+      hasKey: true,
+      list: SAVED,
+      detail: {
+        id: 'c-1',
+        title: '¿Cómo importo un PDF?',
+        messages: [{ role: 'user', content: '¿Cómo importo un PDF?', meta: {} }],
+      },
+      historyCalls,
+    })
+    render(HelpView)
+    await toggleHistory()
+    const list = document.querySelector('.help-view__history-list') as HTMLElement
+    await fireEvent.click(within(list).getByRole('button', { name: /¿Cómo importo un PDF\?/ }))
+    await screen.findByText('¿Cómo importo un PDF?', { selector: '.help-view__bubble--user' })
+
+    await toggleHistory()
+    const deletes = screen.getAllByRole('button', { name: 'Eliminar conversación' })
+    await fireEvent.click(deletes[0] as HTMLElement)
+
+    await waitFor(() =>
+      expect(historyCalls).toContainEqual({
+        command: 'help_history_delete',
+        args: { id: 'c-1' },
+      })
+    )
+    expect(
+      screen.queryByText('¿Cómo importo un PDF?', { selector: '.help-view__bubble--user' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('clear asks for confirmation and then deletes everything', async () => {
+    const historyCalls: unknown[] = []
+    backend({ hasKey: true, list: SAVED, historyCalls })
+    render(HelpView)
+    await toggleHistory()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Borrar historial' }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('¿Borrar el historial?')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Borrar' }))
+
+    await waitFor(() =>
+      expect(historyCalls).toContainEqual({ command: 'help_history_clear', args: undefined })
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Historial (0)' })).toBeInTheDocument()
+    )
+  })
+
+  it('an inline approval decision is appended to the stored conversation', async () => {
+    const historyCalls: unknown[] = []
+    backend({
+      hasKey: true,
+      ask: { answer: 'Listo', sources: [], conversationId: 'c-7' },
+      historyCalls,
+    })
+    render(HelpView)
+    await composer()
+
+    await sendQuestion('Creá una colección SIMAPE')
+    await screen.findByText('Listo')
+
+    const { listen } = await import('@tauri-apps/api/event')
+    const handlers = vi
+      .mocked(listen)
+      .mock.calls.filter(([name]) => name === 'help://approval')
+      .map(([, handler]) => handler) as Array<(event: { payload: unknown }) => void>
+    handlers.at(-1)?.({
+      payload: { id: 'help-apr-9', tool: 'collections_create', summary: 'Crear «SIMAPE»' },
+    })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Aprobar' }))
+
+    await waitFor(() =>
+      expect(historyCalls).toContainEqual({
+        command: 'help_history_append',
+        args: { conversationId: 'c-7', role: 'assistant', content: 'Aprobaste: Crear «SIMAPE»' },
+      })
+    )
   })
 })

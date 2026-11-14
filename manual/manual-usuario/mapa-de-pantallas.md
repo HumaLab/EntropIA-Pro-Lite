@@ -725,6 +725,14 @@
 - ««{alias}» ya se usa como nombre canónico de otra entrada: cada unión se decide por separado.»
 - ««{canonical}» ya es un alias de otro nombre: elegí el nombre canónico final directamente.»
 
+### help
+
+- «No se pudo cargar el historial.»
+- «No se pudo hacer»
+- «No se pudo obtener el diagnóstico.»
+- «No se pudo responder el pedido. Probá de nuevo.»
+- «No se pudo responder. Probá de nuevo.»
+
 ### internetArchive
 
 - «Con error»
@@ -955,12 +963,8 @@
 - «No se pudo exportar la tabla.» `dbBrowser.exportError`
 - «No se pudo guardar el archivo de la red.» `collectionAnalysis.graphExportError`
 - «No se pudo guardar la anotación: {error}» `bibliographyAnnotations.saveFailed`
-- «No se pudo hacer» `help.approvalOutcomeFailed`
 - «No se pudo inicializar la base de datos» `app.initError`
 - «No se pudo iniciar la investigación.» `research.startError`
-- «No se pudo obtener el diagnóstico.» `help.diagnosticsError`
-- «No se pudo responder el pedido. Probá de nuevo.» `help.approvalAnswerError`
-- «No se pudo responder. Probá de nuevo.» `help.sendError`
 - «no se pudo leer el archivo» `bibliography.reprocess.unreadableReadFailed`
 - «{assistant}: salida {exitCode}; {detail}» `assistants.install.command_failed`
 
@@ -1020,16 +1024,20 @@
 
 ## Ayuda
 
-### Varios
+### Varios (1/2)
 
 - «Abrir Configuración» `help.openSettings`
 - «Aprobado» `help.approvalOutcomeApproved`
 - «Aprobar» `help.approve`
 - «Aprobaste: {summary}» `help.approvalApproved`
 - «Ayuda» `help.title`
+- «Borrar» `help.confirmDelete`
+- «Borrar historial» `help.clearHistory`
 - «Buscando en el manual…» `help.thinking`
 - «Buscar en mis documentos» `help.includeDocuments`
+- «Cancelar» `help.cancel`
 - «Cargando el diagnóstico…» `help.diagnosticsLoading`
+- «Cargando el historial…» `help.historyLoading`
 - «Cargá tu clave en Configuración › APIs remotas › OpenRouter y asegurate de que tu cuenta tenga crédito disponible.» `help.noKeyBody`
 - «Cerrar ayuda» `help.closePanel`
 - «Comprobando tu clave de OpenRouter…» `help.statusLoading`
@@ -1038,10 +1046,13 @@
 - «Del mapa de pantallas» `help.sourceScreenMap`
 - «Detener» `help.stop`
 - «El modelo no pudo usar herramientas en este turno; respondió sin usar herramientas.» `help.toolsUnavailable`
+- «Eliminar conversación» `help.deleteConversation`
 - «Enviar» `help.send`
 - «Escribí tu pregunta…» `help.placeholder`
 - «Falló una transcripción, ¿qué hago?» `help.suggestion3`
 - «Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.» `help.documentsHint`
+- «Historial» `help.history`
+- «Historial ({count})» `help.historyCount`
 - «Incluir diagnóstico» `help.includeDiagnostics`
 - «La ayuda pide aprobación» `help.approvalTitle`
 - «La ayuda usa tu cuenta de OpenRouter» `help.noKeyTitle`
@@ -1049,6 +1060,7 @@
 - «Maximizar» `help.maximizePanel`
 - «Más información sobre Buscar en mis documentos» `help.documentsInfo`
 - «Más información sobre Incluir diagnóstico» `help.diagnosticsInfo`
+- «Nueva conversación» `help.newConversation`
 - «Ocultar» `help.previewHide`
 - «Preguntá cómo usar EntropIA o qué hacer cuando algo falla» `help.subtitle`
 - «Preguntá, por ejemplo, cómo importar un PDF o qué hacer si falla una transcripción.» `help.emptyState`
@@ -1058,11 +1070,18 @@
 - «Rechazaste: {summary}» `help.approvalRejected`
 - «Respuesta local, sin consultar a OpenRouter» `help.localAnswer`
 - «Restaurar» `help.restorePanel`
+- «Se eliminan todas las conversaciones guardadas en este equipo. No se puede deshacer.» `help.clearHistoryMessage`
+- «Todavía no hay conversaciones guardadas.» `help.historyEmpty`
 - «Usó» `help.stepsUsed`
 - «Venció» `help.approvalOutcomeExpired`
 - «Ver el manual en línea» `help.openManual`
+
+### Varios (2/2)
+
 - «Ver qué se envía» `help.previewToggle`
 - «Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.» `help.diagnosticsHint`
+- «ahora mismo» `help.historyNow`
+- «¿Borrar el historial?» `help.clearHistoryTitle`
 - «¿Cómo cargo mi clave de OpenRouter?» `help.suggestion2`
 - «¿Cómo importo un PDF?» `help.suggestion1`
 

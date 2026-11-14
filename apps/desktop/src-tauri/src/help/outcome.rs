@@ -53,6 +53,10 @@ pub(crate) struct PendingApproval {
     pub target: Option<String>,
     /// The frontend question that requested it, when known.
     pub request_id: Option<String>,
+    /// The stored help conversation it belongs to (S19, D17), when the
+    /// question carried one: the outcome watcher appends its message
+    /// there. `None` for runs without history.
+    pub conversation_id: Option<String>,
 }
 
 /// One outcome over [`HELP_APPROVAL_OUTCOME_EVENT`] (T26).
@@ -758,6 +762,7 @@ mod tests {
             args: serde_json::json!({"collectionId": "col_1"}),
             target: target.map(str::to_string),
             request_id: Some("r-1".to_string()),
+            conversation_id: None,
         }
     }
 

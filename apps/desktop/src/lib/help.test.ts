@@ -6,16 +6,23 @@ import {
   HELP_NO_OPENROUTER_KEY,
   HELP_STEP_EVENT,
   describeHelpStep,
+  formatHistoryDate,
   helpApprovalAnswer,
   helpAsk,
   helpDiagnosticsPreview,
   helpFaqList,
+  helpHistoryAppend,
+  helpHistoryClear,
+  helpHistoryDelete,
+  helpHistoryGet,
+  helpHistoryList,
   helpStatus,
   helpStop,
   isNoKeyError,
   listenHelpApproval,
   listenHelpApprovalOutcome,
   listenHelpSteps,
+  newHelpConversationId,
   openHelpManual,
   type HelpApprovalOutcome,
   type HelpApprovalRequest,
@@ -437,5 +444,141 @@ describe('help approval outcomes (T26)', () => {
     expect(seen).toEqual([
       { approvalId: 'apr_1', status: 'approved', message: 'Se eliminó la colección «SIMAPE».' },
     ])
+  })
+})
+
+describe('help history backend wrappers (S19)', () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('helpHistoryList calls help_history_list', async () => {
+    vi.mocked(invoke).mockResolvedValue([
+      { id: 'c-1', title: '¿Cómo importo?', updatedAt: 1700000000000, messageCount: 2 },
+    ])
+
+    await expect(helpHistoryList()).resolves.toEqual([
+      { id: 'c-1', title: '¿Cómo importo?', updatedAt: 1700000000000, messageCount: 2 },
+    ])
+    expect(invoke).toHaveBeenCalledWith('help_history_list')
+  })
+
+  it('helpHistoryGet calls help_history_get with the id', async () => {
+    const detail = {
+      id: 'c-1',
+      title: '¿Cómo importo?',
+      messages: [
+        { role: 'user', content: '¿Cómo importo?', meta: {} },
+        { role: 'assistant', content: 'Así.', meta: { kind: 'answer', local: true } },
+      ],
+    }
+    vi.mocked(invoke).mockResolvedValue(detail)
+
+    await expect(helpHistoryGet('c-1')).resolves.toEqual(detail)
+    expect(invoke).toHaveBeenCalledWith('help_history_get', { id: 'c-1' })
+  })
+
+  it('helpHistoryDelete calls help_history_delete with the id', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+
+    await helpHistoryDelete('c-1')
+
+    expect(invoke).toHaveBeenCalledWith('help_history_delete', { id: 'c-1' })
+  })
+
+  it('helpHistoryClear calls help_history_clear', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+
+    await helpHistoryClear()
+
+    expect(invoke).toHaveBeenCalledWith('help_history_clear')
+  })
+
+  it('helpHistoryAppend sends conversation, role and content', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+
+    await helpHistoryAppend('c-1', 'assistant', 'Aprobaste: Crear la colección «SIMAPE»')
+
+    expect(invoke).toHaveBeenCalledWith('help_history_append', {
+      conversationId: 'c-1',
+      role: 'assistant',
+      content: 'Aprobaste: Crear la colección «SIMAPE»',
+    })
+  })
+
+  it('helpAsk passes conversationId through when the panel sends one', async () => {
+    vi.mocked(invoke).mockResolvedValue({ answer: 'listo', sources: [] })
+
+    await helpAsk('¿Cómo importo?', [], null, { conversationId: 'c-1' })
+
+    expect(invoke).toHaveBeenCalledWith('help_ask', {
+      question: '¿Cómo importo?',
+      history: [],
+      conversationId: 'c-1',
+    })
+  })
+
+  it('helpAsk leaves conversationId out for older callers', async () => {
+    vi.mocked(invoke).mockResolvedValue({ answer: 'listo', sources: [] })
+
+    await helpAsk('¿Cómo importo?', [], null)
+
+    const args = vi.mocked(invoke).mock.calls[0]?.[1] as Record<string, unknown>
+    expect('conversationId' in args).toBe(false)
+  })
+
+  it('helpAsk passes the stored conversation id back through', async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      answer: 'listo',
+      sources: [],
+      conversationId: 'c-9',
+    })
+
+    await expect(helpAsk('¿Cómo importo?', [], null, { conversationId: 'c-9' })).resolves.toEqual({
+      answer: 'listo',
+      sources: [],
+      conversationId: 'c-9',
+    })
+  })
+
+  it('newHelpConversationId answers unique ids', () => {
+    const first = newHelpConversationId()
+    const second = newHelpConversationId()
+    expect(typeof first).toBe('string')
+    expect(first.length).toBeGreaterThan(0)
+    expect(first).not.toBe(second)
+  })
+})
+
+describe('formatHistoryDate (S19)', () => {
+  // A fixed Monday noon UTC: dates and relative labels stay deterministic.
+  const NOW = Date.UTC(2026, 5, 15, 12, 0, 0)
+
+  it('says now under 45 seconds, in both locales', () => {
+    expect(formatHistoryDate(NOW - 10_000, 'es', 'ahora mismo', NOW)).toBe('ahora mismo')
+    expect(formatHistoryDate(NOW - 10_000, 'en', 'just now', NOW)).toBe('just now')
+  })
+
+  it('uses minutes, hours and days with the UI locale', () => {
+    const minutes = formatHistoryDate(NOW - 5 * 60_000, 'es', 'ahora mismo', NOW)
+    expect(minutes).toContain('5')
+    expect(minutes).toContain('hace')
+    expect(formatHistoryDate(NOW - 5 * 60_000, 'en', 'just now', NOW)).toContain('ago')
+
+    const hours = formatHistoryDate(NOW - 3 * 3_600_000, 'es', 'ahora mismo', NOW)
+    expect(hours).toContain('3')
+    expect(hours).toContain('hace')
+
+    const days = formatHistoryDate(NOW - 2 * 86_400_000, 'en', 'just now', NOW)
+    expect(days).toContain('2')
+    expect(days).toContain('ago')
+  })
+
+  it('falls back to a short date past a week', () => {
+    const es = formatHistoryDate(NOW - 10 * 86_400_000, 'es', 'ahora mismo', NOW)
+    const en = formatHistoryDate(NOW - 10 * 86_400_000, 'en', 'just now', NOW)
+    expect(es).toContain('5')
+    expect(en).toContain('5')
+    expect(es).not.toBe(en)
   })
 })

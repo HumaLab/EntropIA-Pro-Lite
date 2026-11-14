@@ -94,7 +94,9 @@ pub(crate) fn agent_step_status_wire(status: &super::agent_llm::AgentStepStatus)
 /// `round_limit_reached` says the round cap forced the final answer;
 /// `tools_unavailable` says the provider rejected tool use and the answer
 /// is a plain one without actions. The last two default off so older
-/// payloads keep decoding.
+/// payloads keep decoding. `conversation_id` (S19, D17) is the stored
+/// conversation the question and this answer were appended to, when the
+/// frontend sent one: absent on older payloads and when nothing was sent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HelpAnswer {
@@ -107,6 +109,8 @@ pub(crate) struct HelpAnswer {
     pub round_limit_reached: bool,
     #[serde(default)]
     pub tools_unavailable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
 }
 
 /// The trimmed question, or why it cannot be sent.

@@ -404,6 +404,7 @@ where
                                         args: args.clone(),
                                         target: target.clone(),
                                         request_id: None,
+                                        conversation_id: None,
                                     });
                                 }
                                 ToolOutcome::Pending {
