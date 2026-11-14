@@ -151,6 +151,7 @@ pub(crate) fn correct_ocr_via_local_qwen(
         // retranscribes the page per chunk and blows every budget. The text
         // already carries the content; single passes keep the image.
         let mut partials = Vec::with_capacity(chunks.len());
+        let mut failed: Vec<usize> = Vec::new();
         for (index, prompt) in prompts.iter().enumerate() {
             let part_log = format!("[chunk {}/{}]", index + 1, chunks.len());
             log::info!(
@@ -158,14 +159,52 @@ pub(crate) fn correct_ocr_via_local_qwen(
                 "local Qwen correction {part_log}: {} input chars",
                 chunks[index].chars().count(),
             );
-            partials.push(correct_one_pass(
-                &url,
-                prompt,
-                None,
-                max_tokens,
-                &part_log,
-                &chunks[index],
-            )?);
+            match correct_one_pass(&url, prompt, None, max_tokens, &part_log, &chunks[index]) {
+                Ok(fixed) => {
+                    log::info!(
+                        target: "llm-local",
+                        "local Qwen correction {part_log}: {} output chars",
+                        fixed.chars().count()
+                    );
+                    if let Err(error) = check_word_retention(&fixed, &chunks[index]) {
+                        log::warn!(
+                            target: "llm-local",
+                            "local Qwen correction {part_log} kept as original: {error}"
+                        );
+                        failed.push(index + 1);
+                        partials.push(chunks[index].clone());
+                    } else {
+                        partials.push(fixed);
+                    }
+                }
+                Err(error) => {
+                    // A failed chunk never blocks the page: keep the original
+                    // text for it (same as no correction) and say so loudly.
+                    // Committing a partial correction would delete content;
+                    // committing nothing would waste the chunks that worked.
+                    log::warn!(
+                        target: "llm-local",
+                        "local Qwen correction {part_log} kept as original: {error}"
+                    );
+                    failed.push(index + 1);
+                    partials.push(chunks[index].clone());
+                }
+            }
+        }
+        if failed.len() == chunks.len() {
+            return Err(format!(
+                "local Qwen correction failed on all {} chunks; nothing committed",
+                chunks.len()
+            ));
+        }
+        if !failed.is_empty() {
+            log::warn!(
+                target: "llm-local",
+                "local Qwen correction committed with {} of {} chunks uncorrected: {:?}",
+                failed.len(),
+                chunks.len(),
+                failed
+            );
         }
         partials.join("\n\n")
     };
