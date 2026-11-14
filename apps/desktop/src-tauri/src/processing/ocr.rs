@@ -599,27 +599,27 @@ impl OcrExecutor {
             }
         }
         if requested_high {
-        let job = ocr::OcrJob {
-            asset_id: task.asset_id.clone(),
-            asset_type: asset_type.to_string(),
-            mode: ocr::OcrMode::High,
-            include_native: super::repository::ocr_task_includes_native(&conn, &task.task_id)?,
-        };
-        let output = tauri::async_runtime::block_on(ocr::process_job(
-            &engines.provider,
-            &conn,
-            &job,
-            bytes,
-            &self.app,
-            vl.as_ref(),
-        ))?;
-        return to_compute_output(
-            output,
-            "paddle",
-            bytes,
-            asset_type,
-            self.page_count(asset_type, bytes),
-        );
+            let job = ocr::OcrJob {
+                asset_id: task.asset_id.clone(),
+                asset_type: asset_type.to_string(),
+                mode: ocr::OcrMode::High,
+                include_native: super::repository::ocr_task_includes_native(&conn, &task.task_id)?,
+            };
+            let output = tauri::async_runtime::block_on(ocr::process_job(
+                &engines.provider,
+                &conn,
+                &job,
+                bytes,
+                &self.app,
+                vl.as_ref(),
+            ))?;
+            return to_compute_output(
+                output,
+                "paddle",
+                bytes,
+                asset_type,
+                self.page_count(asset_type, bytes),
+            );
         }
         // `vl` is still locked from the creation check above (std Mutex is
         // not reentrant): reuse it directly instead of locking again.
