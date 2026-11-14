@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import {
+  HELP_APPROVAL_OUTCOME_EVENT,
   HELP_MANUAL_URL,
   HELP_NO_OPENROUTER_KEY,
   HELP_STEP_EVENT,
@@ -13,8 +14,10 @@ import {
   helpStop,
   isNoKeyError,
   listenHelpApproval,
+  listenHelpApprovalOutcome,
   listenHelpSteps,
   openHelpManual,
+  type HelpApprovalOutcome,
   type HelpApprovalRequest,
   type HelpStepEvent,
 } from './help'
@@ -317,5 +320,122 @@ describe('describeHelpStep (T24)', () => {
     expect(
       describeHelpStep({ tool: 'futura_herramienta', args: '{"a":1}', status: 'denied' }, 'en')
     ).toBe('futura_herramienta (denied)')
+  })
+})
+
+describe('describeHelpStep approval tools (T26)', () => {
+  const UUID = '29189757-1545-411c-b1cc-93132f7aaab7'
+  const pending = (target?: string) => ({
+    tool: 'collections_delete',
+    args: `{"collectionId":"${UUID}"}`,
+    status: 'pending' as const,
+    ...(target === undefined ? {} : { target }),
+  })
+
+  it('asks while pending and tells the result once decided, in spanish', () => {
+    expect(describeHelpStep(pending('SIMAPE'), 'es')).toBe('Pidió borrar la colección «SIMAPE»')
+    expect(describeHelpStep({ ...pending('SIMAPE'), status: 'ok' }, 'es')).toBe(
+      'Borró la colección «SIMAPE»'
+    )
+    expect(describeHelpStep({ ...pending('SIMAPE'), status: 'denied' }, 'es')).toBe(
+      'Borrado rechazado: la colección «SIMAPE»'
+    )
+    expect(describeHelpStep({ ...pending('SIMAPE'), status: 'failed' }, 'es')).toBe(
+      'No se pudo borrar la colección «SIMAPE»'
+    )
+    expect(describeHelpStep({ ...pending('SIMAPE'), status: 'expired' }, 'es')).toBe(
+      'El pedido para borrar la colección «SIMAPE» venció'
+    )
+  })
+
+  it('asks while pending and tells the result once decided, in english', () => {
+    expect(describeHelpStep(pending('SIMAPE'), 'en')).toBe(
+      'Asked to delete the “SIMAPE” collection'
+    )
+    expect(describeHelpStep({ ...pending('SIMAPE'), status: 'ok' }, 'en')).toBe(
+      'Deleted the “SIMAPE” collection'
+    )
+    expect(describeHelpStep({ ...pending('SIMAPE'), status: 'denied' }, 'en')).toBe(
+      'Deletion rejected: the “SIMAPE” collection'
+    )
+    expect(describeHelpStep({ ...pending('SIMAPE'), status: 'failed' }, 'en')).toBe(
+      'Could not delete the “SIMAPE” collection'
+    )
+    expect(describeHelpStep({ ...pending('SIMAPE'), status: 'expired' }, 'en')).toBe(
+      'The request to delete the “SIMAPE” collection expired'
+    )
+  })
+
+  it('never shows a raw UUID when the name is known', () => {
+    for (const locale of ['es', 'en'] as const) {
+      for (const status of ['pending', 'ok', 'denied', 'failed', 'expired'] as const) {
+        const label = describeHelpStep({ ...pending('SIMAPE'), status }, locale)
+        expect(label).toContain('SIMAPE')
+        expect(label).not.toContain(UUID)
+      }
+    }
+  })
+
+  it('falls back to a generic when the name is unknown, never to the id', () => {
+    expect(describeHelpStep(pending(), 'es')).toBe('Pidió borrar una colección')
+    expect(describeHelpStep(pending(), 'en')).toBe('Asked to delete a collection')
+    expect(describeHelpStep({ ...pending(), status: 'ok' }, 'es')).toBe('Borró una colección')
+    const label = describeHelpStep(pending(), 'es')
+    expect(label).not.toContain(UUID)
+    expect(label).not.toContain('col_')
+  })
+
+  it('marks pending live steps with the target name', () => {
+    expect(
+      describeHelpStep(
+        {
+          tool: 'documents_delete',
+          args: '{"itemIds":["ite_1"]}',
+          status: 'pending',
+          target: 'Acta',
+        },
+        'es'
+      )
+    ).toBe('Pidió borrar el documento «Acta»')
+    expect(
+      describeHelpStep(
+        {
+          tool: 'documents_delete',
+          args: '{"itemIds":["ite_1"]}',
+          status: 'pending',
+          target: 'Acta',
+        },
+        'en'
+      )
+    ).toBe('Asked to delete the “Acta” document')
+  })
+})
+
+describe('help approval outcomes (T26)', () => {
+  it('names the outcome event', () => {
+    expect(HELP_APPROVAL_OUTCOME_EVENT).toBe('help://approval-outcome')
+  })
+
+  it('relays the help://approval-outcome payload', async () => {
+    const { listen } = await import('@tauri-apps/api/event')
+    const seen: HelpApprovalOutcome[] = []
+
+    await listenHelpApprovalOutcome((outcome) => seen.push(outcome))
+
+    expect(listen).toHaveBeenCalledWith('help://approval-outcome', expect.any(Function))
+    const handler = vi
+      .mocked(listen)
+      .mock.calls.filter(([name]) => name === 'help://approval-outcome')
+      .at(-1)?.[1] as ((event: { payload: HelpApprovalOutcome }) => void) | undefined
+    handler?.({
+      payload: {
+        approvalId: 'apr_1',
+        status: 'approved',
+        message: 'Se eliminó la colección «SIMAPE».',
+      },
+    })
+    expect(seen).toEqual([
+      { approvalId: 'apr_1', status: 'approved', message: 'Se eliminó la colección «SIMAPE».' },
+    ])
   })
 })

@@ -407,6 +407,10 @@ describe('i18n', () => {
     expect(t('help.stop')).toBe('Detener')
     expect(t('help.sourceManual')).toBe('Del manual')
     expect(t('help.sourceScreenMap')).toBe('Del mapa de pantallas')
+    expect(t('help.approvalOutcomeApproved')).toBe('Aprobado')
+    expect(t('help.approvalOutcomeRejected')).toBe('Rechazado')
+    expect(t('help.approvalOutcomeFailed')).toBe('No se pudo hacer')
+    expect(t('help.approvalOutcomeExpired')).toBe('Venció')
 
     locale.set('en')
 
@@ -472,6 +476,10 @@ describe('i18n', () => {
     expect(t('help.stop')).toBe('Stop')
     expect(t('help.sourceManual')).toBe('From the manual')
     expect(t('help.sourceScreenMap')).toBe('From the screen map')
+    expect(t('help.approvalOutcomeApproved')).toBe('Approved')
+    expect(t('help.approvalOutcomeRejected')).toBe('Rejected')
+    expect(t('help.approvalOutcomeFailed')).toBe('Failed')
+    expect(t('help.approvalOutcomeExpired')).toBe('Expired')
   })
 
   it('exposes the API key clearing copy in both locales', async () => {

@@ -19,14 +19,30 @@ pub(crate) struct ToolSpec {
 }
 
 /// The outcome of one tool call: `Ok` carries the text for the model,
+/// `Pending` carries a pending MCP approval (the bridge answered with
+/// `{status: "pending", id}` and waits for the owner in the MCP dialog),
 /// `Denied` means the call must not run (owner rejected, tool not allowed),
-/// `Failed` means it ran and broke. Both non-Ok variants travel back to
-/// the model as plain text, never as a crash.
+/// `Failed` means it ran and broke. Every variant travels back to the
+/// model as plain text, never as a crash.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ToolOutcome {
-    Ok { content: String },
-    Denied { reason: String },
-    Failed { message: String },
+    Ok {
+        content: String,
+    },
+    /// An MCP approval the owner still has to answer (T26): `content`
+    /// is the pending JSON for the model, `approval_id` follows the
+    /// outcome, and `target` names the object when known (never a UUID).
+    Pending {
+        content: String,
+        approval_id: String,
+        target: Option<String>,
+    },
+    Denied {
+        reason: String,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 /// The tools the agent may call. `call` may await a long time (an owner
@@ -101,17 +117,22 @@ pub(crate) struct AgentRequest {
 
 /// One executed tool step shown in the panel: the tool name, the compact
 /// JSON args capped at [`ARGS_PREVIEW_MAX_CHARS`] chars, and the outcome.
+/// A `Pending` step (T26) waits for the owner in the MCP dialog; its
+/// `approval_id` follows the outcome and `target` names the object.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AgentStep {
     pub tool: String,
     pub args: String,
     pub status: AgentStepStatus,
+    pub approval_id: Option<String>,
+    pub target: Option<String>,
 }
 
-/// Whether one tool call succeeded, was denied or failed.
+/// Whether one tool call succeeded, waits for the owner, was denied or failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AgentStepStatus {
     Ok,
+    Pending,
     Denied,
     Failed,
 }
@@ -484,7 +505,7 @@ where
             }
             let parsed: Result<serde_json::Value, serde_json::Error> =
                 serde_json::from_str(&tool_call.arguments);
-            let (outcome_text, status, preview) = match parsed {
+            let (outcome_text, status, approval_id, target, preview) = match parsed {
                 Err(error) => {
                     let preview: String = tool_call
                         .arguments
@@ -495,6 +516,8 @@ where
                     (
                         format!("La herramienta falló: {detail}"),
                         AgentStepStatus::Failed,
+                        None,
+                        None,
                         preview,
                     )
                 }
@@ -505,21 +528,42 @@ where
                         (
                             format!("Herramienta denegada: {reason}"),
                             AgentStepStatus::Denied,
+                            None,
+                            None,
                             preview,
                         )
                     } else {
                         // No timeout on purpose: an owner approval (T22)
                         // may take as long as the person needs.
                         match executor.call(&tool_call.name, value).await {
-                            ToolOutcome::Ok { content } => (content, AgentStepStatus::Ok, preview),
+                            ToolOutcome::Ok { content } => {
+                                (content, AgentStepStatus::Ok, None, None, preview)
+                            }
+                            // A pending MCP approval (T26): the model sees
+                            // the pending JSON, the panel follows the id.
+                            ToolOutcome::Pending {
+                                content,
+                                approval_id,
+                                target,
+                            } => (
+                                content,
+                                AgentStepStatus::Pending,
+                                Some(approval_id),
+                                target,
+                                preview,
+                            ),
                             ToolOutcome::Denied { reason } => (
                                 format!("Herramienta denegada: {reason}"),
                                 AgentStepStatus::Denied,
+                                None,
+                                None,
                                 preview,
                             ),
                             ToolOutcome::Failed { message } => (
                                 format!("La herramienta falló: {message}"),
                                 AgentStepStatus::Failed,
+                                None,
+                                None,
                                 preview,
                             ),
                         }
@@ -530,6 +574,8 @@ where
                 tool: tool_call.name.clone(),
                 args: preview,
                 status,
+                approval_id,
+                target,
             };
             steps.push(step.clone());
             on_step(step);
@@ -1025,6 +1071,53 @@ mod tests {
             texts[1].contains("se rompió"),
             "el fallo vuelve al modelo: {}",
             texts[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_approvals_travel_as_pending_steps_with_id_and_target() {
+        // T26: an MCP approval waiting for the owner marks the step
+        // pending (not ok), keeps the id for the outcome watch and the
+        // human target for the label. The model still sees the pending
+        // JSON as the tool text.
+        let pending = serde_json::json!({
+            "status": "pending",
+            "id": "apr_1",
+        })
+        .to_string();
+        let transport = MockTransport::new(vec![
+            tool_response(vec![call("id-1", "borrar", r#"{"collectionId":"col_1"}"#)]),
+            answer("listo"),
+        ]);
+        let executor = MockExecutor::new(vec![tool("borrar")]).with_outcome(
+            "borrar",
+            ToolOutcome::Pending {
+                content: pending.clone(),
+                approval_id: "apr_1".to_string(),
+                target: Some("SIMAPE".to_string()),
+            },
+        );
+        let stop = AtomicBool::new(false);
+        let mut steps = Vec::new();
+        let result = run_agent(&transport, &executor, agent_request(3), &stop, |step| {
+            steps.push(step)
+        })
+        .await
+        .expect("debe responder");
+        assert_eq!(result.steps.len(), 1);
+        assert_eq!(result.steps[0].status, AgentStepStatus::Pending);
+        assert_eq!(result.steps[0].approval_id, Some("apr_1".to_string()));
+        assert_eq!(result.steps[0].target, Some("SIMAPE".to_string()));
+        let recorded = transport.recorded();
+        let text = recorded[1]
+            .messages
+            .iter()
+            .find(|message| message.role == "tool")
+            .and_then(|message| message.content.clone())
+            .unwrap_or_default();
+        assert!(
+            text.contains("apr_1"),
+            "the pending id reaches the model: {text}"
         );
     }
 

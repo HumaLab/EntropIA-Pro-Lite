@@ -57,20 +57,29 @@ pub(crate) struct HelpDocument {
 }
 
 /// One executed tool step shown under a help answer, from `AgentResult`
-/// (T22): the tool name, the compact JSON args, and the outcome on the
-/// wire as `"ok"`, `"denied"` or `"failed"`.
+/// (T22, T26): the tool name, the compact JSON args, and the outcome on
+/// the wire as `"ok"`, `"pending"`, `"denied"`, `"failed"` or
+/// `"expired"`. A `pending` step (T26) waits for the owner in the MCP
+/// approval dialog; `target` names its object when known (never a UUID),
+/// and `approvalId` follows the outcome. Both default off so older
+/// payloads keep decoding.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HelpStep {
     pub tool: String,
     pub args: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<String>,
 }
 
 /// The wire status of one [`HelpStep`].
 pub(crate) fn agent_step_status_wire(status: &super::agent_llm::AgentStepStatus) -> &'static str {
     match status {
         super::agent_llm::AgentStepStatus::Ok => "ok",
+        super::agent_llm::AgentStepStatus::Pending => "pending",
         super::agent_llm::AgentStepStatus::Denied => "denied",
         super::agent_llm::AgentStepStatus::Failed => "failed",
     }

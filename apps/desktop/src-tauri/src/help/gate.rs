@@ -250,13 +250,16 @@ pub(crate) trait HelpApprover: Send + Sync {
 
 /// The gate around a bridge executor: `tools()` hides CONTENT without the
 /// documents box, `call()` enforces the class of every call and records
-/// the document titles CONTENT results carried. The read-only web tools
+/// the document titles CONTENT results carried. An MCP approval (T26)
+/// returns `Pending` with the approval id and the human target, and is
+/// recorded for the background outcome watcher. The read-only web tools
 /// travel inside the gate (T23, S16, D14): they run freely like READ.
 pub(crate) struct HelpGateExecutor<E, A, H = ReqwestFetch> {
     inner: E,
     approver: A,
     with_documents: bool,
     content_titles: Arc<Mutex<Vec<String>>>,
+    pending: Arc<Mutex<Vec<super::outcome::PendingApproval>>>,
     web: WebTools<H>,
 }
 
@@ -267,6 +270,7 @@ impl<E, A> HelpGateExecutor<E, A, ReqwestFetch> {
             approver,
             with_documents,
             content_titles: Arc::new(Mutex::new(Vec::new())),
+            pending: Arc::new(Mutex::new(Vec::new())),
             web: WebTools::new(ReqwestFetch::default()),
         }
     }
@@ -287,6 +291,7 @@ impl<E, A, H: HttpFetch> HelpGateExecutor<E, A, H> {
             approver,
             with_documents,
             content_titles: Arc::new(Mutex::new(Vec::new())),
+            pending: Arc::new(Mutex::new(Vec::new())),
             web,
         }
     }
@@ -296,6 +301,15 @@ impl<E, A, H: HttpFetch> HelpGateExecutor<E, A, H> {
         self.content_titles
             .lock()
             .map(|titles| titles.clone())
+            .unwrap_or_default()
+    }
+
+    /// Pending MCP approvals (T26) recorded so far, in call order: the
+    /// id parsed from each pending tool result plus the human target.
+    pub(crate) fn pending_approvals(&self) -> Vec<super::outcome::PendingApproval> {
+        self.pending
+            .lock()
+            .map(|pending| pending.clone())
             .unwrap_or_default()
     }
 }
@@ -364,7 +378,46 @@ where
                     },
                 }
             }
-            ToolClass::McpApproval => self.inner.call(name, args).await,
+            ToolClass::McpApproval => {
+                // An MCP change never executes by itself (T26): the bridge
+                // answers with a pending approval for the owner. The id
+                // follows the outcome; the target names the step and the
+                // outcome message (never a UUID). Unknown names stay
+                // unknown: the generic fallback wins.
+                match self.inner.call(name, args.clone()).await {
+                    ToolOutcome::Ok { content } => {
+                        match super::outcome::parse_pending_approval_id(&content) {
+                            Some(approval_id) => {
+                                let approval: serde_json::Value =
+                                    serde_json::from_str(&content).unwrap_or_default();
+                                let target = super::outcome::resolve_target(
+                                    &self.inner,
+                                    name,
+                                    &args,
+                                    &approval,
+                                )
+                                .await;
+                                if let Ok(mut pending) = self.pending.lock() {
+                                    pending.push(super::outcome::PendingApproval {
+                                        approval_id: approval_id.clone(),
+                                        tool: name.to_string(),
+                                        args: args.clone(),
+                                        target: target.clone(),
+                                        request_id: None,
+                                    });
+                                }
+                                ToolOutcome::Pending {
+                                    content,
+                                    approval_id,
+                                    target,
+                                }
+                            }
+                            None => ToolOutcome::Ok { content },
+                        }
+                    }
+                    other => other,
+                }
+            }
         }
     }
 }
@@ -652,12 +705,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcp_approval_calls_forward_as_is() {
+    async fn mcp_approval_calls_forward_as_pending_with_name() {
+        // T26: an MCP change is forwarded, but the gate marks it pending
+        // with the approval id and the collection NAME (never the UUID).
         let (executor, bridge, approver) = harness(false, vec![]);
         let pending = serde_json::json!({
             "status": "pending",
             "id": "apr_1",
+            "clientId": "in-app-help",
             "clientName": "Ayuda",
+            "collections": ["SIMAPE"],
+            "files": 2,
+            "documentTitles": ["Acta"],
         })
         .to_string();
         bridge
@@ -670,18 +729,71 @@ mod tests {
         match executor
             .call(
                 "collections_delete",
-                serde_json::json!({"collectionId": "col_1"}),
+                serde_json::json!({"collectionId": "29189757-1545-411c-b1cc-93132f7aaab7"}),
             )
             .await
         {
-            ToolOutcome::Ok { content } => assert_eq!(content, pending),
-            other => panic!("an MCP approval call must pass through: {other:?}"),
+            ToolOutcome::Pending {
+                content,
+                approval_id,
+                target,
+            } => {
+                assert_eq!(content, pending);
+                assert_eq!(approval_id, "apr_1");
+                assert_eq!(target, Some("SIMAPE".to_string()));
+            }
+            other => panic!("an MCP approval call must be Pending: {other:?}"),
         }
-        assert_eq!(bridge.calls().len(), 1);
+        assert_eq!(
+            bridge.calls().len(),
+            1,
+            "no extra reads: the name came with the pending"
+        );
         assert!(
             approver.requests().is_empty(),
             "no inline card: the MCP dialog asks"
         );
+        let recorded = executor.pending_approvals();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].approval_id, "apr_1");
+        assert_eq!(recorded[0].target, Some("SIMAPE".to_string()));
+    }
+
+    #[tokio::test]
+    async fn mcp_approval_without_a_name_falls_back_to_a_bridge_read() {
+        // T26: when the pending payload names nothing, one cheap READ
+        // resolves the name; a step never shows the raw UUID.
+        let (executor, bridge, _) = harness(false, vec![]);
+        let pending = serde_json::json!({
+            "status": "pending",
+            "id": "apr_9",
+            "clientId": "in-app-help",
+            "clientName": "Ayuda",
+            "collections": [],
+        })
+        .to_string();
+        let page = serde_json::json!({
+            "records": [{"id": "col_1", "name": "SIMAPE", "description": null, "itemCount": 1, "createdAt": 1, "updatedAt": 1}],
+            "nextCursor": null,
+        })
+        .to_string();
+        {
+            let mut handler = bridge.handler.lock().expect("lock");
+            handler.push_back(ToolOutcome::Ok { content: pending });
+            handler.push_back(ToolOutcome::Ok { content: page });
+        }
+        match executor
+            .call(
+                "collections_delete",
+                serde_json::json!({"collectionId": "col_1"}),
+            )
+            .await
+        {
+            ToolOutcome::Pending { target, .. } => {
+                assert_eq!(target, Some("SIMAPE".to_string()));
+            }
+            other => panic!("an MCP approval call must be Pending: {other:?}"),
+        }
     }
 
     #[tokio::test]

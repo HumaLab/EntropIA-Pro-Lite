@@ -955,6 +955,7 @@
 - «No se pudo exportar la tabla.» `dbBrowser.exportError`
 - «No se pudo guardar el archivo de la red.» `collectionAnalysis.graphExportError`
 - «No se pudo guardar la anotación: {error}» `bibliographyAnnotations.saveFailed`
+- «No se pudo hacer» `help.approvalOutcomeFailed`
 - «No se pudo inicializar la base de datos» `app.initError`
 - «No se pudo iniciar la investigación.» `research.startError`
 - «No se pudo obtener el diagnóstico.» `help.diagnosticsError`
@@ -1022,6 +1023,7 @@
 ### Varios
 
 - «Abrir Configuración» `help.openSettings`
+- «Aprobado» `help.approvalOutcomeApproved`
 - «Aprobar» `help.approve`
 - «Ayuda» `help.title`
 - «Buscando en el manual…» `help.thinking`
@@ -1048,10 +1050,12 @@
 - «Preguntá cómo usar EntropIA o qué hacer cuando algo falla» `help.subtitle`
 - «Preguntá, por ejemplo, cómo importar un PDF o qué hacer si falla una transcripción.» `help.emptyState`
 - «Probá con:» `help.suggestionsLabel`
+- «Rechazado» `help.approvalOutcomeRejected`
 - «Rechazar» `help.reject`
 - «Respuesta local, sin consultar a OpenRouter» `help.localAnswer`
 - «Restaurar» `help.restorePanel`
 - «Usó» `help.stepsUsed`
+- «Venció» `help.approvalOutcomeExpired`
 - «Ver el manual en línea» `help.openManual`
 - «Ver qué se envía» `help.previewToggle`
 - «Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.» `help.diagnosticsHint`

@@ -14,9 +14,11 @@
     helpStop,
     isNoKeyError,
     listenHelpApproval,
+    listenHelpApprovalOutcome,
     listenHelpSteps,
     newHelpRequestId,
     openHelpManual,
+    type HelpApprovalOutcome,
     type HelpApprovalRequest,
     type HelpDocument,
     type HelpSource,
@@ -36,6 +38,14 @@
    */
   let { embedded = false }: { embedded?: boolean } = $props()
 
+  /** One decided MCP approval following an answer (T26): how it ended
+   * and the backend's clear Spanish message naming the target. */
+  type HelpOutcomeNotice = {
+    approvalId: string
+    status: 'approved' | 'rejected' | 'expired' | 'failed'
+    message: string
+  }
+
   type HelpMessage = {
     role: 'user' | 'assistant'
     content: string
@@ -44,12 +54,14 @@
     local?: boolean
     /** Titles of the user's documents the agent read for this question (T22). */
     documents?: HelpDocument[]
-    /** Every tool call the agent made, in order (T22). */
+    /** Every tool call the agent made, in order (T22, T26). */
     steps?: HelpStep[]
     /** True when the round cap forced the final answer (T22). */
     roundLimitReached?: boolean
     /** True when the provider rejected tool use and the answer is plain (T22). */
     toolsUnavailable?: boolean
+    /** Decided MCP approvals that followed this answer (T26). */
+    notices?: HelpOutcomeNotice[]
   }
 
   /** The backend's group name for the first-steps starter buttons (S10). */
@@ -109,24 +121,90 @@
     }
   }
 
+  /** The mark shown before an outcome notice, in the UI language. */
+  function outcomeMark(status: HelpOutcomeNotice['status']): string {
+    if (status === 'approved') return $currentLocale && t('help.approvalOutcomeApproved')
+    if (status === 'rejected') return $currentLocale && t('help.approvalOutcomeRejected')
+    if (status === 'expired') return $currentLocale && t('help.approvalOutcomeExpired')
+    return $currentLocale && t('help.approvalOutcomeFailed')
+  }
+
+  /** Applies one decided MCP approval (T26): the notice goes right after
+   * the answer that requested it — found by the step carrying its
+   * approval id — and that step flips from pending to its final state.
+   * The original answer text stays (it was true when written); the notice
+   * makes the final state clear. An outcome for no known answer is
+   * ignored, never pinned to the wrong one. */
+  function applyApprovalOutcome(outcome: HelpApprovalOutcome): void {
+    const stepStatus: HelpStep['status'] =
+      outcome.status === 'approved'
+        ? 'ok'
+        : outcome.status === 'rejected'
+          ? 'denied'
+          : outcome.status === 'expired'
+            ? 'expired'
+            : 'failed'
+    let changed = false
+    messages = messages.map((message) => {
+      if (message.role !== 'assistant' || !message.steps) return message
+      const index = message.steps.findIndex((step) => step.approvalId === outcome.approvalId)
+      if (index === -1) return message
+      if (message.notices?.some((notice) => notice.approvalId === outcome.approvalId)) {
+        return message
+      }
+      const steps = message.steps.map((step, at) =>
+        at === index ? { ...step, status: stepStatus } : step
+      )
+      changed = true
+      return {
+        ...message,
+        steps,
+        notices: [
+          ...(message.notices ?? []),
+          { approvalId: outcome.approvalId, status: outcome.status, message: outcome.message },
+        ],
+      }
+    })
+    if (!changed) return
+  }
+
   onMount(() => {
     let unlisten: (() => void) | null = null
     let unlistenSteps: (() => void) | null = null
+    let unlistenOutcomes: (() => void) | null = null
     void listenHelpApproval((request) => {
       pendingApproval = { ...request, answered: false }
     }).then((stop) => {
       if (destroyed) stop()
       else unlisten = stop
     })
-    // Live agent steps (T24): only the run in flight renders them; a late
-    // step from a settled run is ignored.
+    // Live agent steps (T24, T26): only the run in flight renders them;
+    // a late step from a settled run is ignored. A pending step already
+    // carries its human target and approval id.
     void listenHelpSteps((step) => {
       if (currentRequestId && step.requestId === currentRequestId) {
-        liveSteps = [...liveSteps, { tool: step.tool, args: step.args, status: step.status }]
+        liveSteps = [
+          ...liveSteps,
+          {
+            tool: step.tool,
+            args: step.args,
+            status: step.status,
+            ...(step.target === undefined ? {} : { target: step.target }),
+            ...(step.approvalId === undefined ? {} : { approvalId: step.approvalId }),
+          },
+        ]
       }
     }).then((stopSteps) => {
       if (destroyed) stopSteps()
       else unlistenSteps = stopSteps
+    })
+    // Decided MCP approvals (T26): the backend follows them after the
+    // answer and reports each outcome once.
+    void listenHelpApprovalOutcome((outcome) => {
+      applyApprovalOutcome(outcome)
+    }).then((stopOutcomes) => {
+      if (destroyed) stopOutcomes()
+      else unlistenOutcomes = stopOutcomes
     })
     void helpStatus().then(
       (result) => {
@@ -156,6 +234,7 @@
       destroyed = true
       unlisten?.()
       unlistenSteps?.()
+      unlistenOutcomes?.()
     }
   })
 
@@ -359,6 +438,16 @@
                   .map((step) => describeHelpStep(step, $currentLocale))
                   .join(', ')}
               </p>
+            {/if}
+            {#if message.notices && message.notices.length > 0}
+              <ul class="help-view__notices" aria-live="polite">
+                {#each message.notices as notice (notice.approvalId)}
+                  <li class="help-view__notice help-view__notice--{notice.status}">
+                    <span class="help-view__notice-mark">{outcomeMark(notice.status)}</span>
+                    <span>{notice.message}</span>
+                  </li>
+                {/each}
+              </ul>
             {/if}
             {#if message.roundLimitReached}
               <p class="help-view__note">{$currentLocale && t('help.roundLimitReached')}</p>
@@ -700,6 +789,37 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
     font-style: italic;
+  }
+
+  /* Decided MCP approvals (T26): one short assistant-side notice right
+     after the answer that requested it, with a success/rejected/failed
+     mark. The original answer text stays above. */
+  .help-view__notices {
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .help-view__notices li + li {
+    margin-top: var(--space-1);
+  }
+
+  .help-view__notice {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+  }
+
+  .help-view__notice-mark {
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .help-view__notice--approved .help-view__notice-mark {
+    color: var(--color-success, var(--color-accent));
+  }
+
+  .help-view__notice--rejected .help-view__notice-mark,
+  .help-view__notice--failed .help-view__notice-mark {
+    color: var(--color-danger);
   }
 
   .help-view__bubble--approval {

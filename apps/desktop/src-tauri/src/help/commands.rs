@@ -39,10 +39,13 @@ use crate::automation::server::AgentEndpointState;
 /// source of truth at the end.
 pub(crate) const HELP_STEP_EVENT: &str = "help://step";
 
-/// One live step emitted over [`HELP_STEP_EVENT`] (T24): which run it
-/// belongs to, the tool, the compact JSON args and the outcome on the wire
-/// as `"ok"`, `"denied"` or `"failed"` — the same shape as `HelpStep`
-/// plus the run id.
+/// One live step emitted over [`HELP_STEP_EVENT`] (T24, T26): which run
+/// it belongs to, the tool, the compact JSON args and the outcome on the
+/// wire as `"ok"`, `"pending"`, `"denied"`, `"failed"` or
+/// `"expired"` — the same shape as `HelpStep` plus the run id. A
+/// `pending` step waits for the owner in the MCP dialog; `target` names
+/// its object when known (never a UUID) and `approvalId` follows the
+/// outcome. Both default off so older clients keep decoding.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HelpStepEvent {
@@ -50,6 +53,10 @@ pub(crate) struct HelpStepEvent {
     pub tool: String,
     pub args: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<String>,
 }
 
 /// One stop flag per running agent turn (T24 «Detener»), keyed by the
@@ -274,6 +281,8 @@ where
                 tool: step.tool.clone(),
                 args: step.args.clone(),
                 status: agent_step_status_wire(&step.status).to_string(),
+                target: step.target.clone(),
+                approval_id: step.approval_id.clone(),
             })
             .collect(),
         round_limit_reached: result.round_limit_reached,
@@ -518,10 +527,13 @@ pub async fn help_ask(
         temperature: help.temperature,
         max_rounds: help.max_rounds,
     };
-    // Live steps (T24): each executed tool call emits `help://step` as it
-    // happens; the panel renders them under «Pensando…» until the final
-    // list in the answer replaces them. The same steps are collected here
-    // so a stopped run answers with what it had done so far.
+    // Live steps (T24, T26): each executed tool call emits `help://step`
+    // as it happens; the panel renders them under «Pensando…» until the
+    // final list in the answer replaces them. A pending MCP step carries
+    // its human target (never a UUID) and its approval id, so the panel
+    // already says «Pidió borrar …» while the owner decides. The same
+    // steps are collected here so a stopped run answers with what it had
+    // done so far.
     let live_app = app.clone();
     let live_run = run_id.clone();
     let mut live_steps: Vec<HelpStep> = Vec::new();
@@ -531,6 +543,8 @@ pub async fn help_ask(
             tool: step.tool.clone(),
             args: step.args.clone(),
             status: status.clone(),
+            target: step.target.clone(),
+            approval_id: step.approval_id.clone(),
         });
         if let Some(run) = live_run.as_deref() {
             let _ = live_app.emit(
@@ -540,11 +554,41 @@ pub async fn help_ask(
                     tool: step.tool.clone(),
                     args: step.args.clone(),
                     status,
+                    target: step.target.clone(),
+                    approval_id: step.approval_id.clone(),
                 },
             );
         }
     })
     .await;
+    // MCP approval outcomes (T26): every pending approval of this run is
+    // followed in the background through the shared store — the same one
+    // the MCP dialog decides — and reported as `help://approval-outcome`
+    // with a clear Spanish message. The watch outlives the answer (up to
+    // 10 minutes) because the owner usually decides after reading it.
+    {
+        let mut pendings = gate.pending_approvals();
+        for pending in &mut pendings {
+            pending.request_id = run_id.clone();
+        }
+        if !pendings.is_empty() {
+            let watch_app = app.clone();
+            let watch_store = endpoint.approvals();
+            tokio::spawn(async move {
+                let reader = super::outcome::StoreApprovals::new(watch_store);
+                super::outcome::watch_pending_approvals(
+                    &reader,
+                    pendings,
+                    super::outcome::OUTCOME_WATCH_TIMEOUT,
+                    super::outcome::OUTCOME_POLL_INTERVAL,
+                    |event| {
+                        let _ = watch_app.emit(super::outcome::HELP_APPROVAL_OUTCOME_EVENT, event);
+                    },
+                )
+                .await;
+            });
+        }
+    }
     let answer = match outcome {
         Ok(outcome) => Ok(HelpAnswer {
             answer: outcome.answer,
@@ -852,6 +896,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_approval_tool_step_carries_target_and_pending_status() {
+        // T26: a step for an MCP approval tool carries the approval id
+        // and the collection NAME (never the UUID) with status pending.
+        let transport = MockTransport::new(vec![
+            tool_call(
+                "id-1",
+                "collections_delete",
+                r#"{"collectionId":"29189757-1545-411c-b1cc-93132f7aaab7"}"#,
+            ),
+            answer("Pedí borrarla; aprobala en el diálogo."),
+        ]);
+        let bridge = MockBridge::new(&["collections_delete"]);
+        bridge.outcomes.lock().expect("lock").insert(
+            "collections_delete".to_string(),
+            super::super::agent_llm::ToolOutcome::Ok {
+                content: serde_json::json!({
+                    "status": "pending",
+                    "id": "apr_1",
+                    "clientId": "in-app-help",
+                    "clientName": "Ayuda",
+                    "collections": ["SIMAPE"],
+                    "files": 2,
+                })
+                .to_string(),
+            },
+        );
+        let approver = MockApprover::new(vec![]);
+        let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let outcome = run_help_agent(
+            &transport,
+            &gate,
+            inputs("Borrá la colección SIMAPE"),
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .await
+        .expect("debe responder");
+        assert_eq!(outcome.steps.len(), 1);
+        assert_eq!(outcome.steps[0].tool, "collections_delete");
+        assert_eq!(outcome.steps[0].status, "pending");
+        assert_eq!(outcome.steps[0].target, Some("SIMAPE".to_string()));
+        assert_eq!(outcome.steps[0].approval_id, Some("apr_1".to_string()));
+        let pendings = gate.pending_approvals();
+        assert_eq!(pendings.len(), 1);
+        assert_eq!(pendings[0].approval_id, "apr_1");
+    }
+
+    #[tokio::test]
     async fn an_action_asks_inline_and_forwards_when_approved() {
         let transport = MockTransport::new(vec![
             tool_call(
@@ -986,12 +1078,15 @@ mod tests {
     #[test]
     fn step_events_carry_request_tool_args_and_status() {
         // T24: while the agent runs, the panel follows `help://step` live.
+        // T26 adds the human target and the approval id (both default off).
         assert_eq!(HELP_STEP_EVENT, "help://step");
         let event = HelpStepEvent {
             request_id: "r-1".to_string(),
             tool: "collections_list".to_string(),
             args: "{}".to_string(),
             status: "ok".to_string(),
+            target: None,
+            approval_id: None,
         };
         let value = serde_json::to_value(&event).expect("serializes");
         assert_eq!(
@@ -1001,6 +1096,26 @@ mod tests {
                 "tool": "collections_list",
                 "args": "{}",
                 "status": "ok",
+            })
+        );
+        let pending = HelpStepEvent {
+            request_id: "r-1".to_string(),
+            tool: "collections_delete".to_string(),
+            args: "{}".to_string(),
+            status: "pending".to_string(),
+            target: Some("SIMAPE".to_string()),
+            approval_id: Some("apr_1".to_string()),
+        };
+        let value = serde_json::to_value(&pending).expect("serializes");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "requestId": "r-1",
+                "tool": "collections_delete",
+                "args": "{}",
+                "status": "pending",
+                "target": "SIMAPE",
+                "approvalId": "apr_1",
             })
         );
     }
@@ -1015,6 +1130,8 @@ mod tests {
             tool: "collections_list".to_string(),
             args: "{}".to_string(),
             status: "ok".to_string(),
+            target: None,
+            approval_id: None,
         }];
         let stopped = stopped_answer(steps.clone());
         assert!(

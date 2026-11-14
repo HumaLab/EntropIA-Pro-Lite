@@ -1127,6 +1127,10 @@ const es = {
   'help.approve': 'Aprobar',
   'help.reject': 'Rechazar',
   'help.approvalAnswerError': 'No se pudo responder el pedido. Probá de nuevo.',
+  'help.approvalOutcomeApproved': 'Aprobado',
+  'help.approvalOutcomeRejected': 'Rechazado',
+  'help.approvalOutcomeFailed': 'No se pudo hacer',
+  'help.approvalOutcomeExpired': 'Venció',
   'help.stepsUsed': 'Usó',
   'help.roundLimitReached':
     'Llegó al límite de rondas de herramientas; la respuesta puede estar incompleta.',
@@ -5066,6 +5070,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'help.approve': 'Approve',
   'help.reject': 'Reject',
   'help.approvalAnswerError': 'Could not answer the request. Try again.',
+  'help.approvalOutcomeApproved': 'Approved',
+  'help.approvalOutcomeRejected': 'Rejected',
+  'help.approvalOutcomeFailed': 'Failed',
+  'help.approvalOutcomeExpired': 'Expired',
   'help.stepsUsed': 'Used',
   'help.roundLimitReached': 'Reached the tool round limit; the answer may be incomplete.',
   'help.toolsUnavailable':

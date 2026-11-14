@@ -878,4 +878,168 @@ describe('HelpView', () => {
       expect(await screen.findByRole('button', { name: 'Enviar' })).toBeInTheDocument()
     })
   })
+
+  describe('MCP approval outcomes (T26)', () => {
+    const UUID = '29189757-1545-411c-b1cc-93132f7aaab7'
+
+    /** Fires a help://approval-outcome event the way the backend emits it. */
+    async function fireOutcome(outcome: { approvalId: string; status: string; message: string }) {
+      const { listen } = await import('@tauri-apps/api/event')
+      const handlers = vi
+        .mocked(listen)
+        .mock.calls.filter(([name]) => name === 'help://approval-outcome')
+        .map(([, handler]) => handler) as Array<(event: { payload: typeof outcome }) => void>
+      const handler = handlers.at(-1)
+      if (!handler) throw new Error('HelpView is not listening to help://approval-outcome')
+      handler({ payload: outcome })
+    }
+
+    it('shows the pending request label while the owner decides, with the name', async () => {
+      backend({
+        hasKey: true,
+        ask: {
+          answer: 'Pedí borrarla; aprobala en el diálogo.',
+          sources: [],
+          local: false,
+          documents: [],
+          steps: [
+            {
+              tool: 'collections_delete',
+              args: `{"collectionId":"${UUID}"}`,
+              status: 'pending',
+              target: 'SIMAPE',
+              approvalId: 'apr_1',
+            },
+          ],
+          roundLimitReached: false,
+          toolsUnavailable: false,
+        },
+      })
+      render(HelpView)
+
+      await sendQuestion('Borrá la colección SIMAPE')
+
+      expect(await screen.findByText('Pedí borrarla; aprobala en el diálogo.')).toBeInTheDocument()
+      const label = await screen.findByText('Usó: Pidió borrar la colección «SIMAPE»')
+      expect(label).toBeInTheDocument()
+      expect(screen.queryByText(new RegExp(UUID))).not.toBeInTheDocument()
+    })
+
+    it('appends the outcome notice after the right answer and flips the step label', async () => {
+      backend({
+        hasKey: true,
+        ask: {
+          answer: 'Pedí borrarla; aprobala en el diálogo.',
+          sources: [],
+          local: false,
+          documents: [],
+          steps: [
+            {
+              tool: 'collections_delete',
+              args: `{"collectionId":"${UUID}"}`,
+              status: 'pending',
+              target: 'SIMAPE',
+              approvalId: 'apr_1',
+            },
+          ],
+          roundLimitReached: false,
+          toolsUnavailable: false,
+        },
+      })
+      render(HelpView)
+
+      await sendQuestion('Borrá la colección SIMAPE')
+      await screen.findByText('Usó: Pidió borrar la colección «SIMAPE»')
+
+      await fireOutcome({
+        approvalId: 'apr_1',
+        status: 'approved',
+        message: 'Se eliminó la colección «SIMAPE».',
+      })
+
+      expect(await screen.findByText('Se eliminó la colección «SIMAPE».')).toBeInTheDocument()
+      expect(await screen.findByText('Usó: Borró la colección «SIMAPE»')).toBeInTheDocument()
+      expect(screen.queryByText('Usó: Pidió borrar la colección «SIMAPE»')).not.toBeInTheDocument()
+      expect(screen.queryByText(new RegExp(UUID))).not.toBeInTheDocument()
+      // The original answer stays: it was true when written.
+      expect(screen.getByText('Pedí borrarla; aprobala en el diálogo.')).toBeInTheDocument()
+    })
+
+    it('marks a rejected outcome and keeps the raw id out of the label', async () => {
+      backend({
+        hasKey: true,
+        ask: {
+          answer: 'Pedí borrarla.',
+          sources: [],
+          local: false,
+          documents: [],
+          steps: [
+            {
+              tool: 'collections_delete',
+              args: `{"collectionId":"${UUID}"}`,
+              status: 'pending',
+              target: 'SIMAPE',
+              approvalId: 'apr_2',
+            },
+          ],
+          roundLimitReached: false,
+          toolsUnavailable: false,
+        },
+      })
+      render(HelpView)
+
+      await sendQuestion('Borrá la colección SIMAPE')
+      await screen.findByText('Usó: Pidió borrar la colección «SIMAPE»')
+
+      await fireOutcome({
+        approvalId: 'apr_2',
+        status: 'rejected',
+        message: 'Rechazaste borrar la colección «SIMAPE»; no se borró nada.',
+      })
+
+      expect(
+        await screen.findByText('Rechazaste borrar la colección «SIMAPE»; no se borró nada.')
+      ).toBeInTheDocument()
+      expect(
+        await screen.findByText('Usó: Borrado rechazado: la colección «SIMAPE»')
+      ).toBeInTheDocument()
+      expect(screen.queryByText(new RegExp(UUID))).not.toBeInTheDocument()
+    })
+
+    it('an outcome for another answer does not touch this one', async () => {
+      backend({
+        hasKey: true,
+        ask: {
+          answer: 'Pedí borrarla.',
+          sources: [],
+          local: false,
+          documents: [],
+          steps: [
+            {
+              tool: 'collections_delete',
+              args: `{"collectionId":"${UUID}"}`,
+              status: 'pending',
+              target: 'SIMAPE',
+              approvalId: 'apr_3',
+            },
+          ],
+          roundLimitReached: false,
+          toolsUnavailable: false,
+        },
+      })
+      render(HelpView)
+
+      await sendQuestion('Borrá la colección SIMAPE')
+      await screen.findByText('Usó: Pidió borrar la colección «SIMAPE»')
+
+      await fireOutcome({
+        approvalId: 'apr-other',
+        status: 'approved',
+        message: 'Se eliminó la colección «Otra».',
+      })
+
+      expect(screen.queryByText('Se eliminó la colección «Otra».')).not.toBeInTheDocument()
+      expect(screen.getByText('Usó: Pidió borrar la colección «SIMAPE»')).toBeInTheDocument()
+    })
+  })
 })
