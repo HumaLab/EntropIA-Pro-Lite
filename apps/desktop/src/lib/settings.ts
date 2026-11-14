@@ -118,6 +118,7 @@ export const SETTINGS_KEYS = {
   ASSEMBLYAI_API_KEY: 'assemblyai_api_key',
   ASSEMBLYAI_SPEAKER_LABELS: 'assemblyai_role_speaker_identification',
   STT_MODE: 'stt_mode',
+  STT_LOCAL_ENGINE: 'stt_local_engine',
   GLM_OCR_API_KEY: 'glm_ocr_api_key',
   ZOTERO_API_KEY: 'zotero_api_key',
   HLAB_PUBLISH_KEY: 'hlab_publish_key',
@@ -224,6 +225,8 @@ export type LlmMode = 'local' | 'openrouter' | 'auto'
 export type EmbeddingProvider = 'api' | 'local'
 export type SttMode = 'local' | 'assemblyai' | 'auto'
 export type OcrhMode = 'local' | 'glm_ocr' | 'auto'
+/** Which local backend transcribes when `stt_mode` is `local`. */
+export type SttLocalEngine = 'parakeet' | 'whisper'
 /** Which local backend OCRH uses when `ocrh_mode` is `local`. */
 export type OcrhLocalEngine = 'auto' | 'glm_ocr' | 'paddle_vl'
 
@@ -241,6 +244,7 @@ const _pro = import.meta.env.VITE_LOCAL_ML === '1'
 export const DEFAULT_LLM_MODE: LlmMode = _pro ? 'local' : 'openrouter'
 export const DEFAULT_EMBEDDING_PROVIDER: EmbeddingProvider = _pro ? 'local' : 'api'
 export const DEFAULT_STT_MODE: SttMode = _pro ? 'local' : 'assemblyai'
+export const DEFAULT_STT_LOCAL_ENGINE: SttLocalEngine = 'parakeet'
 export const DEFAULT_OCRH_MODE: OcrhMode = _pro ? 'local' : 'glm_ocr'
 export const DEFAULT_OCRH_LOCAL_ENGINE: OcrhLocalEngine = 'auto'
 

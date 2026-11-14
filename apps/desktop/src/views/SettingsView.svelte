@@ -13,6 +13,7 @@
     localEmbeddingModelDir: string
     llmMode: string
     sttMode: string
+    sttLocalEngine: string
     ocrhMode: string
     ocrhLocalEngine: string
     localModelSourceUrl: string
@@ -68,6 +69,7 @@
     DEFAULT_LLM_MODE,
     DEFAULT_EMBEDDING_PROVIDER,
     DEFAULT_STT_MODE,
+    DEFAULT_STT_LOCAL_ENGINE,
     DEFAULT_OCRH_MODE,
     DEFAULT_OCRH_LOCAL_ENGINE,
     DEFAULT_PROMPTS,
@@ -78,6 +80,7 @@
     type LlmMode,
     type OcrhMode,
     type OcrhLocalEngine,
+    type SttLocalEngine,
     type SttMode,
     type ModelInfo,
   } from '$lib/settings'
@@ -203,6 +206,7 @@
   let localEmbeddingModel = $state<LocalEmbeddingModelInfo | null>(null)
   let llmMode = $state<LlmMode>(DEFAULT_LLM_MODE)
   let sttMode = $state<SttMode>(DEFAULT_STT_MODE)
+  let sttLocalEngine = $state<SttLocalEngine>(DEFAULT_STT_LOCAL_ENGINE)
   let ocrhMode = $state<OcrhMode>(DEFAULT_OCRH_MODE)
   let ocrhLocalEngine = $state<OcrhLocalEngine>(DEFAULT_OCRH_LOCAL_ENGINE)
   let glmOcrLocal = $state<GlmOcrLocalInfo | null>(null)
@@ -552,6 +556,7 @@
       localEmbeddingModelDir,
       llmMode,
       sttMode,
+      sttLocalEngine,
       ocrhMode,
       ocrhLocalEngine,
       localModelSourceUrl,
@@ -630,6 +635,7 @@
         storedLocalEmbeddingModelDir,
         storedMode,
         storedSttMode,
+        storedSttLocalEngine,
         storedOcrhMode,
         storedOcrhLocalEngine,
         storedAssemblyAiKey,
@@ -653,6 +659,7 @@
         settingsGet(SETTINGS_KEYS.LOCAL_EMBEDDING_MODEL_DIR),
         settingsGet(SETTINGS_KEYS.LLM_MODE),
         settingsGet(SETTINGS_KEYS.STT_MODE),
+        settingsGet(SETTINGS_KEYS.STT_LOCAL_ENGINE),
         settingsGet(SETTINGS_KEYS.OCRH_MODE),
         settingsGet(SETTINGS_KEYS.OCRH_LOCAL_ENGINE),
         settingsGet(SETTINGS_KEYS.ASSEMBLYAI_API_KEY),
@@ -694,6 +701,9 @@
       }
       if (storedMode) llmMode = storedMode as LlmMode
       if (storedSttMode) sttMode = storedSttMode as SttMode
+      if (storedSttLocalEngine === 'parakeet' || storedSttLocalEngine === 'whisper') {
+        sttLocalEngine = storedSttLocalEngine
+      }
       if (storedOcrhMode) ocrhMode = storedOcrhMode as OcrhMode
       if (
         storedOcrhLocalEngine === 'auto' ||
@@ -870,31 +880,37 @@
               glmOcrDownloadError = event.payload.error
             }),
           () =>
-            listen<QwenCorrectionDownloadProgressPayload>('qwen-correct:download_progress', (event) => {
-              if (destroyed) return
-              qwenDownloading = true
-              qwenDownloadPct = event.payload.pct
-              qwenDownloadError = null
-            }),
-          () =>
-            listen<QwenCorrectionDownloadCompletePayload>('qwen-correct:download_complete', async () => {
-              if (destroyed) return
-              qwenLocal = await qwenCorrectionLocalInfo().catch(() => null)
-              // Two files download in sequence with one `complete` each; stop
-              // the spinner only when both are on disk.
-              if (qwenLocal?.model_present && qwenLocal?.mmproj_present) {
-                qwenDownloading = false
-                qwenDownloadPct = 100
+            listen<QwenCorrectionDownloadProgressPayload>(
+              'qwen-correct:download_progress',
+              (event) => {
+                if (destroyed) return
+                qwenDownloading = true
+                qwenDownloadPct = event.payload.pct
+                qwenDownloadError = null
               }
-              qwenDownloadError = null
-            }),
+            ),
+          () =>
+            listen<QwenCorrectionDownloadCompletePayload>(
+              'qwen-correct:download_complete',
+              async () => {
+                if (destroyed) return
+                qwenLocal = await qwenCorrectionLocalInfo().catch(() => null)
+                // Two files download in sequence with one `complete` each; stop
+                // the spinner only when both are on disk.
+                if (qwenLocal?.model_present && qwenLocal?.mmproj_present) {
+                  qwenDownloading = false
+                  qwenDownloadPct = 100
+                }
+                qwenDownloadError = null
+              }
+            ),
           () =>
             listen<QwenCorrectionDownloadErrorPayload>('qwen-correct:download_error', (event) => {
               if (destroyed) return
               qwenDownloading = false
               qwenDownloadPct = 0
               qwenDownloadError = event.payload.error
-            })
+            }),
         ],
         () => destroyed
       )
@@ -924,6 +940,7 @@
     llmMode = DEFAULT_LLM_MODE
     embeddingProvider = DEFAULT_EMBEDDING_PROVIDER
     sttMode = DEFAULT_STT_MODE
+    sttLocalEngine = DEFAULT_STT_LOCAL_ENGINE
     ocrhMode = DEFAULT_OCRH_MODE
   }
 
@@ -1454,6 +1471,7 @@
         settingsSet(SETTINGS_KEYS.LOCAL_EMBEDDING_MODEL_DIR, localEmbeddingModelDir.trim()),
         settingsSet(SETTINGS_KEYS.LLM_MODE, llmMode),
         settingsSet(SETTINGS_KEYS.STT_MODE, sttMode),
+        settingsSet(SETTINGS_KEYS.STT_LOCAL_ENGINE, sttLocalEngine),
         settingsSet(
           SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS,
           assemblyAiCollectionSpeakerLabels ? 'true' : 'false'
@@ -2433,6 +2451,41 @@
                 </label>
               </div>
 
+              {#if sttMode === 'local'}
+                <div class="settings__field settings__field--stacked">
+                  <span class="settings__label">{t('settings.sttLocalEngine.title')}</span>
+                  <div class="settings__mode-options">
+                    <label class="settings__radio" class:active={sttLocalEngine === 'parakeet'}>
+                      <input
+                        type="radio"
+                        name="stt_local_engine"
+                        value="parakeet"
+                        bind:group={sttLocalEngine}
+                      />
+                      <div class="settings__radio-content">
+                        <strong>{t('settings.sttLocalEngine.parakeet.label')}</strong>
+                        <span class="settings__radio-desc"
+                          >{t('settings.sttLocalEngine.parakeet.description')}</span
+                        >
+                      </div>
+                    </label>
+                    <label class="settings__radio" class:active={sttLocalEngine === 'whisper'}>
+                      <input
+                        type="radio"
+                        name="stt_local_engine"
+                        value="whisper"
+                        bind:group={sttLocalEngine}
+                      />
+                      <div class="settings__radio-content">
+                        <strong>{t('settings.sttLocalEngine.whisper.label')}</strong>
+                        <span class="settings__radio-desc"
+                          >{t('settings.sttLocalEngine.whisper.description')}</span
+                        >
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              {/if}
               {#if sttMode !== 'local'}
                 <p class="settings__hint settings__hint--privacy">
                   {t('settings.sttPrivacyNotice')}
@@ -2622,11 +2675,13 @@
                 <div class="settings__field settings__field--stacked">
                   <span class="settings__label">{t('settings.ocrhLocalEngine.title')}</span>
                   <div class="settings__mode-options">
-                    <label
-                      class="settings__radio"
-                      class:active={ocrhLocalEngine === 'auto'}
-                    >
-                      <input type="radio" name="ocrh_local_engine" value="auto" bind:group={ocrhLocalEngine} />
+                    <label class="settings__radio" class:active={ocrhLocalEngine === 'auto'}>
+                      <input
+                        type="radio"
+                        name="ocrh_local_engine"
+                        value="auto"
+                        bind:group={ocrhLocalEngine}
+                      />
                       <div class="settings__radio-content">
                         <strong>{t('settings.ocrhLocalEngine.auto.label')}</strong>
                         <span class="settings__radio-desc"
@@ -2635,10 +2690,7 @@
                       </div>
                     </label>
 
-                    <label
-                      class="settings__radio"
-                      class:active={ocrhLocalEngine === 'glm_ocr'}
-                    >
+                    <label class="settings__radio" class:active={ocrhLocalEngine === 'glm_ocr'}>
                       <input
                         type="radio"
                         name="ocrh_local_engine"
@@ -2653,10 +2705,7 @@
                       </div>
                     </label>
 
-                    <label
-                      class="settings__radio"
-                      class:active={ocrhLocalEngine === 'paddle_vl'}
-                    >
+                    <label class="settings__radio" class:active={ocrhLocalEngine === 'paddle_vl'}>
                       <input
                         type="radio"
                         name="ocrh_local_engine"
@@ -2683,9 +2732,9 @@
                       {:else}
                         <span class="settings__badge settings__badge--warn">
                           {t('settings.glmOcrLocal.modelsMissing')}
-                          {!glmOcrLocal.model_present ? ' GLM-OCR-Q8_0.gguf' : ''}{!glmOcrLocal.mmproj_present
-                            ? ' mmproj-GLM-OCR-Q8_0.gguf'
-                            : ''}
+                          {!glmOcrLocal.model_present
+                            ? ' GLM-OCR-Q8_0.gguf'
+                            : ''}{!glmOcrLocal.mmproj_present ? ' mmproj-GLM-OCR-Q8_0.gguf' : ''}
                         </span>
                       {/if}
                     </div>
@@ -2732,7 +2781,9 @@
                       {:else}
                         <span class="settings__badge settings__badge--warn">
                           {t('settings.qwenCorrectLocal.modelsMissing')}
-                          {!qwenLocal.model_present ? ' Qwen3VL-4B-Instruct-Q4_K_M.gguf' : ''}{!qwenLocal.mmproj_present
+                          {!qwenLocal.model_present
+                            ? ' Qwen3VL-4B-Instruct-Q4_K_M.gguf'
+                            : ''}{!qwenLocal.mmproj_present
                             ? ' mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf'
                             : ''}
                         </span>

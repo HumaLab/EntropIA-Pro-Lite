@@ -1735,6 +1735,7 @@ describe('settings dirty detection helpers', () => {
     localEmbeddingModelDir: '',
     llmMode: 'local',
     sttMode: 'local',
+    sttLocalEngine: 'parakeet',
     ocrhMode: 'local',
     ocrhLocalEngine: 'auto',
     localModelSourceUrl: '',

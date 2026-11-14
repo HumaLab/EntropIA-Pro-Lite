@@ -404,7 +404,7 @@ impl LocalCrossEncoder {
             .map_err(|_| LocalRerankFailure::InitializationFailed)?
             .commit_from_file(model_dir.join(LOCAL_RERANKER_MODEL_FILE))
             .map_err(|_| LocalRerankFailure::InitializationFailed)?;
-        if !matches!(session.inputs.len(), 2 | 3) {
+        if !matches!(session.inputs().len(), 2 | 3) {
             return Err(LocalRerankFailure::InitializationFailed);
         }
 
@@ -432,7 +432,7 @@ impl LocalCrossEncoder {
                 .map_err(|_| LocalRerankFailure::TokenizationFailed)?;
             let (input_ids, attention_mask, type_ids) = batch_arrays(&encodings, self.pad_id)?;
 
-            let outputs = match self.session.inputs.len() {
+            let outputs = match self.session.inputs().len() {
                 2 => self
                     .session
                     .run(inputs![

@@ -1,11 +1,10 @@
-// Audio decoding module — currently unused (faster-whisper handles audio decoding internally).
-// Will be re-enabled if we need audio duration/preview in Rust.
-// #[allow(dead_code)]
-// mod audio;
 mod assemblyai;
+#[cfg(feature = "local-ml")]
+mod audio;
 pub mod commands;
 mod engine;
-
+#[cfg(feature = "local-ml")]
+pub(crate) mod parakeet;
 use crate::nlp::{lookup_item_id_for_asset, NlpJob, NlpQueue};
 #[cfg(feature = "local-ml")]
 use crate::path_utils::normalize_windows_path;
@@ -15,6 +14,11 @@ use assemblyai::AssemblyAiClient;
 use engine::TranscriptionResult;
 #[cfg(feature = "local-ml")]
 use engine::{WhisperConfig, WhisperEngine};
+#[cfg(feature = "local-ml")]
+use parakeet::{
+    parakeet_supports_language, ParakeetConfig, ParakeetEngine, PARAKEET_MODEL_NAME,
+    PARAKEET_MODEL_SUBDIR,
+};
 use serde::Serialize;
 use std::path::Path;
 #[cfg(feature = "local-ml")]
@@ -26,6 +30,10 @@ const STT_MODE_ASSEMBLYAI: &str = "assemblyai";
 const STT_MODE_AUTO: &str = "auto";
 const STT_SETTING_MODE: &str = "stt_mode";
 const STT_SETTING_ASSEMBLYAI_API_KEY: &str = "assemblyai_api_key";
+/// Local engine selector (Pro settings): "parakeet" (default) or "whisper".
+const STT_SETTING_LOCAL_ENGINE: &str = "stt_local_engine";
+const STT_LOCAL_ENGINE_PARAKEET: &str = "parakeet";
+const STT_LOCAL_ENGINE_WHISPER: &str = "whisper";
 
 pub(super) struct ManagedTranscriptionResult {
     pub(super) transcription: TranscriptionResult,
@@ -388,20 +396,108 @@ pub(super) fn ensure_selected_cloud_key(conn: &rusqlite::Connection) -> Result<(
 
 #[cfg(feature = "local-ml")]
 pub fn local_transcription_available(settings_db_path: Option<&Path>) -> bool {
+    // Parakeet downloads its model on first use, so selecting it counts as
+    // available; otherwise fall back to the faster-whisper Python probe.
+    if local_engine_is_parakeet(settings_db_path) {
+        return true;
+    }
     which_python(settings_db_path).is_some()
 }
+
+/// Resident Parakeet engine: the 2.5 GB model loads once per app session.
+/// Poisoned only if a holder panicked while transcribing (fail loudly).
+#[cfg(feature = "local-ml")]
+static PARAKEET_ENGINE: std::sync::Mutex<Option<ParakeetEngine>> = std::sync::Mutex::new(None);
+
+/// Selected local engine from settings; unknown values mean Parakeet (default).
+#[cfg(feature = "local-ml")]
+fn get_local_engine(conn: &rusqlite::Connection) -> String {
+    crate::settings::get_setting(conn, STT_SETTING_LOCAL_ENGINE)
+        .unwrap_or_else(|| STT_LOCAL_ENGINE_PARAKEET.to_string())
+        .to_lowercase()
+}
+
+#[cfg(feature = "local-ml")]
+fn local_engine_is_parakeet(settings_db_path: Option<&Path>) -> bool {
+    let Some(path) = settings_db_path else {
+        return true;
+    };
+    let Ok(conn) = crate::db::open::open_archive_connection(path) else {
+        return true;
+    };
+    get_local_engine(&conn) != STT_LOCAL_ENGINE_WHISPER
+}
+
+/// Transcription language. Hardcoded Spanish today (as the Whisper path
+/// always was); the Parakeet guard below falls back to Whisper for any
+/// language outside the 25 v3 covers once a language setting exists.
+#[cfg(feature = "local-ml")]
+const TRANSCRIPTION_LANGUAGE: &str = "es";
 
 #[cfg(feature = "local-ml")]
 fn transcribe_with_local_provider(
     app_handle: &AppHandle,
     settings_db_path: Option<&Path>,
+    conn: &rusqlite::Connection,
     audio_path: &str,
+    asset_id: Option<&str>,
 ) -> Result<ManagedTranscriptionResult, String> {
+    let progress = |pct: u8, stage: &str| {
+        if let Some(asset_id) = asset_id {
+            emit_progress(app_handle, asset_id, pct, stage);
+        }
+    };
+    if get_local_engine(conn) == STT_LOCAL_ENGINE_PARAKEET
+        && parakeet_supports_language(TRANSCRIPTION_LANGUAGE)
+    {
+        match transcribe_with_parakeet(app_handle, settings_db_path, audio_path, &progress) {
+            Ok(result) => {
+                return Ok(ManagedTranscriptionResult {
+                    transcription: result,
+                    model_name: PARAKEET_MODEL_NAME,
+                });
+            }
+            Err(error) => {
+                log::warn!(
+                    target: "transcription",
+                    "Parakeet failed, falling back to faster-whisper: {error}"
+                );
+            }
+        }
+    }
     let result = transcribe_audio_file(app_handle, settings_db_path, audio_path)?;
     Ok(ManagedTranscriptionResult {
         transcription: result,
         model_name: "faster-whisper/base",
     })
+}
+
+/// Load (once) + transcribe via the resident Parakeet engine.
+#[cfg(feature = "local-ml")]
+fn transcribe_with_parakeet(
+    app_handle: &AppHandle,
+    _settings_db_path: Option<&Path>,
+    audio_path: &str,
+    on_progress: &dyn Fn(u8, &str),
+) -> Result<TranscriptionResult, String> {
+    let mut guard = PARAKEET_ENGINE
+        .lock()
+        .map_err(|_| "Parakeet engine lock poisoned".to_string())?;
+    if guard.is_none() {
+        let model_dir = resolve_model_cache_dir(app_handle)?.join(PARAKEET_MODEL_SUBDIR);
+        let engine = ParakeetEngine::init(
+            ParakeetConfig {
+                model_dir,
+                language: TRANSCRIPTION_LANGUAGE.to_string(),
+            },
+            on_progress,
+        )?;
+        *guard = Some(engine);
+    }
+    guard
+        .as_mut()
+        .expect("Parakeet engine just initialized")
+        .transcribe(audio_path, on_progress)
 }
 
 fn transcribe_with_assemblyai_provider(
@@ -449,7 +545,9 @@ pub(super) fn transcribe_with_selected_provider(
 
     match mode.as_str() {
         #[cfg(feature = "local-ml")]
-        STT_MODE_LOCAL => transcribe_with_local_provider(app_handle, settings_db_path, audio_path),
+        STT_MODE_LOCAL => {
+            transcribe_with_local_provider(app_handle, settings_db_path, conn, audio_path, asset_id)
+        }
         STT_MODE_ASSEMBLYAI => {
             if assemblyai_api_key.is_empty() {
                 return Err(
@@ -472,7 +570,13 @@ pub(super) fn transcribe_with_selected_provider(
                 let local_available = local_transcription_available(settings_db_path);
 
                 if local_available {
-                    match transcribe_with_local_provider(app_handle, settings_db_path, audio_path) {
+                    match transcribe_with_local_provider(
+                        app_handle,
+                        settings_db_path,
+                        conn,
+                        audio_path,
+                        asset_id,
+                    ) {
                         Ok(result) => return Ok(result),
                         Err(local_error) => {
                             log::warn!(
@@ -523,7 +627,9 @@ pub(super) fn transcribe_with_selected_provider(
             )
         }
         #[cfg(feature = "local-ml")]
-        _ => transcribe_with_local_provider(app_handle, settings_db_path, audio_path),
+        _ => {
+            transcribe_with_local_provider(app_handle, settings_db_path, conn, audio_path, asset_id)
+        }
         // Lean build: LOCAL + unknown modes have no local engine, so route to
         // AssemblyAI (mirrors Lite's AssemblyAI-only shape).
         #[cfg(not(feature = "local-ml"))]
@@ -779,6 +885,7 @@ fn save_transcription(
             match tool {
                 "assemblyai" => "AssemblyAI API",
                 "faster-whisper" => "faster-whisper (local)",
+                "parakeet" => "Parakeet (local)",
                 other => other,
             },
         )

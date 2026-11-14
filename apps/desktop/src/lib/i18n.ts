@@ -722,7 +722,8 @@ const es = {
   'settings.reranker.downloading': 'Instalando reranker…',
   'settings.sttModeTitle': 'Modo STT',
   'settings.sttMode.local.label': 'Local',
-  'settings.sttMode.local.summary': 'Procesa el audio con faster-whisper en este equipo.',
+  'settings.sttMode.local.summary':
+    'Procesa el audio en este equipo, sin subirlo a ningún servicio.',
   'settings.sttMode.local.description': 'Audio local. No sale de tu dispositivo.',
   'settings.sttMode.assemblyai.label': 'AssemblyAI',
   'settings.sttMode.assemblyai.summary':
@@ -730,8 +731,14 @@ const es = {
   'settings.sttMode.assemblyai.description': 'API remota. Requiere API key y conexión a internet.',
   'settings.sttMode.auto.label': 'Automático',
   'settings.sttMode.auto.summary': 'Intenta local primero y cae a AssemblyAI si hace falta.',
-  'settings.sttMode.auto.description':
-    'Prioriza faster-whisper local y usa AssemblyAI como fallback.',
+  'settings.sttMode.auto.description': 'Prioriza el motor local y usa AssemblyAI como fallback.',
+  'settings.sttLocalEngine.title': 'Motor STT local',
+  'settings.sttLocalEngine.parakeet.label': 'Parakeet (rápido)',
+  'settings.sttLocalEngine.parakeet.description':
+    'Transcripción local con Parakeet TDT. Descarga el modelo una vez (~2,5 GB).',
+  'settings.sttLocalEngine.whisper.label': 'Whisper',
+  'settings.sttLocalEngine.whisper.description':
+    'faster-whisper local (respaldo si el idioma no está entre los 25 de Parakeet).',
   'settings.ocrhModeTitle': 'Modo OCRH',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Usa el pipeline local actual de OCR de alta precisión.',
@@ -3324,7 +3331,11 @@ type ExtraI18nKey =
   | 'settings.sttMode.auto.label'
   | 'settings.sttMode.auto.summary'
   | 'settings.sttMode.auto.description'
-  | 'settings.ocrhModeTitle'
+  | 'settings.sttLocalEngine.title'
+  | 'settings.sttLocalEngine.parakeet.label'
+  | 'settings.sttLocalEngine.parakeet.description'
+  | 'settings.sttLocalEngine.whisper.label'
+  | 'settings.sttLocalEngine.whisper.description'
   | 'settings.ocrhMode.local.label'
   | 'settings.ocrhMode.local.summary'
   | 'settings.ocrhMode.local.description'
@@ -4598,7 +4609,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.reranker.downloading': 'Installing reranker…',
   'settings.sttModeTitle': 'STT mode',
   'settings.sttMode.local.label': 'Local',
-  'settings.sttMode.local.summary': 'Process audio with faster-whisper on this machine.',
+  'settings.sttMode.local.summary': 'Process audio on this machine, without uploading it anywhere.',
   'settings.sttMode.local.description': 'Local audio processing. Audio never leaves your device.',
   'settings.sttMode.assemblyai.label': 'AssemblyAI',
   'settings.sttMode.assemblyai.summary':
@@ -4608,7 +4619,14 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.sttMode.auto.label': 'Automatic',
   'settings.sttMode.auto.summary': 'Try local first and fall back to AssemblyAI when needed.',
   'settings.sttMode.auto.description':
-    'Prioritize local faster-whisper and use AssemblyAI as fallback.',
+    'Prioritize the local engine and use AssemblyAI as fallback.',
+  'settings.sttLocalEngine.title': 'Local STT engine',
+  'settings.sttLocalEngine.parakeet.label': 'Parakeet (fast)',
+  'settings.sttLocalEngine.parakeet.description':
+    'Local transcription with Parakeet TDT. Downloads the model once (~2.5 GB).',
+  'settings.sttLocalEngine.whisper.label': 'Whisper',
+  'settings.sttLocalEngine.whisper.description':
+    'Local faster-whisper (fallback when the language is outside Parakeet’s 25).',
   'settings.ocrhModeTitle': 'OCRH mode',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Use the current local high-accuracy OCR pipeline.',
