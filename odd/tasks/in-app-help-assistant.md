@@ -51,6 +51,9 @@ app from the user manual and helps when something fails. Branch
 - **S19 — Conversation history.** From L46: "estaria bien que haya un historia de conversaciones minimizado pro defecto que pes se peuda consultar y desplegar si el usuarii lo queire". Owner decisions (L47): stored "Por ahora en este equipo pero con posibilidad de mas adentalte aplicar la sincronización"; documents — "Sí, guardar todo (Recomendado)". Supersedes D4.
 - **S20 — Design review.** From L46: "pegale una ultima revisada detallisata al diseño estetica  del chat de ayuda".
 
+- **S21 — Conversation column when maximized.** From L53: "el intercalado de peguntas y respuestas deberia ocupar la fraja central de la ventan amaximizada en un 70% aprox ,  dejando 15 y 15 a cada lado, las preguntas dle usuario deberian alinearse a la derecha y la del agente a la izquierda".
+- **S22 — Not every question needs the knowledge base or tools.** From L53: "ante saludos o preguntas que no refieren a entropia busca igual en la docuemntacion de entropia, no deberia ahcer, tambien deberia poder dar la hora, aunque no e sun tema de importancia es lago simpel que tiene que poder resolñver sin usar la base de conocimiento [...] no toda slas preguntas o consultas requieren consulta rla base de conocimiento o usar tools, ajustar el funcionamiento apra optimizar esto".
+
 Out of scope (L2): the first-run setup assistant ("No, después"); it gets its
 own card later and can reuse this base.
 
@@ -94,6 +97,8 @@ own card later and can reuse this base.
 
 - D18 (S12, S5) For the «Ayuda» principal, file system paths in tool results (`items_get` asset `path`, `jobs_get` `asset_path`, `import_sources_list` folder roots, and any other absolute path) are replaced before reaching the model: a file keeps only its file name, a folder becomes «[carpeta]», the same spirit as D3 for diagnostics. Applied in the help layer (bridge result -> gate), not in the MCP server, so external assistants keep today's payloads.
 
+- D19 (S22) Knowledge on demand: manual / screen-map excerpts are no longer injected into every prompt; the agent gets a `manual_search` tool (the same FTS5 index) and consults it only when the question needs it; «Fuentes» lists only what it actually consulted (none for a greeting). The system prompt carries the current local date and time, so «¿qué hora es?» needs no tool. Greetings, thanks and date/time questions are answered locally and deterministically (no API, no sources). The no-tools fallback (models without tool support) keeps today's injected excerpts.
+
 ## Tasks
 
 | ID | Specs | Route | Status | Commit |
@@ -133,6 +138,8 @@ own card later and can reuse this base.
 | T29 | S18 | TDD — starter buttons send the question directly (question and answer appear in the chat, no copy into the composer) | done | see git log (feat(help): let starter questions ask at once) |
 | T30 | S19 | TDD — history store (`help/history.rs`, D17), commands, collapsed history list, reopen/continue, new conversation, clear | done | see git log (feat(help): keep a local conversation history …) |
 | T31 | S20 | design review of the help panel with the gentle-ui-design criteria; apply the fixes | done | see git log (style(help): quiet answer metadata …) |
+| T33 | S21 | TDD — maximized: conversation column 70% wide centred (15% each side), user bubbles right, assistant left, inside that column | pending | |
+| T34 | S22 | TDD — knowledge on demand (D19): `manual_search` tool, no injected excerpts, current date/time in the system prompt, local answers for greetings/thanks/date-time, sources only when consulted | pending | |
 | T6 | S8 | owner check with the real failures of S8 (needs a real OpenRouter key) | pending | |
 
 ## Log
@@ -199,3 +206,4 @@ own card later and can reuse this base.
 - L50 (2026-11-14, T31, delegated worker, gentle-ui-design criteria): sources / documents / steps under each answer collapsed into one «Fuentes y pasos (N)» disclosure (`aria-expanded`); maximized answers in a 72ch centred column; starters as a vertical list in an empty-state card; assistant accent bar and line-height; composer hairline; 24 px info targets; focus rings on the quiet controls; no motion added. Recommended, not applied: left-aligned starter labels (needs a Button API change), history restyle (owner eyeball first). RED not observed before implementation (tests written with the change); GREEN full desktop Pro 4463 / Lite 4427, typecheck 0/0, lint, prettier, map --check clean. Visual check owed to the owner.
 - L51 (2026-11-14, T25b rerun at the owner's request, gentle-ai-verify, static only): PASS on S12, S15, S16, S17, S19 and identity (only `server.rs:495` after bearer auth and `mcp_bridge.rs:46` insert a `Principal`; `Principal::in_app_help()` built only by the bridge). No High/Medium findings. Low: with the documents box off, READ tools `items_get` (asset `path`), `jobs_get` (`asset_path`) and `import_sources_list` (folder roots) send file paths to OpenRouter — D16 gates text only (owner decision pending); Low cosmetic: stale `allow(dead_code)` in `mcp_bridge.rs:10`. Runtime evidence is the parent's runs (cargo lib 3453/3453, ACL, desktop Pro 4463 / Lite 4427). T32 added for the proposed regression tests.
 - L52 (2026-11-14, owner decision on the L51 advisory): "Ocultarlas (Recomendado)" — D18.
+- L53 (2026-11-14, owner check, verbatim): "La Ayuda funciona pero sigue teniendo algunos detalles a resolver 1) Visual, el intercalado de peguntas y respuestas deberia ocupar la fraja central de la ventan amaximizada en un 70% aprox ,  dejando 15 y 15 a cada lado, las preguntas dle usuario deberian alinearse a la derecha y la del agente a la izquierda; 2) ante saludos o preguntas que no refieren a entropia busca igual en la docuemntacion de entropia, no deberia ahcer, tambien deberia poder dar la hora, aunque no e sun tema de importancia es lago simpel que tiene que poder resolñver sin usar la base de conocimiento [Image#6], no toda slas preguntas o consultas requieren consulta rla base de conocimiento o usar tools, ajustar el funcionamiento apra optimizar esto". Screenshot: «Hola» and «Qué hora es???» answered with four unrelated «Fuentes y pasos», the time answer says it cannot read the clock; assistant bubbles centred, user bubbles at the far right edge. Then: "aborté por error, continua con tu trabajo" (T32 worker had been cancelled). S21-S22, D19, T33-T34 added.
