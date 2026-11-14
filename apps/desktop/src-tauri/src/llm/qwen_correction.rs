@@ -465,13 +465,22 @@ fn chat_completion(
             .and_then(|value| value.as_str())
             .unwrap_or("");
         let preview: String = partial.chars().take(120).collect();
+        let tail: String = partial
+            .chars()
+            .rev()
+            .take(120)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        let out_chars = partial.chars().count();
         // Distinguish a degeneration loop (same block over and over) from a
         // genuinely long answer: the loop is the model's failure, length alone
         // may just need smaller chunks.
         let looped = check_no_repetition_loops(&strip_correction_preamble(partial, "")).is_err();
         log::warn!(
             target: "llm-local",
-            "local Qwen correction hit the {max_tokens}-token output budget (loop={looped}); head: {preview:?}"
+            "local Qwen correction hit the {max_tokens}-token output budget ({out_chars} chars, loop={looped}); head: {preview:?} tail: {tail:?}"
         );
         if looped {
             return Err(
