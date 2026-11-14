@@ -7,6 +7,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod documents;
 pub(crate) mod faq;
 pub(crate) mod index;
+pub(crate) mod intent;
 pub(crate) mod manual;
 pub(crate) mod prompt;
 pub(crate) mod screenmap;

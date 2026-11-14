@@ -46,6 +46,16 @@ impl Source {
             _ => None,
         }
     }
+
+    /// The wire value of `HelpSource.kind` for hits of this source
+    /// (S17/D15): `"manual"`, `"screenMap"` or `"faq"`.
+    pub(crate) fn wire_kind(&self) -> &'static str {
+        match self {
+            Source::Manual => "manual",
+            Source::ScreenMap => "screenMap",
+            Source::Faq => "faq",
+        }
+    }
 }
 
 /// One indexable document: the manual (later the FAQ and the screen map)

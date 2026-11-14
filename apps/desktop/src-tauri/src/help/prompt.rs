@@ -36,6 +36,17 @@ pub(crate) struct HelpTurn {
 pub(crate) struct HelpSource {
     pub chapter: String,
     pub title: String,
+    /// Where the source comes from: `"manual"`, `"screenMap"` or
+    /// `"faq"` (S17/D15). Missing on the wire means `"manual"`, so old
+    /// clients keep the manual label.
+    #[serde(default = "manual_source_kind")]
+    pub kind: String,
+}
+
+/// The [`HelpSource::kind`] default: payloads from before the kind field
+/// label every source as manual.
+fn manual_source_kind() -> String {
+    "manual".to_string()
 }
 
 /// One document title sent to the model with the question (S12): the UI

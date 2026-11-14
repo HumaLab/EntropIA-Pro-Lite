@@ -247,7 +247,10 @@
               <ul class="help-view__sources" aria-label={$currentLocale && t('help.sourcesLabel')}>
                 {#each message.sources as source (source.chapter + source.title)}
                   <li>
-                    {$currentLocale && t('help.sourcesLabel')}: {source.chapter} › {source.title}
+                    {$currentLocale &&
+                      (source.kind === 'screenMap'
+                        ? t('help.sourceScreenMap')
+                        : t('help.sourceManual'))}: {source.chapter} › {source.title}
                   </li>
                 {/each}
               </ul>

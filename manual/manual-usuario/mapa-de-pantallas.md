@@ -1029,7 +1029,8 @@
 - «Cerrar ayuda» `help.closePanel`
 - «Comprobando tu clave de OpenRouter…» `help.statusLoading`
 - «De tus documentos» `help.documentsLabel`
-- «Del manual» `help.sourcesLabel`
+- «Del manual» `help.sourceManual, help.sourcesLabel`
+- «Del mapa de pantallas» `help.sourceScreenMap`
 - «Enviar» `help.send`
 - «Escribí tu pregunta…» `help.placeholder`
 - «Falló una transcripción, ¿qué hago?» `help.suggestion3`

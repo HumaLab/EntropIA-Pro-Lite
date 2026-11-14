@@ -161,6 +161,7 @@ pub async fn help_ask(
             sources: vec![HelpSource {
                 chapter: local.chapter,
                 title: local.title,
+                kind: super::index::Source::Faq.wire_kind().to_string(),
             }],
             local: true,
             documents: Vec::new(),
@@ -206,6 +207,7 @@ pub async fn help_ask(
         .map(|section| HelpSource {
             chapter: section.chapter.clone(),
             title: section.title.clone(),
+            kind: section.source.wire_kind().to_string(),
         })
         .collect();
     let params = crate::llm::generation::OpenRouterGenerationParams::provider_defaults(

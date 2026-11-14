@@ -16,6 +16,8 @@ export interface HelpTurn {
 export interface HelpSource {
   chapter: string
   title: string
+  /** Where the source comes from; absent means manual (older payloads). */
+  kind?: 'manual' | 'screenMap' | 'faq'
 }
 
 /** One title of the user's own excerpts sent to the model (S12). */

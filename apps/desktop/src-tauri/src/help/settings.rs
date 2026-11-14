@@ -8,6 +8,7 @@
 //! resolved values.
 
 use super::faq::{answer_locally, LocalAnswer};
+use super::intent::is_action_request;
 
 /// Manual/excerpt budget: characters sent with a question (D10).
 pub(crate) const HELP_CONTEXT_CHARS_DEFAULT: usize = 24_000;
@@ -104,8 +105,10 @@ fn parse_enabled(raw: Option<String>) -> bool {
 
 /// The deterministic local answer for `question`, or `None` when it must go
 /// to the model: the switch is off, diagnostics travel along (they need the
-/// model), or the user opted into document excerpts (the question needs the
-/// archive). Pure and synchronous: no key, no network.
+/// model), the user opted into document excerpts (the question needs the
+/// archive), or the question asks the assistant to do something (S17/D15:
+/// action requests go to the model, which T20–T22 give tools to). Pure and
+/// synchronous: no key, no network.
 pub(crate) fn local_answer_for(
     settings: &HelpSettings,
     diagnostics: Option<&str>,
@@ -116,6 +119,9 @@ pub(crate) fn local_answer_for(
         return None;
     }
     if documents {
+        return None;
+    }
+    if is_action_request(question) {
         return None;
     }
     answer_locally(diagnostics, question)
@@ -267,5 +273,23 @@ mod tests {
         let question = "¿Cómo importo un PDF?";
         assert!(local_answer_for(&help, None, false, question).is_some());
         assert!(local_answer_for(&help, None, true, question).is_none());
+    }
+
+    #[test]
+    fn action_requests_skip_the_local_answer() {
+        // S17/D15 (L33): a request to do something goes to the model
+        // (T20–T22 give it tools), never to a local FAQ answer — even when
+        // it matches an entry. The how-to twin still answers locally.
+        let stored = lookup(&[]);
+        let help = resolve_help_settings(&|key| stored.get(key).cloned());
+        assert!(local_answer_for(
+            &help,
+            None,
+            false,
+            "Creá una nueva colección con el nombre 'SIMAPE'"
+        )
+        .is_none());
+        assert!(local_answer_for(&help, None, false, "Importá este PDF a mi colección").is_none());
+        assert!(local_answer_for(&help, None, false, "¿Cómo creo mi primera colección?").is_some());
     }
 }

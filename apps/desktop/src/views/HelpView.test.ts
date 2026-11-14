@@ -216,6 +216,32 @@ describe('HelpView', () => {
     ).toBeInTheDocument()
   })
 
+  it('labels a screen-map source as the map and a manual one as the manual', async () => {
+    // S17/D15: screen-map hits are labelled «Del mapa de pantallas», not
+    // «Del manual»; a `manual` kind and a missing kind both render manual.
+    backend({
+      hasKey: true,
+      ask: {
+        answer: 'Listo',
+        sources: [
+          { chapter: 'Sincronización', title: 'card', kind: 'screenMap' },
+          { chapter: 'Capítulo 1. Inicio rápido', title: '1.1 Importar archivos', kind: 'manual' },
+          { chapter: 'Capítulo 4', title: '4.2' },
+        ],
+        local: false,
+      },
+    })
+    render(HelpView)
+
+    await sendQuestion('¿Dónde está el botón Guardar cambios?')
+
+    expect(screen.getByText('Del mapa de pantallas: Sincronización › card')).toBeInTheDocument()
+    expect(
+      screen.getByText('Del manual: Capítulo 1. Inicio rápido › 1.1 Importar archivos')
+    ).toBeInTheDocument()
+    expect(screen.getByText('Del manual: Capítulo 4 › 4.2')).toBeInTheDocument()
+  })
+
   it('marks local answers with the no-OpenRouter badge', async () => {
     backend({
       hasKey: true,

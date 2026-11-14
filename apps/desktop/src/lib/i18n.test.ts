@@ -400,6 +400,8 @@ describe('i18n', () => {
       'Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.'
     )
     expect(t('help.documentsLabel')).toBe('De tus documentos')
+    expect(t('help.sourceManual')).toBe('Del manual')
+    expect(t('help.sourceScreenMap')).toBe('Del mapa de pantallas')
 
     locale.set('en')
 
@@ -460,6 +462,8 @@ describe('i18n', () => {
       'Excerpts from your documents go to OpenRouter for this question only.'
     )
     expect(t('help.documentsLabel')).toBe('From your documents')
+    expect(t('help.sourceManual')).toBe('From the manual')
+    expect(t('help.sourceScreenMap')).toBe('From the screen map')
   })
 
   it('exposes the API key clearing copy in both locales', async () => {
