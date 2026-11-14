@@ -35,12 +35,13 @@ const MAX_WORD_RATIO: f64 = 2.0;
 /// server slot minus image tokens and margin. Pages beyond this are
 /// corrected per paragraph chunk and rejoined, never truncated.
 const SINGLE_PASS_BUDGET_CHARS: u64 = 45_000;
-/// Output tokens budgeted per prompt char: corrections track input length,
-/// so a multiple of the prompt size bounds the output without cutting it.
+/// Output tokens budgeted per prompt char when deciding single vs chunked
+/// pass. Conservative on purpose: overestimating only chunks earlier.
 const CHARS_PER_OUTPUT_TOKEN: u64 = 3;
-/// Max chars per correction chunk: splits happen only at blank lines, so a
-/// chunk is a run of whole paragraphs whose correction fits one server call.
-const CORRECTION_CHUNK_CHARS: usize = 20_000;
+/// Max chars per correction chunk: with the full 8k output budget a chunk
+/// plus its correction always fits the 16K slot (13K chars ≈ 5K tokens +
+/// 8K out + template < 16K). Splits happen only at blank lines.
+const CORRECTION_CHUNK_CHARS: usize = 13_000;
 
 /// Whether a local correction path exists right now: both GGUF files plus a
 /// usable server binary (managed install or installer-bundled resources).
@@ -122,15 +123,14 @@ pub(crate) fn correct_ocr_via_local_qwen(
             chunks.len(),
             expected_extraction.chars().count(),
         );
-        // The image shows the whole page, so each chunk prompt must say
-        // explicitly to correct ONLY its fragment; otherwise the model
-        // retranscribes the entire page per chunk and hits the token cap.
+        // Each chunk prompt names its place in the page so the model stops
+        // at the fragment's end instead of continuing the article.
         let prompts: Vec<String> = chunks
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
                 let scoped = format!(
-                    "(Fragmento {}/{} de la página. Corregí ÚNICAMENTE este fragmento. La imagen muestra la página completa SOLO como referencia visual para desambiguar caracteres dudosos del fragmento: NO la transcribas ni la describas. Devolvé ÚNICAMENTE el fragmento corregido, nada más.)\n\n{}",
+                    "(Fragmento {}/{} de la página. Corregí ÚNICAMENTE este fragmento y detenete exactamente donde termina: no continúes la redacción ni agregues cierre. Devolvé ÚNICAMENTE el fragmento corregido, nada más.)\n\n{}",
                     index + 1,
                     chunks.len(),
                     chunk
@@ -142,26 +142,27 @@ pub(crate) fn correct_ocr_via_local_qwen(
                 )
             })
             .collect();
-        // Per-chunk output budget: a correction mirrors its input, so input
-        // tokens plus headroom is plenty; anything beyond is rambling and
-        // must fail fast instead of burning minutes.
-        let chunk_max_tokens: Vec<i32> = chunks
-            .iter()
-            .map(|chunk| (chunk.chars().count() as i32 / 3 + 1024).min(max_tokens))
-            .collect();
+        // Full output budget per chunk: chunks are small enough that prompt
+        // plus the largest plausible correction fits the 16K slot; loop and
+        // length guards below turn degeneration into a loud failure.
         drop(conn);
         let url = qwen_local::ensure_server(&assets, db_path)?;
-        let mut partials = Vec::with_capacity(chunks.len());
         // No image on chunk calls: with the whole page in context the model
         // retranscribes the page per chunk and blows every budget. The text
         // already carries the content; single passes keep the image.
-        for ((index, prompt), chunk_max) in prompts.iter().enumerate().zip(chunk_max_tokens) {
+        let mut partials = Vec::with_capacity(chunks.len());
+        for (index, prompt) in prompts.iter().enumerate() {
             let part_log = format!("[chunk {}/{}]", index + 1, chunks.len());
+            log::info!(
+                target: "llm-local",
+                "local Qwen correction {part_log}: {} input chars",
+                chunks[index].chars().count(),
+            );
             partials.push(correct_one_pass(
                 &url,
                 prompt,
                 None,
-                chunk_max,
+                max_tokens,
                 &part_log,
                 &chunks[index],
             )?);

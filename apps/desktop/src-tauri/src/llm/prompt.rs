@@ -54,7 +54,7 @@ Tu tarea:
 4. No resumas ni reescribas. Mantené el contenido y el nivel de detalle, pero restablecé el orden natural de lectura y unificá los cortes de línea causados por columnas para que no queden oraciones ni párrafos cortados.
 5. Si una palabra quedó cortada por un guion de fin de línea, reconstruila únicamente cuando el guion sea un corte de layout y no parte del contenido.
 
-Devolvé únicamente el contenido corregido.
+Devolvé únicamente el contenido corregido y detenete exactamente donde termina el texto dado: no continúes la redacción ni agregues cierre.
 No agregues explicaciones, títulos, comillas, bloques de código ni JSON.
 No repitas la consigna.
 
