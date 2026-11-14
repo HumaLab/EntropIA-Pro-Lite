@@ -364,4 +364,16 @@ describe('AgentApprovalDialog', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('venció')
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
+
+  it('names the in-app help as Ayuda, never as an external assistant', async () => {
+    // T22/D12: a request from client «Ayuda» (in-app-help) goes through the
+    // existing dialog, but the copy must not say it comes from outside.
+    respond([[{ ...START, id: 'apr_ayuda', clientId: 'in-app-help', clientName: 'Ayuda' }]])
+    render(AgentApprovalDialog)
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('Ayuda pide empezar un procesamiento')
+    expect(dialog).toHaveTextContent('La ayuda dentro de EntropIA lo pidió')
+    expect(dialog).not.toHaveTextContent('externo')
+  })
 })

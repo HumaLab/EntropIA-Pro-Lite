@@ -25,6 +25,8 @@ describe('tab-meta', () => {
     expect(tabTitle({ name: 'settings' })).toBe('Configuración')
   })
 
+  // D9 (S13): no help root view — the bubble replaced it, so tab-meta has
+  // no help arm (the exhaustive switch proves it at type level).
   it('titles and icons the experimental navegador section', () => {
     expect(tabTitle({ name: 'navegador' })).toBe('Navegador')
     expect(tabIcon({ name: 'navegador' })).toBe('browser')

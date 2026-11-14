@@ -602,7 +602,7 @@ and `install` starts nothing.
 
 ### The in-app help principal
 
-The in-app help chat (branch `feat/in-app-help-assistant`) drives this same
+The in-app help chat (`src-tauri/src/help/`) drives this same
 server in-process: an `rmcp` client over an in-memory duplex talks to an
 `AgentServer` built with a synthetic principal named **Ayuda** (stable client
 id, scopes `read` + `local_write` + `remote_spend`). Only in-process code can

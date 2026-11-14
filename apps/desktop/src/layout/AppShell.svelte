@@ -43,6 +43,7 @@
   import SyncStatusIndicator from './SyncStatusIndicator.svelte'
   import BatchStatusIndicator from './BatchStatusIndicator.svelte'
   import NotificationBell from './NotificationBell.svelte'
+  import HelpBubble from '../components/HelpBubble.svelte'
   import WorkPane from './WorkPane.svelte'
   import SplitDivider from './SplitDivider.svelte'
 
@@ -648,6 +649,10 @@
        but still inside the shell's stacking context, under the tooltip. -->
   <div data-overlay-root></div>
 
+  <!-- The help bubble (S13, D9): one floating entry point for the whole app,
+       visible on every screen, in Lite and Pro. -->
+  <HelpBubble />
+
   <TopBar splitAvailable={splitFits} />
 
   <div class="workspace" class:workspace--home={$activeNav.current.name === 'home'}>
@@ -938,6 +943,7 @@
           onclick={openGithubRepo}
           aria-label={t('appshell.githubAria')}
           use:tooltip={t('appshell.githubTitle')}
+          data-help-bubble-anchor
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <path
@@ -1289,10 +1295,17 @@
   }
 
   /* ── Status bar (compact, replaces footer) ── */
+  /* Three columns with equal sides, so the centre group (the GitHub link, the
+     help bubble's anchor) sits at the true centre of the bar whatever the
+     widths of the left and right groups. The right side never shrinks below
+     its content (`max-content`); when it needs more than half, the sides stop
+     being equal and the centre shifts left instead of overlapping. The left
+     side is the one that yields (`minmax(0, …)`), as before. */
   .statusbar {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
     align-items: center;
-    justify-content: space-between;
+    column-gap: var(--space-2);
     height: var(--statusbar-height);
     padding: 0 var(--space-3);
     border-top: 1px solid var(--border-subtle);

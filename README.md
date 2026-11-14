@@ -124,7 +124,7 @@ Ambas variantes cubren los mismos flujos principales de investigación; cambia e
 - Mantenimiento del archivo: migraciones aplicadas en Rust al iniciar, auditoría de triggers y vistas, y compactación al cerrar cuando conviene.
 - Aviso de actualización de Microsoft Store (Lite en Windows): detecta si hay una versión más nueva publicada y abre la ficha de la Store; no descarga ni instala nada por sí mismo.
 - Asistentes externos por MCP (Claude Code, Codex, OpenCode, Pi u otro): conexión de un clic o instrucción para cualquier asistente, diagnóstico `--check`, conector incluido en cada instalador, transporte local (loopback y, en Windows, named pipe del usuario) y aprobación en la app de todo lo que gasta, importa, reemplaza texto o borra. Ver [integrations/agents](./integrations/agents/README.md).
-- Chat de ayuda dentro de la app (en desarrollo): responde desde el manual empaquetado, con respuestas locales para preguntas frecuentes, diagnóstico opcional y saneado, y las mismas herramientas MCP con aprobación.
+- Chat de ayuda dentro de la app (próxima versión): responde desde el manual empaquetado, con respuestas locales para preguntas frecuentes, diagnóstico opcional y saneado, y las mismas herramientas MCP con aprobación.
 
 ## Cómo funciona el flag de variante
 

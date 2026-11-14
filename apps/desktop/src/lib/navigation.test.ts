@@ -152,6 +152,10 @@ describe('NavigationStore', () => {
     expect(nav.canGoBack).toBe(true)
   })
 
+  // D9 (S13): there is no help root view anymore — the help chat lives in
+  // the floating bubble, so `help` is not a navigable View at all (the
+  // exhaustive switches in tab-meta.ts and the route loader prove it at
+  // type level; these tests pin the breadcrumb roots that remain).
   it('navigates to db browser view', () => {
     nav.navigate({ name: 'db-browser' })
     expect(nav.current).toEqual({ name: 'db-browser' })

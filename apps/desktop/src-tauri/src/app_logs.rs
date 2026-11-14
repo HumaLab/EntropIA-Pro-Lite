@@ -76,7 +76,7 @@ impl AppLogsState {
         }
     }
 
-    fn recent_entries(&self, limit: usize) -> Vec<AppLogEntry> {
+    pub(crate) fn recent_entries(&self, limit: usize) -> Vec<AppLogEntry> {
         let inner = self
             .inner
             .lock()

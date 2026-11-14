@@ -124,7 +124,7 @@ Both variants cover the same core research workflows; the engine changes (local 
 - Archive maintenance: migrations applied in Rust at startup, a trigger/view audit, and compaction at close when worthwhile.
 - Microsoft Store update notice (Lite on Windows): detects a newer published version and opens the Store listing; it does not download or install anything on its own.
 - External assistants over MCP (Claude Code, Codex, OpenCode, Pi or any other): one-click connection or a setup instruction for any assistant, `--check` diagnostics, a connector bundled with every installer, local transport (loopback and, on Windows, a per-user named pipe) and in-app approval of anything that spends, imports, replaces text or deletes. See [integrations/agents](./integrations/agents/README.md).
-- In-app help chat (in development): answers from the bundled manual, with local answers for frequent questions, optional scrubbed diagnostics, and the same MCP tools behind approvals.
+- In-app help chat (next version): answers from the bundled manual, with local answers for frequent questions, optional scrubbed diagnostics, and the same MCP tools behind approvals.
 
 ## How the variant flag works
 

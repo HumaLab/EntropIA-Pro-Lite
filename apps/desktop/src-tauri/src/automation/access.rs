@@ -166,6 +166,19 @@ impl Principal {
     pub fn has(&self, scope: Scope) -> bool {
         self.scopes.contains(&scope)
     }
+
+    /// The in-app help assistant (D11 of `odd/tasks/in-app-help-assistant.md`):
+    /// a synthetic caller with a stable id, the «Ayuda» name and read +
+    /// local-write + remote-spend scopes. It is never paired, holds no token
+    /// and never touches the keyring: only in-process code can place it in
+    /// the request extensions, so it says nothing about the external switch.
+    pub fn in_app_help() -> Self {
+        Self {
+            client_id: "in-app-help".to_string(),
+            name: "Ayuda".to_string(),
+            scopes: vec![Scope::Read, Scope::LocalWrite, Scope::RemoteSpend],
+        }
+    }
 }
 
 /// Where tokens are kept. The keyring in the app; an in-memory map in tests,
