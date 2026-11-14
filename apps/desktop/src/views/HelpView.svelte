@@ -506,6 +506,134 @@
   class:help-view--embedded={embedded}
   class:help-view--maximized={maximized}
 >
+  <!-- The exchange (S21): one snippet rendered straight into the messages
+    region when floating, or inside the centred maximized column, so the
+    markup is never duplicated. -->
+  {#snippet conversation()}
+    {#if messages.length === 0 && !sending}
+      <div class="help-view__empty">
+        <p class="help-view__empty-text">{$currentLocale && t('help.emptyState')}</p>
+        <div class="help-view__suggestions">
+          <p class="help-view__suggestions-label">
+            {$currentLocale && t('help.suggestionsLabel')}
+          </p>
+          <div class="help-view__suggestions-list">
+            {#each starters as starter (starter)}
+              <Button variant="secondary" size="sm" onclick={() => void send(starter)}>
+                {starter}
+              </Button>
+            {/each}
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#each messages as message, index (index)}
+      {#if message.role === 'user'}
+        <p class="help-view__bubble help-view__bubble--user">{message.content}</p>
+      {:else}
+        <article class="help-view__bubble help-view__bubble--assistant">
+          <div class="help-view__markdown">
+            <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
+            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+            {@html renderMarkdown(message.content)}
+          </div>
+          {#if message.local}
+            <p class="help-view__local">{$currentLocale && t('help.localAnswer')}</p>
+          {/if}
+          {#if metaCount(message) > 0}
+            {@const metaId = `help-meta-${paneId}-${index}`}
+            <div class="help-view__meta">
+              <button
+                type="button"
+                class="help-view__meta-toggle"
+                aria-expanded={message.metaOpen === true}
+                onclick={() => toggleMeta(index)}
+              >
+                <span class="help-view__meta-marker" aria-hidden="true"></span>
+                {$currentLocale && t('help.metaToggle', { count: metaCount(message) })}
+              </button>
+              {#if message.metaOpen}
+                <div
+                  class="help-view__meta-details"
+                  id={metaId}
+                  role="group"
+                  aria-label={$currentLocale && t('help.metaDetails')}
+                >
+                  {#if message.sources && message.sources.length > 0}
+                    <ul
+                      class="help-view__sources"
+                      aria-label={$currentLocale && t('help.sourcesLabel')}
+                    >
+                      {#each message.sources as source (source.chapter + source.title)}
+                        <li>
+                          {$currentLocale &&
+                            (source.kind === 'screenMap'
+                              ? t('help.sourceScreenMap')
+                              : t('help.sourceManual'))}: {source.chapter} › {source.title}
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                  {#if message.documents && message.documents.length > 0}
+                    <p class="help-view__doc-titles">
+                      {$currentLocale && t('help.documentsLabel')}: {message.documents
+                        .map((document) => document.title)
+                        .join('; ')}
+                    </p>
+                  {/if}
+                  {#if message.steps && message.steps.length > 0}
+                    <p class="help-view__steps">
+                      {$currentLocale && t('help.stepsUsed')}: {message.steps
+                        .map((step) => describeHelpStep(step, $currentLocale))
+                        .join(', ')}
+                    </p>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/if}
+          {#if message.notices && message.notices.length > 0}
+            <ul class="help-view__notices" aria-live="polite">
+              {#each message.notices as notice (notice.approvalId)}
+                <li class="help-view__notice help-view__notice--{notice.status}">
+                  <span class="help-view__notice-mark">{outcomeMark(notice.status)}</span>
+                  <span>{notice.message}</span>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          {#if message.roundLimitReached}
+            <p class="help-view__note">{$currentLocale && t('help.roundLimitReached')}</p>
+          {/if}
+          {#if message.toolsUnavailable}
+            <p class="help-view__note">{$currentLocale && t('help.toolsUnavailable')}</p>
+          {/if}
+        </article>
+      {/if}
+    {/each}
+
+    {#if sending}
+      <p class="help-view__state" role="status">{$currentLocale && t('help.thinking')}</p>
+      {#if liveSteps.length > 0}
+        <ul class="help-view__live-steps" aria-label={$currentLocale && t('help.stepsUsed')}>
+          {#each liveSteps as liveStep, index (index)}
+            <li>{describeHelpStep(liveStep, $currentLocale)}</li>
+          {/each}
+        </ul>
+      {/if}
+    {/if}
+
+    {#if previewOpen}
+      {#if previewLoading}
+        <p class="help-view__state" role="status">
+          {$currentLocale && t('help.diagnosticsLoading')}
+        </p>
+      {:else if preview !== null}
+        <pre class="help-view__preview">{preview}</pre>
+      {/if}
+    {/if}
+  {/snippet}
   {#if !embedded}
     <section class="page-header help-view__header" aria-labelledby="help-title-{paneId}">
       <div class="page-header__content">
@@ -608,128 +736,13 @@
       aria-live="polite"
       aria-label={$currentLocale && t('help.title')}
     >
-      {#if messages.length === 0 && !sending}
-        <div class="help-view__empty">
-          <p class="help-view__empty-text">{$currentLocale && t('help.emptyState')}</p>
-          <div class="help-view__suggestions">
-            <p class="help-view__suggestions-label">
-              {$currentLocale && t('help.suggestionsLabel')}
-            </p>
-            <div class="help-view__suggestions-list">
-              {#each starters as starter (starter)}
-                <Button variant="secondary" size="sm" onclick={() => void send(starter)}>
-                  {starter}
-                </Button>
-              {/each}
-            </div>
-          </div>
+      {#if maximized}
+        <!-- Maximized (S21): the whole exchange in one centred 70% column. -->
+        <div class="help-view__column">
+          {@render conversation()}
         </div>
-      {/if}
-
-      {#each messages as message, index (index)}
-        {#if message.role === 'user'}
-          <p class="help-view__bubble help-view__bubble--user">{message.content}</p>
-        {:else}
-          <article class="help-view__bubble help-view__bubble--assistant">
-            <div class="help-view__markdown">
-              <!-- markdown: renderMarkdown escapes all HTML before emitting tags -->
-              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-              {@html renderMarkdown(message.content)}
-            </div>
-            {#if message.local}
-              <p class="help-view__local">{$currentLocale && t('help.localAnswer')}</p>
-            {/if}
-            {#if metaCount(message) > 0}
-              {@const metaId = `help-meta-${paneId}-${index}`}
-              <div class="help-view__meta">
-                <button
-                  type="button"
-                  class="help-view__meta-toggle"
-                  aria-expanded={message.metaOpen === true}
-                  onclick={() => toggleMeta(index)}
-                >
-                  <span class="help-view__meta-marker" aria-hidden="true"></span>
-                  {$currentLocale && t('help.metaToggle', { count: metaCount(message) })}
-                </button>
-                {#if message.metaOpen}
-                  <div
-                    class="help-view__meta-details"
-                    id={metaId}
-                    role="group"
-                    aria-label={$currentLocale && t('help.metaDetails')}
-                  >
-                    {#if message.sources && message.sources.length > 0}
-                      <ul
-                        class="help-view__sources"
-                        aria-label={$currentLocale && t('help.sourcesLabel')}
-                      >
-                        {#each message.sources as source (source.chapter + source.title)}
-                          <li>
-                            {$currentLocale &&
-                              (source.kind === 'screenMap'
-                                ? t('help.sourceScreenMap')
-                                : t('help.sourceManual'))}: {source.chapter} › {source.title}
-                          </li>
-                        {/each}
-                      </ul>
-                    {/if}
-                    {#if message.documents && message.documents.length > 0}
-                      <p class="help-view__doc-titles">
-                        {$currentLocale && t('help.documentsLabel')}: {message.documents
-                          .map((document) => document.title)
-                          .join('; ')}
-                      </p>
-                    {/if}
-                    {#if message.steps && message.steps.length > 0}
-                      <p class="help-view__steps">
-                        {$currentLocale && t('help.stepsUsed')}: {message.steps
-                          .map((step) => describeHelpStep(step, $currentLocale))
-                          .join(', ')}
-                      </p>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-            {/if}
-            {#if message.notices && message.notices.length > 0}
-              <ul class="help-view__notices" aria-live="polite">
-                {#each message.notices as notice (notice.approvalId)}
-                  <li class="help-view__notice help-view__notice--{notice.status}">
-                    <span class="help-view__notice-mark">{outcomeMark(notice.status)}</span>
-                    <span>{notice.message}</span>
-                  </li>
-                {/each}
-              </ul>
-            {/if}
-            {#if message.roundLimitReached}
-              <p class="help-view__note">{$currentLocale && t('help.roundLimitReached')}</p>
-            {/if}
-            {#if message.toolsUnavailable}
-              <p class="help-view__note">{$currentLocale && t('help.toolsUnavailable')}</p>
-            {/if}
-          </article>
-        {/if}
-      {/each}
-
-      {#if sending}
-        <p class="help-view__state" role="status">{$currentLocale && t('help.thinking')}</p>
-        {#if liveSteps.length > 0}
-          <ul class="help-view__live-steps" aria-label={$currentLocale && t('help.stepsUsed')}>
-            {#each liveSteps as liveStep, index (index)}
-              <li>{describeHelpStep(liveStep, $currentLocale)}</li>
-            {/each}
-          </ul>
-        {/if}
-      {/if}
-
-      {#if previewOpen}
-        {#if previewLoading}
-          <p class="help-view__state" role="status">
-            {$currentLocale && t('help.diagnosticsLoading')}
-          </p>
-        {:else if preview !== null}
-          <pre class="help-view__preview">{preview}</pre>
-        {/if}
+      {:else}
+        {@render conversation()}
       {/if}
     </div>
 
@@ -866,21 +879,39 @@
     padding-block-end: 0;
   }
 
-  /* Readable answers when maximized (S20): the centred column caps the
-     measure at ~72ch instead of stretching across the whole window. The
-     user bubble keeps its right docking, only capped. */
-  .help-view--maximized .help-view__bubble {
-    max-width: 72ch;
+  /* Conversation column when maximized (S21): the whole exchange — the
+     empty state, bubbles, live steps, preview — lives in one centred
+     column, 70% of the panel (15% margin each side), never narrower than
+     the floating panel's content. Inside it the zig-zag: the user bubble
+     docks at the column's right edge, the assistant at the left, each
+     capped at 85% of the column so the alternation reads clearly. This
+     replaces the T31 per-bubble ch cap. */
+  .help-view--maximized .help-view__column {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 70%;
+    min-width: min(25rem, 100%);
+    margin-inline: auto;
   }
 
-  .help-view--maximized .help-view__bubble--assistant {
-    align-self: center;
-    width: 100%;
+  .help-view--maximized .help-view__column .help-view__bubble {
+    max-width: 85%;
   }
 
-  .help-view--maximized .help-view__empty {
-    width: 100%;
-    max-width: 72ch;
+  .help-view--maximized .help-view__column .help-view__bubble--user {
+    align-self: flex-end;
+  }
+
+  .help-view--maximized .help-view__column .help-view__bubble--assistant {
+    align-self: flex-start;
+  }
+
+  /* The composer follows the same column when maximized (one rule): the
+     send row sits under the conversation instead of spanning the window. */
+  .help-view--maximized .help-view__composer {
+    width: 70%;
+    min-width: min(25rem, 100%);
     margin-inline: auto;
   }
 

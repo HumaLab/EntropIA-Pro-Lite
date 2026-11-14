@@ -1230,6 +1230,65 @@ describe('HelpView', () => {
       expect(rule('.help-view__info')).toMatch(/vertical-align:\s*super/)
     })
   })
+
+  describe('maximized conversation column (S21)', () => {
+    it('maximized: the empty state, the bubbles and the preview render inside one column', async () => {
+      backend({ hasKey: true, ask: answer('Respuesta de ayuda', []) })
+      render(HelpView, { props: { embedded: true, maximized: true } })
+      await composer()
+
+      const messages = document.querySelector('.help-view__messages') as HTMLElement
+      const column = within(messages).getByText('Probá con:').closest('.help-view__column')
+      expect(column).not.toBeNull()
+      // The empty-state card lives in the column.
+      expect(
+        within(column as HTMLElement).getByRole('button', { name: '¿Cómo importo un PDF?' })
+      ).toBeInTheDocument()
+
+      await sendQuestion('¿Cómo importo?')
+
+      expect(
+        within(column as HTMLElement).getByText('¿Cómo importo?', {
+          selector: '.help-view__bubble--user',
+        })
+      ).toBeInTheDocument()
+      expect(within(column as HTMLElement).getByText('Respuesta de ayuda')).toBeInTheDocument()
+
+      // The diagnostics preview renders inside the column too.
+      await fireEvent.click(screen.getByRole('button', { name: 'Ver qué se envía' }))
+      const pre = await previewBlock()
+      expect(pre.closest('.help-view__column')).not.toBeNull()
+    })
+
+    it('maximized: live steps render inside the column while the answer is in flight', async () => {
+      let release!: (value: unknown) => void
+      mockInvoke.mockImplementation(async (command: string) => {
+        if (command === 'help_status') return { hasOpenrouterKey: true }
+        if (command === 'help_faq_list') return DEFAULT_FAQ
+        if (command === 'help_ask') return new Promise((resolve) => (release = resolve))
+        return undefined
+      })
+      render(HelpView, { props: { embedded: true, maximized: true } })
+      const input = await composer()
+      await fireEvent.input(input, { target: { value: '¿Cómo importo?' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Enviar' }))
+
+      const column = document.querySelector('.help-view__column') as HTMLElement
+      expect(within(column).getByText('Buscando en el manual…')).toBeInTheDocument()
+      release(answer('listo', []))
+      expect(await within(column).findByText('listo')).toBeInTheDocument()
+    })
+
+    it('floating: no column wrapper, the messages keep their layout', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      expect(document.querySelector('.help-view--maximized')).toBeNull()
+      expect(document.querySelector('.help-view__column')).toBeNull()
+      expect(screen.getByText('Probá con:')).toBeInTheDocument()
+    })
+  })
 })
 
 describe('answer metadata disclosure (S20)', () => {
@@ -1324,7 +1383,7 @@ describe('answer metadata disclosure (S20)', () => {
     )
   })
 
-  it('the maximized panel caps the measure and centres the column (stylesheet contract)', async () => {
+  it('S21: the maximized conversation lives in one centred 70% column (stylesheet contract)', async () => {
     const { readFileSync } = await import('node:fs')
     const { resolve } = await import('node:path')
     const styles = readFileSync(resolve(import.meta.dirname, 'HelpView.svelte'), 'utf-8')
@@ -1337,12 +1396,25 @@ describe('answer metadata disclosure (S20)', () => {
       expect(match, `${selector} is no longer in the stylesheet`).not.toBeNull()
       return match?.[2] ?? ''
     }
-    expect(rule('.help-view--maximized .help-view__bubble')).toMatch(/max-width:\s*72ch/)
-    expect(rule('.help-view--maximized .help-view__bubble--assistant')).toMatch(
-      /align-self:\s*center/
+    // The T31 per-bubble ch cap is gone: no bubble is measured in ch any more.
+    expect(styles).not.toMatch(/72ch/)
+    // One centred column, 70% of the panel (15% margin each side), never
+    // narrower than the floating panel's content.
+    expect(rule('.help-view--maximized .help-view__column')).toMatch(/width:\s*70%/)
+    expect(rule('.help-view--maximized .help-view__column')).toMatch(/margin-inline:\s*auto/)
+    expect(rule('.help-view--maximized .help-view__column')).toMatch(/min-width:/)
+    // Inside the column the zig-zag: the user bubble docks at the column's
+    // right edge, the assistant at the left, each capped so the alternation
+    // reads clearly.
+    expect(rule('.help-view--maximized .help-view__column .help-view__bubble')).toMatch(
+      /max-width:\s*85%/
     )
-    expect(rule('.help-view--maximized .help-view__bubble--assistant')).toMatch(/width:\s*100%/)
-    expect(rule('.help-view--maximized .help-view__empty')).toMatch(/max-width:\s*72ch/)
+    expect(rule('.help-view--maximized .help-view__column .help-view__bubble--user')).toMatch(
+      /align-self:\s*flex-end/
+    )
+    expect(rule('.help-view--maximized .help-view__column .help-view__bubble--assistant')).toMatch(
+      /align-self:\s*flex-start/
+    )
   })
 
   it('the starters read as a list and the quiet controls keep the shared focus ring', async () => {
