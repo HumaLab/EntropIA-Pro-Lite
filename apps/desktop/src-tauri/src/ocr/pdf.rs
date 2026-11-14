@@ -2636,6 +2636,48 @@ pub fn render_pdf_page_to_image(bytes: &[u8], page_index: usize) -> Result<Vec<u
     render_pdf_page(&page, page_index)
 }
 
+/// Render a single PDF page to PNG bytes at full OCR resolution.
+///
+/// Same 300-DPI-equivalent raster as [`render_pdf_page_to_image`] (target
+/// width 2550px, landscape rotation applied), but WITHOUT the 10 MB shrink
+/// loop: dense newspaper pages exceed 10 MB at full resolution, and shrinking
+/// them to fit loses the small print local models could otherwise read
+/// (measured: a 1965 newspaper page went from 93% to 100% reference recall
+/// at full resolution, and half resolution also produced more spurious
+/// text). Only local backends may use this — the remote GLM-OCR API rejects
+/// images over [`MAX_RENDERED_PAGE_IMAGE_BYTES`].
+#[cfg(feature = "paddle-ocr")]
+pub fn render_pdf_page_to_image_full_res(
+    bytes: &[u8],
+    page_index: usize,
+) -> Result<Vec<u8>, String> {
+    let pdfium = get_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_byte_slice(bytes, None)
+        .map_err(|e| format!("Failed to load PDF: {e}"))?;
+
+    let pages = document.pages();
+    let page_count = pdfium_page_count(pages.len());
+
+    if page_index >= page_count {
+        return Err(format!(
+            "Page index {page_index} out of bounds (PDF has {page_count} pages)"
+        ));
+    }
+
+    let page_idx = pdfium_page_index(page_index)?;
+    let page = pages
+        .get(page_idx)
+        .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
+
+    let image = render_pdf_page_image(&page, page_index, true)?;
+    let mut png_bytes = Vec::new();
+    image
+        .write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode rendered page as PNG: {e}"))?;
+    Ok(png_bytes)
+}
+
 /// Renders one page at the OCR resolution WITHOUT the landscape rotation the
 /// OCR render applies, so the image keeps the page's own orientation and a
 /// layout box drawn over the viewer maps onto it by scaling alone.

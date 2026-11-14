@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  extractSpeakerLabels,
+  renameSpeakers,
   resolveDictationExtension,
   TranscriptionStore,
   transcribeAudio,
@@ -124,6 +126,47 @@ describe('TranscriptionStore', () => {
       durationMs: 1234,
       segmentsCount: 2,
     })
+  })
+  it('surfaces the backend diarization warning on completion', async () => {
+    const callbacks = new Map<string, (e: { payload: unknown }) => void>()
+    const store = new TranscriptionStore()
+
+    await store.startListening(async (event, callback) => {
+      callbacks.set(event, callback)
+      return vi.fn<() => void>()
+    })
+
+    callbacks.get('transcription:complete')?.({
+      payload: {
+        asset_id: 'asset-1',
+        text: 'Hablante A: hola',
+        warning: 'Se detectaron 6 hablantes y el modo local asigna hasta 4',
+      },
+    })
+
+    expect(store.getState('asset-1')).toMatchObject({
+      status: 'done',
+      text: 'Hablante A: hola',
+      warning: 'Se detectaron 6 hablantes y el modo local asigna hasta 4',
+    })
+  })
+
+  it('extracts speaker labels in first-appearance order', () => {
+    expect(extractSpeakerLabels('Hablante A: hola\nHablante B: chau\nHablante A: sí')).toEqual([
+      'Hablante A',
+      'Hablante B',
+    ])
+    expect(extractSpeakerLabels('Sin prefijos aquí')).toEqual([])
+  })
+
+  it('renames speaker prefixes and sanitizes the new labels', () => {
+    expect(
+      renameSpeakers('Hablante A: hola\nHablante B: chau', {
+        'Hablante A': 'Ana',
+        'Hablante B': 'Luis: el entrevistado\nsegunda línea',
+      })
+    ).toBe('Ana: hola\nLuis  el entrevistado segunda línea: chau')
+    expect(renameSpeakers('Hablante A: hola', {})).toBe('Hablante A: hola')
   })
 
   it('accepts the legacy text_content completion payload', async () => {

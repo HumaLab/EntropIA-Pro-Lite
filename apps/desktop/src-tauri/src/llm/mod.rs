@@ -8,6 +8,8 @@ pub(crate) mod ocr_correction;
 pub mod openrouter;
 pub mod project_context;
 pub mod prompt;
+#[cfg(feature = "paddle-ocr")]
+pub(crate) mod qwen_correction;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -28,12 +30,12 @@ use crate::nlp::text_provider;
 use crate::settings;
 
 #[cfg(feature = "local-ml")]
-use self::engine::{LlmConfig, LlmEngine};
+use self::engine::{FitFailure, LlmConfig, LlmEngine};
 use self::generation::{
     generation_config_from_settings, render_prompt_from_settings, FlowGenerationConfig,
     GenerationFlow, OpenRouterGenerationParams,
 };
-use self::openrouter::{OpenRouterClient, OpenRouterImage};
+use self::openrouter::{resolve_custom_endpoint, OpenRouterClient, OpenRouterImage};
 
 const LLM_PREFIX: &str = "[llm]";
 const LLM_LOCAL_PREFIX: &str = "[llm-local]";
@@ -308,6 +310,7 @@ pub(crate) fn ensure_default_model_downloaded_if_missing(
     );
     let managed_dir = self::download::open_managed_models_dir(&download.models_dir)?;
     self::download::download_model_file(
+        "llm",
         &source_url,
         managed_dir,
         &filename,
@@ -338,6 +341,11 @@ pub(crate) fn get_or_init_local_gemma_engine(
         n_ctx: 4096,
         n_threads: None,
         seed: 1234,
+        // Opt-in CUDA builds offload every layer; CPU-only builds stay at 0.
+        #[cfg(feature = "cuda")]
+        n_gpu_layers: u32::MAX,
+        #[cfg(not(feature = "cuda"))]
+        n_gpu_layers: 0,
     })?;
     let engine = Arc::new(Mutex::new(engine));
     *cached = Some(Arc::clone(&engine));
@@ -654,26 +662,9 @@ pub struct LlmErrorPayload {
     pub job: String,
     pub error: String,
 }
-
-#[derive(Clone, Serialize)]
-#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
-pub struct LlmDownloadProgressPayload {
-    pub pct: u8,
-    pub downloaded_bytes: u64,
-    pub total_bytes: Option<u64>,
-}
-
-#[derive(Clone, Serialize)]
-#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
-pub struct LlmDownloadCompletePayload {
-    pub path: String,
-}
-
-#[derive(Clone, Serialize)]
-#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
-pub struct LlmDownloadErrorPayload {
-    pub error: String,
-}
+/// Failure of a managed LLM model download (`llm:download_error`).
+#[cfg(feature = "local-ml")]
+pub type LlmDownloadErrorPayload = download::ModelDownloadErrorPayload;
 
 fn emit_progress(app_handle: &AppHandle, id: &str, job: &str, pct: u8) {
     if pct == 0 || pct == 10 || pct == 100 {
@@ -1113,7 +1104,9 @@ fn preview_for_log(text: &str, max_chars: usize) -> String {
     }
 }
 
-fn extract_json_objects(text: &str) -> Vec<String> {
+/// Balanced `{...}` spans of a model output, in order. Lets strict parsers
+/// (intent classifier, schema extraction) tolerate prose around the JSON.
+pub(crate) fn extract_json_objects(text: &str) -> Vec<String> {
     let mut objects = Vec::new();
     let mut depth = 0usize;
     let mut start = None;
@@ -1490,7 +1483,27 @@ pub(crate) fn correct_ocr_for_asset_blocking(
         asset_id: asset_id.to_string(),
     };
     let conn = crate::db::open::open_archive_connection(db_path)?;
-    let api_key = require_openrouter_key(&conn)?;
+    // A custom OpenAI-compatible endpoint (local vLLM/Ollama) needs no API
+    // key and bypasses the local-Qwen fallback: the user pointed remote
+    // traffic at their own server on purpose.
+    let custom_endpoint = resolve_custom_endpoint(&conn)?;
+    // No remote key: correct on the local Qwen server when available,
+    // instead of failing like every other remote-only job.
+    if custom_endpoint.is_none() && require_openrouter_key(&conn).is_err() {
+        #[cfg(feature = "paddle-ocr")]
+        if qwen_correction::local_correction_available_for(app_handle, db_path) {
+            drop(conn);
+            return qwen_correction::correct_ocr_via_local_qwen(app_handle, db_path, asset_id);
+        }
+        return Err(
+            "OpenRouter API key no configurada. Andá a Configuración para agregarla.".to_string(),
+        );
+    }
+    let api_key = if custom_endpoint.is_some() {
+        String::new()
+    } else {
+        require_openrouter_key(&conn)?
+    };
     let request = prepare_remote_job_request(
         &conn,
         &job,
@@ -1503,13 +1516,52 @@ pub(crate) fn correct_ocr_for_asset_blocking(
     let expected_extraction = request.ocr_extraction_snapshot.clone().ok_or_else(|| {
         "OCR correction completion is missing its extraction snapshot".to_string()
     })?;
-    let client = OpenRouterClient::new(api_key, request.generation.model.clone());
+    let client = OpenRouterClient::new(api_key, request.generation.model.clone())
+        .with_custom_endpoint(custom_endpoint);
     let generated =
         tauri::async_runtime::block_on(execute_remote_job_request(&client, &request, app_handle))?;
     Ok(AssetCorrectionRun {
         expected_extraction,
         corrected: generated.output,
     })
+}
+
+/// Local Qwen fallback for OCRC when no remote key exists.
+///
+/// Returns `Some` output only for correction jobs with local assets installed
+/// (or any build without the local engine compiled in: always `None`). The
+/// caller keeps its remote-key error otherwise.
+#[cfg_attr(not(feature = "paddle-ocr"), allow(unused_variables))]
+async fn local_qwen_correction_fallback(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    job: &LlmJob,
+) -> Option<JobExecutionOutput> {
+    #[cfg(feature = "paddle-ocr")]
+    if let LlmJob::CorrectOcrAsset { asset_id } = job {
+        let handle = app_handle.clone();
+        let path = db_path.to_path_buf();
+        let asset = asset_id.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            qwen_correction::correct_ocr_via_local_qwen(&handle, &path, &asset)
+        })
+        .await;
+        match outcome {
+            Ok(Ok(run)) => {
+                return Some(JobExecutionOutput {
+                    output: run.corrected,
+                    ocr_extraction_snapshot: Some(run.expected_extraction),
+                });
+            }
+            Ok(Err(error)) => {
+                log::warn!(target: "llm-local", "Local Qwen correction failed, keeping remote error: {error}");
+            }
+            Err(error) => {
+                log::warn!(target: "llm-local", "Local Qwen correction panicked: {error}");
+            }
+        }
+    }
+    None
 }
 
 /// The same for a page summary: the local engine or OpenRouter, chosen by the
@@ -1557,6 +1609,7 @@ fn run_asset_job_blocking(
 ) -> Result<(String, &'static str), String> {
     let conn = crate::db::open::open_archive_connection(db_path)?;
     let api_key = settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
+    let custom_endpoint = resolve_custom_endpoint(&conn)?;
     #[cfg(feature = "local-ml")]
     {
         let llm_mode =
@@ -1577,7 +1630,10 @@ fn run_asset_job_blocking(
             match local {
                 Ok(generated) => return Ok((generated.output, LLM_LOCAL_PREFIX)),
                 // Same fallback as the worker: only "auto" with a key goes remote.
-                Err(error) if llm_mode != "auto" || api_key.is_empty() => {
+                // A custom endpoint counts as a remote route (it needs no key).
+                Err(error)
+                    if llm_mode != "auto" || (api_key.is_empty() && custom_endpoint.is_none()) =>
+                {
                     return Err(format!("Local LLM unavailable: {error}"))
                 }
                 Err(error) => log::warn!(
@@ -1587,7 +1643,7 @@ fn run_asset_job_blocking(
             }
         }
     }
-    if api_key.trim().is_empty() {
+    if custom_endpoint.is_none() && api_key.trim().is_empty() {
         return Err(
             "OpenRouter API key no configurada. Configure OpenRouter API key/model.".to_string(),
         );
@@ -1601,7 +1657,8 @@ fn run_asset_job_blocking(
             .unwrap_or_else(|| std::path::Path::new(".")),
     )?;
     drop(conn);
-    let client = OpenRouterClient::new(api_key, request.generation.model.clone());
+    let client = OpenRouterClient::new(api_key, request.generation.model.clone())
+        .with_custom_endpoint(custom_endpoint);
     let generated =
         tauri::async_runtime::block_on(execute_remote_job_request(&client, &request, app_handle))?;
     Ok((generated.output, LLM_CLOUD_PREFIX))
@@ -1617,7 +1674,7 @@ pub struct LlmQueue {
     /// Shared flag set to `true` after the LLM engine initializes successfully.
     available: Arc<AtomicBool>,
     /// Path to the database, used for checking settings.
-    db_path: PathBuf,
+    pub(crate) db_path: PathBuf,
 }
 
 impl LlmQueue {
@@ -1652,9 +1709,17 @@ impl LlmQueue {
         self.is_openrouter_configured()
     }
 
-    /// OCRC is remote-only while local vision support is unavailable.
+    /// OCRC runs remote when an OpenRouter key exists, otherwise on the local
+    /// Qwen3-VL server when its assets are installed.
     pub fn is_ocr_correction_available(&self) -> bool {
-        self.is_openrouter_api_key_configured()
+        if self.is_openrouter_api_key_configured() {
+            return true;
+        }
+        #[cfg(feature = "paddle-ocr")]
+        if qwen_correction::local_correction_available(&self.db_path, None) {
+            return true;
+        }
+        false
     }
 
     /// Report local availability without loading Gemma. Existing models are
@@ -1767,6 +1832,13 @@ impl LlmQueue {
 
                 let api_key =
                     settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
+                let custom_endpoint = match resolve_custom_endpoint(&conn) {
+                    Ok(endpoint) => endpoint,
+                    Err(error) => {
+                        emit_error(&app_handle, &id, job_name, &error);
+                        continue;
+                    }
+                };
                 let force_remote_ocr_correction = matches!(&job, LlmJob::CorrectOcrAsset { .. });
                 #[cfg(feature = "local-ml")]
                 let local_can_initialize = local_model_can_initialize_from_conn(&conn, &db_path);
@@ -1788,36 +1860,48 @@ impl LlmQueue {
                 let result = if use_openrouter {
                     // OpenRouter remote path
 
-                    if api_key.is_empty() {
-                        emit_error(
-                            &app_handle,
-                            &id,
-                            job_name,
-                            "OpenRouter API key no configurada. Andá a Configuración para agregarla.",
-                        );
-                        continue;
-                    }
-
-                    log::info!(
-                        target: log_target(&job_log_prefix),
-                        "Running job '{job_name}' for {id} via remote API"
-                    );
-                    match prepare_remote_job_request(
-                        &conn,
-                        &job,
-                        OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
-                        db_path
-                            .parent()
-                            .unwrap_or_else(|| std::path::Path::new(".")),
-                    ) {
-                        Ok(request) => {
-                            let client = OpenRouterClient::new(
-                                api_key.clone(),
-                                request.generation.model.clone(),
-                            );
-                            execute_remote_job_request(&client, &request, &app_handle).await
+                    if custom_endpoint.is_none() && api_key.is_empty() {
+                        match local_qwen_correction_fallback(&app_handle, &db_path, &job).await {
+                            Some(generated) => {
+                                log::info!(
+                                    target: "llm-local",
+                                    "Running job '{job_name}' for {id} via local Qwen (no remote key)"
+                                );
+                                Ok(generated)
+                            }
+                            None => {
+                                emit_error(
+                                    &app_handle,
+                                    &id,
+                                    job_name,
+                                    "OpenRouter API key no configurada. Andá a Configuración para agregarla.",
+                                );
+                                continue;
+                            }
                         }
-                        Err(e) => Err(e),
+                    } else {
+                        log::info!(
+                            target: log_target(&job_log_prefix),
+                            "Running job '{job_name}' for {id} via remote API"
+                        );
+                        match prepare_remote_job_request(
+                            &conn,
+                            &job,
+                            OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
+                            db_path
+                                .parent()
+                                .unwrap_or_else(|| std::path::Path::new(".")),
+                        ) {
+                            Ok(request) => {
+                                let client = OpenRouterClient::new(
+                                    api_key.clone(),
+                                    request.generation.model.clone(),
+                                )
+                                .with_custom_endpoint(custom_endpoint);
+                                execute_remote_job_request(&client, &request, &app_handle).await
+                            }
+                            Err(e) => Err(e),
+                        }
                     }
                 } else {
                     // Local engine path. Compiled only with the local engine; under
@@ -1892,7 +1976,9 @@ impl LlmQueue {
                                 })
                             }
                             None => {
-                                if llm_mode == "auto" && !api_key.is_empty() {
+                                if llm_mode == "auto"
+                                    && (custom_endpoint.is_some() || !api_key.is_empty())
+                                {
                                     let fallback_log_prefix = llm_job_prefix(true, &job);
                                     log::warn!(
                                         target: log_target(&fallback_log_prefix),
@@ -1910,7 +1996,8 @@ impl LlmQueue {
                                             let client = OpenRouterClient::new(
                                                 api_key.clone(),
                                                 request.generation.model.clone(),
-                                            );
+                                            )
+                                            .with_custom_endpoint(custom_endpoint);
                                             execute_remote_job_request(
                                                 &client,
                                                 &request,
@@ -2034,7 +2121,7 @@ fn max_tokens_for(job: &LlmJob) -> i32 {
         | LlmJob::ConsolidateEntitiesAsset { .. } => 1024,
         LlmJob::ExtractTriples { .. } | LlmJob::ExtractTriplesAsset { .. } => 1024,
         LlmJob::ExtractSchemaAsset { .. } => 2048,
-        LlmJob::Summarize { .. } | LlmJob::SummarizeAsset { .. } => 512,
+        LlmJob::Summarize { .. } | LlmJob::SummarizeAsset { .. } => 1024,
         LlmJob::Classify { .. } => 256,
         LlmJob::Ask { .. } => 512,
     }
@@ -2067,6 +2154,199 @@ fn truncate_to_sentence_boundary(text: &str) -> String {
     } else {
         // No sentence boundary found at all — return as-is (better than nothing)
         trimmed.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Whole-text summaries without truncation (map-reduce)
+// ---------------------------------------------------------------------------
+
+/// Ceiling for one summary pass: ~100 KB of Spanish OCR text fits in it.
+/// Anything larger is summarized per chunk and fused; input is never dropped.
+#[cfg(feature = "local-ml")]
+const SUMMARY_MAX_N_CTX: u32 = 32_768;
+
+/// Recursion cap for summary chunking: each level shrinks text ~25x, so depth
+/// 4 already covers absurd inputs; beyond that something else is wrong.
+#[cfg(feature = "local-ml")]
+const SUMMARY_MAX_DEPTH: u32 = 4;
+
+/// Split text into sentence-bounded chunks of at most `max_chars` each.
+/// Never drops text: a single block longer than the budget becomes its own
+/// chunk and the caller errors loudly instead of summarizing silently.
+#[cfg(feature = "local-ml")]
+fn split_text_for_summary(text: &str, max_chars: usize) -> Vec<String> {
+    const BOUNDARIES: [char; 5] = ['.', '!', '?', '\n', '。'];
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for sentence in text.split_inclusive(&BOUNDARIES[..]) {
+        if current.chars().count() + sentence.chars().count() > max_chars && !current.is_empty() {
+            chunks.push(std::mem::take(&mut current));
+        }
+        current.push_str(sentence);
+    }
+    if !current.trim().is_empty() {
+        chunks.push(current);
+    }
+    chunks
+        .into_iter()
+        .map(|chunk| chunk.trim().to_string())
+        .filter(|chunk| !chunk.is_empty())
+        .collect()
+}
+
+/// Text tokens each chunk may hold so its prompt fits the ceiling.
+#[cfg(feature = "local-ml")]
+fn summary_chunk_budget(
+    engine: &LlmEngine,
+    empty_prompt: &str,
+    max_tokens: i32,
+) -> Result<u32, String> {
+    let template_tokens = engine
+        .count_tokens(empty_prompt, crate::llm::engine::AddBos::Always)
+        .map_err(|error| format!("Failed to tokenize summary template: {error}"))?
+        as u32;
+    let budget = SUMMARY_MAX_N_CTX.saturating_sub(max_tokens.max(0) as u32 + 256 + template_tokens);
+    if budget < 512 {
+        return Err(format!(
+            "summary template alone needs {template_tokens} tokens: cannot chunk under the {SUMMARY_MAX_N_CTX} ceiling"
+        ));
+    }
+    Ok(budget)
+}
+
+/// Summarize `text` in full with the user's summary template: one fitted pass
+/// when it fits, otherwise one pass per chunk plus a fusion pass. Never
+/// truncates input; fails loudly when even one block cannot be split to fit.
+#[cfg(feature = "local-ml")]
+fn summarize_text_fully(
+    engine: &LlmEngine,
+    conn: &rusqlite::Connection,
+    text: &str,
+    max_tokens: i32,
+    log_prefix: &str,
+    depth: u32,
+) -> Result<String, String> {
+    let render = |part: &str| {
+        prompt::gemma_wrap(&render_prompt_from_settings(
+            conn,
+            GenerationFlow::Summary,
+            part,
+        ))
+    };
+    let prompt = render(text);
+    match engine.generate_fitted(&prompt, max_tokens, SUMMARY_MAX_N_CTX, log_prefix) {
+        Ok(generated) => {
+            if generated.hit_budget {
+                log::warn!(
+                    target: log_target(log_prefix),
+                    "summary hit the {max_tokens}-token output budget; the 10-15 line shape may end early",
+                );
+            }
+            Ok(truncate_to_sentence_boundary(&generated.text))
+        }
+        Err(FitFailure::Tokenize(error)) => Err(error),
+        Err(FitFailure::TooLong { need }) => {
+            if depth >= SUMMARY_MAX_DEPTH {
+                return Err(format!(
+                    "document needs a {need}-token window (ceiling {SUMMARY_MAX_N_CTX}): split it before summarizing"
+                ));
+            }
+            let budget = summary_chunk_budget(engine, &render(""), max_tokens)?;
+            // Conservative chars-per-token for chunking; if a chunk still
+            // overflows, recursion re-chunks it instead of dropping text.
+            let chunks = split_text_for_summary(text, budget as usize * 3);
+            if chunks.len() <= 1 {
+                return Err(format!(
+                    "single block needs a {need}-token window (ceiling {SUMMARY_MAX_N_CTX}): split it before summarizing"
+                ));
+            }
+            log::info!(
+                target: log_target(log_prefix),
+                "summary map-reduce: {} chunks (depth {depth})",
+                chunks.len(),
+            );
+            let mut partials = Vec::with_capacity(chunks.len());
+            for (index, chunk) in chunks.iter().enumerate() {
+                let part_log = format!("{log_prefix}[parte {}/{}]", index + 1, chunks.len());
+                partials.push(summarize_text_fully(
+                    engine,
+                    conn,
+                    chunk,
+                    max_tokens,
+                    &part_log,
+                    depth + 1,
+                )?);
+            }
+            summarize_partials_fully(
+                engine,
+                &partials.join("\n\n"),
+                max_tokens,
+                log_prefix,
+                depth + 1,
+            )
+        }
+    }
+}
+
+/// Fuse per-chunk summaries with the internal fusion template. Recurses the
+/// same way when the partials themselves do not fit.
+#[cfg(feature = "local-ml")]
+fn summarize_partials_fully(
+    engine: &LlmEngine,
+    joined: &str,
+    max_tokens: i32,
+    log_prefix: &str,
+    depth: u32,
+) -> Result<String, String> {
+    let prompt = prompt::gemma_wrap(&prompt::SUMMARY_FUSION_PROMPT.replace("{text}", joined));
+    match engine.generate_fitted(&prompt, max_tokens, SUMMARY_MAX_N_CTX, log_prefix) {
+        Ok(generated) => {
+            if generated.hit_budget {
+                log::warn!(
+                    target: log_target(log_prefix),
+                    "summary fusion hit the {max_tokens}-token output budget; the 10-15 line shape may end early",
+                );
+            }
+            Ok(truncate_to_sentence_boundary(&generated.text))
+        }
+        Err(FitFailure::Tokenize(error)) => Err(error),
+        Err(FitFailure::TooLong { need }) => {
+            if depth >= SUMMARY_MAX_DEPTH {
+                return Err(format!(
+                    "partials need a {need}-token window (ceiling {SUMMARY_MAX_N_CTX}): cannot fuse"
+                ));
+            }
+            let budget = summary_chunk_budget(
+                engine,
+                &prompt::gemma_wrap(&prompt::SUMMARY_FUSION_PROMPT.replace("{text}", "")),
+                max_tokens,
+            )?;
+            let chunks = split_text_for_summary(joined, budget as usize * 3);
+            if chunks.len() <= 1 {
+                return Err(format!(
+                    "partials need a {need}-token window (ceiling {SUMMARY_MAX_N_CTX}): cannot fuse"
+                ));
+            }
+            let mut partials = Vec::with_capacity(chunks.len());
+            for (index, chunk) in chunks.iter().enumerate() {
+                let part_log = format!("{log_prefix}[fusion {}/{}]", index + 1, chunks.len());
+                partials.push(summarize_partials_fully(
+                    engine,
+                    chunk,
+                    max_tokens,
+                    &part_log,
+                    depth + 1,
+                )?);
+            }
+            summarize_partials_fully(
+                engine,
+                &partials.join("\n\n"),
+                max_tokens,
+                log_prefix,
+                depth + 1,
+            )
+        }
     }
 }
 
@@ -2216,14 +2496,11 @@ fn process_job(
             if text.is_empty() {
                 return Err("No text available for summarization".to_string());
             }
-            let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::gemma_wrap(&render_prompt_from_settings(
-                conn,
-                GenerationFlow::Summary,
-                &truncated,
-            ));
-            let result = engine.generate(&p, max_tokens_for(job), &log_prefix)?;
-            Ok(truncate_to_sentence_boundary(&result))
+            // Whole item text, never truncated: one fitted pass, or
+            // per-chunk passes plus fusion when it exceeds the ceiling.
+            let output =
+                summarize_text_fully(engine, conn, &text, max_tokens_for(job), &log_prefix, 0)?;
+            Ok(output)
         }
 
         LlmJob::Classify {
@@ -2327,14 +2604,11 @@ fn process_job(
             if text.is_empty() {
                 return Err("No text available for summarization on this asset".to_string());
             }
-            let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
-            let p = prompt::gemma_wrap(&render_prompt_from_settings(
-                conn,
-                GenerationFlow::Summary,
-                &truncated,
-            ));
-            let result = engine.generate(&p, max_tokens_for(job), &log_prefix)?;
-            Ok(truncate_to_sentence_boundary(&result))
+            // Whole asset text, never truncated: one fitted pass, or
+            // per-chunk passes plus fusion when it exceeds the ceiling.
+            let output =
+                summarize_text_fully(engine, conn, &text, max_tokens_for(job), &log_prefix, 0)?;
+            Ok(output)
         }
     }?;
     Ok(JobExecutionOutput {
@@ -2464,12 +2738,12 @@ fn remote_generation_config_for_job(
     }
 }
 
-struct RemoteJobRequest {
-    prompt: String,
-    visual_source_path: Option<std::path::PathBuf>,
-    generation: FlowGenerationConfig,
-    truncate_to_sentence_boundary: bool,
-    ocr_extraction_snapshot: Option<String>,
+pub(crate) struct RemoteJobRequest {
+    pub(crate) prompt: String,
+    pub(crate) visual_source_path: Option<std::path::PathBuf>,
+    pub(crate) generation: FlowGenerationConfig,
+    pub(crate) truncate_to_sentence_boundary: bool,
+    pub(crate) ocr_extraction_snapshot: Option<String>,
 }
 
 async fn execute_remote_job_request(
@@ -2521,7 +2795,7 @@ async fn execute_remote_job_request(
     })
 }
 
-fn resolve_ocr_correction_visual_source_path(
+pub(crate) fn resolve_ocr_correction_visual_source_path(
     conn: &rusqlite::Connection,
     asset_id: &str,
     app_data_dir: &std::path::Path,
@@ -2561,7 +2835,7 @@ struct PreparedRemotePrompt {
 // ---------------------------------------------------------------------------
 
 /// Prepare a remote OpenRouter request without holding a DB connection across `.await`.
-fn prepare_remote_job_request(
+pub(crate) fn prepare_remote_job_request(
     conn: &rusqlite::Connection,
     job: &LlmJob,
     n_ctx: u32,
@@ -2798,6 +3072,62 @@ mod tests {
                 None,
             ]
         );
+    }
+
+    #[test]
+    #[cfg(feature = "local-ml")]
+    fn summary_chunks_cover_the_whole_text_without_loss() {
+        let text =
+            "Primera oración. Segunda oración con más palabras. Tercera. Cuarta oración final.";
+        let chunks = split_text_for_summary(text, 40);
+        assert!(chunks.len() > 1);
+        // Concatenation (ignoring whitespace) preserves every character.
+        let joined: String = chunks.join("");
+        let norm = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        assert_eq!(norm(&joined), norm(text));
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 40 || !chunk[..chunk.len().min(40)].contains('.'));
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "local-ml")]
+    fn summary_chunking_scales_to_hundreds_of_kb() {
+        // A ~300 KB document must split into bounded chunks without loss.
+        let paragraph = "Esta es una oración de relleno con varias palabras. ";
+        let text = paragraph.repeat(6000);
+        assert!(text.chars().count() > 200_000);
+        let chunks = split_text_for_summary(&text, 4000);
+        assert!(
+            chunks.len() > 40,
+            "expected many chunks, got {}",
+            chunks.len()
+        );
+        let joined: String = chunks.join("");
+        let norm = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        assert_eq!(norm(&joined), norm(&text));
+        assert!(chunks.iter().all(|c| c.chars().count() <= 4000));
+    }
+
+    #[test]
+    #[cfg(feature = "local-ml")]
+    fn summary_chunking_keeps_an_oversized_block_verbatim() {
+        // A single block longer than the budget becomes its own chunk: the
+        // caller errors loudly instead of dropping it.
+        let text = "Esta es una sola oración larguísima sin ningún otro corte posible en todo el texto que sigue creciendo.";
+        let chunks = split_text_for_summary(text, 20);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
+    }
+
+    #[test]
+    fn summary_max_tokens_covers_the_ten_to_fifteen_line_shape() {
+        // The 10-15 line summary shape (~350 tokens) must fit comfortably in
+        // the output budget with headroom: the budget, not truncation, ends it.
+        let job = LlmJob::Summarize {
+            item_id: "test-item".to_string(),
+        };
+        assert!(max_tokens_for(&job) >= 700);
     }
 
     /// S6: both new operations need the OpenRouter key, and a missing key is

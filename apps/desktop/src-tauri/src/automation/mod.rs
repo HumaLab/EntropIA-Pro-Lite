@@ -9,6 +9,7 @@
 //! - [`corpus_tools`] — the corpus edit tools' adapter over the corpus services.
 //! - [`jobs`] — the processing tools' adapter over the batch services.
 //! - [`mcp`] — what the endpoint offers over MCP (one tool per intent).
+//! - [`models_setup`] — local-model inventory and installs behind `models_setup`.
 //! - [`proof`] — the instance key and HMAC that keep a token from reaching a
 //!   process that is not this app (D12).
 //! - [`read`] — the read-only archive connection and the queries behind the tools.
@@ -22,6 +23,7 @@ pub mod connector;
 pub mod corpus_tools;
 pub mod jobs;
 pub mod mcp;
+pub mod models_setup;
 #[cfg(windows)]
 mod private_acl;
 pub mod proof;

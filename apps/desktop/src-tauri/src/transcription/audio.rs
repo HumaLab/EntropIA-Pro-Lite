@@ -4,14 +4,11 @@
 /// All audio is converted to 16kHz mono f32 PCM for Whisper-compatible input.
 use std::path::Path;
 
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::codecs::audio::AudioDecoderOptions;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-#[allow(unused_imports)]
-use symphonia::core::units::Time;
 
 /// Processed audio data ready for Whisper inference.
 #[derive(Debug)]
@@ -103,50 +100,48 @@ fn decode_symphonia(path: &str) -> Result<AudioData, String> {
         .unwrap_or("");
     hint.with_extension(ext);
 
-    let format_opts = FormatOptions {
-        enable_gapless: true,
-        ..Default::default()
-    };
+    let format_opts = FormatOptions::default();
     let metadata_opts = MetadataOptions::default();
-    let decoder_opts = DecoderOptions {
-        verify: false,
-        ..Default::default()
-    };
+    let decoder_opts = AudioDecoderOptions::default();
 
     // Probe the format
-    let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &format_opts, &metadata_opts)
+    let mut format_reader = symphonia::default::get_probe()
+        .probe(&hint, mss, format_opts, metadata_opts)
         .map_err(|e| format!("Failed to probe audio format: {e}"))?;
-
-    let mut format_reader = probed.format;
 
     // Find the default audio track
     let track = format_reader
-        .tracks()
-        .iter()
-        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .default_track(TrackType::Audio)
         .ok_or("No audio track found in file")?;
-
-    let codec_params = track.codec_params.clone();
     let track_id = track.id;
+    let codec_params = track
+        .codec_params
+        .clone()
+        .ok_or("Track has no codec parameters")?;
+
+    // Audio-specific parameters (sample rate, channels)
+    let audio_params = codec_params
+        .audio()
+        .ok_or("Track has no audio codec parameters")?;
 
     // Get original sample rate and channels from codec params
-    let original_sample_rate = codec_params.sample_rate.unwrap_or(44100) as usize;
-    let num_channels = codec_params.channels.map(|c| c.count()).unwrap_or(1) as u16;
-
-    // Create decoder
+    let original_sample_rate = audio_params.sample_rate.unwrap_or(44100) as usize;
+    let num_channels = audio_params
+        .channels
+        .as_ref()
+        .map(|c| c.count())
+        .unwrap_or(1) as u16;
     let mut decoder = symphonia::default::get_codecs()
-        .make(&codec_params, &decoder_opts)
+        .make_audio_decoder(audio_params, &decoder_opts)
         .map_err(|e| format!("Failed to create audio decoder: {e}"))?;
 
-    // Decode all frames and collect samples using SampleBuffer
+    // Decode all packets, converting each buffer to interleaved f32
     let mut all_samples: Vec<f32> = Vec::new();
-    let mut sample_buf: Option<SampleBuffer<f32>> = None;
-
     loop {
         let packet = match format_reader.next_packet() {
-            Ok(p) => p,
-            Err(symphonia::core::errors::Error::IoError(ref e))
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            Err(symphonia::core::errors::Error::IoError(e))
                 if e.kind() == std::io::ErrorKind::UnexpectedEof =>
             {
                 break;
@@ -157,36 +152,21 @@ fn decode_symphonia(path: &str) -> Result<AudioData, String> {
             }
         };
 
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
 
         let decoded = match decoder.decode(&packet) {
-            Ok(d) => d,
+            Ok(decoded) => decoded,
             Err(e) => {
                 log::info!(target: "transcription", "Failed to decode packet: {e}");
                 continue;
             }
         };
 
-        // Use SampleBuffer to convert AudioBufferRef to interleaved f32 samples
-        let spec = *decoded.spec();
-        let frames = decoded.capacity();
-
-        // Recreate sample buffer if needed (first decode or different capacity)
-        let needs_resize = match sample_buf {
-            None => true,
-            Some(_) => false, // Keep same buffer — SampleBuffer::copy_interleaved_ref handles resizing
-        };
-
-        if needs_resize {
-            sample_buf = Some(SampleBuffer::<f32>::new(frames as u64, spec));
-        }
-
-        if let Some(ref mut buf) = sample_buf {
-            buf.copy_interleaved_ref(decoded);
-            all_samples.extend_from_slice(buf.samples());
-        }
+        let mut interleaved = vec![0.0f32; decoded.samples_interleaved()];
+        decoded.copy_to_slice_interleaved(&mut interleaved);
+        all_samples.extend_from_slice(&interleaved);
     }
 
     // Mix down to mono if needed

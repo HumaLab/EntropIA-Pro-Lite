@@ -152,8 +152,10 @@ pub struct AgentEndpointState {
     /// Paid work assistants asked for, waiting for the owner (D3). Outlives
     /// endpoint restarts within one app run; an app restart clears it.
     approvals: Arc<ApprovalStore>,
-    /// Announces corpus writes so the app's views refresh.
     corpus_events: Arc<CorpusEvents>,
+    /// Present in the running app; `None` in tests, where model installs
+    /// cannot emit progress or resolve bundle paths.
+    app_handle: Option<tauri::AppHandle>,
 }
 
 impl AgentEndpointState {
@@ -161,6 +163,7 @@ impl AgentEndpointState {
         dir: impl Into<PathBuf>,
         db_path: impl Into<PathBuf>,
         cache_dir: impl Into<PathBuf>,
+        app_handle: Option<tauri::AppHandle>,
     ) -> Self {
         Self {
             dir: dir.into(),
@@ -169,6 +172,7 @@ impl AgentEndpointState {
             running: Mutex::new(None),
             approvals: Arc::new(ApprovalStore::default()),
             corpus_events: Arc::new(CorpusEvents::default()),
+            app_handle,
         }
     }
 
@@ -215,6 +219,7 @@ impl AgentEndpointState {
                         cache_dir: self.cache_dir.clone(),
                         approvals: self.approvals.clone(),
                         corpus_events: self.corpus_events.clone(),
+                        app_handle: self.app_handle.clone(),
                     },
                 )?);
                 Ok(())
@@ -257,6 +262,10 @@ struct ToolContext {
     cache_dir: PathBuf,
     approvals: Arc<ApprovalStore>,
     corpus_events: Arc<CorpusEvents>,
+    /// Lets tools start local-model installs with the same managers (and
+    /// progress events) as the Settings UI. Cloned per request; never sent
+    /// over the wire. `None` in tests.
+    app_handle: Option<tauri::AppHandle>,
 }
 
 /// Bind, advertise and spawn. The listener is bound before the discovery file
@@ -434,6 +443,7 @@ impl GuardedEndpoint {
                         context.approvals.clone(),
                         context.corpus_events.clone(),
                         tool_access.clone(),
+                        context.app_handle.clone(),
                     ))
                 },
                 Arc::new(NeverSessionManager::default()),
@@ -771,6 +781,7 @@ mod tests {
             dir.path().to_path_buf(),
             db_path,
             dir.path().join("cache"),
+            None,
         ));
         endpoint.sync(&access).await.unwrap();
         let port = endpoint.port().expect("the endpoint is running");
@@ -957,6 +968,7 @@ mod tests {
                 "items_update",
                 "jobs_get",
                 "jobs_list",
+                "models_setup",
                 "processing_control",
                 "processing_prepare",
                 "processing_start",

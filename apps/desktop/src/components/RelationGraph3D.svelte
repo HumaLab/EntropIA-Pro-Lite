@@ -9,7 +9,7 @@
    * passage saves a snapshot (camera, node positions, selection) on the
    * collection's history entry so «Volver» brings this view back as it was.
    */
-  import { onDestroy } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import { ActionIcon, IconButton, tooltip } from '@entropia/ui'
   import type { Entity, Triple } from '@entropia/store'
   import { getStore } from '$lib/db'
@@ -41,6 +41,7 @@
     type OccurrenceTarget,
   } from '$lib/relation-occurrences'
   import {
+    isUsableCamera,
     linkTouchesSelection,
     resolveSelection,
     seedNodePositions,
@@ -74,8 +75,13 @@
   let status = $state<'idle' | 'loading' | 'ready' | 'error'>('idle')
   let graph = $state<RelationGraph | null>(null)
   let container: HTMLDivElement | undefined = $state()
+  type ForceGraph3DConstructor = (typeof import('3d-force-graph'))['default']
   let instance: ForceGraph3DInstance | null = null
+  /** Kept from the first load so a lost WebGL context can be rebuilt. */
+  let ForceGraph: ForceGraph3DConstructor | null = null
   let observer: ResizeObserver | null = null
+  /** The render loop (drawing and layout ticks) stops while the view is hidden. */
+  let paused = false
   let loadedFor = ''
   let builtStructureKey = ''
   // a snapshot only restores the first build
@@ -199,6 +205,19 @@
       if (node.x === undefined || node.y === undefined || node.z === undefined) return null
       positions[node.id] = [node.x, node.y, node.z]
     }
+    const camera = readCamera()
+    return {
+      structureKey: builtStructureKey,
+      positions,
+      // A broken camera must not come back with «Volver»: the view is framed anew.
+      camera: camera && isUsableCamera(camera) ? camera : null,
+      selection: selection(),
+      expanded: [...expanded],
+    }
+  }
+
+  function readCamera(): GraphCamera | null {
+    if (!instance) return null
     const camera = instance.camera() as unknown as {
       position: { x: number; y: number; z: number }
       up: { x: number; y: number; z: number }
@@ -206,16 +225,10 @@
     }
     const controls = instance.controls() as unknown as OrbitControls
     return {
-      structureKey: builtStructureKey,
-      positions,
-      camera: {
-        position: [camera.position.x, camera.position.y, camera.position.z],
-        target: [controls.target.x, controls.target.y, controls.target.z],
-        up: [camera.up.x, camera.up.y, camera.up.z],
-        zoom: camera.zoom,
-      },
-      selection: selection(),
-      expanded: [...expanded],
+      position: [camera.position.x, camera.position.y, camera.position.z],
+      target: [controls.target.x, controls.target.y, controls.target.z],
+      up: [camera.up.x, camera.up.y, camera.up.z],
+      zoom: camera.zoom,
     }
   }
 
@@ -418,15 +431,12 @@
     instance.cooldownTicks(seeded.restored ? 0 : Infinity)
     let released = !seeded.restored
     // A freshly laid out graph starts framed whole; a restored one keeps the
-    // camera the user left.
-    fitOwed = !seeded.restored
+    // camera the user left, if it had a usable one.
+    fitOwed = !seeded.restored || !restore?.camera
     fitTicks = 0
     instance.onEngineStop(() => {
       if (!instance) return
-      if (fitOwed) {
-        frameWholeGraph(400)
-        fitOwed = false
-      }
+      if (fitOwed && frameWholeGraph(400)) fitOwed = false
       if (!released) {
         released = true
         for (const node of instance.graphData().nodes as Array<Record<string, unknown>>) {
@@ -458,8 +468,169 @@
   let fitOwed = false
   let fitTicks = 0
 
-  function frameWholeGraph(duration: number) {
-    if (instance && graph?.nodes.length) instance.zoomToFit(duration, FIT_PADDING)
+  /**
+   * Frames every node. Refused while the view has no height: the library
+   * divides by it and would leave the camera at NaN, drawing nothing.
+   */
+  function frameWholeGraph(duration: number): boolean {
+    if (!instance || !graph?.nodes.length || !container?.clientHeight) return false
+    instance.zoomToFit(duration, FIT_PADDING)
+    return true
+  }
+
+  // ── Visibility and the WebGL context ─────────────────────────────────────
+  /**
+   * A hidden tab (display: none) measures 0×0. The loop is paused there, so
+   * nothing is drawn or laid out for a view nobody sees and no framing runs
+   * against a zero size; on return the real size is applied, a camera broken
+   * earlier is reset, and the loop resumes.
+   */
+  function syncVisibility() {
+    if (!instance || !container) return
+    const width = container.clientWidth
+    const height = container.clientHeight
+    if (!active || width === 0 || height === 0) {
+      if (!paused) instance.pauseAnimation()
+      paused = true
+      return
+    }
+    if (contextBroken) {
+      recreateInstance()
+      return
+    }
+    instance.width(width).height(height)
+    repairCamera()
+    if (paused) {
+      paused = false
+      instance.resumeAnimation()
+    }
+  }
+
+  function repairCamera() {
+    const camera = readCamera()
+    if (!instance || !camera || isUsableCamera(camera)) return
+    const controls = instance.controls() as unknown as OrbitControls
+    const cameraObject = instance.camera() as unknown as {
+      up: { set: (...v: number[]) => void }
+      zoom: number
+      updateProjectionMatrix: () => void
+    }
+    cameraObject.up.set(0, 1, 0)
+    cameraObject.zoom = 1
+    cameraObject.updateProjectionMatrix()
+    controls.target.set(0, 0, 0)
+    instance.cameraPosition({ x: 0, y: 0, z: 1000 }, { x: 0, y: 0, z: 0 }, 0)
+    fitOwed = !frameWholeGraph(0)
+  }
+
+  /** How long the browser gets to give a lost WebGL context back. */
+  const CONTEXT_RESTORE_WAIT_MS = 1500
+  let contextTimer: ReturnType<typeof setTimeout> | undefined
+  /** The context was lost and not given back: the view is rebuilt when shown. */
+  let contextBroken = false
+  let detachContextWatch: (() => void) | null = null
+
+  /**
+   * The GPU may drop a WebGL context (WebKitGTK does so with hidden canvases
+   * or too many contexts). Hover picking runs on the CPU and keeps answering,
+   * but nothing is drawn. A context given back is drawn again by three.js; one
+   * that stays lost gets a new renderer with the same layout and camera.
+   */
+  function watchContext(current: ForceGraph3DInstance) {
+    const canvas = current.renderer().domElement
+    const lost = (event: Event) => {
+      event.preventDefault()
+      clearTimeout(contextTimer)
+      contextTimer = setTimeout(() => {
+        contextBroken = true
+        syncVisibility()
+      }, CONTEXT_RESTORE_WAIT_MS)
+    }
+    const restored = () => {
+      clearTimeout(contextTimer)
+      applyHighlight()
+    }
+    canvas.addEventListener('webglcontextlost', lost)
+    canvas.addEventListener('webglcontextrestored', restored)
+    detachContextWatch = () => {
+      clearTimeout(contextTimer)
+      canvas.removeEventListener('webglcontextlost', lost)
+      canvas.removeEventListener('webglcontextrestored', restored)
+    }
+  }
+
+  function recreateInstance() {
+    if (!ForceGraph || !container || !graph) return
+    contextBroken = false
+    pendingSnapshot = captureSnapshot()
+    disposeInstance()
+    createInstance(ForceGraph)
+    configureInstance()
+    appliedPhysics = ''
+    applyRender(settings)
+    draw()
+    syncVisibility()
+  }
+
+  function createInstance(ForceGraph3D: ForceGraph3DConstructor) {
+    if (!container) return
+    const created = new ForceGraph3D(container, { controlType: 'orbit' })
+    instance = created
+    paused = false
+    // Any zoom or turn by the user ends the automatic framing.
+    ;(
+      created.controls() as unknown as {
+        addEventListener: (type: string, listener: () => void) => void
+      }
+    ).addEventListener('start', () => (fitOwed = false))
+    created.onEngineTick(() => {
+      if (fitOwed && ++fitTicks % 20 === 0) frameWholeGraph(0)
+    })
+    watchContext(created)
+  }
+
+  /** Releases the renderer and its WebGL context instead of waiting for GC. */
+  function disposeInstance() {
+    if (!instance) return
+    cancelAnimationFrame(outlineWatch)
+    removeOutline()
+    detachContextWatch?.()
+    detachContextWatch = null
+    const renderer = instance.renderer()
+    instance._destructor()
+    instance = null
+    try {
+      if (!renderer.getContext().isContextLost()) renderer.forceContextLoss()
+    } catch {
+      // Best effort: the context is collected with the canvas anyway.
+    }
+  }
+
+  function configureInstance() {
+    if (!instance || !container) return
+    instance
+      .backgroundColor(token('--color-surface', '#111'))
+      .showNavInfo(false)
+      .nodeLabel((n) => {
+        const node = n as GraphNode
+        return label(
+          node.hiddenRelations > 0
+            ? t('collectionAnalysis.graphNodeHiddenLabel', {
+                label: node.label,
+                count: node.hiddenRelations,
+              })
+            : node.label
+        )
+      })
+      .onNodeClick((n) => {
+        selected = graph ? resolveSelection(graph, { kind: 'node', id: (n as GraphNode).id }) : null
+      })
+      .onLinkClick((l) => selectLink(l))
+      .onBackgroundClick(() => (selected = null))
+      .linkDirectionalArrowRelPos(1)
+      // A cycle (A → B → A) only bends the radial rings; it must not throw.
+      .onDagError(() => {})
+      .linkDirectionalParticleWidth(2)
   }
 
   function rebuild() {
@@ -474,6 +645,7 @@
     status = 'loading'
     try {
       const [{ default: ForceGraph3D }] = await Promise.all([import('3d-force-graph'), loadRows()])
+      ForceGraph = ForceGraph3D
       if (loadedFor !== loadKey || !container) return
       selected = null
       // A restored view brings back the entities the user had expanded.
@@ -482,54 +654,16 @@
       resolveAlias = await loadEntityAliasResolver()
       graph = buildRelationGraph(tripleRows, settings.structure, expanded, resolveAlias)
       status = 'ready'
-      if (!instance) {
-        instance = new ForceGraph3D(container, { controlType: 'orbit' })
-        observer = new ResizeObserver(() => {
-          if (container && instance) {
-            instance.width(container.clientWidth).height(container.clientHeight)
-          }
-        })
+      if (!instance) createInstance(ForceGraph3D)
+      if (!observer) {
+        observer = new ResizeObserver(() => syncVisibility())
         observer.observe(container)
-        // Any zoom or turn by the user ends the automatic framing.
-        ;(
-          instance.controls() as unknown as {
-            addEventListener: (type: string, listener: () => void) => void
-          }
-        ).addEventListener('start', () => (fitOwed = false))
-        instance.onEngineTick(() => {
-          if (fitOwed && ++fitTicks % 20 === 0) frameWholeGraph(0)
-        })
       }
-      instance
-        .width(container.clientWidth)
-        .height(container.clientHeight)
-        .backgroundColor(token('--color-surface', '#111'))
-        .showNavInfo(false)
-        .nodeLabel((n) => {
-          const node = n as GraphNode
-          return label(
-            node.hiddenRelations > 0
-              ? t('collectionAnalysis.graphNodeHiddenLabel', {
-                  label: node.label,
-                  count: node.hiddenRelations,
-                })
-              : node.label
-          )
-        })
-        .onNodeClick((n) => {
-          selected = graph
-            ? resolveSelection(graph, { kind: 'node', id: (n as GraphNode).id })
-            : null
-        })
-        .onLinkClick((l) => selectLink(l))
-        .onBackgroundClick(() => (selected = null))
-        .linkDirectionalArrowRelPos(1)
-        // A cycle (A → B → A) only bends the radial rings; it must not throw.
-        .onDagError(() => {})
-        .linkDirectionalParticleWidth(2)
+      configureInstance()
       appliedPhysics = ''
       applyRender(settings)
       draw()
+      syncVisibility()
     } catch (failure) {
       console.warn('[RelationGraph3D] failed to build the graph:', failure)
       status = 'error'
@@ -578,6 +712,12 @@
     if (active && container) void render()
   })
 
+  // Leaving the tab pauses the loop; coming back resumes it at the real size.
+  $effect(() => {
+    void active
+    untrack(syncVisibility)
+  })
+
   // Structure settings: rebuild from the loaded rows, never re-query.
   $effect(() => {
     const structureKey = viewKey()
@@ -598,11 +738,8 @@
   })
 
   onDestroy(() => {
-    cancelAnimationFrame(outlineWatch)
-    removeOutline()
     observer?.disconnect()
-    instance?._destructor()
-    instance = null
+    disposeInstance()
   })
 </script>
 
@@ -615,15 +752,6 @@
     <p class="relation-graph__note">{$currentLocale && t('collectionAnalysis.graphEmpty')}</p>
   {:else if status === 'ready' && graph}
     <p class="relation-graph__note">
-      <IconButton
-        size="sm"
-        variant="secondary"
-        label={$currentLocale && t('collectionAnalysis.graphExport')}
-        title={t('collectionAnalysis.graphExport')}
-        onclick={() => void exportGexf()}
-      >
-        <ActionIcon name="download" size={14} />
-      </IconButton>
       {$currentLocale &&
         t('collectionAnalysis.graphSummary', {
           nodes: graph.nodes.length,
@@ -649,6 +777,20 @@
       class:is-empty={status !== 'ready' || !graph?.nodes.length}
       bind:this={container}
     ></div>
+    {#if status === 'ready' && graph?.nodes.length}
+      <!-- In the corner of the canvas, away from the network summary above. -->
+      <div class="relation-graph__export">
+        <IconButton
+          size="sm"
+          variant="secondary"
+          label={$currentLocale && t('collectionAnalysis.graphExport')}
+          title={t('collectionAnalysis.graphExport')}
+          onclick={() => void exportGexf()}
+        >
+          <ActionIcon name="download" size={14} />
+        </IconButton>
+      </div>
+    {/if}
     {#if selected}
       {@const heading = selectionHeading(selected)}
       {#snippet relationRow(relation: NodeRelation)}
@@ -974,6 +1116,14 @@
     min-height: 15rem;
     border-radius: var(--radius-surface);
     overflow: hidden;
+  }
+
+  /* Above the canvas and the detail panel, which may reach this corner. */
+  .relation-graph__export {
+    position: absolute;
+    right: var(--space-2);
+    bottom: var(--space-2);
+    z-index: 1;
   }
 
   .relation-graph__canvas.is-empty {

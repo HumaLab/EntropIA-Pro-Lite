@@ -54,8 +54,11 @@ if _cpu_threads is None:
 sys.stderr.write(f"[paddle_vl] CPU threads: OMP={os.environ.get('OMP_NUM_THREADS')}, MKL={os.environ.get('MKL_NUM_THREADS')}\n")
 
 # Enable Paddle's MKL-DNN (oneDNN) acceleration for CPU inference.
-# This typically gives 2-5x speedup on Intel/AMD CPUs.
-os.environ.setdefault("FLAGS_use_mkldnn", "1")
+# This typically gives 2-5x speedup on Intel/AMD CPUs. It is CPU-only: on a
+# GPU run it mixes oneDNN kernels into the CUDA pipeline and inference fails
+# with "event_waiter_[1][0] shall not be nullptr", so default it off for GPU.
+_gpu_requested = "--device" in sys.argv and sys.argv[sys.argv.index("--device") + 1:][:1] == ["gpu"]
+os.environ.setdefault("FLAGS_use_mkldnn", "0" if _gpu_requested else "1")
 os.environ.setdefault("FLAGS_use_avx", "1")
 
 # Disable Paddle's new PIR (Paddle Intermediate Representation) executor.
@@ -190,20 +193,43 @@ def _init_pipeline(requested_device: str):
     # Try requested device first
     try:
         pipeline = PaddleOCRVL(device=requested_device, **kwargs)
+        if requested_device == "gpu":
+            _smoke_test_gpu(pipeline)
         sys.stderr.write(f"[paddle_vl] Pipeline initialized on device='{requested_device}'\n")
         return pipeline, requested_device
     except Exception as e:
         if requested_device == "gpu":
             sys.stderr.write(
-                f"[paddle_vl] GPU init failed: {e}. "
-                "Falling back to CPU. If you expected GPU acceleration, "
-                "ensure paddlepaddle-gpu is installed. "
-                "EntropIA can install it automatically via the dependency manager.\n"
+                f"[paddle_vl] GPU unusable ({e.__class__.__name__}: {e}); "
+                "falling back to CPU. GPU init can succeed while inference is "
+                "broken (e.g. Paddle 3.2 event_waiter nullptr on some "
+                "driver/wheel combos), so the smoke test runs a tiny predict. "
+                "If you expected GPU acceleration, ensure paddlepaddle-gpu "
+                "matches your CUDA driver.\n"
             )
             pipeline = PaddleOCRVL(device="cpu", **kwargs)
             sys.stderr.write("[paddle_vl] Pipeline initialized on device='cpu' (GPU fallback)\n")
             return pipeline, "cpu"
         raise
+
+
+def _smoke_test_gpu(pipeline):
+    """Run a tiny predict to prove GPU inference works before trusting it.
+
+    Pipeline construction downloads/loads models but does not execute the
+    kernels that break on some GPU setups; a failed smoke test must fall
+    back to CPU instead of failing the whole OCRH run.
+    """
+    import tempfile
+
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        probe_path = os.path.join(tmpdir, "probe.png")
+        Image.new("RGB", (32, 32), "white").save(probe_path)
+        for _ in pipeline.predict(probe_path):
+            pass  # Drain the generator; content is irrelevant, execution is.
+    sys.stderr.write("[paddle_vl] GPU smoke test passed\n")
 
 
 def main():
@@ -269,21 +295,31 @@ def main():
                 with open(json_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
-        # Extract image dimensions
-        image_width = int(data.get("width", 0))
-        image_height = int(data.get("height", 0))
+        # PaddleOCR-VL emits explicit nulls for some fields (e.g. block_order
+        # on figure/seal blocks), and dict.get(key, default) returns None when
+        # the key exists with a null value. Every read goes through `or` so a
+        # null never crashes the parse (losing the whole layout) or leaks the
+        # literal string "None" into the OCR text.
+        image_width = int(data.get("width") or 0)
+        image_height = int(data.get("height") or 0)
 
         # Process parsing_res_list — blocks with OCR text
         blocks = []
         text_parts = []
-        parsing_res_list = data.get("parsing_res_list", [])
+        parsing_res_list = data.get("parsing_res_list") or []
 
-        for block in parsing_res_list:
-            block_label = str(block.get("block_label", ""))
-            block_content = str(block.get("block_content", ""))
-            block_bbox = block.get("block_bbox", [0, 0, 0, 0])
-            block_order = int(block.get("block_order", 0))
-            group_id = int(block.get("group_id", 0))
+        # parsing_res_list already comes in PaddleX reading order. A block
+        # without block_order inherits its predecessor's order, and the
+        # (order, index) sort key keeps it in place instead of jumping first.
+        last_order = 0
+        for index, block in enumerate(parsing_res_list):
+            block_label = str(block.get("block_label") or "")
+            block_content = str(block.get("block_content") or "")
+            block_bbox = block.get("block_bbox") or [0, 0, 0, 0]
+            raw_order = block.get("block_order")
+            block_order = int(raw_order) if raw_order is not None else last_order
+            last_order = block_order
+            group_id = int(block.get("group_id") or 0)
 
             x1, y1, x2, y2 = [float(v) for v in block_bbox]
 
@@ -302,7 +338,7 @@ def main():
 
             formatted = _format_block_text(block_label, block_content)
             if formatted is not None:
-                text_parts.append((block_order, formatted))
+                text_parts.append(((block_order, index), formatted))
 
         # Sort by reading order and join with double newlines
         text_parts.sort(key=lambda t: t[0])
@@ -310,13 +346,13 @@ def main():
 
         # Build regions from layout detection results
         regions = []
-        layout_det_res = data.get("layout_det_res", {})
+        layout_det_res = data.get("layout_det_res") or {}
         if isinstance(layout_det_res, dict):
-            layout_boxes = layout_det_res.get("boxes", [])
+            layout_boxes = layout_det_res.get("boxes") or []
             for box in layout_boxes:
-                label = str(box.get("label", ""))
-                score = float(box.get("score", 0.0))
-                coord = box.get("coordinate", [0, 0, 0, 0])
+                label = str(box.get("label") or "")
+                score = float(box.get("score") or 0.0)
+                coord = box.get("coordinate") or [0, 0, 0, 0]
 
                 x1, y1, x2, y2 = [float(v) for v in coord]
                 regions.append({

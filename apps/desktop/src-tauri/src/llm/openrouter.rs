@@ -13,6 +13,57 @@ use super::generation::{OpenRouterGenerationParams, ReasoningConfig};
 /// Vercel AI Gateway: OpenAI-compatible, with the same `provider/model` ids.
 const VERCEL_AI_GATEWAY_URL: &str = "https://ai-gateway.vercel.sh/v1/chat/completions";
 
+/// Optional user-configured OpenAI-compatible base URL (local vLLM/Ollama
+/// server, self-hosted gateway). When set, remote generation goes there
+/// instead of OpenRouter — no auth headers, no Vercel fallback, errors name
+/// the custom server loudly instead of surprise-billing a cloud API.
+pub const SETTING_CUSTOM_BASE_URL: &str = "openai_compatible_base_url";
+
+/// Normalize a user-typed base URL into a full `/chat/completions` URL.
+/// Accepts `host:port`, a full base URL, or the completions URL itself.
+/// Returns `None` for blank input (feature off), `Err` for garbage the user
+/// must fix (never silently fall back to a billed API).
+pub(crate) fn normalize_custom_endpoint(raw: &str) -> Result<Option<String>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.contains(char::is_whitespace) {
+        return Err(format!("Invalid OpenAI-compatible base URL: {raw:?}"));
+    }
+    // Split scheme from authority+path on the untrimmed-slash input: the
+    // slashes in "://" are not path separators to strip.
+    let (scheme, rest) = match trimmed.split_once("://") {
+        Some((scheme, rest)) => (scheme.to_string(), rest.trim_end_matches('/').to_string()),
+        None => (
+            "http".to_string(),
+            trimmed.trim_end_matches('/').to_string(),
+        ),
+    };
+    if scheme.is_empty() || rest.is_empty() {
+        return Err(format!("Invalid OpenAI-compatible base URL: {raw:?}"));
+    }
+    let base = format!("{scheme}://{rest}");
+    Ok(Some(if base.ends_with("/chat/completions") {
+        base
+    } else if !rest.contains('/') {
+        // Bare host:port — every OpenAI-compatible server (vLLM, Ollama,
+        // LM Studio) serves the API under /v1.
+        format!("{base}/v1/chat/completions")
+    } else {
+        format!("{base}/chat/completions")
+    }))
+}
+
+/// Resolve the custom endpoint from settings. `Ok(None)` = not configured
+/// (normal OpenRouter path); `Err` = configured but invalid (fail loudly).
+pub(crate) fn resolve_custom_endpoint(
+    conn: &rusqlite::Connection,
+) -> Result<Option<String>, String> {
+    let raw = crate::settings::get_setting(conn, SETTING_CUSTOM_BASE_URL).unwrap_or_default();
+    normalize_custom_endpoint(&raw)
+}
+
 /// The Vercel AI Gateway key, when the user stored one. Kept here because the
 /// clients are built in many places with only the OpenRouter key; settings
 /// refresh it on startup and whenever the key is saved or deleted.
@@ -435,6 +486,9 @@ pub struct OpenRouterClient {
     client: reqwest::Client,
     api_key: String,
     model: String,
+    /// Full `/chat/completions` URL of a user-configured OpenAI-compatible
+    /// server (local vLLM/Ollama). `None` = stock OpenRouter+Vercel path.
+    custom_endpoint: Option<String>,
 }
 
 impl OpenRouterClient {
@@ -462,7 +516,15 @@ impl OpenRouterClient {
             client,
             api_key,
             model,
+            custom_endpoint: None,
         }
+    }
+
+    /// Route remote generation through a custom OpenAI-compatible server
+    /// instead of OpenRouter (see [`SETTING_CUSTOM_BASE_URL`]).
+    pub fn with_custom_endpoint(mut self, url: Option<String>) -> Self {
+        self.custom_endpoint = url;
+        self
     }
 
     /// Generate a completion from the prompt text.
@@ -488,6 +550,20 @@ impl OpenRouterClient {
     /// When OpenRouter fails for reasons of its own and a Vercel AI Gateway key
     /// is stored, the same request goes there once (T-45).
     async fn send_request(&self, request: ChatCompletionRequest) -> Result<String, String> {
+        if let Some(url) = self.custom_endpoint.as_deref() {
+            // A user-pointed server (local vLLM/Ollama): one attempt, no
+            // auth headers (those servers run without keys by default), no
+            // Vercel fallback — a failure must never surprise-bill OpenRouter.
+            return self
+                .try_send_request(url, None, &request)
+                .await
+                .map_err(|failure| {
+                    format!(
+                        "Custom OpenAI-compatible endpoint failed ({url}): {}",
+                        failure.message()
+                    )
+                });
+        }
         let failure = match self.send_to_openrouter(&request).await {
             Ok(answer) => return Ok(answer),
             Err(failure) => failure,
@@ -505,7 +581,7 @@ impl OpenRouterClient {
         // `reasoning` is an OpenRouter extension: the gateway gets the request
         // as it was before NER started asking for the override.
         fallback.reasoning = None;
-        self.try_send_request(VERCEL_AI_GATEWAY_URL, &key, &fallback)
+        self.try_send_request(VERCEL_AI_GATEWAY_URL, Some(key.as_str()), &fallback)
             .await
             .map_err(|second| {
                 format!(
@@ -530,7 +606,7 @@ impl OpenRouterClient {
         let mut attempt = 1;
         loop {
             match self
-                .try_send_request(OPENROUTER_CHAT_URL, &self.api_key, &current)
+                .try_send_request(OPENROUTER_CHAT_URL, Some(self.api_key.as_str()), &current)
                 .await
             {
                 Ok(answer) => return Ok(answer),
@@ -565,15 +641,19 @@ impl OpenRouterClient {
     async fn try_send_request(
         &self,
         url: &str,
-        api_key: &str,
+        api_key: Option<&str>,
         request: &ChatCompletionRequest,
     ) -> Result<String, RequestFailure> {
-        let response = self
-            .client
-            .post(url)
-            .header("Authorization", format!("Bearer {api_key}"))
-            .header("HTTP-Referer", "https://hlab.com.ar/")
-            .header("X-Title", "EntropIA")
+        let mut call = self.client.post(url);
+        // OpenRouter/Vercel need Bearer auth plus app headers; a custom
+        // local server typically runs without keys, so send it bare JSON.
+        if let Some(key) = api_key {
+            call = call
+                .header("Authorization", format!("Bearer {key}"))
+                .header("HTTP-Referer", "https://hlab.com.ar/")
+                .header("X-Title", "EntropIA");
+        }
+        let response = call
             .json(request)
             .send()
             .await
@@ -673,7 +753,7 @@ impl OpenRouterClient {
             reasoning: None,
         };
         Self::new(String::new(), String::new())
-            .try_send_request(VERCEL_AI_GATEWAY_URL, &key, &request)
+            .try_send_request(VERCEL_AI_GATEWAY_URL, Some(key.as_str()), &request)
             .await
             .map(|_| ())
             .map_err(|failure| match failure {
@@ -737,7 +817,37 @@ mod tests {
         conn
     }
 
-    // ── Reading a 200 body ───────────────────────────────────────────────────
+    // ── Custom OpenAI-compatible base URL ───────────────────────────────────
+
+    #[test]
+    fn custom_endpoint_normalizes_host_port_and_paths() {
+        // Bare host:port gets http and the completions suffix.
+        assert_eq!(
+            normalize_custom_endpoint("127.0.0.1:11434").unwrap(),
+            Some("http://127.0.0.1:11434/v1/chat/completions".to_string())
+        );
+        // Full base URL keeps its scheme; trailing slashes are trimmed.
+        assert_eq!(
+            normalize_custom_endpoint("https://gpu-cluster:8000/v1/").unwrap(),
+            Some("https://gpu-cluster:8000/v1/chat/completions".to_string())
+        );
+        // An already-complete URL passes through untouched.
+        assert_eq!(
+            normalize_custom_endpoint("http://localhost:11434/v1/chat/completions").unwrap(),
+            Some("http://localhost:11434/v1/chat/completions".to_string())
+        );
+        // Blank means off (normal OpenRouter path).
+        assert_eq!(normalize_custom_endpoint("   ").unwrap(), None);
+        assert_eq!(normalize_custom_endpoint("").unwrap(), None);
+    }
+
+    #[test]
+    fn custom_endpoint_rejects_garbage_loudly() {
+        // Never silently fall back to a billed API on a typo.
+        assert!(normalize_custom_endpoint("http://").is_err());
+        assert!(normalize_custom_endpoint("not a url at all").is_err());
+        assert!(normalize_custom_endpoint("http://ho st:11434").is_err());
+    }
 
     fn payload_message(result: Result<String, RequestFailure>) -> String {
         match result {

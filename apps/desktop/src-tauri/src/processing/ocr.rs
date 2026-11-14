@@ -276,7 +276,7 @@ impl Executor for OcrExecutor {
                 )
                 .map_err(|e| e.to_string())?;
             if children > 0 {
-                return Err("incomplete_pdf_pages: PDF page coverage is incomplete; repair the page import before retrying".to_string());
+                return Err("pdf_parent_with_pages: this PDF was imported with per-page assets; run OCR on each page instead of the parent".to_string());
             }
             if asset_type != "pdf" {
                 ctx.progress_total(task, 1)?;
@@ -558,22 +558,47 @@ impl OcrExecutor {
         let engines = guard
             .as_ref()
             .ok_or_else(|| "configuration: PaddleOCR liviano no está disponible".to_string())?;
-        if requested_high {
-            let mut vl = engines
-                .paddle_vl
-                .lock()
-                .map_err(|e| format!("OCR engine lock poisoned: {e}"))?;
-            if vl.is_none() {
-                match ocr::paddle_vl::create_paddle_vl_engine_result(&self.app, &self.db_path) {
-                    Ok(engine) => *vl = Some(engine),
-                    Err(error) => {
-                        log::warn!(
-                            target: "processing",
-                            "PaddleOCR-VL unavailable, falling back to light: {error}"
-                        );
-                    }
+        // The layout-assisted Light path needs the same engine. Creation is
+        // lazy and cached; when Python/PaddleX is missing the error is
+        // logged once here and Light falls back to its full-image heuristic.
+        let mut vl = engines
+            .paddle_vl
+            .lock()
+            .map_err(|e| format!("OCR engine lock poisoned: {e}"))?;
+        // The local engine setting can change without an app restart
+        // (Settings UI). Rebuild the cached engine when the desired
+        // backend no longer matches it; when the desired backend cannot
+        // even be resolved (e.g. forced GLM-OCR with missing assets),
+        // keep the running engine instead of thrashing the cache.
+        let desired_glm = ocr::paddle_vl::resolve_desired_backend(&self.app, &self.db_path)
+            .ok()
+            .map(|assets| assets.is_some());
+        let current_glm = vl.as_ref().map(|engine| engine.uses_glm_local());
+        let stale = match (current_glm, desired_glm) {
+            (Some(current), Some(desired)) => current != desired,
+            (None, _) => true,
+            (Some(_), None) => false,
+        };
+        if stale {
+            if current_glm == Some(true) {
+                // The GLM-OCR server pins ~3 GB of VRAM; it must not
+                // survive the switch back to PaddleOCR-VL.
+                ocr::glm_ocr_local::shutdown();
+            }
+            *vl = None;
+        }
+        if vl.is_none() {
+            match ocr::paddle_vl::create_paddle_vl_engine_result(&self.app, &self.db_path) {
+                Ok(engine) => *vl = Some(engine),
+                Err(error) => {
+                    log::warn!(
+                        target: "processing",
+                        "PaddleOCR-VL unavailable, falling back to light: {error}"
+                    );
                 }
             }
+        }
+        if requested_high {
             let job = ocr::OcrJob {
                 asset_id: task.asset_id.clone(),
                 asset_type: asset_type.to_string(),
@@ -596,26 +621,22 @@ impl OcrExecutor {
                 self.page_count(asset_type, bytes),
             );
         }
+        // `vl` is still locked from the creation check above (std Mutex is
+        // not reentrant): reuse it directly instead of locking again.
         let job = ocr::OcrJob {
             asset_id: task.asset_id.clone(),
             asset_type: asset_type.to_string(),
             mode: ocr::OcrMode::Light,
             include_native: super::repository::ocr_task_includes_native(&conn, &task.task_id)?,
         };
-        // Borrow-check: re-fetch the vl guard as immutable for process_job.
-        let vl_guard = engines
-            .paddle_vl
-            .lock()
-            .map_err(|e| format!("OCR engine lock poisoned: {e}"))?;
         let output = tauri::async_runtime::block_on(ocr::process_job(
             &engines.provider,
             &conn,
             &job,
             bytes,
             &self.app,
-            vl_guard.as_ref(),
+            vl.as_ref(),
         ))?;
-        drop(vl_guard);
         to_compute_output(
             output,
             "paddle",

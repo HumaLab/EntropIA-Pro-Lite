@@ -6,13 +6,14 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
+pub use llama_cpp_2::model::AddBos;
+use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 
 /// Tokens evaluated per prefill decode call. llama.cpp processes the prompt in
 /// batches of this size, so a 128K-token prompt no longer requires a
 /// 128K-token batch allocation (which the old single-shot prefill did).
-const PREFILL_BATCH_TOKENS: usize = 512;
+const PREFILL_BATCH_TOKENS: usize = 2048;
 
 #[derive(Debug, PartialEq, Eq)]
 struct ResearchChatPromptPlan<'a> {
@@ -77,6 +78,9 @@ pub struct LlmConfig {
     pub n_ctx: u32,
     pub n_threads: Option<i32>,
     pub seed: u32,
+    /// Layers to offload to GPU (llama.cpp default 0 = CPU). The `cuda`
+    /// feature build sets this to all layers; CPU-only builds ignore it.
+    pub n_gpu_layers: u32,
 }
 
 impl Default for LlmConfig {
@@ -86,6 +90,7 @@ impl Default for LlmConfig {
             n_ctx: 4096,
             n_threads: None,
             seed: 1234,
+            n_gpu_layers: 0,
         }
     }
 }
@@ -194,16 +199,26 @@ impl LlmEngine {
         // reserve spam, etc.). We keep our own `[llm-local] ...` diagnostics.
         backend.void_logs();
 
-        let model_params = pin!(LlamaModelParams::default());
+        // `with_n_gpu_layers` consumes the unpinned params, so offload is
+        // decided before pinning. `u32::MAX` (the `cuda` feature default)
+        // means "every layer".
+        let unpinned = LlamaModelParams::default();
+        let unpinned = if config.n_gpu_layers > 0 {
+            unpinned.with_n_gpu_layers(config.n_gpu_layers)
+        } else {
+            unpinned
+        };
+        let model_params = pin!(unpinned);
 
         let model = LlamaModel::load_from_file(&backend, &config.model_path, &model_params)
             .map_err(|e| format!("Failed to load model {}: {e}", config.model_path.display()))?;
 
         log::info!(
             target: "llm-local",
-            "Model loaded: {} (n_ctx={})",
+            "Model loaded: {} (n_ctx={}, n_gpu_layers={})",
             config.model_path.display(),
-            config.n_ctx
+            config.n_ctx,
+            config.n_gpu_layers
         );
         log::info!(target: "llm-local", "Running in text-only mode");
 
@@ -225,6 +240,10 @@ impl LlmEngine {
     /// keeps the model loaded, but each generation builds its own context, so
     /// evidence-heavy flows (RAG) can request a much larger window than the
     /// small default used by OCR/NER flows.
+    /// Returns the text plus whether generation stopped because it reached
+    /// the token budget instead of an end-of-generation token. Callers that
+    /// must never deliver a cut answer (summaries) treat `hit_budget` as a
+    /// signal to retry with a larger budget or to fail loudly.
     fn generate_raw(
         &self,
         prompt: &str,
@@ -233,7 +252,7 @@ impl LlmEngine {
         log_prefix: &str,
         add_bos: AddBos,
         sampling: SamplingPlan,
-    ) -> Result<String, String> {
+    ) -> Result<(String, bool), String> {
         let tokens = self
             .model
             .str_to_token(prompt, add_bos)
@@ -310,11 +329,13 @@ impl LlmEngine {
         let mut output = String::new();
         let mut n_cur = total as i32;
 
+        let mut hit_budget = true;
         while n_cur <= n_len {
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
             sampler.accept(token);
 
             if self.model.is_eog_token(token) {
+                hit_budget = false;
                 break;
             }
 
@@ -335,7 +356,7 @@ impl LlmEngine {
             n_cur += 1;
         }
 
-        Ok(output.trim().to_string())
+        Ok((output.trim().to_string(), hit_budget))
     }
 
     /// Run text generation with the given prompt. Returns the sanitized generated text
@@ -346,7 +367,7 @@ impl LlmEngine {
         max_tokens: i32,
         log_prefix: &str,
     ) -> Result<String, String> {
-        let raw = self.generate_raw(
+        let (raw, _hit_budget) = self.generate_raw(
             prompt,
             max_tokens,
             self.config.n_ctx,
@@ -356,10 +377,103 @@ impl LlmEngine {
         )?;
         Ok(Self::sanitize_text_output(&raw))
     }
+}
+
+/// Headroom added on top of prompt + output tokens when fitting a context
+/// window: sampler warmup and the template's own framing.
+const FIT_MARGIN_TOKENS: u32 = 256;
+
+/// Why a prompt cannot run inside a context ceiling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FitFailure {
+    /// Tokenizing the prompt failed.
+    Tokenize(String),
+    /// The prompt plus the output budget exceeds the ceiling; `need` is the
+    /// window that would fit it. The caller chunks instead of truncating.
+    TooLong { need: u32 },
+}
+
+impl LlmEngine {
+    /// Exact token count of a prompt with the given BOS handling.
+    pub fn count_tokens(&self, text: &str, add_bos: AddBos) -> Result<usize, String> {
+        self.model
+            .str_to_token(text, add_bos)
+            .map(|tokens| tokens.len())
+            .map_err(|e| format!("Failed to tokenize prompt: {e}"))
+    }
+
+    /// Context window that fits `prompt` plus `max_tokens` under `max_n_ctx`.
+    /// Returns the fitted size, or `TooLong` with the size it would need so
+    /// the caller splits the input instead of silently dropping text.
+    pub fn fit_n_ctx(
+        &self,
+        prompt: &str,
+        max_tokens: i32,
+        add_bos: AddBos,
+        max_n_ctx: u32,
+    ) -> Result<u32, FitFailure> {
+        let prompt_tokens = self
+            .count_tokens(prompt, add_bos)
+            .map_err(FitFailure::Tokenize)? as u32;
+        let need = prompt_tokens
+            .saturating_add(max_tokens.max(0) as u32)
+            .saturating_add(FIT_MARGIN_TOKENS);
+        if need <= max_n_ctx {
+            Ok(need.max(1024))
+        } else {
+            Err(FitFailure::TooLong { need })
+        }
+    }
+}
+
+/// Text produced by [`LlmEngine::generate_fitted`].
+#[derive(Clone, Debug)]
+pub struct FittedGeneration {
+    /// Sanitized model output (prompt excluded).
+    pub text: String,
+    /// `true` when generation stopped at the token budget instead of an
+    /// end-of-generation token: the answer may be cut mid-thought.
+    pub hit_budget: bool,
+}
+
+impl LlmEngine {
+    /// Greedy generation with a context window fitted to this prompt
+    /// (`prompt` + `max_tokens` under `max_n_ctx`). Returns the sanitized
+    /// text, whether it stopped on an end-of-generation token, and the window
+    /// used. Fails with [`FitFailure::TooLong`] instead of truncating input,
+    /// so callers that must cover the whole text split it (map-reduce).
+    pub fn generate_fitted(
+        &self,
+        prompt: &str,
+        max_tokens: i32,
+        max_n_ctx: u32,
+        log_prefix: &str,
+    ) -> Result<FittedGeneration, FitFailure> {
+        let n_ctx = self.fit_n_ctx(prompt, max_tokens, AddBos::Always, max_n_ctx)?;
+        let (raw, hit_budget) = self
+            .generate_raw(
+                prompt,
+                max_tokens,
+                n_ctx,
+                log_prefix,
+                AddBos::Always,
+                SamplingPlan::Greedy,
+            )
+            .map_err(FitFailure::Tokenize)?;
+        log::info!(
+            target: super::log_target(log_prefix),
+            "fitted generate: prompt_ctx={n_ctx} max_tokens={max_tokens} hit_budget={hit_budget}",
+        );
+        Ok(FittedGeneration {
+            text: Self::sanitize_text_output(&raw),
+            hit_budget,
+        })
+    }
 
     /// Same as [`generate`](Self::generate) but with an explicit per-request
-    /// context window instead of the engine default. Used by the RAG chat,
-    /// whose evidence budget needs the full 131K-token window.
+    /// context *ceiling* instead of the engine default. The window is fitted
+    /// down to the actual prompt, so a small evidence set never pays for the
+    /// full RAG budget; evidence-heavy flows still pass their large ceiling.
     pub fn generate_chat_with_ctx(
         &self,
         instruction: &str,
@@ -380,10 +494,18 @@ impl LlmEngine {
             .apply_chat_template(&template, &[message], plan.add_generation_prompt)
             .map_err(|error| format!("Failed to apply model chat template: {error}"))?;
         let sampling = sampling_plan(temperature, self.config.seed)?;
-        let raw = self.generate_raw(
+        // Size the KV allocation to this prompt instead of always reserving
+        // the full ceiling: a 3K-token evidence prompt must not pay for a
+        // 131K-token context on every chat turn.
+        let fitted_ctx = match self.fit_n_ctx(&prompt, max_tokens, plan.add_bos, n_ctx) {
+            Ok(fitted) => fitted,
+            Err(FitFailure::TooLong { .. }) => n_ctx,
+            Err(FitFailure::Tokenize(error)) => return Err(error),
+        };
+        let (raw, _hit_budget) = self.generate_raw(
             &prompt,
             max_tokens,
-            n_ctx,
+            fitted_ctx,
             log_prefix,
             plan.add_bos,
             sampling,
@@ -399,7 +521,7 @@ impl LlmEngine {
         max_tokens: i32,
         log_prefix: &str,
     ) -> Result<String, String> {
-        let raw = self.generate_raw(
+        let (raw, _hit_budget) = self.generate_raw(
             prompt,
             max_tokens,
             self.config.n_ctx,
@@ -436,7 +558,7 @@ impl LlmEngine {
         max_tokens: i32,
         log_prefix: &str,
     ) -> Result<String, String> {
-        let raw = self.generate_raw(
+        let (raw, _hit_budget) = self.generate_raw(
             prompt,
             max_tokens,
             self.config.n_ctx,

@@ -6,7 +6,7 @@
 //!
 //! Fallback chain: PaddleVL → lightweight PaddleOCR (if PaddleVL fails or times out)
 
-use super::paddle_vl_types::PaddleVlOutput;
+use super::paddle_vl_types::{LayoutV3Output, PaddleVlOutput};
 use crate::path_utils::normalize_windows_path;
 use crate::runtime::{
     managed_hf_cache_dir, managed_paddlex_cache_dir, managed_script_path, managed_venv_python_path,
@@ -32,6 +32,9 @@ pub struct PaddleVlConfig {
     pub python_path: PathBuf,
     /// Path to the paddle_vl.py script.
     pub script_path: PathBuf,
+    /// Path to the layout-only `layout_v3.py` script (same PP-DocLayoutV3
+    /// model the GLM-OCR engine uses, without any recognition).
+    pub layout_script_path: PathBuf,
     /// HuggingFace cache directory, if available.
     pub hf_cache_dir: Option<PathBuf>,
     /// PaddleX cache directory, if available.
@@ -46,6 +49,17 @@ pub struct PaddleVlConfig {
     /// The Python subprocess will validate GPU support and fall back to CPU
     /// if the paddlepaddle-gpu stack is not installed or GPU init fails.
     pub device: String,
+    /// When set, the engine runs `glm_ocr_local.py` (layout on CPU, GLM-OCR on
+    /// a local llama-server) instead of PaddleOCR-VL. Same output contract.
+    pub glm_local: Option<GlmLocalBackend>,
+}
+
+/// What the local GLM-OCR backend needs to start its server.
+#[derive(Clone)]
+pub struct GlmLocalBackend {
+    pub assets: super::glm_ocr_local::GlmLocalAssets,
+    /// Archive database path; the server's models, pid file and log live next to it.
+    pub db_path: PathBuf,
 }
 
 /// The PaddleOCR-VL engine — spawns Python as a child process.
@@ -56,6 +70,89 @@ pub struct PaddleVlEngine {
     config: PaddleVlConfig,
 }
 
+/// Shared Python subprocess setup for the OCRH helpers (`paddle_vl.py`,
+/// `glm_ocr_local.py`, `layout_v3.py`): CPU thread tuning, Paddle flags,
+/// HF/PaddleX cache dirs and offline mode.
+///
+/// Returns the configured command plus the tuning values for logging.
+fn build_ocrh_command(
+    config: &PaddleVlConfig,
+    script_path: &Path,
+    image_path: &str,
+    device: &str,
+    extra_args: &[String],
+) -> Result<(Command, String, &'static str), String> {
+    // Determine optimal thread count: all logical cores capped at 8.
+    // Going beyond 8 typically hurts due to memory bandwidth + scheduler overhead.
+    let cpu_threads = std::thread::available_parallelism()
+        .map(|n| n.get().min(8))
+        .unwrap_or(4)
+        .to_string();
+
+    // oneDNN (MKL-DNN) is a CPU-only accelerator. Forcing it on a GPU run
+    // makes Paddle 3.2 mix oneDNN kernels into the CUDA pipeline and fail
+    // inference with "event_waiter_[1][0] shall not be nullptr", which
+    // silently degraded every GPU OCRH run to CPU (and to timeouts).
+    let use_mkldnn = if device == "gpu" { "0" } else { "1" };
+    let mut cmd = Command::new(&config.python_path);
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.arg(script_path).arg(image_path);
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    cmd
+        // CPU performance tuning — must be set BEFORE the Python process starts
+        // because OMP/MKL libraries read these once at import time.
+        .env("OMP_NUM_THREADS", &cpu_threads)
+        .env("MKL_NUM_THREADS", &cpu_threads)
+        .env("OPENBLAS_NUM_THREADS", &cpu_threads)
+        .env("FLAGS_use_mkldnn", use_mkldnn)
+        .env("FLAGS_use_avx", "1")
+        // Disable Paddle's new PIR executor — it crashes with
+        // ConvertPirAttribute2RuntimeAttribute on some paddle/paddleocr combos.
+        .env("FLAGS_enable_pir_api", "0")
+        // Silence HuggingFace progress bars (would pollute stderr/stdout)
+        .env("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        .env("HF_HUB_DISABLE_TELEMETRY", "1")
+        // PaddleX otherwise performs a slow connectivity preflight before
+        // trying the actual model source. The download itself can still run.
+        .env("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    if let Some(cache_dir) = config.hf_cache_dir.as_deref() {
+        ensure_cache_dir("HuggingFace", cache_dir)?;
+    }
+    if let Some(cache_dir) = config.paddlex_cache_dir.as_deref() {
+        ensure_cache_dir("PaddleX", cache_dir)?;
+    }
+
+    let offline_value = if config.offline_mode { "1" } else { "0" };
+    cmd.env("HF_HUB_OFFLINE", offline_value)
+        .env("TRANSFORMERS_OFFLINE", offline_value);
+
+    if let Some(cache_dir) = config.hf_cache_dir.as_deref() {
+        cmd.env("HF_HOME", cache_dir).env("HF_HUB_CACHE", cache_dir);
+    }
+
+    if let Some(cache_dir) = config.paddlex_cache_dir.as_deref() {
+        let modelscope_cache_dir = cache_dir.join("modelscope");
+        ensure_cache_dir("ModelScope", &modelscope_cache_dir)?;
+        cmd.env("PADDLE_PDX_CACHE_HOME", cache_dir)
+            // Legacy/no-op for current PaddleX, but harmless for older builds.
+            .env("PADDLEX_HOME", cache_dir)
+            // Keep ModelScope downloads/locks inside EntropIA's managed
+            // runtime instead of the user's global ~/.cache/modelscope.
+            .env("MODELSCOPE_CACHE", &modelscope_cache_dir)
+            .env("MODELSCOPE_HOME", &modelscope_cache_dir);
+    }
+
+    Ok((cmd, cpu_threads, use_mkldnn))
+}
+
 impl PaddleVlEngine {
     /// Validate configuration and create the engine.
     ///
@@ -64,11 +161,17 @@ impl PaddleVlEngine {
     /// Redundant verification (e.g., `python --version`) is skipped — the
     /// discovery module already proved the interpreter works.
     pub fn init(config: PaddleVlConfig) -> Result<Self, String> {
-        // Verify script exists
+        // Verify scripts exist
         if !config.script_path.exists() {
             return Err(format!(
                 "PaddleVL script not found: {}",
                 config.script_path.display()
+            ));
+        }
+        if !config.layout_script_path.exists() {
+            return Err(format!(
+                "Layout script not found: {}",
+                config.layout_script_path.display()
             ));
         }
 
@@ -87,6 +190,11 @@ impl PaddleVlEngine {
         Ok(Self { config })
     }
 
+    /// Whether this engine runs local GLM-OCR rather than PaddleOCR-VL.
+    pub fn uses_glm_local(&self) -> bool {
+        self.config.glm_local.is_some()
+    }
+
     /// Maximum time (in seconds) to wait for PaddleVL subprocess to complete.
     ///
     /// PaddleOCR-VL on CPU has very different timing depending on state:
@@ -98,6 +206,12 @@ impl PaddleVlEngine {
     /// We give 15 minutes (900s) of headroom. Progress is logged every 30s so the
     /// user knows the subprocess is still alive.
     const PADDLE_VL_TIMEOUT_SECS: u64 = 900;
+
+    /// Maximum time (in seconds) to wait for the layout-only subprocess.
+    ///
+    /// PP-DocLayoutV3 on CPU reads a newspaper page in ~6-25 s once the model
+    /// is cached; 5 minutes cover cold starts without hanging OCRH forever.
+    const LAYOUT_TIMEOUT_SECS: u64 = 300;
 
     /// Interval (in seconds) for logging progress updates while waiting for the subprocess.
     /// At 30s intervals, a 900s timeout produces ~30 progress logs.
@@ -120,72 +234,32 @@ impl PaddleVlEngine {
             image_path, self.config.device
         );
 
-        // Determine optimal thread count: all logical cores capped at 8.
-        // Going beyond 8 typically hurts due to memory bandwidth + scheduler overhead.
-        let cpu_threads = std::thread::available_parallelism()
-            .map(|n| n.get().min(8))
-            .unwrap_or(4)
-            .to_string();
-
-        let mut cmd = Command::new(&self.config.python_path);
-        #[cfg(windows)]
-        {
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        cmd.arg(&self.config.script_path)
-            .arg(image_path)
-            .arg("--device")
-            .arg(&self.config.device)
-            // CPU performance tuning — must be set BEFORE the Python process starts
-            // because OMP/MKL libraries read these once at import time.
-            .env("OMP_NUM_THREADS", &cpu_threads)
-            .env("MKL_NUM_THREADS", &cpu_threads)
-            .env("OPENBLAS_NUM_THREADS", &cpu_threads)
-            .env("FLAGS_use_mkldnn", "1")
-            .env("FLAGS_use_avx", "1")
-            // Disable Paddle's new PIR executor — it crashes with
-            // ConvertPirAttribute2RuntimeAttribute on some paddle/paddleocr combos.
-            .env("FLAGS_enable_pir_api", "0")
-            // Silence HuggingFace progress bars (would pollute stderr/stdout)
-            .env("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-            .env("HF_HUB_DISABLE_TELEMETRY", "1")
-            // PaddleX otherwise performs a slow connectivity preflight before
-            // trying the actual model source. The download itself can still run.
-            .env("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        if let Some(ref cache_dir) = self.config.hf_cache_dir {
-            ensure_cache_dir("HuggingFace", cache_dir)?;
-        }
-        if let Some(ref cache_dir) = self.config.paddlex_cache_dir {
-            ensure_cache_dir("PaddleX", cache_dir)?;
-        }
+        let extra_args: Vec<String> = if let Some(glm) = &self.config.glm_local {
+            // Layout runs on CPU inside the script; recognition goes to the
+            // persistent llama-server, started here on first use.
+            let url = super::glm_ocr_local::ensure_server(&glm.assets, &glm.db_path)?;
+            vec![
+                "--server-url".to_string(),
+                url,
+                "--parallel".to_string(),
+                super::glm_ocr_local::PARALLEL_SLOTS.to_string(),
+            ]
+        } else {
+            vec!["--device".to_string(), self.config.device.clone()]
+        };
+        let (mut cmd, cpu_threads, use_mkldnn) = build_ocrh_command(
+            &self.config,
+            &self.config.script_path,
+            image_path,
+            &self.config.device,
+            &extra_args,
+        )?;
 
         let offline_value = if self.config.offline_mode { "1" } else { "0" };
-        cmd.env("HF_HUB_OFFLINE", offline_value)
-            .env("TRANSFORMERS_OFFLINE", offline_value);
-
-        if let Some(ref cache_dir) = self.config.hf_cache_dir {
-            cmd.env("HF_HOME", cache_dir).env("HF_HUB_CACHE", cache_dir);
-        }
-
-        if let Some(ref cache_dir) = self.config.paddlex_cache_dir {
-            let modelscope_cache_dir = cache_dir.join("modelscope");
-            ensure_cache_dir("ModelScope", &modelscope_cache_dir)?;
-            cmd.env("PADDLE_PDX_CACHE_HOME", cache_dir)
-                // Legacy/no-op for current PaddleX, but harmless for older builds.
-                .env("PADDLEX_HOME", cache_dir)
-                // Keep ModelScope downloads/locks inside EntropIA's managed
-                // runtime instead of the user's global ~/.cache/modelscope.
-                .env("MODELSCOPE_CACHE", &modelscope_cache_dir)
-                .env("MODELSCOPE_HOME", &modelscope_cache_dir);
-        }
-
         log::info!(
             target: "paddle_vl",
-            "device={}, CPU threads: {cpu_threads}, MKLDNN+AVX enabled, offline_mode={}",
-            self.config.device, offline_value
+            "device={}, CPU threads: {cpu_threads}, FLAGS_use_mkldnn={use_mkldnn}, offline_mode={offline_value}",
+            self.config.device,
         );
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -362,8 +436,120 @@ impl PaddleVlEngine {
             _ => false,
         }
     }
-}
 
+    /// Run PP-DocLayoutV3 on an image file (layout boxes only, no text).
+    ///
+    /// Used by the lightweight OCR path to read segment by segment in reading
+    /// order instead of the full page at once. Same Python environment as the
+    /// other OCRH helpers; the layout model comes from the same PaddleX cache.
+    /// On timeout (5 minutes), kills the subprocess and returns an error.
+    pub fn detect_layout(&self, image_path: &str) -> Result<LayoutV3Output, String> {
+        log::info!(
+            target: "paddle_vl",
+            "Spawning layout_v3 for: {image_path}"
+        );
+        let (mut cmd, _threads, _mkldnn) = build_ocrh_command(
+            &self.config,
+            &self.config.layout_script_path,
+            image_path,
+            "cpu",
+            &[],
+        )?;
+        let mut child = cmd.spawn().map_err(|e| {
+            format!(
+                "Failed to spawn layout process (python={}): {e}",
+                self.config.python_path.display()
+            )
+        })?;
+
+        let stdout_reader = child
+            .stdout
+            .take()
+            .map(|stdout| std::thread::spawn(move || drain_child_pipe(stdout)));
+        let stderr_reader = child
+            .stderr
+            .take()
+            .map(|stderr| std::thread::spawn(move || drain_child_pipe(stderr)));
+
+        let timeout = std::time::Duration::from_secs(Self::LAYOUT_TIMEOUT_SECS);
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let _ = child.wait();
+                    let stdout_buf = join_child_reader(stdout_reader);
+                    let stderr_buf = join_child_reader(stderr_reader);
+
+                    let stdout = String::from_utf8_lossy(&stdout_buf);
+                    let stderr = String::from_utf8_lossy(&stderr_buf);
+
+                    if !status.success() {
+                        let exit_code = status.code().unwrap_or(-1);
+                        return Err(format!(
+                            "layout_v3 script failed (exit code {exit_code}).\n\
+                             Python: {}\n\
+                             Script: {}\n\
+                             Stderr tail: {}",
+                            self.config.python_path.display(),
+                            self.config.layout_script_path.display(),
+                            stderr
+                                .chars()
+                                .rev()
+                                .take(500)
+                                .collect::<String>()
+                                .chars()
+                                .rev()
+                                .collect::<String>(),
+                        ));
+                    }
+
+                    // Extract JSON between sentinels
+                    let json_str = extract_sentinel_json(&stdout);
+
+                    // Check for error key in JSON
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        if let Some(error) = parsed.get("error") {
+                            let error_msg = error.as_str().unwrap_or("Unknown error");
+                            return Err(format!("layout_v3 script reported error: {error_msg}"));
+                        }
+                    }
+
+                    let result: LayoutV3Output = serde_json::from_str(json_str).map_err(|e| {
+                        let preview = if json_str.len() > 300 {
+                            &json_str[..300]
+                        } else {
+                            json_str
+                        };
+                        format!("Failed to parse layout_v3 JSON: {e}\nExtracted: {preview}")
+                    })?;
+
+                    log::info!(
+                        target: "paddle_vl",
+                        "Layout complete: {} boxes (took {:.1}s)",
+                        result.boxes.len(),
+                        start.elapsed().as_secs_f64()
+                    );
+
+                    return Ok(result);
+                }
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(format!(
+                            "layout_v3 timed out after {}s for {image_path}",
+                            Self::LAYOUT_TIMEOUT_SECS
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                Err(e) => {
+                    return Err(format!("Failed to check layout process status: {e}"));
+                }
+            }
+        }
+    }
+}
 /// Extract JSON content between `===VL_JSON_BEGIN===` and `===VL_JSON_END===`
 /// sentinels. Falls back to full output if sentinels not found.
 fn extract_sentinel_json(output: &str) -> &str {
@@ -504,8 +690,8 @@ pub fn which_python_for_paddle_vl(settings_db_path: Option<&std::path::Path>) ->
 ///      or fixing the driver stack.
 ///   3. On Windows, also check for `nvidia-smi.exe` in Program Files.
 ///
-/// Returns `false` if no hardware signal reports an NVIDIA GPU.
-fn detect_nvidia_gpu() -> bool {
+/// Whether an NVIDIA GPU is present (nvidia-smi plus OS inventory).
+pub(crate) fn detect_nvidia_gpu() -> bool {
     // Fast path: nvidia-smi -L lists GPUs in ~50-100ms.
     let mut cmd = Command::new("nvidia-smi");
     cmd.arg("-L");
@@ -730,7 +916,48 @@ pub fn create_paddle_vl_engine_result(
 
     // Auto-detect GPU and prefer it, but let the Python subprocess validate
     // software-level support and fall back to CPU if GPU init fails.
-    let device = if detect_nvidia_gpu() {
+    let has_gpu = detect_nvidia_gpu();
+    let glm_assets = resolve_desired_backend_with_gpu(
+        settings_db_path,
+        bundled_resource_dir(app_handle).as_deref(),
+        has_gpu,
+    )?;
+    if let Some(assets) = glm_assets {
+        crate::app_logs::info(
+            app_handle,
+            "ocrh",
+            format!(
+                "OCRH local usará GLM-OCR (llama-server: {})",
+                assets.server.display()
+            ),
+        );
+        let config = PaddleVlConfig {
+            python_path,
+            script_path: resolve_ocrh_script_path_from_roots(
+                runtime_root.as_deref(),
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                "glm_ocr_local.py",
+            ),
+            layout_script_path: resolve_ocrh_script_path_from_roots(
+                runtime_root.as_deref(),
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                "layout_v3.py",
+            ),
+            hf_cache_dir,
+            paddlex_cache_dir,
+            offline_mode,
+            // Only the layout model runs inside the script, and it runs on CPU.
+            device: "cpu".to_string(),
+            glm_local: Some(GlmLocalBackend {
+                assets,
+                db_path: settings_db_path.to_path_buf(),
+            }),
+        };
+        return PaddleVlEngine::init(config)
+            .map_err(|e| format!("❌ Failed to create GLM-OCR local engine: {e}"));
+    }
+
+    let device = if has_gpu {
         log::info!(target: "paddle_vl", "NVIDIA GPU detected — preferring GPU for PaddleOCR-VL");
         "gpu".to_string()
     } else {
@@ -741,28 +968,116 @@ pub fn create_paddle_vl_engine_result(
     match PaddleVlEngine::init(PaddleVlConfig {
         python_path,
         script_path,
+        layout_script_path: resolve_ocrh_script_path_from_roots(
+            runtime_root.as_deref(),
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            "layout_v3.py",
+        ),
         hf_cache_dir,
         paddlex_cache_dir,
         offline_mode,
         device,
+        glm_local: None,
     }) {
         Ok(engine) => Ok(engine),
         Err(e) => Err(format!("❌ Failed to create PaddleVLEngine: {e}")),
     }
 }
 
+/// Installer-shipped server builds live under the Tauri resource directory
+/// (`resources/tools/llama-server`); `None` outside a bundled app (dev).
+fn bundled_resource_dir(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    use tauri::Manager;
+    app_handle.path().resource_dir().ok()
+}
+
+/// Decide whether OCRH local runs on GLM-OCR.
+///
+/// `glm_ocr` demands it (missing assets is an error); `auto` uses it when the
+/// assets are installed and an NVIDIA GPU is present, since GLM-OCR on CPU is
+/// far slower than PaddleOCR-VL; anything else keeps PaddleOCR-VL.
+fn select_glm_local_assets(
+    setting: &str,
+    has_gpu: bool,
+    assets: Result<super::glm_ocr_local::GlmLocalAssets, String>,
+) -> Result<Option<super::glm_ocr_local::GlmLocalAssets>, String> {
+    use super::glm_ocr_local::{ENGINE_AUTO, ENGINE_GLM_OCR};
+    match setting.trim().to_lowercase().as_str() {
+        ENGINE_GLM_OCR => assets.map(Some),
+        ENGINE_AUTO => match assets {
+            Ok(assets) if has_gpu => Ok(Some(assets)),
+            Ok(_) => {
+                log::info!(target: "paddle_vl", "GLM-OCR local installed but no NVIDIA GPU; using PaddleOCR-VL");
+                Ok(None)
+            }
+            Err(reason) => {
+                log::info!(target: "paddle_vl", "GLM-OCR local unavailable ({reason}); using PaddleOCR-VL");
+                Ok(None)
+            }
+        },
+        _ => Ok(None),
+    }
+}
+
+/// Resolve which local backend OCRH should use right now, without building it.
+///
+/// Reads the `ocrh_local_engine` setting plus a filesystem check for the
+/// GLM-OCR assets. `Ok(None)` means PaddleOCR-VL, `Ok(Some(assets))` means
+/// local GLM-OCR. An `Err` (the `glm_ocr` setting demanding GLM-OCR whose
+/// assets are missing) tells the caller to keep whatever engine is already
+/// running instead of thrashing the cache on every task.
+///
+/// The server binary may ship inside the installer resources, so the Tauri
+/// resource directory is consulted alongside the managed install.
+pub fn resolve_desired_backend(
+    app_handle: &tauri::AppHandle,
+    settings_db_path: &Path,
+) -> Result<Option<super::glm_ocr_local::GlmLocalAssets>, String> {
+    resolve_desired_backend_with_gpu(
+        settings_db_path,
+        bundled_resource_dir(app_handle).as_deref(),
+        detect_nvidia_gpu(),
+    )
+}
+
+fn resolve_desired_backend_with_gpu(
+    settings_db_path: &Path,
+    resource_dir: Option<&Path>,
+    has_gpu: bool,
+) -> Result<Option<super::glm_ocr_local::GlmLocalAssets>, String> {
+    let engine_setting = crate::db::open::open_archive_connection(settings_db_path)
+        .ok()
+        .and_then(|conn| {
+            crate::settings::get_setting(&conn, super::glm_ocr_local::OCRH_LOCAL_ENGINE_SETTING)
+        })
+        .unwrap_or_else(|| super::glm_ocr_local::ENGINE_AUTO.to_string());
+    select_glm_local_assets(
+        &engine_setting,
+        has_gpu,
+        super::glm_ocr_local::resolve_assets_with_resource_dir(settings_db_path, resource_dir),
+    )
+}
+
 fn resolve_paddle_vl_script_path_from_roots(
     managed_root: Option<&Path>,
     manifest_dir: &Path,
 ) -> PathBuf {
+    resolve_ocrh_script_path_from_roots(managed_root, manifest_dir, "paddle_vl.py")
+}
+
+fn resolve_ocrh_script_path_from_roots(
+    managed_root: Option<&Path>,
+    manifest_dir: &Path,
+    script_name: &str,
+) -> PathBuf {
     if let Some(root) = managed_root {
-        let managed = managed_script_path(root, "paddle_vl.py");
+        let managed = managed_script_path(root, script_name);
         if managed.exists() {
             return managed;
         }
     }
 
-    normalize_windows_path(manifest_dir.join("scripts/paddle_vl.py"))
+    normalize_windows_path(manifest_dir.join("scripts").join(script_name))
 }
 
 fn ensure_cache_dir(label: &str, cache_dir: &Path) -> Result<(), String> {
@@ -827,16 +1142,32 @@ fn paddle_vl_caches_look_complete(paddlex_cache_dir: Option<&Path>) -> bool {
 
     let official_models = cache_dir.join("official_models");
     let layout_model = official_models.join("PP-DocLayoutV3");
-    let vl_model = official_models.join("PaddleOCR-VL-1.5");
 
     let layout_ready = layout_model.join("inference.yml").is_file()
         && layout_model.join("inference.pdiparams").is_file()
         && (layout_model.join("inference.json").is_file()
             || layout_model.join("inference.pdmodel").is_file());
 
-    let vl_ready = vl_model.join("model.safetensors").is_file()
-        || vl_model.join("model_state.pdparams").is_file()
-        || vl_model.join("inference.pdparams").is_file();
+    // The VL model dir carries the pack's model version (PaddleOCR-VL-1.5,
+    // -1.6, ...). Matching any version keeps the completeness check valid as
+    // the seeded cache ships newer models; a hardcoded -1.5 made every later
+    // pack look incomplete and silently forced online downloads.
+    let vl_ready = std::fs::read_dir(&official_models)
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let is_vl_dir = name.starts_with("PaddleOCR-VL-");
+                if !is_vl_dir {
+                    return false;
+                }
+                let dir = entry.path();
+                dir.join("model.safetensors").is_file()
+                    || dir.join("model_state.pdparams").is_file()
+                    || dir.join("inference.pdparams").is_file()
+            })
+        })
+        .unwrap_or(false);
 
     layout_ready && vl_ready
 }
@@ -960,7 +1291,7 @@ mod tests {
         let vl = cache_dir
             .path()
             .join("official_models")
-            .join("PaddleOCR-VL-1.5");
+            .join("PaddleOCR-VL-1.6");
         std::fs::create_dir_all(&layout).expect("layout dir");
         std::fs::create_dir_all(&vl).expect("vl dir");
         std::fs::write(layout.join("inference.yml"), "mode: paddle").expect("layout yml");
@@ -1108,11 +1439,52 @@ mod tests {
         let config = PaddleVlConfig {
             python_path: PathBuf::from("/usr/bin/python"),
             script_path: PathBuf::from("/tmp/paddle_vl.py"),
+            layout_script_path: PathBuf::from("/tmp/layout_v3.py"),
             hf_cache_dir: None,
             paddlex_cache_dir: None,
             offline_mode: false,
             device: "gpu".to_string(),
+            glm_local: None,
         };
         assert_eq!(config.device, "gpu");
+    }
+
+    fn glm_assets() -> crate::ocr::glm_ocr_local::GlmLocalAssets {
+        crate::ocr::glm_ocr_local::GlmLocalAssets {
+            server: PathBuf::from("/x/llama-server"),
+            model: PathBuf::from("/x/m.gguf"),
+            mmproj: PathBuf::from("/x/p.gguf"),
+        }
+    }
+
+    #[test]
+    fn auto_uses_glm_only_with_assets_and_gpu() {
+        assert!(select_glm_local_assets("auto", true, Ok(glm_assets()))
+            .unwrap()
+            .is_some());
+        assert!(select_glm_local_assets("auto", false, Ok(glm_assets()))
+            .unwrap()
+            .is_none());
+        assert!(select_glm_local_assets("auto", true, Err("missing".into()))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn forced_glm_reports_missing_assets() {
+        assert_eq!(
+            select_glm_local_assets("glm_ocr", false, Err("missing".into())).unwrap_err(),
+            "missing"
+        );
+        assert!(select_glm_local_assets("GLM_OCR", false, Ok(glm_assets()))
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn paddle_vl_setting_never_uses_glm() {
+        assert!(select_glm_local_assets("paddle_vl", true, Ok(glm_assets()))
+            .unwrap()
+            .is_none());
     }
 }

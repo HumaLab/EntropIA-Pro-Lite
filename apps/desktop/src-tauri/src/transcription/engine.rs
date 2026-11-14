@@ -82,12 +82,17 @@ pub struct TranscriptionResult {
     pub duration_ms: u64,
 }
 
-/// A single timestamped segment from faster-whisper.
+/// A single timestamped segment from a transcription engine.
+/// `speaker` is `None` for engines without diarization and for JSON written
+/// before diarization existed: old rows and other synced installs keep
+/// deserializing (no schema migration needed).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Segment {
     pub start: f64,
     pub end: f64,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
 }
 
 /// The transcription engine — spawns Python as a child process.
@@ -329,5 +334,33 @@ mod tests {
         };
         let result = WhisperEngine::init(config);
         assert!(result.is_err(), "Should fail with missing script");
+    }
+
+    #[test]
+    fn legacy_segments_without_speaker_deserialize() {
+        // Rows written before diarization have no `speaker` key: they must
+        // keep loading (None), on this and on already-synced installs.
+        let legacy = r#"[{"start":0.0,"end":2.5,"text":"hola mundo"}]"#;
+        let segments: Vec<Segment> = serde_json::from_str(legacy).expect("legacy JSON");
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].speaker, None);
+        // New rows round-trip the label and skip the key when absent.
+        let labeled = Segment {
+            start: 0.0,
+            end: 1.0,
+            text: "hola".to_string(),
+            speaker: Some("Hablante A".to_string()),
+        };
+        let json = serde_json::to_string(&labeled).expect("serialize");
+        assert!(json.contains("Hablante A"));
+        let plain = Segment {
+            start: 0.0,
+            end: 1.0,
+            text: "hola".to_string(),
+            speaker: None,
+        };
+        assert!(!serde_json::to_string(&plain)
+            .expect("serialize")
+            .contains("speaker"));
     }
 }

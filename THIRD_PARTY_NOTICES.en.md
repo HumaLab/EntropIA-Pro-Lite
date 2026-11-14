@@ -26,7 +26,9 @@ Before signing or publishing a final installer, verify:
 | uv | Managed Python environment bootstrap (Pro) | `resources/tools/uv/*`, runtime payload `uv/` | `resources/tools/uv/*` pinned to uv 0.6.14 (MIT OR Apache-2.0) in `binary-provenance.json`; the runtime payload copy follows the runtime-pack manifest. |
 | Python runtime | OCR/NLP/transcription subprocess runtime | release runtime payload `python/` | Must be redistributable and version-stamped. |
 | Python wheelhouse | Offline install for AI dependencies | release runtime payload `wheelhouse/` | Must be generated from reviewed packages. |
-| Hugging Face caches | faster-whisper/model cache seeds | release runtime payload `caches/hf/` | Each model license must be reviewed. |
+ | Hugging Face caches | faster-whisper/model cache seeds | release runtime payload `caches/hf/` | Each model license must be reviewed. |
+ | Parakeet TDT 0.6B v3 (ONNX fp32, 2.5 GB) | Local transcription via `parakeet-rs` (25 languages) | First-use download from `altunenes/parakeet-rs` rev `664cc74` into `caches/hf/parakeet-tdt-0.6b-v3/` (per-file sha256 in `transcription/parakeet.rs`) | **CC-BY-4.0** (NVIDIA) — attribution required; no official int8 (`Orukeet` int8 is a community finetune under CC-BY-SA-4.0, not used). |
+ | Nemotron-3 Diarization Sortformer v3 (ONNX fp32, ~400 MB) | Optional local diarization via `parakeet-rs` (`sortformer`) | First-use download with diarization from `altunenes/parakeet-rs` rev `664cc74` into `caches/hf/nemotron-3-diarization/` (sha256 + LICENSE pinned in `transcription/parakeet.rs`) | **OpenMDW-1.1** (NVIDIA) — unrestricted use including commercial; retain the agreement and origin notices on distribution; no restrictions on outputs. |
 | PaddleX caches | PaddleOCR-VL/layout model cache seeds | release runtime payload `caches/paddlex/` | Each model license must be reviewed. |
 | Gemma GGUF | Local LLM downloaded by user/app | Hugging Face URL configured in LLM settings | Downloaded model terms must be visible to users before relying on redistribution. |
 
@@ -38,7 +40,8 @@ These do not travel as separate runtime-payload files: they are compiled or bund
 | --------- | ------- | ------- |
 | `keyring` | Stores the sync session token in the operating system credential manager | MIT OR Apache-2.0 |
 | `ed25519-dalek` | Verifies the managed-runtime bootstrap signature | BSD-3-Clause |
-| `symphonia` | Audio decoding for preview | **MPL-2.0** |
+ | `symphonia` | Audio decoding for preview | **MPL-2.0** |
+ | `parakeet-rs` (0.3.x) | Rust runtime for Parakeet TDT (local transcription) | MIT |
 | `hound` | WAV read/write for the audio path | Apache-2.0 |
 | `leaflet` | Location map | BSD-2-Clause |
 | `@tiptap/*` | Rich-text editor behind notes and Writing | MIT |

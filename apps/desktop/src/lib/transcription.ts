@@ -29,6 +29,54 @@ export interface TranscriptionResult {
   durationMs: number
   segmentsCount: number
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// Speaker labels ("Hablante A: ..." line prefixes written by diarization)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Matches a speaker-turn line prefix: up to 40 chars before the first colon. */
+const SPEAKER_PREFIX_RE = /^([^:\n]{1,40}):[ \t]+/u
+
+/**
+ * Distinct speaker labels in first-appearance order, parsed from the
+ * transcription text. Pure text-level parsing (no backend round trip), so a
+ * second rename pass keeps working on already-renamed labels.
+ */
+export function extractSpeakerLabels(text: string): string[] {
+  const labels: string[] = []
+  for (const line of text.split('\n')) {
+    const match = SPEAKER_PREFIX_RE.exec(line.trim())
+    const label = (match?.[1] ?? '').trim()
+    if (label && !labels.includes(label)) {
+      labels.push(label)
+    }
+  }
+  return labels
+}
+
+/**
+ * Rewrite speaker-turn prefixes per `mapping` (old label → new label).
+ * New labels are sanitized (no colons/newlines, max 40 chars); empty or
+ * unchanged entries keep the original prefix.
+ */
+export function renameSpeakers(text: string, mapping: Record<string, string>): string {
+  const clean = (name: string) =>
+    name
+      .replace(/[\r\n:]+/g, ' ')
+      .trim()
+      .slice(0, 40)
+  return text
+    .split('\n')
+    .map((line) => {
+      const match = SPEAKER_PREFIX_RE.exec(line.trim())
+      if (!match) return line
+      const current = (match[1] ?? '').trim()
+      const replacement = mapping[current]
+      const next = replacement !== undefined ? clean(replacement) : ''
+      if (!next || !current || next === current) return line
+      return line.replace(current, next)
+    })
+    .join('\n')
+}
 
 export interface AssetTranscriptionState {
   status: TranscriptionStatus
@@ -36,6 +84,7 @@ export interface AssetTranscriptionState {
   progress: number
   stage?: string
   error?: string
+  warning?: string
   text?: string
   language?: string
   durationMs?: number
@@ -97,6 +146,7 @@ interface CompletePayload {
   language?: string
   duration_ms?: number
   segments_count?: number
+  warning?: string
 }
 
 interface ErrorPayload {
@@ -155,6 +205,7 @@ export class TranscriptionStore {
         language: p.language,
         durationMs: p.duration_ms ?? 0,
         segmentsCount: p.segments_count ?? 0,
+        warning: p.warning,
       })
       // Notify caller so views can refresh visible transcription-dependent state.
       this.onComplete?.(p.asset_id)
