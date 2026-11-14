@@ -169,6 +169,7 @@ const APP_COMMANDS: &[&str] = &[
     "help_ask",
     "help_faq_list",
     "help_approval_answer",
+    "help_stop",
     "rag_chunk_coverage",
     "rag_list_conversations",
     "rag_search_conversations",

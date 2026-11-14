@@ -98,4 +98,19 @@ describe('HelpSettingsTab (S14)', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('Parámetro de ayuda inválido: contextChars')
   })
+
+  it('renders the agent rounds control with its default and paid hint', () => {
+    renderTab()
+
+    expect(screen.getByLabelText('Vueltas máximas del agente')).toHaveValue(8)
+    expect(
+      screen.getByText('Cada vuelta es una consulta paga a OpenRouter (1-20)')
+    ).toBeInTheDocument()
+  })
+
+  it('shows a stored rounds value instead of the default', () => {
+    renderTab({ maxRounds: '3' })
+
+    expect(screen.getByLabelText('Vueltas máximas del agente')).toHaveValue(3)
+  })
 })

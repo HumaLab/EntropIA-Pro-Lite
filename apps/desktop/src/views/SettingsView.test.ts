@@ -797,6 +797,7 @@ describe('SettingsView', () => {
     expect(screen.getByLabelText('Largo máximo de la respuesta (tokens)')).toHaveValue(1500)
     expect(screen.getByLabelText('Temperatura')).toHaveValue(0.2)
     expect(screen.getByLabelText('Turnos de historial')).toHaveValue(6)
+    expect(screen.getByLabelText('Vueltas máximas del agente')).toHaveValue(8)
     expect(screen.getByRole('checkbox', { name: 'Respuestas locales' })).toBeChecked()
     expect(
       screen.getByText('Modelo de la ayuda: vacío usa el modelo general de Configuración')
@@ -830,6 +831,16 @@ describe('SettingsView', () => {
     expect(screen.getByRole('checkbox', { name: 'Respuestas locales' })).not.toBeChecked()
   })
 
+  it('loads a stored agent rounds value instead of the default', async () => {
+    settingsGetAllMock.mockResolvedValue([{ key: 'help_max_rounds', value: '3' }])
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
+
+    await waitFor(() => expect(screen.getByLabelText('Vueltas máximas del agente')).toHaveValue(3))
+  })
+
   it('saves help settings clamped to their ranges', async () => {
     render(SettingsView)
 
@@ -851,6 +862,9 @@ describe('SettingsView', () => {
     await fireEvent.input(screen.getByLabelText('Turnos de historial'), {
       target: { value: '99' },
     })
+    await fireEvent.input(screen.getByLabelText('Vueltas máximas del agente'), {
+      target: { value: '999' },
+    })
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Respuestas locales' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
 
@@ -861,6 +875,7 @@ describe('SettingsView', () => {
     expect(settingsSetMock).toHaveBeenCalledWith('help_max_tokens', '200')
     expect(settingsSetMock).toHaveBeenCalledWith('help_temperature', '1')
     expect(settingsSetMock).toHaveBeenCalledWith('help_history_turns', '12')
+    expect(settingsSetMock).toHaveBeenCalledWith('help_max_rounds', '20')
     expect(settingsSetMock).toHaveBeenCalledWith('help_local_answers', 'false')
   })
 
@@ -904,6 +919,7 @@ describe('SettingsView', () => {
 
     expect(screen.getByLabelText('Modelo')).toHaveValue('anthropic/claude-3.7-sonnet')
     expect(screen.getByLabelText('Contexto del manual (caracteres)')).toHaveValue(24000)
+    expect(screen.getByLabelText('Vueltas máximas del agente')).toHaveValue(8)
     expect(screen.getByRole('checkbox', { name: 'Respuestas locales' })).toBeChecked()
   })
 
@@ -1887,6 +1903,7 @@ describe('settings dirty detection helpers', () => {
       maxTokens: '1500',
       temperature: '0.2',
       historyTurns: '6',
+      maxRounds: '8',
       localAnswers: true,
     },
   }

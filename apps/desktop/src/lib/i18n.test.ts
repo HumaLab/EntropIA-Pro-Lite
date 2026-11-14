@@ -391,6 +391,10 @@ describe('i18n', () => {
       'Contexto: caracteres del manual y del mapa de pantallas enviados al modelo (4000-60000)'
     )
     expect(t('settings.help.localAnswers')).toBe('Respuestas locales')
+    expect(t('settings.help.label.maxRounds')).toBe('Vueltas máximas del agente')
+    expect(t('settings.help.hint.maxRounds')).toBe(
+      'Cada vuelta es una consulta paga a OpenRouter (1-20)'
+    )
     expect(t('settings.help.invalidParam', { param: 'contextChars' })).toBe(
       'Parámetro de ayuda inválido: contextChars'
     )
@@ -400,6 +404,7 @@ describe('i18n', () => {
       'Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.'
     )
     expect(t('help.documentsLabel')).toBe('De tus documentos')
+    expect(t('help.stop')).toBe('Detener')
     expect(t('help.sourceManual')).toBe('Del manual')
     expect(t('help.sourceScreenMap')).toBe('Del mapa de pantallas')
 
@@ -453,6 +458,8 @@ describe('i18n', () => {
       'Context: manual and screen-map characters sent to the model (4000-60000)'
     )
     expect(t('settings.help.localAnswers')).toBe('Local answers')
+    expect(t('settings.help.label.maxRounds')).toBe('Maximum agent rounds')
+    expect(t('settings.help.hint.maxRounds')).toBe('Each round is a paid OpenRouter call (1-20)')
     expect(t('settings.help.invalidParam', { param: 'contextChars' })).toBe(
       'Invalid help parameter: contextChars'
     )
@@ -462,6 +469,7 @@ describe('i18n', () => {
       'Excerpts from your documents go to OpenRouter for this question only.'
     )
     expect(t('help.documentsLabel')).toBe('From your documents')
+    expect(t('help.stop')).toBe('Stop')
     expect(t('help.sourceManual')).toBe('From the manual')
     expect(t('help.sourceScreenMap')).toBe('From the screen map')
   })

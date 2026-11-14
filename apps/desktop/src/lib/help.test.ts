@@ -3,15 +3,20 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   HELP_MANUAL_URL,
   HELP_NO_OPENROUTER_KEY,
+  HELP_STEP_EVENT,
+  describeHelpStep,
   helpApprovalAnswer,
   helpAsk,
   helpDiagnosticsPreview,
   helpFaqList,
   helpStatus,
+  helpStop,
   isNoKeyError,
   listenHelpApproval,
+  listenHelpSteps,
   openHelpManual,
   type HelpApprovalRequest,
+  type HelpStepEvent,
 } from './help'
 
 describe('help backend wrappers', () => {
@@ -196,5 +201,121 @@ describe('help backend wrappers', () => {
         summary: 'Crear la colección «SIMAPE»',
       },
     ])
+  })
+
+  it('helpAsk passes requestId through when the panel generates one', async () => {
+    vi.mocked(invoke).mockResolvedValue({ answer: 'listo', sources: [] })
+
+    await helpAsk('¿Cómo importo?', [], null, { requestId: 'r-1' })
+
+    expect(invoke).toHaveBeenCalledWith('help_ask', {
+      question: '¿Cómo importo?',
+      history: [],
+      requestId: 'r-1',
+    })
+  })
+
+  it('helpAsk leaves requestId out for older callers', async () => {
+    vi.mocked(invoke).mockResolvedValue({ answer: 'listo', sources: [] })
+
+    await helpAsk('¿Cómo importo?', [], null)
+
+    const args = vi.mocked(invoke).mock.calls[0]?.[1] as Record<string, unknown>
+    expect('requestId' in args).toBe(false)
+  })
+
+  it('helpStop invokes help_stop with the run id', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+
+    await helpStop('r-1')
+
+    expect(invoke).toHaveBeenCalledWith('help_stop', { requestId: 'r-1' })
+  })
+
+  it('listenHelpSteps relays the help://step payload', async () => {
+    const { listen } = await import('@tauri-apps/api/event')
+    const seen: HelpStepEvent[] = []
+
+    await listenHelpSteps((event) => seen.push(event))
+
+    expect(listen).toHaveBeenCalledWith('help://step', expect.any(Function))
+    expect(HELP_STEP_EVENT).toBe('help://step')
+    const handler = vi
+      .mocked(listen)
+      .mock.calls.filter(([name]) => name === 'help://step')
+      .at(-1)?.[1] as ((event: { payload: HelpStepEvent }) => void) | undefined
+    handler?.({
+      payload: { requestId: 'r-1', tool: 'collections_list', args: '{}', status: 'ok' },
+    })
+    expect(seen).toEqual([{ requestId: 'r-1', tool: 'collections_list', args: '{}', status: 'ok' }])
+  })
+})
+
+describe('describeHelpStep (T24)', () => {
+  it('names the common tools in spanish', () => {
+    const es = (tool: string, args = '{}', status: 'ok' | 'denied' | 'failed' = 'ok') =>
+      describeHelpStep({ tool, args, status }, 'es')
+    expect(es('collections_list')).toBe('Listó colecciones')
+    expect(es('documents_get_text')).toBe('Leyó texto de un documento')
+    expect(es('hlab_entropia_page')).toBe('Consultó la página de HLab')
+  })
+
+  it('names the common tools in english', () => {
+    const en = (tool: string, args = '{}', status: 'ok' | 'denied' | 'failed' = 'ok') =>
+      describeHelpStep({ tool, args, status }, 'en')
+    expect(en('collections_list')).toBe('Listed collections')
+    expect(en('documents_get_text')).toBe('Read text from a document')
+    expect(en('hlab_entropia_page')).toBe('Checked the HLab page')
+  })
+
+  it('carries the query, name or path the args hold', () => {
+    expect(
+      describeHelpStep({ tool: 'search_items', args: '{"query":"actas"}', status: 'ok' }, 'es')
+    ).toBe('Buscó documentos: «actas»')
+    expect(
+      describeHelpStep({ tool: 'search_items', args: '{"query":"actas"}', status: 'ok' }, 'en')
+    ).toBe('Searched documents: “actas”')
+    expect(
+      describeHelpStep(
+        { tool: 'collections_create', args: '{"name":"SIMAPE"}', status: 'ok' },
+        'es'
+      )
+    ).toBe('Creó la colección «SIMAPE»')
+    expect(
+      describeHelpStep(
+        { tool: 'collections_create', args: '{"name":"SIMAPE"}', status: 'ok' },
+        'en'
+      )
+    ).toBe('Created the “SIMAPE” collection')
+    expect(
+      describeHelpStep({ tool: 'repo_read', args: '{"path":"README.md"}', status: 'ok' }, 'es')
+    ).toBe('Leyó del repositorio: README.md')
+    expect(
+      describeHelpStep({ tool: 'repo_read', args: '{"path":"README.md"}', status: 'ok' }, 'en')
+    ).toBe('Read from the repository: README.md')
+  })
+
+  it('marks denied and failed steps in both languages', () => {
+    expect(describeHelpStep({ tool: 'collections_list', args: '{}', status: 'denied' }, 'es')).toBe(
+      'Listó colecciones (denegado)'
+    )
+    expect(describeHelpStep({ tool: 'collections_list', args: '{}', status: 'failed' }, 'es')).toBe(
+      'Listó colecciones (falló)'
+    )
+    expect(describeHelpStep({ tool: 'collections_list', args: '{}', status: 'denied' }, 'en')).toBe(
+      'Listed collections (denied)'
+    )
+    expect(describeHelpStep({ tool: 'collections_list', args: '{}', status: 'failed' }, 'en')).toBe(
+      'Listed collections (failed)'
+    )
+  })
+
+  it('falls back to the tool name for unknown tools', () => {
+    expect(
+      describeHelpStep({ tool: 'futura_herramienta', args: '{"a":1}', status: 'ok' }, 'es')
+    ).toBe('futura_herramienta')
+    expect(
+      describeHelpStep({ tool: 'futura_herramienta', args: '{"a":1}', status: 'denied' }, 'en')
+    ).toBe('futura_herramienta (denied)')
   })
 })

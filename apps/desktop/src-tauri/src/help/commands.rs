@@ -16,7 +16,7 @@ use tauri::Emitter;
 use tokio::sync::oneshot;
 
 use super::agent_llm::{
-    run_agent, AgentRequest, ChatTransport, HelpToolExecutor, OpenRouterChatTransport,
+    run_agent, AgentRequest, AgentStep, ChatTransport, HelpToolExecutor, OpenRouterChatTransport,
 };
 use super::diagnostics::{
     build_report, scrub_report, DiagnosticInputs, KEY_SETTINGS, SETTINGS_ALLOWLIST,
@@ -33,9 +33,86 @@ use super::prompt::{
 use crate::automation::access::AgentAccess;
 use crate::automation::server::AgentEndpointState;
 
-/// Tool rounds per question until T24 adds the setting (D13): at most 8
-/// tool-using model turns, then one final answer call.
-pub(crate) const HELP_AGENT_MAX_ROUNDS: usize = 8;
+/// The event the frontend listens to for live agent steps (T24): the
+/// payload carries `{ requestId, tool, args, status }`, one per executed
+/// tool call as it happens. The final list in `HelpAnswer.steps` stays the
+/// source of truth at the end.
+pub(crate) const HELP_STEP_EVENT: &str = "help://step";
+
+/// One live step emitted over [`HELP_STEP_EVENT`] (T24): which run it
+/// belongs to, the tool, the compact JSON args and the outcome on the wire
+/// as `"ok"`, `"denied"` or `"failed"` — the same shape as `HelpStep`
+/// plus the run id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HelpStepEvent {
+    pub request_id: String,
+    pub tool: String,
+    pub args: String,
+    pub status: String,
+}
+
+/// One stop flag per running agent turn (T24 «Detener»), keyed by the
+/// frontend-generated `requestId`. `help_ask` inserts the flag when the run
+/// starts and removes it when the run finishes; `help_stop` flips it.
+/// Managed once in `lib.rs`.
+#[derive(Clone, Default)]
+pub(crate) struct HelpAgentRuns {
+    flags: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+}
+
+impl HelpAgentRuns {
+    /// Registers a run and answers its stop flag. A repeated id for a run
+    /// that is still registered reuses the same flag.
+    pub(crate) fn start(&self, request_id: &str) -> Arc<AtomicBool> {
+        self.flags
+            .lock()
+            .map(|mut flags| {
+                flags
+                    .entry(request_id.to_string())
+                    .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+                    .clone()
+            })
+            .unwrap_or_else(|_| Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Flips the stop flag of a running turn. Unknown (finished or never
+    /// started) ids stop nothing.
+    pub(crate) fn stop(&self, request_id: &str) -> bool {
+        self.flags
+            .lock()
+            .map(|flags| {
+                flags
+                    .get(request_id)
+                    .map(|flag| flag.store(true, Ordering::Relaxed))
+                    .is_some()
+            })
+            .unwrap_or(false)
+    }
+
+    /// Forgets a finished run. Late `help_stop` calls for it stop nothing.
+    pub(crate) fn finish(&self, request_id: &str) {
+        if let Ok(mut flags) = self.flags.lock() {
+            flags.remove(request_id);
+        }
+    }
+}
+
+/// Whether an agent-loop error is the owner pressing «Detener» (T24): the
+/// run answers with [`stopped_answer`], never with a generic failure.
+pub(crate) fn is_stop_error(message: &str) -> bool {
+    message == "detenido"
+}
+
+/// The answer of a stopped run (T24): a clear message plus the steps done
+/// so far. The round cap did not force anything: the owner did.
+pub(crate) fn stopped_answer(steps: Vec<HelpStep>) -> AgentOutcome {
+    AgentOutcome {
+        answer: "Detenido.".to_string(),
+        steps,
+        round_limit_reached: false,
+    }
+}
 
 /// How long an inline approval waits for the owner (D12): 10 minutes,
 /// then the call is denied.
@@ -81,10 +158,13 @@ static HELP_APPROVAL_SEQ: AtomicU64 = AtomicU64::new(1);
 /// Asks the owner about a local write over the `help://approval` event and
 /// waits for `help_approval_answer`, at most [`HELP_APPROVAL_TIMEOUT`]
 /// (D12, S15). No Tauri type crosses `gate.rs`: this is the production
-/// [`HelpApprover`].
+/// [`HelpApprover`]. When the owner presses «Detener» (T24) while the card
+/// waits, the card resolves as rejected so the run stops quickly instead of
+/// hanging on the 10-minute timeout.
 struct TauriHelpApprover {
     app: tauri::AppHandle,
     pending: HelpApprovalPending,
+    stop: Arc<AtomicBool>,
 }
 
 impl HelpApprover for TauriHelpApprover {
@@ -109,10 +189,22 @@ impl HelpApprover for TauriHelpApprover {
             HELP_APPROVAL_EVENT,
             serde_json::json!({ "id": id, "tool": tool, "summary": summary }),
         );
-        let answer = match tokio::time::timeout(HELP_APPROVAL_TIMEOUT, rx).await {
-            Ok(Ok(true)) => ApprovalAnswer::Approved,
-            Ok(Ok(false)) => ApprovalAnswer::Rejected,
-            _ => ApprovalAnswer::TimedOut,
+        // The stop branch watches the «Detener» flag: when the owner stops
+        // the run mid-approval, the card counts as rejected and the agent
+        // loop sees the denial, then its own stop check ends the run.
+        let answer = tokio::select! {
+            biased;
+            message = rx => match message {
+                Ok(true) => ApprovalAnswer::Approved,
+                Ok(false) => ApprovalAnswer::Rejected,
+                Err(_) => ApprovalAnswer::TimedOut,
+            },
+            _ = async {
+                while !self.stop.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            } => ApprovalAnswer::Rejected,
+            _ = tokio::time::sleep(HELP_APPROVAL_TIMEOUT) => ApprovalAnswer::TimedOut,
         };
         if let Ok(mut senders) = self.pending.senders.lock() {
             senders.remove(&id);
@@ -135,6 +227,7 @@ pub(crate) struct AgentInputs {
 
 /// The agent turn mapped to answer parts: the final text, every tool step
 /// and whether the round cap forced the closing call.
+#[derive(Debug)]
 pub(crate) struct AgentOutcome {
     pub answer: String,
     pub steps: Vec<HelpStep>,
@@ -144,11 +237,15 @@ pub(crate) struct AgentOutcome {
 /// Runs the bounded agent loop and maps the result to answer parts. Pure
 /// over the transport and the executor, so the whole decision flow — model
 /// calls a read tool, an action asks inline and is forwarded or denied,
-/// content tools gated by the box — is unit-testable with mocks.
+/// content tools gated by the box — is unit-testable with mocks. `stop`
+/// ends the run when the owner presses «Detener» (T24); `on_step` sees
+/// every executed step as it happens, so `help_ask` can emit it live.
 pub(crate) async fn run_help_agent<T, E>(
     transport: &T,
     executor: &E,
     inputs: AgentInputs,
+    stop: &AtomicBool,
+    on_step: impl FnMut(AgentStep),
 ) -> Result<AgentOutcome, String>
 where
     T: ChatTransport,
@@ -167,9 +264,7 @@ where
         max_tokens: inputs.max_tokens,
         temperature: inputs.temperature,
     };
-    // No «Detener» yet (T24 owns the button): a fresh flag that never fires.
-    let stop = AtomicBool::new(false);
-    let result = run_agent(transport, executor, request, &stop, |_| {}).await?;
+    let result = run_agent(transport, executor, request, stop, on_step).await?;
     Ok(AgentOutcome {
         answer: result.answer,
         steps: result
@@ -295,7 +390,11 @@ pub async fn help_diagnostics_preview(
 /// the model. `documents` (S12) opts into the CONTENT tools for this question
 /// only, camelCase on the wire, absent means off: document text reaches the
 /// model only through those tools (D16), and a question with documents on
-/// never gets a local FAQ answer.
+/// never gets a local FAQ answer. `requestId` (T24) is the frontend-generated
+/// id of this question: while the agent runs, every executed tool call is
+/// emitted live as a `help://step` `{ requestId, tool, args, status }`
+/// event, and `help_stop` ends the run through it. Absent means no live
+/// events and no stopping (older clients keep working).
 // A Tauri command: one State per shared service it touches.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -305,10 +404,12 @@ pub async fn help_ask(
     history: Option<Vec<HelpTurn>>,
     diagnostics: Option<String>,
     documents: Option<bool>,
+    request_id: Option<String>,
     db: tauri::State<'_, crate::db::state::AppDbState>,
     endpoint: tauri::State<'_, Arc<AgentEndpointState>>,
     access: tauri::State<'_, Arc<AgentAccess>>,
     pending: tauri::State<'_, HelpApprovalPending>,
+    runs: tauri::State<'_, HelpAgentRuns>,
 ) -> Result<HelpAnswer, String> {
     let question = validate_question(&question)?;
     // S12: opt-in per question, off when absent (S5 stands unchanged).
@@ -389,9 +490,23 @@ pub async fn help_ask(
     )
     .await?;
     let transport = OpenRouterChatTransport::new(api_key.clone());
+    // «Detener» (T24): the run registers its stop flag under the
+    // frontend's id; `help_stop` flips it, the agent loop checks it before
+    // every request and every tool call, and a pending inline approval for
+    // the run resolves as rejected. The flag is forgotten when the run ends.
+    let run_id = request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+    let stop = run_id
+        .as_deref()
+        .map(|id| runs.start(id))
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let approver = TauriHelpApprover {
         app: app.clone(),
         pending: (*pending).clone(),
+        stop: Arc::clone(&stop),
     };
     let gate = HelpGateExecutor::new(bridge, approver, with_documents);
     let inputs = AgentInputs {
@@ -401,9 +516,36 @@ pub async fn help_ask(
         model: help.model.clone(),
         max_tokens: help.max_tokens,
         temperature: help.temperature,
-        max_rounds: HELP_AGENT_MAX_ROUNDS,
+        max_rounds: help.max_rounds,
     };
-    match run_help_agent(&transport, &gate, inputs).await {
+    // Live steps (T24): each executed tool call emits `help://step` as it
+    // happens; the panel renders them under «Pensando…» until the final
+    // list in the answer replaces them. The same steps are collected here
+    // so a stopped run answers with what it had done so far.
+    let live_app = app.clone();
+    let live_run = run_id.clone();
+    let mut live_steps: Vec<HelpStep> = Vec::new();
+    let outcome = run_help_agent(&transport, &gate, inputs, &stop, |step: AgentStep| {
+        let status = agent_step_status_wire(&step.status).to_string();
+        live_steps.push(HelpStep {
+            tool: step.tool.clone(),
+            args: step.args.clone(),
+            status: status.clone(),
+        });
+        if let Some(run) = live_run.as_deref() {
+            let _ = live_app.emit(
+                HELP_STEP_EVENT,
+                HelpStepEvent {
+                    request_id: run.to_string(),
+                    tool: step.tool.clone(),
+                    args: step.args.clone(),
+                    status,
+                },
+            );
+        }
+    })
+    .await;
+    let answer = match outcome {
         Ok(outcome) => Ok(HelpAnswer {
             answer: outcome.answer,
             sources,
@@ -417,6 +559,24 @@ pub async fn help_ask(
             round_limit_reached: outcome.round_limit_reached,
             tools_unavailable: false,
         }),
+        Err(error) if is_stop_error(&error) => {
+            // «Detener» (T24): a clear message plus the steps done so far,
+            // with the titles of the documents read up to the stop.
+            let stopped = stopped_answer(live_steps);
+            Ok(HelpAnswer {
+                answer: stopped.answer,
+                sources,
+                local: false,
+                documents: gate
+                    .content_titles()
+                    .into_iter()
+                    .map(|title| HelpDocument { title })
+                    .collect(),
+                steps: stopped.steps,
+                round_limit_reached: false,
+                tools_unavailable: false,
+            })
+        }
         Err(error) if tools_unsupported_error(&error) => {
             // The model or provider rejected tool use: retry once without
             // tools (plain answer as before, no actions) and say so in the
@@ -441,6 +601,26 @@ pub async fn help_ask(
             })
         }
         Err(error) => Err(error),
+    };
+    if let Some(run) = run_id.as_deref() {
+        runs.finish(run);
+    }
+    answer
+}
+
+/// Stops a running help agent turn (T24 «Detener»): flips the stop flag of
+/// `requestId`, so the run returns quickly with a «Detenido» answer and a
+/// pending inline approval for that run resolves as rejected. Unknown
+/// (finished or never started) ids are an error.
+#[tauri::command]
+pub async fn help_stop(
+    request_id: String,
+    runs: tauri::State<'_, HelpAgentRuns>,
+) -> Result<(), String> {
+    if runs.stop(request_id.trim()) {
+        Ok(())
+    } else {
+        Err("No hay una pregunta en curso con ese identificador.".to_string())
     }
 }
 
@@ -622,7 +802,7 @@ mod tests {
             model: "vendor/modelo".to_string(),
             max_tokens: 200,
             temperature: 0.2,
-            max_rounds: HELP_AGENT_MAX_ROUNDS,
+            max_rounds: super::super::settings::HELP_MAX_ROUNDS_DEFAULT,
         }
     }
 
@@ -653,9 +833,15 @@ mod tests {
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![]);
         let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
-        let outcome = run_help_agent(&transport, &gate, inputs("¿qué colecciones tengo?"))
-            .await
-            .expect("debe responder");
+        let outcome = run_help_agent(
+            &transport,
+            &gate,
+            inputs("¿qué colecciones tengo?"),
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .await
+        .expect("debe responder");
         assert_eq!(outcome.answer, "Tenés 3 colecciones.");
         assert_eq!(outcome.steps.len(), 1);
         assert_eq!(outcome.steps[0].tool, "collections_list");
@@ -678,9 +864,15 @@ mod tests {
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![ApprovalAnswer::Approved]);
         let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
-        let outcome = run_help_agent(&transport, &gate, inputs("Creá una colección SIMAPE"))
-            .await
-            .expect("debe responder");
+        let outcome = run_help_agent(
+            &transport,
+            &gate,
+            inputs("Creá una colección SIMAPE"),
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .await
+        .expect("debe responder");
         assert_eq!(outcome.answer, "Colección SIMAPE creada.");
         assert_eq!(outcome.steps.len(), 1);
         assert_eq!(outcome.steps[0].tool, "collections_create");
@@ -710,9 +902,15 @@ mod tests {
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![ApprovalAnswer::Rejected]);
         let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
-        let outcome = run_help_agent(&transport, &gate, inputs("Creá una colección SIMAPE"))
-            .await
-            .expect("debe responder");
+        let outcome = run_help_agent(
+            &transport,
+            &gate,
+            inputs("Creá una colección SIMAPE"),
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .await
+        .expect("debe responder");
         assert_eq!(outcome.answer, "No puedo crearla sin tu aprobación.");
         assert_eq!(outcome.steps.len(), 1);
         assert_eq!(outcome.steps[0].status, "denied");
@@ -732,9 +930,15 @@ mod tests {
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![]);
         let gate = HelpGateExecutor::new(bridge, approver, false);
-        run_help_agent(&transport, &gate, inputs("¿qué dice mi acta?"))
-            .await
-            .expect("debe responder");
+        run_help_agent(
+            &transport,
+            &gate,
+            inputs("¿qué dice mi acta?"),
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .await
+        .expect("debe responder");
         let names = transport.tool_names(0);
         assert!(!names.contains(&"documents_get_text".to_string()));
         assert!(!names.contains(&"search_passages".to_string()));
@@ -748,9 +952,15 @@ mod tests {
         let bridge = MockBridge::new(BRIDGE_TOOLS);
         let approver = MockApprover::new(vec![]);
         let gate = HelpGateExecutor::new(bridge, approver, true);
-        run_help_agent(&transport, &gate, inputs("¿qué dice mi acta?"))
-            .await
-            .expect("debe responder");
+        run_help_agent(
+            &transport,
+            &gate,
+            inputs("¿qué dice mi acta?"),
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .await
+        .expect("debe responder");
         let names = transport.tool_names(0);
         assert!(names.contains(&"documents_get_text".to_string()));
         assert!(names.contains(&"search_passages".to_string()));
@@ -771,5 +981,89 @@ mod tests {
             "No se pudo contactar a OpenRouter: timeout"
         ));
         assert!(!tools_unsupported_error("La herramienta falló: se rompió"));
+    }
+
+    #[test]
+    fn step_events_carry_request_tool_args_and_status() {
+        // T24: while the agent runs, the panel follows `help://step` live.
+        assert_eq!(HELP_STEP_EVENT, "help://step");
+        let event = HelpStepEvent {
+            request_id: "r-1".to_string(),
+            tool: "collections_list".to_string(),
+            args: "{}".to_string(),
+            status: "ok".to_string(),
+        };
+        let value = serde_json::to_value(&event).expect("serializes");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "requestId": "r-1",
+                "tool": "collections_list",
+                "args": "{}",
+                "status": "ok",
+            })
+        );
+    }
+
+    #[test]
+    fn stop_flag_runs_are_recognised_and_answered_as_stopped() {
+        // T24 «Detener»: a run stopped mid-loop answers quickly with a
+        // clear message and keeps the steps done so far.
+        assert!(is_stop_error("detenido"));
+        assert!(!is_stop_error("La herramienta falló: se rompió"));
+        let steps = vec![HelpStep {
+            tool: "collections_list".to_string(),
+            args: "{}".to_string(),
+            status: "ok".to_string(),
+        }];
+        let stopped = stopped_answer(steps.clone());
+        assert!(
+            stopped.answer.contains("Detenido"),
+            "the answer says the run stopped: {}",
+            stopped.answer
+        );
+        assert_eq!(stopped.steps, steps);
+        assert!(!stopped.round_limit_reached);
+    }
+
+    #[test]
+    fn help_runs_track_a_stop_flag_per_request() {
+        // T24: `help_stop(requestId)` flips the flag of that run only;
+        // the flag is removed when the run finishes.
+        let runs = HelpAgentRuns::default();
+        assert!(!runs.stop("missing"), "unknown requests stop nothing");
+        let flag = runs.start("r-1");
+        assert!(!flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(runs.stop("r-1"));
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(!runs.stop("other"), "one run stops only itself");
+        runs.finish("r-1");
+        assert!(!runs.stop("r-1"), "finished runs are gone");
+    }
+
+    #[tokio::test]
+    async fn a_stopped_run_makes_no_more_executor_calls() {
+        // T24: the stop flag set between rounds means no more tool calls —
+        // the same path `help_stop` flips while `help_ask` is awaiting.
+        let transport = MockTransport::new(vec![
+            tool_call("id-1", "collections_list", "{}"),
+            answer("nunca"),
+        ]);
+        let bridge = MockBridge::new(BRIDGE_TOOLS);
+        let approver = MockApprover::new(vec![]);
+        let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let stop = AtomicBool::new(false);
+        let result = run_help_agent(
+            &transport,
+            &gate,
+            inputs("¿qué colecciones tengo?"),
+            &stop,
+            |_| {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "detenido");
+        assert_eq!(bridge.calls().len(), 1, "sin más llamadas tras detener");
     }
 }

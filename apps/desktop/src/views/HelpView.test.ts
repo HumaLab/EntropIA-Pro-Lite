@@ -128,6 +128,7 @@ describe('HelpView', () => {
     expect(askCalls[0]).toEqual({
       question: '¿Cómo importo un PDF?',
       history: [],
+      requestId: expect.any(String),
     })
     expect('diagnostics' in (askCalls[0] as Record<string, unknown>)).toBe(false)
     expect(await screen.findByText('Respuesta de ayuda')).toBeInTheDocument()
@@ -164,6 +165,7 @@ describe('HelpView', () => {
       question: '¿Qué dice mi acta?',
       history: [],
       documents: true,
+      requestId: expect.any(String),
     })
     expect(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })).not.toBeChecked()
   })
@@ -375,6 +377,7 @@ describe('HelpView', () => {
       question: 'Falla la transcripción',
       history: [],
       diagnostics: PREVIEW_TEXT,
+      requestId: expect.any(String),
     })
     // The preview is reused, not fetched again for the send.
     expect(
@@ -396,6 +399,7 @@ describe('HelpView', () => {
       question: 'Falla algo',
       history: [],
       diagnostics: PREVIEW_TEXT,
+      requestId: expect.any(String),
     })
   })
 
@@ -674,7 +678,9 @@ describe('HelpView', () => {
       await sendQuestion('Creá una colección SIMAPE')
 
       expect(await screen.findByText('Listo')).toBeInTheDocument()
-      expect(screen.getByText('Usó: collections_list, collections_create')).toBeInTheDocument()
+      expect(
+        screen.getByText('Usó: Listó colecciones, Creó la colección «SIMAPE»')
+      ).toBeInTheDocument()
     })
 
     it('no steps line when the answer ran no tools', async () => {
@@ -707,6 +713,169 @@ describe('HelpView', () => {
       expect(await screen.findByText('A medias')).toBeInTheDocument()
       expect(screen.getByText(/límite de rondas/)).toBeInTheDocument()
       expect(screen.getByText(/sin usar herramientas/)).toBeInTheDocument()
+    })
+  })
+
+  describe('live steps and Detener (T24)', () => {
+    /** The last help://step handler, the way the approval tests read theirs. */
+    async function fireStep(step: {
+      requestId: string
+      tool: string
+      args: string
+      status: string
+    }) {
+      const { listen } = await import('@tauri-apps/api/event')
+      const handlers = vi
+        .mocked(listen)
+        .mock.calls.filter(([name]) => name === 'help://step')
+        .map(([, handler]) => handler) as Array<(event: { payload: typeof step }) => void>
+      const handler = handlers.at(-1)
+      if (!handler) throw new Error('HelpView is not listening to help://step')
+      handler({ payload: step })
+    }
+
+    /** An ask that stays in flight until the test releases it. */
+    function deferredBackend(askCalls: unknown[]) {
+      let release!: (value: unknown) => void
+      mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === 'help_status') return { hasOpenrouterKey: true }
+        if (command === 'help_faq_list') return DEFAULT_FAQ
+        if (command === 'help_ask') {
+          askCalls.push(args)
+          return new Promise((resolve) => (release = resolve))
+        }
+        return undefined
+      })
+      return (value: unknown) => release(value)
+    }
+
+    it('sends a requestId generated per question', async () => {
+      const askCalls: unknown[] = []
+      backend({ hasKey: true })
+      const calls = askCalls
+      mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === 'help_status') return { hasOpenrouterKey: true }
+        if (command === 'help_faq_list') return DEFAULT_FAQ
+        if (command === 'help_ask') {
+          calls.push(args)
+          return answer('listo', [])
+        }
+        return undefined
+      })
+      render(HelpView)
+
+      await sendQuestion('¿Cómo importo?')
+
+      await waitFor(() => expect(calls).toHaveLength(1))
+      const first = calls[0] as { requestId?: unknown }
+      expect(typeof first.requestId).toBe('string')
+      expect((first.requestId as string).length).toBeGreaterThan(0)
+    })
+
+    it('shows live steps in order under Pensando as they arrive, then the final list', async () => {
+      const askCalls: unknown[] = []
+      const release = deferredBackend(askCalls)
+      render(HelpView)
+
+      await sendQuestion('Creá una colección SIMAPE')
+
+      expect(await screen.findByText('Buscando en el manual…')).toBeInTheDocument()
+      const requestId = (askCalls[0] as { requestId: string }).requestId
+      expect(requestId).toBeTruthy()
+
+      await fireStep({ requestId, tool: 'collections_list', args: '{}', status: 'ok' })
+      await fireStep({
+        requestId,
+        tool: 'collections_create',
+        args: '{"name":"SIMAPE"}',
+        status: 'ok',
+      })
+
+      expect(await screen.findByText('Listó colecciones')).toBeInTheDocument()
+      expect(screen.getByText('Creó la colección «SIMAPE»')).toBeInTheDocument()
+
+      // Steps from another run never leak into this question.
+      await fireStep({ requestId: 'other-run', tool: 'items_list', args: '{}', status: 'ok' })
+      expect(screen.queryByText('Listó documentos')).not.toBeInTheDocument()
+
+      release({
+        answer: 'Listo',
+        sources: [],
+        local: false,
+        documents: [],
+        steps: [
+          { tool: 'collections_list', args: '{}', status: 'ok' },
+          { tool: 'collections_create', args: '{"name":"SIMAPE"}', status: 'ok' },
+        ],
+        roundLimitReached: false,
+        toolsUnavailable: false,
+      })
+
+      expect(await screen.findByText('Listo')).toBeInTheDocument()
+      // The final list stays under the answer; the live list is gone, so no
+      // label shows twice.
+      expect(screen.queryByText('Buscando en el manual…')).not.toBeInTheDocument()
+      expect(document.querySelectorAll('.help-view__live-steps li')).toHaveLength(0)
+      expect(
+        screen.getByText('Usó: Listó colecciones, Creó la colección «SIMAPE»')
+      ).toBeInTheDocument()
+    })
+
+    it('marks a denied live step', async () => {
+      const askCalls: unknown[] = []
+      const release = deferredBackend(askCalls)
+      render(HelpView)
+
+      await sendQuestion('Creá una colección SIMAPE')
+      await screen.findByText('Buscando en el manual…')
+      const requestId = (askCalls[0] as { requestId: string }).requestId
+
+      await fireStep({
+        requestId,
+        tool: 'collections_create',
+        args: '{"name":"SIMAPE"}',
+        status: 'denied',
+      })
+
+      expect(await screen.findByText('Creó la colección «SIMAPE» (denegado)')).toBeInTheDocument()
+      release({
+        answer: 'No puedo sin tu aprobación.',
+        sources: [],
+        local: false,
+        documents: [],
+        steps: [{ tool: 'collections_create', args: '{"name":"SIMAPE"}', status: 'denied' }],
+        roundLimitReached: false,
+        toolsUnavailable: false,
+      })
+      expect(await screen.findByText('No puedo sin tu aprobación.')).toBeInTheDocument()
+    })
+
+    it('Detener swaps the send button and invokes help_stop with the run id', async () => {
+      const askCalls: unknown[] = []
+      const release = deferredBackend(askCalls)
+      render(HelpView)
+
+      await sendQuestion('Hacé muchas cosas')
+
+      const stop = await screen.findByRole('button', { name: 'Detener' })
+      expect(screen.queryByRole('button', { name: 'Enviar' })).not.toBeInTheDocument()
+      const requestId = (askCalls[0] as { requestId: string }).requestId
+
+      await fireEvent.click(stop)
+
+      await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith('help_stop', { requestId }))
+      release({
+        answer: 'Detenido.',
+        sources: [],
+        local: false,
+        documents: [],
+        steps: [{ tool: 'collections_list', args: '{}', status: 'ok' }],
+        roundLimitReached: false,
+        toolsUnavailable: false,
+      })
+      expect(await screen.findByText('Detenido.')).toBeInTheDocument()
+      // The send button is back once the run settles.
+      expect(await screen.findByRole('button', { name: 'Enviar' })).toBeInTheDocument()
     })
   })
 })

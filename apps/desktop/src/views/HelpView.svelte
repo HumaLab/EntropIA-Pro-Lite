@@ -5,13 +5,17 @@
   import { renderMarkdown } from '$lib/markdown'
   import {
     HELP_HISTORY_MAX_TURNS,
+    describeHelpStep,
     helpApprovalAnswer,
     helpAsk,
     helpDiagnosticsPreview,
     helpFaqList,
     helpStatus,
+    helpStop,
     isNoKeyError,
     listenHelpApproval,
+    listenHelpSteps,
+    newHelpRequestId,
     openHelpManual,
     type HelpApprovalRequest,
     type HelpDocument,
@@ -56,6 +60,12 @@
   let messages = $state<HelpMessage[]>([])
   let draft = $state('')
   let sending = $state(false)
+  // The run in flight (T24): its frontend-generated id keys the live
+  // `help://step` events and `helpStop`. Steps accumulate here as they
+  // arrive and are replaced by the answer's final list at the end.
+  let liveSteps = $state<HelpStep[]>([])
+  let currentRequestId = $state<string | null>(null)
+  let stopping = $state(false)
   let error = $state<string | null>(null)
   // Opt-in per question, off by default (S5, D3).
   let includeDiagnostics = $state(false)
@@ -101,11 +111,22 @@
 
   onMount(() => {
     let unlisten: (() => void) | null = null
+    let unlistenSteps: (() => void) | null = null
     void listenHelpApproval((request) => {
       pendingApproval = { ...request, answered: false }
     }).then((stop) => {
       if (destroyed) stop()
       else unlisten = stop
+    })
+    // Live agent steps (T24): only the run in flight renders them; a late
+    // step from a settled run is ignored.
+    void listenHelpSteps((step) => {
+      if (currentRequestId && step.requestId === currentRequestId) {
+        liveSteps = [...liveSteps, { tool: step.tool, args: step.args, status: step.status }]
+      }
+    }).then((stopSteps) => {
+      if (destroyed) stopSteps()
+      else unlistenSteps = stopSteps
     })
     void helpStatus().then(
       (result) => {
@@ -134,6 +155,7 @@
     return () => {
       destroyed = true
       unlisten?.()
+      unlistenSteps?.()
     }
   })
 
@@ -144,6 +166,11 @@
     if (!question || sending || status === 'loading') return
     sending = true
     error = null
+    // One id per question (T24): the live steps and `helpStop` belong to it.
+    const requestId = newHelpRequestId()
+    currentRequestId = requestId
+    liveSteps = []
+    stopping = false
     let diagnostics: string | null = null
     if (includeDiagnostics) {
       // Read once, then back off: every send starts unsubscribed again (S5).
@@ -169,12 +196,10 @@
     const withDocuments = includeDocuments
     includeDocuments = false
     try {
-      const answer = await helpAsk(
-        question,
-        history,
-        diagnostics,
-        withDocuments ? { documents: true } : undefined
-      )
+      const answer = await helpAsk(question, history, diagnostics, {
+        ...(withDocuments ? { documents: true as const } : {}),
+        requestId,
+      })
       messages = [
         ...messages,
         {
@@ -200,6 +225,24 @@
       draft = question
     } finally {
       sending = false
+      stopping = false
+      // The answer's final steps replace the live list (same content).
+      currentRequestId = null
+      liveSteps = []
+    }
+  }
+
+  /** «Detener» (T24): ends the run in flight; its answer keeps the steps
+   * done so far. The button stays put until the run settles. */
+  async function stop(): Promise<void> {
+    const requestId = currentRequestId
+    if (!requestId || !sending || stopping) return
+    stopping = true
+    try {
+      await helpStop(requestId)
+    } catch {
+      stopping = false
+      error = t('help.sendError')
     }
   }
 
@@ -313,7 +356,7 @@
             {#if message.steps && message.steps.length > 0}
               <p class="help-view__steps">
                 {$currentLocale && t('help.stepsUsed')}: {message.steps
-                  .map((step) => step.tool)
+                  .map((step) => describeHelpStep(step, $currentLocale))
                   .join(', ')}
               </p>
             {/if}
@@ -360,6 +403,13 @@
 
       {#if sending}
         <p class="help-view__state" role="status">{$currentLocale && t('help.thinking')}</p>
+        {#if liveSteps.length > 0}
+          <ul class="help-view__live-steps" aria-label={$currentLocale && t('help.stepsUsed')}>
+            {#each liveSteps as liveStep, index (index)}
+              <li>{describeHelpStep(liveStep, $currentLocale)}</li>
+            {/each}
+          </ul>
+        {/if}
       {/if}
 
       {#if previewOpen}
@@ -420,16 +470,29 @@
           aria-label={$currentLocale && t('help.placeholder')}
           onkeydown={handleComposerKeydown}
           disabled={sending}></textarea>
-        <Button
-          variant="primary"
-          iconOnly
-          type="submit"
-          aria-label={$currentLocale && t('help.send')}
-          title={$currentLocale && t('help.send')}
-          disabled={!canSend}
-        >
-          <ActionIcon name="send" size={20} />
-        </Button>
+        {#if sending}
+          <Button
+            variant="primary"
+            type="button"
+            aria-label={$currentLocale && t('help.stop')}
+            title={$currentLocale && t('help.stop')}
+            disabled={stopping}
+            onclick={() => void stop()}
+          >
+            {$currentLocale && t('help.stop')}
+          </Button>
+        {:else}
+          <Button
+            variant="primary"
+            iconOnly
+            type="submit"
+            aria-label={$currentLocale && t('help.send')}
+            title={$currentLocale && t('help.send')}
+            disabled={!canSend}
+          >
+            <ActionIcon name="send" size={20} />
+          </Button>
+        {/if}
       </div>
     </form>
   {/if}
@@ -619,6 +682,17 @@
     margin: var(--space-2) 0 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
+  }
+
+  .help-view__live-steps {
+    margin: 0;
+    padding-left: var(--space-4);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+  }
+
+  .help-view__live-steps li {
+    margin-block: var(--space-1);
   }
 
   .help-view__note {

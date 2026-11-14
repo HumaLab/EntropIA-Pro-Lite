@@ -227,6 +227,7 @@ export const SETTINGS_KEYS = {
   HELP_MAX_TOKENS: 'help_max_tokens',
   HELP_TEMPERATURE: 'help_temperature',
   HELP_HISTORY_TURNS: 'help_history_turns',
+  HELP_MAX_ROUNDS: 'help_max_rounds',
   /** `help_local_answers`: 'false' apaga las respuestas locales (S10). */
   HELP_LOCAL_ANSWERS: 'help_local_answers',
 } as const
@@ -374,4 +375,7 @@ export const DEFAULT_HELP_CONTEXT_CHARS = '24000'
 export const DEFAULT_HELP_MAX_TOKENS = '1500'
 export const DEFAULT_HELP_TEMPERATURE = '0.2'
 export const DEFAULT_HELP_HISTORY_TURNS = '6'
+/** Agent tool rounds per question (S15, D13, T24): each round is a paid
+ * OpenRouter call; mirrors `HELP_MAX_ROUNDS_DEFAULT` in Rust. */
+export const DEFAULT_HELP_MAX_ROUNDS = '8'
 export const DEFAULT_HELP_LOCAL_ANSWERS = true

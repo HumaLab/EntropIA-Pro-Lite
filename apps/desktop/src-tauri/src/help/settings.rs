@@ -25,6 +25,11 @@ pub(crate) const HELP_TEMPERATURE_MAX: f32 = 1.0;
 /// History turns sent to the model (D10).
 pub(crate) const HELP_HISTORY_TURNS_DEFAULT: usize = 6;
 pub(crate) const HELP_HISTORY_TURNS_MAX: usize = 12;
+/// Agent tool rounds per question (S15, D13, T24): each round is a paid
+/// OpenRouter call, so the owner caps them in Configuración → Ayuda.
+pub(crate) const HELP_MAX_ROUNDS_DEFAULT: usize = 8;
+pub(crate) const HELP_MAX_ROUNDS_MIN: usize = 1;
+pub(crate) const HELP_MAX_ROUNDS_MAX: usize = 20;
 
 /// The resolved help settings `help_ask` runs with.
 pub(crate) struct HelpSettings {
@@ -33,6 +38,7 @@ pub(crate) struct HelpSettings {
     pub max_tokens: i32,
     pub temperature: f32,
     pub history_turns: usize,
+    pub max_rounds: usize,
     pub local_answers: bool,
 }
 
@@ -69,6 +75,12 @@ pub(crate) fn resolve_help_settings(lookup: &dyn Fn(&str) -> Option<String>) -> 
             0,
             HELP_HISTORY_TURNS_MAX as i64,
             HELP_HISTORY_TURNS_DEFAULT as i64,
+        ) as usize,
+        max_rounds: parse_clamped(
+            raw("help_max_rounds"),
+            HELP_MAX_ROUNDS_MIN as i64,
+            HELP_MAX_ROUNDS_MAX as i64,
+            HELP_MAX_ROUNDS_DEFAULT as i64,
         ) as usize,
         local_answers: parse_enabled(raw("help_local_answers")),
     }
@@ -214,6 +226,31 @@ mod tests {
         assert_eq!(help.max_tokens, HELP_MAX_TOKENS_DEFAULT);
         assert_eq!(help.temperature, HELP_TEMPERATURE_DEFAULT);
         assert_eq!(help.history_turns, 0);
+    }
+
+    #[test]
+    fn max_rounds_defaults_to_eight_and_clamps_one_to_twenty() {
+        // S15/D13 (T24): at most 8 tool rounds per question, configurable
+        // in Configuración → Ayuda between 1 and 20.
+        assert_eq!(HELP_MAX_ROUNDS_DEFAULT, 8);
+        assert_eq!(HELP_MAX_ROUNDS_MIN, 1);
+        assert_eq!(HELP_MAX_ROUNDS_MAX, 20);
+
+        let stored = lookup(&[]);
+        let help = resolve_help_settings(&|key| stored.get(key).cloned());
+        assert_eq!(help.max_rounds, HELP_MAX_ROUNDS_DEFAULT);
+
+        let stored = lookup(&[("help_max_rounds", "999")]);
+        let help = resolve_help_settings(&|key| stored.get(key).cloned());
+        assert_eq!(help.max_rounds, HELP_MAX_ROUNDS_MAX);
+
+        let stored = lookup(&[("help_max_rounds", "0")]);
+        let help = resolve_help_settings(&|key| stored.get(key).cloned());
+        assert_eq!(help.max_rounds, HELP_MAX_ROUNDS_MIN);
+
+        let stored = lookup(&[("help_max_rounds", "tres")]);
+        let help = resolve_help_settings(&|key| stored.get(key).cloned());
+        assert_eq!(help.max_rounds, HELP_MAX_ROUNDS_DEFAULT);
     }
 
     #[test]

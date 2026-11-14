@@ -74,6 +74,7 @@
     DEFAULT_MODEL_PARAMS_BY_FLOW,
     DEFAULT_HELP_CONTEXT_CHARS,
     DEFAULT_HELP_HISTORY_TURNS,
+    DEFAULT_HELP_MAX_ROUNDS,
     DEFAULT_HELP_MAX_TOKENS,
     DEFAULT_HELP_TEMPERATURE,
     DEFAULT_RAG_PARAMS,
@@ -1025,6 +1026,9 @@
       historyTurns:
         validIntegerText(settingsMap.get(SETTINGS_KEYS.HELP_HISTORY_TURNS) ?? null, 0, 12) ??
         DEFAULT_HELP_HISTORY_TURNS,
+      maxRounds:
+        validIntegerText(settingsMap.get(SETTINGS_KEYS.HELP_MAX_ROUNDS) ?? null, 1, 20) ??
+        DEFAULT_HELP_MAX_ROUNDS,
       localAnswers: parseEnabledByDefault(
         settingsMap.get(SETTINGS_KEYS.HELP_LOCAL_ANSWERS) ?? null
       ),
@@ -1083,6 +1087,7 @@
         'historyTurns',
         clampedHelpInteger(helpParams.historyTurns, 0, 12, DEFAULT_HELP_HISTORY_TURNS),
       ],
+      ['maxRounds', clampedHelpInteger(helpParams.maxRounds, 1, 20, DEFAULT_HELP_MAX_ROUNDS)],
     ]
     const invalid = checks.find(([, value]) => value === null)
     if (invalid) return t('settings.help.invalidParam', { param: invalid[0] })
@@ -1570,6 +1575,11 @@
           SETTINGS_KEYS.HELP_HISTORY_TURNS,
           clampedHelpInteger(helpParams.historyTurns, 0, 12, DEFAULT_HELP_HISTORY_TURNS) ??
             DEFAULT_HELP_HISTORY_TURNS
+        ),
+        settingsSet(
+          SETTINGS_KEYS.HELP_MAX_ROUNDS,
+          clampedHelpInteger(helpParams.maxRounds, 1, 20, DEFAULT_HELP_MAX_ROUNDS) ??
+            DEFAULT_HELP_MAX_ROUNDS
         ),
         settingsSet(SETTINGS_KEYS.HELP_LOCAL_ANSWERS, helpParams.localAnswers ? 'true' : 'false')
       )

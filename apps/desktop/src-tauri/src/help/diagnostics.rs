@@ -19,6 +19,7 @@ pub(crate) const SETTINGS_ALLOWLIST: &[&str] = &[
     "help_context_chars",
     "help_history_turns",
     "help_local_answers",
+    "help_max_rounds",
     "help_max_tokens",
     "help_model",
     "help_temperature",
@@ -424,9 +425,11 @@ mod tests {
         styled
             .settings
             .push(("help_context_chars".into(), "12000".into()));
+        styled.settings.push(("help_max_rounds".into(), "8".into()));
         let report = build_report(&styled);
         assert!(report.contains("help_model: vendor/help-model"), "{report}");
         assert!(report.contains("help_context_chars: 12000"), "{report}");
+        assert!(report.contains("help_max_rounds: 8"), "{report}");
     }
 
     #[test]

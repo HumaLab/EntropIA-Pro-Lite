@@ -1033,6 +1033,7 @@
 - «De tus documentos» `help.documentsLabel`
 - «Del manual» `help.sourceManual, help.sourcesLabel`
 - «Del mapa de pantallas» `help.sourceScreenMap`
+- «Detener» `help.stop`
 - «El modelo no pudo usar herramientas en este turno; respondió sin usar herramientas.» `help.toolsUnavailable`
 - «Enviar» `help.send`
 - «Escribí tu pregunta…» `help.placeholder`
@@ -2392,6 +2393,7 @@
 ### Ayuda
 
 - «Ayuda»
+- «Cada vuelta es una consulta paga a OpenRouter (1-20)»
 - «Contexto del manual (caracteres)»
 - «Contexto: caracteres del manual y del mapa de pantallas enviados al modelo (4000-60000)»
 - «Historial: cantidad de turnos previos incluidos (0-12)»
@@ -2408,6 +2410,7 @@
 - «Temperatura»
 - «Temperatura: gradúa la creatividad de la respuesta (0-1)»
 - «Turnos de historial»
+- «Vueltas máximas del agente»
 
 ### llmMode
 

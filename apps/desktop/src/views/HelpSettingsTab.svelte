@@ -3,6 +3,7 @@
     DEFAULT_HELP_CONTEXT_CHARS,
     DEFAULT_HELP_HISTORY_TURNS,
     DEFAULT_HELP_LOCAL_ANSWERS,
+    DEFAULT_HELP_MAX_ROUNDS,
     DEFAULT_HELP_MAX_TOKENS,
     DEFAULT_HELP_MODEL,
     DEFAULT_HELP_TEMPERATURE,
@@ -19,6 +20,7 @@
     maxTokens: string
     temperature: string
     historyTurns: string
+    maxRounds: string
     localAnswers: boolean
   }
 
@@ -30,6 +32,7 @@
       maxTokens: DEFAULT_HELP_MAX_TOKENS,
       temperature: DEFAULT_HELP_TEMPERATURE,
       historyTurns: DEFAULT_HELP_HISTORY_TURNS,
+      maxRounds: DEFAULT_HELP_MAX_ROUNDS,
       localAnswers: DEFAULT_HELP_LOCAL_ANSWERS,
     }
   }
@@ -134,6 +137,21 @@
               incrementLabel={t('numberField.increase')}
             />
             <span class="help-settings-tab__hint">{t('settings.help.hint.historyTurns')}</span>
+          </label>
+          <label class="help-settings-tab__field">
+            <span class="help-settings-tab__label number-field-label"
+              >{t('settings.help.label.maxRounds')}</span
+            >
+            <NumberField
+              bind:value={form.maxRounds}
+              min="1"
+              max="20"
+              step="1"
+              label={t('settings.help.label.maxRounds')}
+              decrementLabel={t('numberField.decrease')}
+              incrementLabel={t('numberField.increase')}
+            />
+            <span class="help-settings-tab__hint">{t('settings.help.hint.maxRounds')}</span>
           </label>
         </div>
         <div class="help-settings-tab__switch">

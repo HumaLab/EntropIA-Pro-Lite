@@ -1075,6 +1075,10 @@ pub fn run() {
             // Pending inline help approvals (T22, D12): `help_ask` fills the
             // cards, `help_approval_answer` takes the owner's answer.
             app.manage(help::commands::HelpApprovalPending::default());
+            // One stop flag per running help agent turn (T24 «Detener»):
+            // `help_ask` registers the frontend's `requestId`, `help_stop`
+            // flips it.
+            app.manage(help::commands::HelpAgentRuns::default());
 
             // Asset integrity scan: reconciles `assets` rows against files on
             // disk. Off the critical path on purpose — a missing file is
@@ -1692,6 +1696,7 @@ pub fn run() {
             help::commands::help_ask,
             help::commands::help_faq_list,
             help::commands::help_approval_answer,
+            help::commands::help_stop,
             rag::commands::rag_chunk_coverage,
             rag::commands::rag_list_conversations,
             rag::commands::rag_search_conversations,
