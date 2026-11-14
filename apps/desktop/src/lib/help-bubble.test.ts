@@ -4,7 +4,12 @@ import {
   clampBubblePosition,
   clearStoredBubblePosition,
   defaultBubbleOffsets,
+  defaultBubbleOffsetsFromAnchor,
+  defaultBubblePositionFromAnchor,
   exceedsDragThreshold,
+  fallbackBubblePosition,
+  HELP_BUBBLE_ANCHOR_GAP_PX,
+  HELP_BUBBLE_ANCHOR_SELECTOR,
   HELP_BUBBLE_DRAG_THRESHOLD_PX,
   HELP_BUBBLE_MAXIMIZED_KEY,
   HELP_BUBBLE_STORAGE_KEY,
@@ -129,6 +134,43 @@ describe('help-bubble position helpers (S13, T16)', () => {
     it('is a fixed point: clamping twice changes nothing', () => {
       const once = clampBubbleOffsets({ right: 24, bottom: 46 }, { width: 100, height: 100 })
       expect(clampBubbleOffsets(once, { width: 100, height: 100 })).toEqual(once)
+    })
+  })
+
+  describe('anchor default (S13, T17)', () => {
+    it('exposes the status-bar anchor selector and a small gap above the bar', () => {
+      expect(HELP_BUBBLE_ANCHOR_SELECTOR).toBe('[data-help-bubble-anchor]')
+      expect(HELP_BUBBLE_ANCHOR_GAP_PX).toBe(8)
+    })
+
+    it('centres the bubble on the anchor, just above the status bar', () => {
+      // Task case: anchor centre x = 512 in a 1024x700 window, bar top 676.
+      expect(
+        defaultBubblePositionFromAnchor({ centerX: 512, barTop: 676 }, { width: 1024, height: 700 })
+      ).toEqual({ x: 512 - 28, y: 676 - HELP_BUBBLE_ANCHOR_GAP_PX - 56 })
+    })
+
+    it('offsets round-trip the anchor default and follow a moved anchor after a resize', () => {
+      const before = defaultBubbleOffsetsFromAnchor({ centerX: 512, barTop: 676 }, SMALL_VIEWPORT)
+      expect(offsetsToPosition(before, SMALL_VIEWPORT)).toEqual({ x: 484, y: 612 })
+
+      // The window is maximized and the anchor moves to the new centre.
+      const after = defaultBubbleOffsetsFromAnchor({ centerX: 960, barTop: 1050 }, LARGE_VIEWPORT)
+      expect(offsetsToPosition(after, LARGE_VIEWPORT)).toEqual({ x: 932, y: 986 })
+    })
+
+    it('clamps an anchor default that would hang off-screen', () => {
+      expect(defaultBubblePositionFromAnchor({ centerX: 4, barTop: 20 }, SMALL_VIEWPORT)).toEqual({
+        x: 8,
+        y: 8,
+      })
+    })
+
+    it('falls back to window-centred, just above the bottom, without an anchor', () => {
+      expect(fallbackBubblePosition({ width: 1024, height: 700 })).toEqual({
+        x: 512 - 28,
+        y: 700 - 56 - HELP_BUBBLE_ANCHOR_GAP_PX,
+      })
     })
   })
 

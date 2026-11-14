@@ -4,7 +4,11 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { invoke } from '@tauri-apps/api/core'
 import { locale } from '$lib/i18n'
-import { HELP_BUBBLE_MAXIMIZED_KEY, HELP_BUBBLE_STORAGE_KEY } from '$lib/help-bubble'
+import {
+  HELP_BUBBLE_ANCHOR_GAP_PX,
+  HELP_BUBBLE_MAXIMIZED_KEY,
+  HELP_BUBBLE_STORAGE_KEY,
+} from '$lib/help-bubble'
 import HelpBubble from './HelpBubble.svelte'
 
 const mockInvoke = vi.mocked(invoke)
@@ -18,11 +22,61 @@ vi.mock('$lib/pane-context', () => ({
   getPaneId: () => 'pane-test',
 }))
 
-/** Bottom-right default for the current viewport (56px bubble, status bar clearance). */
-function defaultPosition(): { x: number; y: number } {
+/**
+ * Status-bar anchor fixture (T17): a footer carrying the
+ * `[data-help-bubble-anchor]` link, with mocked rects because the test DOM
+ * has no layout. The component measures this element (centre x) and the
+ * bar's top to place the bubble's default.
+ */
+function placeAnchor(centerX: number, barTop: number): void {
+  clearAnchor()
+  const footer = document.createElement('footer')
+  footer.className = 'statusbar'
+  footer.setAttribute('data-test-anchor-bar', '')
+  const link = document.createElement('a')
+  link.setAttribute('data-help-bubble-anchor', '')
+  link.setAttribute('aria-label', 'GitHub')
+  footer.appendChild(link)
+  document.body.appendChild(footer)
+  const anchorWidth = 16
+  vi.spyOn(link, 'getBoundingClientRect').mockReturnValue({
+    x: centerX - anchorWidth / 2,
+    y: barTop + 7,
+    width: anchorWidth,
+    height: 16,
+    top: barTop + 7,
+    left: centerX - anchorWidth / 2,
+    bottom: barTop + 23,
+    right: centerX + anchorWidth / 2,
+    toJSON: () => {},
+  } as DOMRect)
+  vi.spyOn(footer, 'getBoundingClientRect').mockReturnValue({
+    x: 0,
+    y: barTop,
+    width: window.innerWidth,
+    height: 30,
+    top: barTop,
+    left: 0,
+    bottom: barTop + 30,
+    right: window.innerWidth,
+    toJSON: () => {},
+  } as DOMRect)
+}
+
+function clearAnchor(): void {
+  document.querySelectorAll('[data-test-anchor-bar]').forEach((el) => el.remove())
+}
+
+/** Where the bubble should sit for the placed anchor (56px bubble, small gap). */
+function anchorPosition(centerX: number, barTop: number): { x: number; y: number } {
+  return { x: centerX - 28, y: barTop - HELP_BUBBLE_ANCHOR_GAP_PX - 56 }
+}
+
+/** Where the bubble sits with no anchor in the DOM: window-centred fallback. */
+function fallbackPosition(): { x: number; y: number } {
   return {
-    x: window.innerWidth - 56 - 24,
-    y: window.innerHeight - 56 - 46,
+    x: window.innerWidth / 2 - 28,
+    y: window.innerHeight - 56 - HELP_BUBBLE_ANCHOR_GAP_PX,
   }
 }
 
@@ -51,28 +105,31 @@ function setWindowSize(width: number, height: number): void {
   Object.defineProperty(window, 'innerHeight', { value: height, configurable: true })
 }
 
-describe('HelpBubble (S13, T16)', () => {
+describe('HelpBubble (S13, T17)', () => {
   const realWidth = window.innerWidth
   const realHeight = window.innerHeight
 
   beforeEach(() => {
     locale.set('es')
     localStorage.clear()
+    vi.restoreAllMocks()
     navigationRef.navigate.mockReset()
     navigationRef.openRootSection.mockReset()
     mockInvoke.mockReset()
     backend()
     setWindowSize(realWidth, realHeight)
+    clearAnchor()
   })
 
-  it('renders one round button at the bottom-right with its accessible name and the logo', () => {
+  it('renders one round button at its default with its accessible name and the logo', () => {
     // The bubble is portalled to the overlay root (fixed-overlays guard),
-    // so it lives in the document, not in the render container.
+    // so it lives in the document, not in the render container. With no
+    // anchor in this bare render it waits at the window-centred fallback.
     render(HelpBubble)
 
     const button = bubbleButton()
     expect(button.tagName).toBe('BUTTON')
-    const expected = defaultPosition()
+    const expected = fallbackPosition()
     expect(button.style.left).toBe(`${expected.x}px`)
     expect(button.style.top).toBe(`${expected.y}px`)
 
@@ -147,7 +204,7 @@ describe('HelpBubble (S13, T16)', () => {
     render(HelpBubble)
 
     const button = bubbleButton()
-    const from = defaultPosition()
+    const from = fallbackPosition()
     const startX = from.x + 28
     const startY = from.y + 28
 
@@ -173,7 +230,7 @@ describe('HelpBubble (S13, T16)', () => {
     render(HelpBubble)
 
     const button = bubbleButton()
-    const from = defaultPosition()
+    const from = fallbackPosition()
     const startX = from.x + 28
     const startY = from.y + 28
 
@@ -191,7 +248,7 @@ describe('HelpBubble (S13, T16)', () => {
     render(HelpBubble)
 
     const button = bubbleButton()
-    const expected = defaultPosition()
+    const expected = fallbackPosition()
     expect(button.style.left).toBe(`${expected.x}px`)
     expect(button.style.top).toBe(`${expected.y}px`)
     // …and the stale value is removed once, so it can never come back.
@@ -202,9 +259,9 @@ describe('HelpBubble (S13, T16)', () => {
     localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"x":120,"y":200}')
     render(HelpBubble)
 
-    // The bubble ignores the stale value and starts at the default corner…
+    // The bubble ignores the stale value and starts at the default…
     const button = bubbleButton()
-    const expected = defaultPosition()
+    const expected = fallbackPosition()
     expect(button.style.left).toBe(`${expected.x}px`)
     expect(button.style.top).toBe(`${expected.y}px`)
     // …and the legacy shape is removed once, so it can never come back.
@@ -216,7 +273,7 @@ describe('HelpBubble (S13, T16)', () => {
     render(HelpBubble)
 
     const button = bubbleButton()
-    const expected = defaultPosition()
+    const expected = fallbackPosition()
     expect(button.style.left).toBe(`${expected.x}px`)
     expect(button.style.top).toBe(`${expected.y}px`)
     expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
@@ -226,7 +283,7 @@ describe('HelpBubble (S13, T16)', () => {
     localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, 'not json at all')
     render(HelpBubble)
 
-    const expected = defaultPosition()
+    const expected = fallbackPosition()
     const button = bubbleButton()
     expect(button.style.left).toBe(`${expected.x}px`)
     expect(button.style.top).toBe(`${expected.y}px`)
@@ -237,7 +294,7 @@ describe('HelpBubble (S13, T16)', () => {
     const { unmount } = render(HelpBubble)
 
     const button = bubbleButton()
-    const from = defaultPosition()
+    const from = fallbackPosition()
     await fireEvent.pointerDown(button, {
       clientX: from.x + 28,
       clientY: from.y + 28,
@@ -253,48 +310,11 @@ describe('HelpBubble (S13, T16)', () => {
     unmount()
 
     render(HelpBubble)
-    const expected = defaultPosition()
+    const expected = fallbackPosition()
     const again = bubbleButton()
     expect(again.style.left).toBe(`${expected.x}px`)
     expect(again.style.top).toBe(`${expected.y}px`)
     expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
-  })
-
-  it('mounting at 1024x700 or at 1920x1080 starts at the same corner offset', () => {
-    for (const [width, height] of [
-      [1024, 700],
-      [1920, 1080],
-    ] as const) {
-      setWindowSize(width, height)
-      const { unmount } = render(HelpBubble)
-      try {
-        const button = bubbleButton()
-        expect(button.style.left).toBe(`${width - 56 - 24}px`)
-        expect(button.style.top).toBe(`${height - 56 - 46}px`)
-      } finally {
-        unmount()
-      }
-    }
-  })
-
-  it('the default stays in the bottom-right corner after a resize (1024x700 -> 1920x1080)', async () => {
-    setWindowSize(1024, 700)
-    try {
-      render(HelpBubble)
-      const button = bubbleButton()
-      expect(button.style.left).toBe(`${1024 - 56 - 24}px`)
-      expect(button.style.top).toBe(`${700 - 56 - 46}px`)
-
-      // Maximizing the window moves the corner: the bubble follows it.
-      setWindowSize(1920, 1080)
-      window.dispatchEvent(new Event('resize'))
-      await waitFor(() => {
-        expect(button.style.left).toBe(`${1920 - 56 - 24}px`)
-        expect(button.style.top).toBe(`${1080 - 56 - 46}px`)
-      })
-    } finally {
-      setWindowSize(realWidth, realHeight)
-    }
   })
 
   it('a dragged bubble keeps its distance to the corner after a resize', async () => {
@@ -302,7 +322,7 @@ describe('HelpBubble (S13, T16)', () => {
     try {
       render(HelpBubble)
       const button = bubbleButton()
-      const from = { x: 1024 - 56 - 24, y: 768 - 56 - 46 }
+      const from = fallbackPosition()
 
       await fireEvent.pointerDown(button, {
         clientX: from.x + 28,
@@ -325,9 +345,10 @@ describe('HelpBubble (S13, T16)', () => {
       setWindowSize(1920, 1080)
       window.dispatchEvent(new Event('resize'))
       await waitFor(() => {
-        // Same offsets from the new corner.
-        expect(button.style.left).toBe(`${1920 - 56 - 124}px`)
-        expect(button.style.top).toBe(`${1080 - 56 - 96}px`)
+        // Same offsets from the new corner (T14 math: the drag wins over
+        // the anchor after the user moves the bubble).
+        expect(button.style.left).toBe(`${1920 - 56 - (1024 - 56 - (from.x - 100))}px`)
+        expect(button.style.top).toBe(`${1080 - 56 - (768 - 56 - (from.y - 50))}px`)
       })
     } finally {
       setWindowSize(realWidth, realHeight)
@@ -335,19 +356,25 @@ describe('HelpBubble (S13, T16)', () => {
   })
 
   it('the panel opens toward the inside of the window, never off-screen', async () => {
-    render(HelpBubble)
-    await openPanel()
+    setWindowSize(1024, 700)
+    placeAnchor(512, 676)
+    try {
+      render(HelpBubble)
+      await openPanel()
 
-    // Default bottom-right: the panel grows leftwards and upwards.
-    const panel = screen.getByRole('dialog', { name: 'Ayuda' })
-    expect(panel).toHaveAttribute('data-side', 'left')
-    expect(panel).toHaveAttribute('data-vertical', 'above')
+      // Centred default near the bottom: the panel grows leftwards or
+      // rightwards but always upwards.
+      const panel = screen.getByRole('dialog', { name: 'Ayuda' })
+      expect(panel).toHaveAttribute('data-vertical', 'above')
+    } finally {
+      setWindowSize(realWidth, realHeight)
+    }
   })
 
   it('the panel flips sides when the bubble is dragged to the top-left', async () => {
     render(HelpBubble)
     const button = bubbleButton()
-    const from = defaultPosition()
+    const from = fallbackPosition()
 
     await fireEvent.pointerDown(button, {
       clientX: from.x + 28,
@@ -370,7 +397,7 @@ describe('HelpBubble (S13, T16)', () => {
   it('re-clamps the bubble when the window shrinks', async () => {
     render(HelpBubble)
     const button = bubbleButton()
-    const from = defaultPosition()
+    const from = fallbackPosition()
 
     // Drag to the top-left corner: the offsets grow to the far edges.
     await fireEvent.pointerDown(button, {
@@ -488,6 +515,152 @@ describe('HelpBubble (S13, T16)', () => {
     // Reopening keeps the last maximized state.
     await openPanel()
     expect(screen.getByRole('button', { name: 'Restaurar' })).toBeInTheDocument()
+  })
+
+  describe('anchor default (T17)', () => {
+    it('centres the bubble on the GitHub anchor, just above the status bar', () => {
+      setWindowSize(1024, 700)
+      // Task case: anchor centre x = 512, status bar top 676.
+      placeAnchor(512, 676)
+      try {
+        render(HelpBubble)
+
+        const button = bubbleButton()
+        const expected = anchorPosition(512, 676)
+        expect(button.style.left).toBe(`${expected.x}px`)
+        expect(button.style.top).toBe(`${expected.y}px`)
+      } finally {
+        setWindowSize(realWidth, realHeight)
+      }
+    })
+
+    it('mounting at 1024x700 or at 1920x1080 centres on the anchor in both states', () => {
+      for (const [width, height, centerX, barTop] of [
+        [1024, 700, 512, 676],
+        [1920, 1080, 960, 1050],
+      ] as const) {
+        setWindowSize(width, height)
+        placeAnchor(centerX, barTop)
+        const { unmount } = render(HelpBubble)
+        try {
+          const button = bubbleButton()
+          const expected = anchorPosition(centerX, barTop)
+          expect(button.style.left).toBe(`${expected.x}px`)
+          expect(button.style.top).toBe(`${expected.y}px`)
+        } finally {
+          unmount()
+          clearAnchor()
+        }
+      }
+      setWindowSize(realWidth, realHeight)
+    })
+
+    it('the default follows the anchor when the window is resized (1024x700 -> 1920x1080)', async () => {
+      setWindowSize(1024, 700)
+      placeAnchor(512, 676)
+      try {
+        render(HelpBubble)
+        const button = bubbleButton()
+        expect(button.style.left).toBe('484px')
+        expect(button.style.top).toBe('612px')
+
+        // Maximizing the window moves the anchor: the bubble follows it.
+        setWindowSize(1920, 1080)
+        placeAnchor(960, 1050)
+        window.dispatchEvent(new Event('resize'))
+        await waitFor(() => {
+          expect(button.style.left).toBe('932px')
+          expect(button.style.top).toBe('986px')
+        })
+      } finally {
+        setWindowSize(realWidth, realHeight)
+      }
+    })
+
+    it('retries on the next frames when the anchor is not mounted yet, then settles on it', async () => {
+      setWindowSize(1024, 700)
+      try {
+        // The shell mounts the bubble before the status bar, so the first
+        // paint waits at the window-centred fallback…
+        render(HelpBubble)
+        const button = bubbleButton()
+        expect(button.style.left).toBe(`${512 - 28}px`)
+        expect(button.style.top).toBe(`${700 - 56 - HELP_BUBBLE_ANCHOR_GAP_PX}px`)
+
+        // …and once the anchor mounts, a retry frame picks it up.
+        placeAnchor(512, 676)
+        await waitFor(() => {
+          expect(button.style.left).toBe('484px')
+          expect(button.style.top).toBe('612px')
+        })
+      } finally {
+        setWindowSize(realWidth, realHeight)
+      }
+    })
+
+    it('a drag then a resize keeps the dragged offsets even as the anchor moves', async () => {
+      setWindowSize(1024, 700)
+      placeAnchor(512, 676)
+      try {
+        render(HelpBubble)
+        const button = bubbleButton()
+        const from = anchorPosition(512, 676)
+        expect(button.style.left).toBe(`${from.x}px`)
+
+        // Drag 100px left and 50px up from the anchor default.
+        await fireEvent.pointerDown(button, {
+          clientX: from.x + 28,
+          clientY: from.y + 28,
+          pointerId: 1,
+        })
+        await fireEvent.pointerMove(button, {
+          clientX: from.x + 28 - 100,
+          clientY: from.y + 28 - 50,
+          pointerId: 1,
+        })
+        await fireEvent.pointerUp(button, {
+          clientX: from.x + 28 - 100,
+          clientY: from.y + 28 - 50,
+          pointerId: 1,
+        })
+        expect(button.style.left).toBe(`${from.x - 100}px`)
+        expect(button.style.top).toBe(`${from.y - 50}px`)
+
+        // The window moves and the anchor with it, but the drag wins: the
+        // bubble keeps its distance to the corner (T14 math).
+        setWindowSize(1920, 1080)
+        placeAnchor(960, 1050)
+        window.dispatchEvent(new Event('resize'))
+        await waitFor(() => {
+          expect(button.style.left).toBe(`${1920 - 56 - (1024 - 56 - (from.x - 100))}px`)
+          expect(button.style.top).toBe(`${1080 - 56 - (700 - 56 - (from.y - 50))}px`)
+        })
+      } finally {
+        setWindowSize(realWidth, realHeight)
+      }
+    })
+
+    it('the panel opens upward and stays inside the window from the centred default', async () => {
+      setWindowSize(1024, 700)
+      placeAnchor(512, 676)
+      try {
+        render(HelpBubble)
+        await openPanel()
+
+        const panel = screen.getByRole('dialog', { name: 'Ayuda' })
+        expect(panel).toHaveAttribute('data-vertical', 'above')
+        // Horizontally inside: the default opens to the right of the
+        // centred bubble, 400px wide, within the 1024px window…
+        const left = Number.parseFloat(panel.style.left)
+        expect(left).toBe(484 + 56 + 12)
+        expect(left + 400).toBeLessThanOrEqual(1024)
+        // …and vertically inside: 560px tall, above the status bar.
+        const bottom = Number.parseFloat(panel.style.bottom)
+        expect(700 - bottom - 560).toBeGreaterThanOrEqual(0)
+      } finally {
+        setWindowSize(realWidth, realHeight)
+      }
+    })
   })
 
   describe('panel layout (T15)', () => {

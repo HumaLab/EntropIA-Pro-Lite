@@ -1,15 +1,20 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { locale, t } from '$lib/i18n'
   import {
     clampBubbleOffsets,
     clearStoredBubblePosition,
-    defaultBubbleOffsets,
+    defaultBubbleOffsetsFromAnchor,
     exceedsDragThreshold,
+    fallbackBubbleOffsets,
+    HELP_BUBBLE_ANCHOR_RETRIES,
+    HELP_BUBBLE_ANCHOR_SELECTOR,
     HELP_BUBBLE_SIZE_PX,
     loadBubbleMaximized,
     offsetsToPosition,
     positionToOffsets,
     saveBubbleMaximized,
+    type BubbleAnchor,
     type BubbleOffsets,
     type BubbleViewport,
   } from '$lib/help-bubble'
@@ -39,20 +44,50 @@
   }
 
   function initialOffsets(viewport: BubbleViewport): BubbleOffsets {
-    // T16: every launch starts at the default bottom-right corner, whatever
+    // T16: every launch starts at the default, whatever
     // was stored before. Clear the stale position once so old values can
     // never come back; a drag lasts for the session only.
     clearStoredBubblePosition(readStorage())
-    return clampBubbleOffsets(defaultBubbleOffsets(), viewport)
+    return defaultOffsetsFor(viewport)
+  }
+
+  /**
+   * Reads the status-bar anchor (T17): its horizontal centre plus the top
+   * of its bar (the closest footer/.statusbar). Null when the anchor is
+   * not in the DOM yet or has no laid-out box (mount order, hidden shell).
+   */
+  function measureAnchor(): BubbleAnchor | null {
+    if (typeof document === 'undefined') return null
+    const anchor = document.querySelector(HELP_BUBBLE_ANCHOR_SELECTOR)
+    if (!(anchor instanceof Element)) return null
+    const rect = anchor.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return null
+    const bar = anchor.closest('footer, .statusbar')
+    const barTop = bar?.getBoundingClientRect().top ?? rect.top
+    if (!Number.isFinite(barTop)) return null
+    return { centerX: rect.left + rect.width / 2, barTop }
+  }
+
+  function defaultOffsetsFor(viewport: BubbleViewport): BubbleOffsets {
+    // T17: the default is centred on the GitHub anchor, just above the
+    // status bar; without an anchor (or before it mounts) the bubble
+    // waits window-centred, just above the bottom.
+    const anchor = measureAnchor()
+    if (anchor) return defaultBubbleOffsetsFromAnchor(anchor, viewport)
+    return fallbackBubbleOffsets(viewport)
   }
 
   // Snapshot once: the live viewport below re-reads the window on resize,
   // but the initial offsets need the same values the first paint uses.
   const initialViewport = readViewport()
   let viewport = $state<BubbleViewport>(initialViewport)
+  // T17: the anchor owns the default only while the user has not dragged
+  // in this session; after a drag the offsets below are the bubble's
+  // distance to the window's right/bottom edges (T14 math).
+  let userDragged = $state(false)
   // Anchored to the window's right/bottom edges (T14): the derived position
-  // below follows the bottom-right corner across resizes and
-  // maximize/restore, and a drag keeps its distance to that corner.
+  // below follows the corner across resizes and maximize/restore once the
+  // user drags, and the anchor default while they have not (T17).
   let offsets = $state<BubbleOffsets>(initialOffsets(initialViewport))
   let maximized = $state<boolean>(loadBubbleMaximized(readStorage()))
   let open = $state(false)
@@ -130,6 +165,9 @@
       return
     }
     dragging = true
+    // Session-only (T16): from here on the anchor no longer owns the
+    // position; resizes keep this dragged distance to the corner (T14).
+    userDragged = true
     const moved = clampBubbleOffsets(
       positionToOffsets(
         {
@@ -196,12 +234,46 @@
 
   function handleWindowResize(): void {
     viewport = readViewport()
-    // The window moved the corner under the bubble: keep its distance to the
-    // corner, pulling it back inside when the window shrank (T14).
-    const clamped = clampBubbleOffsets(offsets, viewport)
-    offsets.right = clamped.right
-    offsets.bottom = clamped.bottom
+    if (userDragged) {
+      // The window moved the corner under the bubble: keep its distance to the
+      // corner, pulling it back inside when the window shrank (T14).
+      const clamped = clampBubbleOffsets(offsets, viewport)
+      offsets.right = clamped.right
+      offsets.bottom = clamped.bottom
+      return
+    }
+    // Not dragged: the anchor owns the default, so follow it (or the
+    // window-centred fallback) instead of the corner (T17).
+    const next = defaultOffsetsFor(viewport)
+    offsets.right = next.right
+    offsets.bottom = next.bottom
   }
+
+  // The shell mounts the bubble before the status bar, so the anchor is
+  // usually missing on the first paint: retry on the next frames a few
+  // times, then settle on the fallback (a later resize re-measures
+  // anyway). A drag in between wins over every retry.
+  onMount(() => {
+    if (typeof requestAnimationFrame === 'undefined') return
+    if (measureAnchor()) return
+    let attempts = 0
+    let cancelled = false
+    function tick(): void {
+      if (cancelled || userDragged) return
+      if (measureAnchor()) {
+        const next = defaultOffsetsFor(readViewport())
+        offsets.right = next.right
+        offsets.bottom = next.bottom
+        return
+      }
+      attempts += 1
+      if (attempts < HELP_BUBBLE_ANCHOR_RETRIES) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+    return () => {
+      cancelled = true
+    }
+  })
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} onresize={handleWindowResize} />

@@ -943,6 +943,7 @@
           onclick={openGithubRepo}
           aria-label={t('appshell.githubAria')}
           use:tooltip={t('appshell.githubTitle')}
+          data-help-bubble-anchor
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <path

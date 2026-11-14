@@ -294,6 +294,12 @@ describe('AppShell', () => {
     })
   })
 
+  it('marks the GitHub status-bar link as the help-bubble anchor (T17)', () => {
+    render(AppShellHost)
+
+    expect(screen.getByRole('link', { name: 'GitHub' })).toHaveAttribute('data-help-bubble-anchor')
+  })
+
   it('toggles the sidebar with Ctrl+B except when typing in editable targets', async () => {
     render(AppShellHost)
 
