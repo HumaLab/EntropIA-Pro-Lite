@@ -47,6 +47,10 @@ app from the user manual and helps when something fails. Branch
 - **S16 — Questions beyond the manual.** From L33: "debe poder responder preguntas sobre EntropIA que no estén en el manual, tendrái qeu poder revisar el repo y consultar la pagina de entropIA en la página de HLab". Owner decisions (L34): the public GitHub repo, live, through tools ("GitHub en vivo"); the HLab page "https://hlab.com.ar/herramientas/entropia-lite".
 - **S17 — Commands are not FAQ.** From the L33 screenshot: «Creá una nueva colección con el nombre 'SIMAPE'» was answered with the local FAQ steps instead of creating it. A request to do something goes to the agent, never to a local answer.
 
+- **S18 — Starter questions answer directly.** From L46: "que los botones d ela spregintas Probá con: no copien la prengunte en el chat para que el usuario la envie hacioendo clic en el botón de send, si el usuario hace clic an alguans d elas 10 preguntas la respuesta debe ser directa, o sea se debe imrpimir como conversacion en el char pregutna respuesta pero sin pasar por copiar pegar y enviar del usuario".
+- **S19 — Conversation history.** From L46: "estaria bien que haya un historia de conversaciones minimizado pro defecto que pes se peuda consultar y desplegar si el usuarii lo queire". Owner decisions (L47): stored "Por ahora en este equipo pero con posibilidad de mas adentalte aplicar la sincronización"; documents — "Sí, guardar todo (Recomendado)". Supersedes D4.
+- **S20 — Design review.** From L46: "pegale una ultima revisada detallisata al diseño estetica  del chat de ayuda".
+
 Out of scope (L2): the first-run setup assistant ("No, después"); it gets its
 own card later and can reuse this base.
 
@@ -86,6 +90,8 @@ own card later and can reuse this base.
 
 - D16 (S12, S15) With the agent, document text reaches the model only through the CONTENT tools (`documents_get_text`, `search_passages`) and only when «Buscar en mis documentos» is ticked; the T12 fixed fragment injection is removed (`help/documents.rs` deleted). `search_items` returns only id/title/collection/rank, so it is a READ tool.
 
+- D17 (S19, supersedes D4) History lives in its own SQLite file in the app DATA dir (`help-history.sqlite`, profile-aware like the archive, never the cache dir — the OS may clear caches — and never the user's archive: no migration, no sync now). Sync-ready shape: UUID ids, `created_at` / `updated_at` in UTC ms, soft delete `deleted_at`, one row per conversation and one per message (role, text, sources/steps JSON). Full content is stored, including answers built from documents (L47). The list is collapsed by default; a conversation can be reopened and continued; «Nueva conversación» and «Borrar historial» exist.
+
 ## Tasks
 
 | ID | Specs | Route | Status | Commit |
@@ -121,6 +127,9 @@ own card later and can reuse this base.
 | T26 | S15 | TDD — MCP approval outcome: after the owner decides an MCP approval the agent requested, the conversation shows what happened («Se eliminó la colección «SIMAPE»» / «Rechazaste…» / failure); step labels for approval tools say «Pidió borrar…» with names, not UUIDs | done | see git log (feat(help): report MCP approval outcomes …) |
 | T27 | S15 | TDD — inline approvals shown as a dialog like the MCP approval dialog: appears, and disappears once answered (no card left pinned in the panel) | done | see git log (feat(help): ask inline approvals in a dialog …) |
 | T28 | S13 | TDD — opt-in row responsive: maximized → «Incluir diagnóstico» and «Buscar en mis documentos» on one line; each hint moved into a small superscript «i» icon after the label, shown as a tooltip on hover/focus | done | see git log (feat(help): ask inline approvals in a dialog …) |
+| T29 | S18 | TDD — starter buttons send the question directly (question and answer appear in the chat, no copy into the composer) | pending | |
+| T30 | S19 | TDD — history store (`help/history.rs`, D17), commands, collapsed history list, reopen/continue, new conversation, clear | pending | |
+| T31 | S20 | design review of the help panel with the gentle-ui-design criteria; apply the fixes | pending | |
 | T6 | S8 | owner check with the real failures of S8 (needs a real OpenRouter key) | pending | |
 
 ## Log
@@ -181,3 +190,4 @@ own card later and can reuse this base.
 - L44 (2026-11-14, T26, delegated worker): `help/outcome.rs` — pending MCP approvals keep id + target name (from the approval payload, else one cheap bridge read; generic fallback, never a UUID), a bounded 10-minute watcher on the shared approval store emits `help://approval-outcome` (Approved / Rejected / Failed / Expired, Spanish message); `ToolOutcome::Pending`, steps carry `target` / `approvalId`; HelpView appends the outcome notice after the requesting answer and flips the step («Pidió borrar…» -> «Borró…» / «Borrado rechazado»). RED 7 + 4 frontend failing -> GREEN `help::` 160/160, focused 97/97 Pro and Lite, typecheck 0/0, lint, prettier, map --check, clippy, fmt clean; ACL not linkable (dev app running), no command added.
 - L45 (2026-11-14, T27-T28, delegated worker): `HelpApprovalDialog.svelte` (ConfirmDialog like AgentApprovalDialog, portalled, focus on «Rechazar», Escape rejects, closes on answer, dismissed when the run settles) replaces the pinned card; the conversation gets «Aprobaste: …» / «Rechazaste: …»; opt-ins in one row when maximized (`help-view__optins--single`), hints moved into superscript «i» buttons with the app tooltip, aria-label and aria-describedby; new `info` icon. RED (missing module, 3 + 4 failing) -> GREEN dialog 8/8, full desktop Pro 4435 / Lite 4399, ui 963, typecheck 0/0, lint, prettier, map --check clean.
 - L46 (2026-11-14, owner, verbatim): "genial, funciona, ahora te pido dos cosas mas 1) que los botones d ela spregintas Probá con: no copien la prengunte en el chat para que el usuario la envie hacioendo clic en el botón de send, si el usuario hace clic an alguans d elas 10 preguntas la respuesta debe ser directa, o sea se debe imrpimir como conversacion en el char pregutna respuesta pero sin pasar por copiar pegar y enviar del usuario ¿?me explico?, 2) estaria bien que haya un historia de conversaciones minimizado pro defecto que pes se peuda consultar y desplegar si el usuarii lo queire [Image#5]. Finalmente, pegale una ultima revisada detallisata al diseño estetica  del chat de ayuda". T26-T28 confirmed working. Item 2 reopens D4 (nothing stored).
+- L47 (2026-11-14, owner answers): history — "Por ahora en este equipo pero con posibilidad de mas adentalte aplicar la sincronización"; documents in history — "Sí, guardar todo (Recomendado)". S18-S20, D17, T29-T31 added.
