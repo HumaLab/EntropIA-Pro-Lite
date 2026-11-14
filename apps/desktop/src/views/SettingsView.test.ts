@@ -279,6 +279,7 @@ describe('SettingsView', () => {
       expect(screen.getByRole('tab', { name: 'Prompts' })).toBeInTheDocument()
       expect(screen.getByRole('tab', { name: 'Model Params' })).toBeInTheDocument()
       expect(screen.getByRole('tab', { name: 'RAG Params' })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: 'Ayuda' })).toBeInTheDocument()
       expect(screen.getByRole('tab', { name: /Dependencias de IA/ })).toBeInTheDocument()
       expect(screen.getByRole('tab', { name: 'Logs' })).toBeInTheDocument()
     }
@@ -818,6 +819,149 @@ describe('SettingsView', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Restaurar defaults' }))
 
     expect(screen.getByLabelText('model')).toHaveValue('anthropic/claude-3.7-sonnet')
+  })
+
+  it('shows the Ayuda tab with defaults inheriting the general model', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
+
+    expect(screen.getByRole('tab', { name: 'Ayuda' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('heading', { name: 'Ayuda' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Modelo')).toHaveValue('anthropic/claude-3.7-sonnet')
+    expect(screen.getByLabelText('Modelo')).toHaveAttribute(
+      'placeholder',
+      'anthropic/claude-3.7-sonnet'
+    )
+    expect(screen.getByLabelText('Contexto del manual (caracteres)')).toHaveValue(24000)
+    expect(screen.getByLabelText('Largo máximo de la respuesta (tokens)')).toHaveValue(1500)
+    expect(screen.getByLabelText('Temperatura')).toHaveValue(0.2)
+    expect(screen.getByLabelText('Turnos de historial')).toHaveValue(6)
+    expect(screen.getByLabelText('Vueltas máximas del agente')).toHaveValue(8)
+    expect(screen.getByRole('checkbox', { name: 'Respuestas locales' })).toBeChecked()
+    expect(
+      screen.getByText('Modelo de la ayuda: vacío usa el modelo general de Configuración')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Las preguntas que van al modelo se cobran en tu cuenta de OpenRouter. El diagnóstico y tus documentos solo viajan si los activás en cada pregunta.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('loads stored help settings instead of the defaults', async () => {
+    settingsGetAllMock.mockResolvedValue([
+      { key: 'help_model', value: 'vendor/help-model' },
+      { key: 'help_context_chars', value: '12000' },
+      { key: 'help_max_tokens', value: '800' },
+      { key: 'help_temperature', value: '0.7' },
+      { key: 'help_history_turns', value: '2' },
+      { key: 'help_local_answers', value: 'false' },
+    ])
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
+
+    await waitFor(() => expect(screen.getByLabelText('Modelo')).toHaveValue('vendor/help-model'))
+    expect(screen.getByLabelText('Contexto del manual (caracteres)')).toHaveValue(12000)
+    expect(screen.getByLabelText('Largo máximo de la respuesta (tokens)')).toHaveValue(800)
+    expect(screen.getByLabelText('Temperatura')).toHaveValue(0.7)
+    expect(screen.getByLabelText('Turnos de historial')).toHaveValue(2)
+    expect(screen.getByRole('checkbox', { name: 'Respuestas locales' })).not.toBeChecked()
+  })
+
+  it('loads a stored agent rounds value instead of the default', async () => {
+    settingsGetAllMock.mockResolvedValue([{ key: 'help_max_rounds', value: '3' }])
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
+
+    await waitFor(() => expect(screen.getByLabelText('Vueltas máximas del agente')).toHaveValue(3))
+  })
+
+  it('saves help settings clamped to their ranges', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
+
+    await fireEvent.input(screen.getByLabelText('Modelo'), {
+      target: { value: 'vendor/help-model' },
+    })
+    await fireEvent.input(screen.getByLabelText('Contexto del manual (caracteres)'), {
+      target: { value: '999999' },
+    })
+    await fireEvent.input(screen.getByLabelText('Largo máximo de la respuesta (tokens)'), {
+      target: { value: '1' },
+    })
+    await fireEvent.input(screen.getByLabelText('Temperatura'), {
+      target: { value: '5' },
+    })
+    await fireEvent.input(screen.getByLabelText('Turnos de historial'), {
+      target: { value: '99' },
+    })
+    await fireEvent.input(screen.getByLabelText('Vueltas máximas del agente'), {
+      target: { value: '999' },
+    })
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Respuestas locales' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+    await waitFor(() =>
+      expect(settingsSetMock).toHaveBeenCalledWith('help_model', 'vendor/help-model')
+    )
+    expect(settingsSetMock).toHaveBeenCalledWith('help_context_chars', '60000')
+    expect(settingsSetMock).toHaveBeenCalledWith('help_max_tokens', '200')
+    expect(settingsSetMock).toHaveBeenCalledWith('help_temperature', '1')
+    expect(settingsSetMock).toHaveBeenCalledWith('help_history_turns', '12')
+    expect(settingsSetMock).toHaveBeenCalledWith('help_max_rounds', '20')
+    expect(settingsSetMock).toHaveBeenCalledWith('help_local_answers', 'false')
+  })
+
+  it('keeps help model inheritance alive when it matches the general model', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+    await waitFor(() => expect(settingsSetMock).toHaveBeenCalledWith('help_model', ''))
+    expect(settingsSetMock).toHaveBeenCalledWith('help_local_answers', 'true')
+  })
+
+  it('saves the default when a numeric field is emptied', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
+
+    // Un número no puede guardar basura: el navegador la sanea a vacío, y
+    // el vacío vuelve al default.
+    await fireEvent.input(screen.getByLabelText('Contexto del manual (caracteres)'), {
+      target: { value: '' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+    await waitFor(() => expect(settingsSetMock).toHaveBeenCalledWith('help_context_chars', '24000'))
+  })
+
+  it('restores help defaults back to the inherited general model', async () => {
+    render(SettingsView)
+
+    await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await fireEvent.click(screen.getByRole('tab', { name: 'Ayuda' }))
+
+    await fireEvent.input(screen.getByLabelText('Modelo'), { target: { value: 'vendor/other' } })
+    expect(screen.getByLabelText('Modelo')).toHaveValue('vendor/other')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Restaurar defaults' }))
+
+    expect(screen.getByLabelText('Modelo')).toHaveValue('anthropic/claude-3.7-sonnet')
+    expect(screen.getByLabelText('Contexto del manual (caracteres)')).toHaveValue(24000)
+    expect(screen.getByLabelText('Vueltas máximas del agente')).toHaveValue(8)
+    expect(screen.getByRole('checkbox', { name: 'Respuestas locales' })).toBeChecked()
   })
 
   it.runIf(LOCAL_ML)(
@@ -1798,6 +1942,15 @@ describe('settings dirty detection helpers', () => {
     ragRerankerModel: 'cohere/rerank-4-fast',
     ragParams: { topK: '6', temperature: '0.2' },
     agentParams: { values: { max_tokens_salida: '16384' }, maxConsultas: { general: '20' } },
+    helpParams: {
+      model: 'anthropic/claude-3.7-sonnet',
+      contextChars: '24000',
+      maxTokens: '1500',
+      temperature: '0.2',
+      historyTurns: '6',
+      maxRounds: '8',
+      localAnswers: true,
+    },
   }
 
   it('is clean when the current snapshot matches the saved baseline', () => {
@@ -1839,6 +1992,15 @@ describe('settings dirty detection helpers', () => {
       hasUnsavedSettingsChanges(
         saved,
         buildSettingsSnapshot({ ...baseInput, ragParams: { topK: '12', temperature: '0.2' } })
+      )
+    ).toBe(true)
+    expect(
+      hasUnsavedSettingsChanges(
+        saved,
+        buildSettingsSnapshot({
+          ...baseInput,
+          helpParams: { ...baseInput.helpParams, maxTokens: '800' },
+        })
       )
     ).toBe(true)
     expect(

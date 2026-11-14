@@ -86,7 +86,7 @@ httpdate = "1"
 # The assistant endpoint (src/automation/server.rs): rmcp's Streamable HTTP server
 # for MCP, and the hyper/tower plumbing that serves it on loopback. Versions match
 # what is already in the lockfile; the features are the ones the endpoint uses.
-rmcp = { version = "3.8", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "3.8", default-features = false, features = ["server", "macros", "transport-streamable-http-server", "client", "transport-async-rw"] }
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
 tower-service = "0.3"

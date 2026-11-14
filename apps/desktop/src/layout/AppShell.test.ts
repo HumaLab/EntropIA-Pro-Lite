@@ -127,6 +127,7 @@ describe('AppShell', () => {
     expect(screen.queryByText('Abrí una colección para ver el explorador')).not.toBeInTheDocument()
   })
 
+  // D9 (S13): no help root view anymore — the bubble replaced it.
   it.each(['db-browser', 'rag-chat', 'settings'] as const)(
     'hides the whole sidebar on the %s root section so it reserves no width',
     async (viewName) => {
@@ -259,6 +260,21 @@ describe('AppShell', () => {
     expect(source).toMatch(/\.statusbar\s*\{[\s\S]*?height: var\(--statusbar-height\);/)
   })
 
+  it('keeps the status bar centre group (GitHub link) at the true centre of the bar', () => {
+    // With `space-between` the centre group sat wherever the left and right
+    // groups left room for it, off to the right; the help bubble is anchored
+    // on that link (L29-L31), so it drifted with it.
+    const source = readFileSync(resolve(import.meta.dirname, 'AppShell.svelte'), 'utf-8')
+    const statusbar = source.match(/\.statusbar\s*\{([^}]*)\}/)?.[1] ?? ''
+
+    expect(statusbar).toContain('display: grid;')
+    expect(statusbar).toContain(
+      'grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);'
+    )
+    expect(statusbar).not.toContain('justify-content: space-between;')
+    expect(source).toMatch(/\.statusbar__right\s*\{\s*justify-content: flex-end;/)
+  })
+
   describe('split view: pane inner spacing', () => {
     // `.content`'s own padding only ever reached the two edges touching the
     // window — the edge each pane shares with the divider got none, so a
@@ -291,6 +307,12 @@ describe('AppShell', () => {
     expect(invokeMock).toHaveBeenCalledWith('open_external_url', {
       url: 'https://hlab.com.ar/',
     })
+  })
+
+  it('marks the GitHub status-bar link as the help-bubble anchor (T17)', () => {
+    render(AppShellHost)
+
+    expect(screen.getByRole('link', { name: 'GitHub' })).toHaveAttribute('data-help-bubble-anchor')
   })
 
   it('toggles the sidebar with Ctrl+B except when typing in editable targets', async () => {
@@ -857,8 +879,10 @@ describe('AppShell', () => {
       expect(await screen.findByText('1,2 GB de 2,4 GB (50 %)')).toBeInTheDocument()
       expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50')
       // Non-modal: the app stays usable, nothing traps focus behind a dialog.
+      // (The help bubble's panel is in the DOM but shut: hidden dialogs trap
+      // nothing, so only a shown one counts here.)
       expect(screen.getByTestId('app-shell-child')).toBeInTheDocument()
-      expect(container.querySelector('[role="dialog"]')).toBeNull()
+      expect(container.querySelector('[role="dialog"]:not([hidden])')).toBeNull()
     })
 
     it.runIf(LOCAL_ML)('pause_cancel_returns_to_pending_state', async () => {

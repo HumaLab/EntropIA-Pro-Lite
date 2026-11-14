@@ -27,6 +27,9 @@
   let destroyed = false
 
   const current = $derived(pending[0] ?? null)
+  /** Requests from the in-app help (client `in-app-help`, D12) are the owner's
+   * own assistant, not an external one: the copy says so. */
+  const isInAppHelp = $derived(current?.clientId === 'in-app-help')
   const deleting = $derived(
     current?.action.kind === 'delete_items' || current?.action.kind === 'delete_collection'
   )
@@ -172,8 +175,12 @@
     title="{current.clientName} pide {actionVerb(current)}"
     titleId="agent-approval-title"
     message={deleting
-      ? 'Lo pidió un asistente externo conectado a EntropIA. Revisá qué se va a borrar antes de aprobar.'
-      : 'Lo pidió un asistente externo conectado a EntropIA. Revisá qué va a procesar antes de aprobar.'}
+      ? isInAppHelp
+        ? 'La ayuda dentro de EntropIA lo pidió. Revisá qué se va a borrar antes de aprobar.'
+        : 'Lo pidió un asistente externo conectado a EntropIA. Revisá qué se va a borrar antes de aprobar.'
+      : isInAppHelp
+        ? 'La ayuda dentro de EntropIA lo pidió. Revisá qué va a procesar antes de aprobar.'
+        : 'Lo pidió un asistente externo conectado a EntropIA. Revisá qué va a procesar antes de aprobar.'}
     cancelLabel="Rechazar"
     confirmLabel={deleting ? 'Borrar' : 'Aprobar'}
     variant={deleting ? 'destructive' : 'default'}

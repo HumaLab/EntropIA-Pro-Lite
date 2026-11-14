@@ -246,6 +246,15 @@ describe('TopBar', () => {
     expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'rag-chat' })
   })
 
+  // D9 (S13): the help chat lives in the floating bubble, not in the header.
+  // No header button may open a help view again.
+  it('no longer offers a header button for help', async () => {
+    render(TopBar)
+
+    expect(screen.queryByRole('button', { name: 'Abrir Ayuda' })).not.toBeInTheDocument()
+    expect(navigateActiveMock).not.toHaveBeenCalledWith({ name: 'help' })
+  })
+
   it('opens the research agent from its section icon', async () => {
     render(TopBar)
 

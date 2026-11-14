@@ -26,6 +26,7 @@
   import IconArrowForwardUp from '@tabler/icons-svelte-runes/icons/arrow-forward-up'
   import IconArrowsDiagonal2 from '@tabler/icons-svelte-runes/icons/arrows-diagonal-2'
   import IconArrowsMaximize from '@tabler/icons-svelte-runes/icons/arrows-maximize'
+  import IconArrowsMinimize from '@tabler/icons-svelte-runes/icons/arrows-minimize'
   import IconAsterisk from '@tabler/icons-svelte-runes/icons/asterisk'
   import IconBell from '@tabler/icons-svelte-runes/icons/bell'
   import IconBold from '@tabler/icons-svelte-runes/icons/bold'
@@ -69,6 +70,7 @@
   import IconFolderPlus from '@tabler/icons-svelte-runes/icons/folder-plus'
   import IconHistory from '@tabler/icons-svelte-runes/icons/history'
   import IconHome from '@tabler/icons-svelte-runes/icons/home'
+  import IconInfoCircle from '@tabler/icons-svelte-runes/icons/info-circle'
   import IconH1 from '@tabler/icons-svelte-runes/icons/h-1'
   import IconH2 from '@tabler/icons-svelte-runes/icons/h-2'
   import IconH3 from '@tabler/icons-svelte-runes/icons/h-3'
@@ -260,6 +262,9 @@
     'heading-2': IconH2,
     'heading-3': IconH3,
     import: IconFileDownload,
+    // The small superscript hint after the help opt-ins (T28): a lowercase
+    // `i` in a circle, distinct from the `?` of `circle-help` above.
+    info: IconInfoCircle,
     'insert-image': IconPhotoPlus,
     italic: IconItalic,
     languages: IconLanguage,
@@ -300,6 +305,9 @@
     // plain `arrows-diagonal` points the other diagonal (top-right/
     // bottom-left) and would read backwards on a bottom-right handle.
     'resize-diagonal': IconArrowsDiagonal2,
+    // The maximized panel's restore control: arrows point back in, the
+    // mirror of `expand` above (T14).
+    restore: IconArrowsMinimize,
     // The plain rotate arrows, not the -2 variants: those draw a dotted arc,
     // which is the metric the in-house fine-rotation icons below already own.
     'rotate-ccw': IconRotate,

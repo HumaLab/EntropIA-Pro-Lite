@@ -28,6 +28,7 @@ pub mod deps;
 pub mod deps;
 mod derived_source;
 mod geo;
+mod help;
 mod image_edit;
 mod image_orient;
 mod image_version_repair;
@@ -1081,6 +1082,14 @@ pub fn run() {
 
             app.manage(AppDbState::new(ui_conn, worker_conn, db_path.clone()));
 
+            // Pending inline help approvals (T22, D12): `help_ask` fills the
+            // cards, `help_approval_answer` takes the owner's answer.
+            app.manage(help::commands::HelpApprovalPending::default());
+            // One stop flag per running help agent turn (T24 «Detener»):
+            // `help_ask` registers the frontend's `requestId`, `help_stop`
+            // flips it.
+            app.manage(help::commands::HelpAgentRuns::default());
+
             // Asset integrity scan: reconciles `assets` rows against files on
             // disk. Off the critical path on purpose — a missing file is
             // worth logging, not worth making startup wait on or fail over.
@@ -1697,6 +1706,17 @@ pub fn run() {
             geo::commands::geocode_entity,
             geo::commands::geocode_item_entities,
             rag::commands::rag_ask,
+            help::commands::help_status,
+            help::commands::help_diagnostics_preview,
+            help::commands::help_ask,
+            help::commands::help_faq_list,
+            help::commands::help_approval_answer,
+            help::commands::help_stop,
+            help::history::help_history_list,
+            help::history::help_history_get,
+            help::history::help_history_delete,
+            help::history::help_history_clear,
+            help::history::help_history_append,
             rag::commands::rag_chunk_coverage,
             rag::commands::rag_list_conversations,
             rag::commands::rag_search_conversations,

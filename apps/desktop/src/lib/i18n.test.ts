@@ -379,6 +379,48 @@ describe('i18n', () => {
       'snippetMaxChars no puede superar contextMaxChars.'
     )
     expect(t('settings.ragParams.restoreDefaults')).toBe('Restaurar defaults')
+    expect(t('settings.helpTab')).toBe('Ayuda')
+    expect(t('settings.help.title')).toBe('Ayuda')
+    expect(t('settings.help.description')).toBe(
+      'Modelo, contexto y límites de la ayuda en la app. Los valores mostrados son los vigentes.'
+    )
+    expect(t('settings.help.hint.model')).toBe(
+      'Modelo de la ayuda: vacío usa el modelo general de Configuración'
+    )
+    expect(t('settings.help.hint.contextChars')).toBe(
+      'Contexto: caracteres del manual y del mapa de pantallas enviados al modelo (4000-60000)'
+    )
+    expect(t('settings.help.localAnswers')).toBe('Respuestas locales')
+    expect(t('settings.help.label.maxRounds')).toBe('Vueltas máximas del agente')
+    expect(t('settings.help.hint.maxRounds')).toBe(
+      'Cada vuelta es una consulta paga a OpenRouter (1-20)'
+    )
+    expect(t('settings.help.invalidParam', { param: 'contextChars' })).toBe(
+      'Parámetro de ayuda inválido: contextChars'
+    )
+    expect(t('settings.help.restoreDefaults')).toBe('Restaurar defaults')
+    expect(t('help.includeDocuments')).toBe('Buscar en mis documentos')
+    expect(t('help.documentsHint')).toBe(
+      'Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.'
+    )
+    expect(t('help.documentsLabel')).toBe('De tus documentos')
+    expect(t('help.metaToggle', { count: 5 })).toBe('Fuentes y pasos (5)')
+    expect(t('help.metaDetails')).toBe('Detalle de fuentes y pasos')
+    expect(t('help.stop')).toBe('Detener')
+    expect(t('help.sourceManual')).toBe('Del manual')
+    expect(t('help.sourceScreenMap')).toBe('Del mapa de pantallas')
+    expect(t('help.approvalOutcomeApproved')).toBe('Aprobado')
+    expect(t('help.approvalOutcomeRejected')).toBe('Rechazado')
+    expect(t('help.approvalOutcomeFailed')).toBe('No se pudo hacer')
+    expect(t('help.approvalOutcomeExpired')).toBe('Venció')
+    expect(t('help.approvalApproved', { summary: 'Crear la colección «SIMAPE»' })).toBe(
+      'Aprobaste: Crear la colección «SIMAPE»'
+    )
+    expect(t('help.approvalRejected', { summary: 'Crear la colección «SIMAPE»' })).toBe(
+      'Rechazaste: Crear la colección «SIMAPE»'
+    )
+    expect(t('help.diagnosticsInfo')).toBe('Más información sobre Incluir diagnóstico')
+    expect(t('help.documentsInfo')).toBe('Más información sobre Buscar en mis documentos')
 
     locale.set('en')
 
@@ -420,6 +462,44 @@ describe('i18n', () => {
       'snippetMaxChars cannot exceed contextMaxChars.'
     )
     expect(t('settings.ragParams.restoreDefaults')).toBe('Restore defaults')
+    expect(t('settings.helpTab')).toBe('Help')
+    expect(t('settings.help.title')).toBe('Help')
+    expect(t('settings.help.description')).toBe(
+      'Model, context and limits for in-app help. The values shown are the ones in effect.'
+    )
+    expect(t('settings.help.hint.model')).toBe('Help model: empty uses the general Settings model')
+    expect(t('settings.help.hint.contextChars')).toBe(
+      'Context: manual and screen-map characters sent to the model (4000-60000)'
+    )
+    expect(t('settings.help.localAnswers')).toBe('Local answers')
+    expect(t('settings.help.label.maxRounds')).toBe('Maximum agent rounds')
+    expect(t('settings.help.hint.maxRounds')).toBe('Each round is a paid OpenRouter call (1-20)')
+    expect(t('settings.help.invalidParam', { param: 'contextChars' })).toBe(
+      'Invalid help parameter: contextChars'
+    )
+    expect(t('settings.help.restoreDefaults')).toBe('Restore defaults')
+    expect(t('help.includeDocuments')).toBe('Search my documents')
+    expect(t('help.documentsHint')).toBe(
+      'Excerpts from your documents go to OpenRouter for this question only.'
+    )
+    expect(t('help.documentsLabel')).toBe('From your documents')
+    expect(t('help.metaToggle', { count: 5 })).toBe('Sources and steps (5)')
+    expect(t('help.metaDetails')).toBe('Source and step details')
+    expect(t('help.stop')).toBe('Stop')
+    expect(t('help.sourceManual')).toBe('From the manual')
+    expect(t('help.sourceScreenMap')).toBe('From the screen map')
+    expect(t('help.approvalOutcomeApproved')).toBe('Approved')
+    expect(t('help.approvalOutcomeRejected')).toBe('Rejected')
+    expect(t('help.approvalOutcomeFailed')).toBe('Failed')
+    expect(t('help.approvalOutcomeExpired')).toBe('Expired')
+    expect(t('help.approvalApproved', { summary: 'Create the "SIMAPE" collection' })).toBe(
+      'You approved: Create the "SIMAPE" collection'
+    )
+    expect(t('help.approvalRejected', { summary: 'Create the "SIMAPE" collection' })).toBe(
+      'You rejected: Create the "SIMAPE" collection'
+    )
+    expect(t('help.diagnosticsInfo')).toBe('More about Include diagnostics')
+    expect(t('help.documentsInfo')).toBe('More about Search my documents')
   })
 
   it('exposes the API key clearing copy in both locales', async () => {
@@ -574,5 +654,47 @@ describe('i18n — biblioteca copy', () => {
     expect(t('bibliographyWork.tabText')).toBe('Text')
     expect(t('bibliographyWork.tabMetadata')).toBe('Metadata')
     expect(t('bibliographyWork.textPage', { page: 3 })).toBe('Page 3')
+  })
+})
+
+describe('i18n — help history copy (S19)', () => {
+  it('exposes the history copy in both locales', async () => {
+    const { locale, t } = await import('./i18n')
+
+    locale.set('es')
+
+    expect(t('help.history')).toBe('Historial')
+    expect(t('help.historyCount', { count: 2 })).toBe('Historial (2)')
+    expect(t('help.historyEmpty')).toBe('Todavía no hay conversaciones guardadas.')
+    expect(t('help.historyLoading')).toBe('Cargando el historial…')
+    expect(t('help.historyError')).toBe('No se pudo cargar el historial.')
+    expect(t('help.historyNow')).toBe('ahora mismo')
+    expect(t('help.newConversation')).toBe('Nueva conversación')
+    expect(t('help.deleteConversation')).toBe('Eliminar conversación')
+    expect(t('help.clearHistory')).toBe('Borrar historial')
+    expect(t('help.clearHistoryTitle')).toBe('¿Borrar el historial?')
+    expect(t('help.clearHistoryMessage')).toBe(
+      'Se eliminan todas las conversaciones guardadas en este equipo. No se puede deshacer.'
+    )
+    expect(t('help.confirmDelete')).toBe('Borrar')
+    expect(t('help.cancel')).toBe('Cancelar')
+
+    locale.set('en')
+
+    expect(t('help.history')).toBe('History')
+    expect(t('help.historyCount', { count: 2 })).toBe('History (2)')
+    expect(t('help.historyEmpty')).toBe('No saved conversations yet.')
+    expect(t('help.historyLoading')).toBe('Loading history…')
+    expect(t('help.historyError')).toBe('Could not load the history.')
+    expect(t('help.historyNow')).toBe('just now')
+    expect(t('help.newConversation')).toBe('New conversation')
+    expect(t('help.deleteConversation')).toBe('Delete conversation')
+    expect(t('help.clearHistory')).toBe('Clear history')
+    expect(t('help.clearHistoryTitle')).toBe('Clear the history?')
+    expect(t('help.clearHistoryMessage')).toBe(
+      'All conversations saved on this device will be deleted. This cannot be undone.'
+    )
+    expect(t('help.confirmDelete')).toBe('Delete')
+    expect(t('help.cancel')).toBe('Cancel')
   })
 })

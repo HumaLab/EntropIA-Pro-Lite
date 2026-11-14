@@ -1020,6 +1020,23 @@ Las líneas no contienen ninguna contraseña: la credencial queda en el llavero 
 
 En Windows, algunos antivirus demoran el primer arranque del conector; si el asistente se rinde antes, ampliá su tiempo de espera para servidores MCP o excluí la carpeta de EntropIA en el antivirus.
 
+<a id="ayuda-en-la-app"></a>
+### 13.5. Ayuda dentro de la app
+
+La burbuja con el logo de EntropIA, centrada justo encima del logo de GitHub de la barra inferior, abre un chat de ayuda aparte del Chat de documentos. Podés arrastrarla con el mouse durante la sesión: en cada arranque vuelve a ese lugar por defecto sobre el logo de GitHub. Con **Escape** se cierra el panel. Le podés preguntar cómo hacer algo («¿Cómo importo un PDF?») o qué hacer cuando algo falla («Falló una transcripción, ¿qué hago?»). Cada respuesta indica de qué secciones del manual salió.
+
+- **Primeros pasos y preguntas frecuentes, sin conexión.** Las preguntas más comunes (crear la primera colección, hacer OCR, eliminar una imagen, cargar la clave de OpenRouter, entre otras) se responden en tu equipo, sin clave y sin costo; la respuesta lo indica con «Respuesta local, sin consultar a OpenRouter». Los botones de **Primeros pasos** del panel las muestran.
+- **El resto usa tu clave de OpenRouter.** Las demás preguntas se responden con la clave de **Configuración → APIs remotas → OpenRouter** y se cobran en tu cuenta, que tiene que tener crédito. Sin clave, la ayuda sigue respondiendo las preguntas frecuentes y te explica cómo cargarla.
+- **Solo viaja lo que hace falta.** EntropIA busca en tu equipo, en este manual y en el mapa de pantallas de la app, las secciones relacionadas con la pregunta, más el capítulo [19](#capitulo-19-que-hago-si) cuando algo falla; nunca manda el manual entero.
+- **Incluir diagnóstico.** Para un error, marcá **Incluir diagnóstico** antes de enviar. Se agrega la versión, el sistema, los modos y modelos elegidos, qué claves están cargadas (sí o no, nunca la clave) y los últimos avisos y errores del registro, sin rutas, nombres de archivo ni textos entre comillas. **Ver qué se envía** muestra el texto exacto.
+- **Buscar en mis documentos.** Para que la ayuda pueda leer el texto de tus documentos, marcá **Buscar en mis documentos** antes de preguntar: solo para esa pregunta, el asistente puede buscar pasajes y leer el texto que necesite, y esos fragmentos viajan a OpenRouter. La respuesta lista **De tus documentos** con los títulos usados. Sin esa casilla, puede ver colecciones, títulos y estados, pero no el texto.
+- **Las dos casillas se apagan solas** después de cada pregunta.
+- **Configuración → Ayuda** permite elegir otro modelo (vacío usa el modelo general), cuánto texto del manual se manda, el largo máximo de la respuesta, la temperatura, cuántos turnos anteriores se incluyen, si se usan las respuestas locales y las **vueltas máximas del agente** (8 por defecto; cada vuelta es una llamada paga a OpenRouter).
+- **Queda guardado en este equipo.** Las conversaciones se guardan solo en este equipo, todavía sin sincronización. El botón **Historial** del panel las lista, plegado por defecto: abrilo para ver el título y la fecha de cada una, tocala para seguirla donde quedó, borrala con su papelera o empezá otra con **Nueva conversación**. **Borrar historial** las elimina todas, con confirmación. Se guarda todo lo que se muestra, también los fragmentos de tus documentos cuando usaste **Buscar en mis documentos**.
+- **También actúa.** Podés pedirle que haga algo, por ejemplo «Creá una colección llamada SIMAPE» o «Mostrame qué lotes están pausados»: usa las mismas herramientas que los asistentes externos de la [sección 13.4](#asistentes-externos). Consultar el archivo no pregunta nada; antes de crear, editar, borrar o lanzar un procesamiento que gasta, te pide **Aprobar** o **Rechazar** (dentro del panel o en el diálogo de aprobación). Sus acciones quedan en el registro de asistentes con el nombre **Ayuda**.
+- **Preguntas que no están en el manual.** Para dudas sobre EntropIA que este manual no cubre (por ejemplo, diferencias entre Lite y Pro), la ayuda consulta la página de EntropIA en el sitio de HLab y el repositorio público del proyecto en GitHub, y dice de dónde sacó la respuesta. El repositorio puede describir una versión más nueva que la que tenés instalada.
+- **Pasos y Detener.** Mientras trabaja, el panel muestra cada paso («Listó colecciones», «Leyó del repositorio…»); el botón **Detener** corta la tarea en curso.
+
 ---
 
 <a id="capitulo-14-procesamiento-por-lotes"></a>
@@ -1134,6 +1151,7 @@ Abrí **Configuración** con el botón de engranaje de la barra superior. En Lit
 | **Agente** | Ajustar los parámetros del [Agente de investigación](#capitulo-10-investigacion): salida, red y reintentos, archivo, recuperación y preguntas. | Dejá los valores por defecto; cambian solo las investigaciones que crees después. |
 | **Sincronización** | Conectar la cuenta y compartir datos entre equipos. | No la actives si no necesitás usar más de un equipo. |
 | **Asistentes** | Permitir que un asistente externo (Claude Code, Codex, OpenCode, Pi) consulte el archivo, darle permisos y elegir sus carpetas de entrada ([13.4](#asistentes-externos)). | Dejala apagada si no usás un asistente externo. |
+| **Ayuda** | Modelo, contexto, largo de respuesta, temperatura, historial y respuestas locales del chat de ayuda ([13.5](#ayuda-en-la-app)). | Vacío en el modelo usa el modelo general. |
 | **Lotes** | Procesar varias colecciones: OCR, embeddings, entidades, tripletes, corrección OCR, resúmenes y esquemas propios; seguir también la sincronización de la Biblioteca. | Ejecutá primero una prueba con una colección pequeña. |
 | **Logs** | Leer mensajes de actividad y error. | Anotá el mensaje visible antes de compartirlo con soporte. |
 | **Copias** | Elegir la carpeta y la frecuencia de las copias de seguridad, y hacer una al momento. | Elegí una carpeta en otro disco y activá una copia automática. |

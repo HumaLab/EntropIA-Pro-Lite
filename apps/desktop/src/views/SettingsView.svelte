@@ -1,5 +1,6 @@
 <script module lang="ts">
   import type { AgentParametersForm } from '$lib/research'
+  import type { EditableHelpParams } from './HelpSettingsTab.svelte'
 
   /**
    * Serializable snapshot of every user-editable settings value. Compared
@@ -33,6 +34,7 @@
     ragRerankerModel: string
     ragParams: Record<string, string>
     agentParams: AgentParametersForm
+    helpParams: EditableHelpParams
   }
 
   export function buildSettingsSnapshot(input: SettingsSnapshotInput): string {
@@ -76,6 +78,11 @@
     DEFAULT_OCRH_LOCAL_ENGINE,
     DEFAULT_PROMPTS,
     DEFAULT_MODEL_PARAMS_BY_FLOW,
+    DEFAULT_HELP_CONTEXT_CHARS,
+    DEFAULT_HELP_HISTORY_TURNS,
+    DEFAULT_HELP_MAX_ROUNDS,
+    DEFAULT_HELP_MAX_TOKENS,
+    DEFAULT_HELP_TEMPERATURE,
     DEFAULT_RAG_PARAMS,
     DEFAULT_RAG_RERANKER_MODEL,
     type EmbeddingProvider,
@@ -152,6 +159,7 @@
   import AppearanceTab from './AppearanceTab.svelte'
   import BackupTab from './BackupTab.svelte'
   import AssistantsTab from './AssistantsTab.svelte'
+  import HelpSettingsTab, { defaultHelpParams } from './HelpSettingsTab.svelte'
   import VercelFallbackCard from './VercelFallbackCard.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
   import MaintenanceSettingsCard from './MaintenanceSettingsCard.svelte'
@@ -189,6 +197,7 @@
     | 'agentParams'
     | 'sync'
     | 'assistants'
+    | 'help'
     | 'dependencias'
     | 'batch'
     | 'aliases'
@@ -347,6 +356,12 @@
   // eso el campo se oculta bajo `LOCAL_ML` en vez de mostrarse inerte.
   let ragRerankerModel = $state(DEFAULT_RAG_RERANKER_MODEL)
   let ragParamsError = $state<string | null>(null)
+
+  // Solapa «Ayuda»: modelo, contexto y límites de la ayuda en la app (S14).
+  // Se guarda con el botón global como los RAG Params; el modelo vacío
+  // hereda el general y los numéricos viajan como texto.
+  let helpParams = $state<EditableHelpParams>(defaultHelpParams(DEFAULT_OPENROUTER_MODEL))
+  let helpParamsError = $state<string | null>(null)
 
   // Solapa «Agente»: los parámetros del motor de investigación. El formulario
   // arranca vacío y lo llena la respuesta de defaults del motor
@@ -581,6 +596,7 @@
       ragRerankerModel,
       ragParams,
       agentParams,
+      helpParams,
     })
   )
   const isDirty = $derived(hasUnsavedSettingsChanges(savedSnapshot, currentSnapshot))
@@ -780,6 +796,7 @@
       ragModel = readRagModelFromSettings(settingsMap, effectiveGlobalModel)
       ragRerankerModel =
         settingsMap.get(SETTINGS_KEYS.RAG_RERANKER_MODEL)?.trim() || DEFAULT_RAG_RERANKER_MODEL
+      helpParams = readHelpParamsFromSettings(settingsMap, effectiveGlobalModel)
       await loadAgentParameters(settingsMap)
       normalizeRemoteModesForCapabilities()
       savedSnapshot = currentSnapshot
@@ -1104,6 +1121,102 @@
   /** Modelo general vigente en el formulario, usado como valor heredado. */
   function inheritedRagModel(): string {
     return model.trim() || DEFAULT_OPENROUTER_MODEL
+  }
+
+  /**
+   * Valores de la solapa «Ayuda» que muestra el formulario (S14): el modelo
+   * con la misma herencia que el chat RAG (override propio, si no el modelo
+   * general, si no el default), los numéricos validados contra sus rangos y
+   * el interruptor de respuestas locales. Espeja la precedencia y los clamps
+   * de `resolve_help_settings` en Rust.
+   */
+  function readHelpParamsFromSettings(
+    settingsMap: Map<string, string>,
+    effectiveGlobalModel: string | null
+  ): EditableHelpParams {
+    return {
+      model:
+        settingsMap.get(SETTINGS_KEYS.HELP_MODEL)?.trim() ||
+        effectiveGlobalModel ||
+        DEFAULT_OPENROUTER_MODEL,
+      contextChars:
+        validIntegerText(settingsMap.get(SETTINGS_KEYS.HELP_CONTEXT_CHARS) ?? null, 4000, 60000) ??
+        DEFAULT_HELP_CONTEXT_CHARS,
+      maxTokens:
+        validIntegerText(settingsMap.get(SETTINGS_KEYS.HELP_MAX_TOKENS) ?? null, 200, 8000) ??
+        DEFAULT_HELP_MAX_TOKENS,
+      temperature:
+        validNumberText(settingsMap.get(SETTINGS_KEYS.HELP_TEMPERATURE) ?? null, 0, 1) ??
+        DEFAULT_HELP_TEMPERATURE,
+      historyTurns:
+        validIntegerText(settingsMap.get(SETTINGS_KEYS.HELP_HISTORY_TURNS) ?? null, 0, 12) ??
+        DEFAULT_HELP_HISTORY_TURNS,
+      maxRounds:
+        validIntegerText(settingsMap.get(SETTINGS_KEYS.HELP_MAX_ROUNDS) ?? null, 1, 20) ??
+        DEFAULT_HELP_MAX_ROUNDS,
+      localAnswers: parseEnabledByDefault(
+        settingsMap.get(SETTINGS_KEYS.HELP_LOCAL_ANSWERS) ?? null
+      ),
+    }
+  }
+
+  /** Modelo general vigente en el formulario, usado como valor heredado por la ayuda. */
+  function inheritedHelpModel(): string {
+    return model.trim() || DEFAULT_OPENROUTER_MODEL
+  }
+
+  /**
+   * Un numérico de la ayuda como texto canónico para persistir: vacío = el
+   * default, fuera de rango = se fija al borde, basura = `null` (invalida el
+   * guardado como en los RAG Params). `DEFAULT_HELP_*` ya trae esa forma.
+   * Acepta números porque `NumberField` escribe el valor nativo del input
+   * cuando se usan sus botones.
+   */
+  function clampedHelpInteger(
+    value: string | number | null | undefined,
+    min: number,
+    max: number,
+    fallback: string
+  ): string | null {
+    const trimmed = String(value ?? '').trim()
+    if (!trimmed) return fallback
+    if (!INTEGER_TEXT_PATTERN.test(trimmed)) return null
+    const parsed = Number(trimmed)
+    if (!Number.isInteger(parsed)) return null
+    return String(Math.min(max, Math.max(min, parsed)))
+  }
+
+  function clampedHelpDecimal(
+    value: string | number | null | undefined,
+    min: number,
+    max: number,
+    fallback: string
+  ): string | null {
+    const trimmed = String(value ?? '').trim()
+    if (!trimmed) return fallback
+    if (!DECIMAL_TEXT_PATTERN.test(trimmed)) return null
+    const parsed = Number(trimmed)
+    if (!Number.isFinite(parsed)) return null
+    return String(Math.min(max, Math.max(min, parsed)))
+  }
+
+  function validateHelpParams(): string | null {
+    const checks: Array<[string, string | null]> = [
+      [
+        'contextChars',
+        clampedHelpInteger(helpParams.contextChars, 4000, 60000, DEFAULT_HELP_CONTEXT_CHARS),
+      ],
+      ['maxTokens', clampedHelpInteger(helpParams.maxTokens, 200, 8000, DEFAULT_HELP_MAX_TOKENS)],
+      ['temperature', clampedHelpDecimal(helpParams.temperature, 0, 1, DEFAULT_HELP_TEMPERATURE)],
+      [
+        'historyTurns',
+        clampedHelpInteger(helpParams.historyTurns, 0, 12, DEFAULT_HELP_HISTORY_TURNS),
+      ],
+      ['maxRounds', clampedHelpInteger(helpParams.maxRounds, 1, 20, DEFAULT_HELP_MAX_ROUNDS)],
+    ]
+    const invalid = checks.find(([, value]) => value === null)
+    if (invalid) return t('settings.help.invalidParam', { param: invalid[0] })
+    return null
   }
 
   /**
@@ -1457,6 +1570,13 @@
       activeTab = 'ragParams'
       return
     }
+    helpParamsError = validateHelpParams()
+    if (helpParamsError) {
+      saving = false
+      saveFeedback = { tone: 'error', text: helpParamsError }
+      activeTab = 'help'
+      return
+    }
     // La solapa Agente valida con el motor: si rechaza, se muestra su mensaje
     // y no se persiste nada (ni los parámetros ni el resto de la página).
     agentParamsError = null
@@ -1556,6 +1676,42 @@
           settingsSet(SETTINGS_KEYS.RESEARCH_AGENT_PARAMETERS, JSON.stringify(agentParameters))
         )
       }
+      // El override de la ayuda se persiste como el del chat RAG: vacío si
+      // coincide con el modelo general, para que la herencia siga viva. Los
+      // numéricos se guardan fijados a sus rangos ('999999' → '60000').
+      const helpModelOverride = helpParams.model.trim()
+      writes.push(
+        settingsSet(
+          SETTINGS_KEYS.HELP_MODEL,
+          helpModelOverride === inheritedHelpModel() ? '' : helpModelOverride
+        ),
+        settingsSet(
+          SETTINGS_KEYS.HELP_CONTEXT_CHARS,
+          clampedHelpInteger(helpParams.contextChars, 4000, 60000, DEFAULT_HELP_CONTEXT_CHARS) ??
+            DEFAULT_HELP_CONTEXT_CHARS
+        ),
+        settingsSet(
+          SETTINGS_KEYS.HELP_MAX_TOKENS,
+          clampedHelpInteger(helpParams.maxTokens, 200, 8000, DEFAULT_HELP_MAX_TOKENS) ??
+            DEFAULT_HELP_MAX_TOKENS
+        ),
+        settingsSet(
+          SETTINGS_KEYS.HELP_TEMPERATURE,
+          clampedHelpDecimal(helpParams.temperature, 0, 1, DEFAULT_HELP_TEMPERATURE) ??
+            DEFAULT_HELP_TEMPERATURE
+        ),
+        settingsSet(
+          SETTINGS_KEYS.HELP_HISTORY_TURNS,
+          clampedHelpInteger(helpParams.historyTurns, 0, 12, DEFAULT_HELP_HISTORY_TURNS) ??
+            DEFAULT_HELP_HISTORY_TURNS
+        ),
+        settingsSet(
+          SETTINGS_KEYS.HELP_MAX_ROUNDS,
+          clampedHelpInteger(helpParams.maxRounds, 1, 20, DEFAULT_HELP_MAX_ROUNDS) ??
+            DEFAULT_HELP_MAX_ROUNDS
+        ),
+        settingsSet(SETTINGS_KEYS.HELP_LOCAL_ANSWERS, helpParams.localAnswers ? 'true' : 'false')
+      )
       if (apiKey.trim()) writes.push(settingsSet(SETTINGS_KEYS.OPENROUTER_API_KEY, apiKey.trim()))
       if (assemblyAiApiKey.trim())
         writes.push(settingsSet(SETTINGS_KEYS.ASSEMBLYAI_API_KEY, assemblyAiApiKey.trim()))
@@ -1794,6 +1950,12 @@
     ragParamsError = null
   }
 
+  function resetHelpParams() {
+    // El default del modelo de ayuda también es heredar el general.
+    helpParams = defaultHelpParams(inheritedHelpModel())
+    helpParamsError = null
+  }
+
   async function openProviderLink(event: MouseEvent, url: string, providerName: string) {
     try {
       await openExternalUrlFromClick(event, url)
@@ -1862,6 +2024,9 @@
         </TabButton>
         <TabButton active={activeTab === 'assistants'} onclick={() => (activeTab = 'assistants')}>
           {t('settings.assistantsTab')}
+        </TabButton>
+        <TabButton active={activeTab === 'help'} onclick={() => (activeTab = 'help')}>
+          {t('settings.helpTab')}
         </TabButton>
         {#if LOCAL_ML}
           <TabButton
@@ -3465,6 +3630,23 @@
       <SyncSettingsCard />
     {:else if activeTab === 'assistants'}
       <AssistantsTab />
+    {:else if activeTab === 'help'}
+      {#if saveFeedback}
+        <p
+          class="surface-message"
+          class:surface-message--error={saveFeedback.tone === 'error'}
+          class:surface-message--success={saveFeedback.tone === 'success'}
+        >
+          {saveFeedback.text}
+        </p>
+      {/if}
+
+      <HelpSettingsTab
+        bind:form={helpParams}
+        inheritedModel={inheritedHelpModel()}
+        error={helpParamsError}
+        onrestore={resetHelpParams}
+      />
     {:else if activeTab === 'logs'}
       <LogsTab />
     {:else if activeTab === 'batch'}
