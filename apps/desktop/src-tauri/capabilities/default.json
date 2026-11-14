@@ -160,6 +160,7 @@
     "allow-help-diagnostics-preview",
     "allow-help-ask",
     "allow-help-faq-list",
+    "allow-help-approval-answer",
     "allow-rag-chunk-coverage",
     "allow-rag-list-conversations",
     "allow-rag-search-conversations",

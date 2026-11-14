@@ -5,14 +5,18 @@
   import { renderMarkdown } from '$lib/markdown'
   import {
     HELP_HISTORY_MAX_TURNS,
+    helpApprovalAnswer,
     helpAsk,
     helpDiagnosticsPreview,
     helpFaqList,
     helpStatus,
     isNoKeyError,
+    listenHelpApproval,
     openHelpManual,
+    type HelpApprovalRequest,
     type HelpDocument,
     type HelpSource,
+    type HelpStep,
     type HelpTurn,
   } from '$lib/help'
   import { ActionIcon, Button, Checkbox } from '@entropia/ui'
@@ -34,8 +38,14 @@
     sources?: HelpSource[]
     /** True when the backend answered from the bundled FAQ, with no network call (S10). */
     local?: boolean
-    /** Titles of the user's excerpts sent to the model for this question (S12). */
+    /** Titles of the user's documents the agent read for this question (T22). */
     documents?: HelpDocument[]
+    /** Every tool call the agent made, in order (T22). */
+    steps?: HelpStep[]
+    /** True when the round cap forced the final answer (T22). */
+    roundLimitReached?: boolean
+    /** True when the provider rejected tool use and the answer is plain (T22). */
+    toolsUnavailable?: boolean
   }
 
   /** The backend's group name for the first-steps starter buttons (S10). */
@@ -65,7 +75,38 @@
     return [t('help.suggestion1'), t('help.suggestion2'), t('help.suggestion3')]
   }
 
+  // Inline approval from the help agent (T22, D12): one card per request,
+  // answered once. The backend emits `help://approval` while `help_ask` waits.
+  let pendingApproval = $state<(HelpApprovalRequest & { answered: boolean }) | null>(null)
+  let approvalCard: HTMLElement | null = $state(null)
+  let destroyed = false
+
+  // Focus Rechazar, like the MCP approval dialog does: a stray Enter never approves.
+  $effect(() => {
+    if (pendingApproval && !pendingApproval.answered) {
+      approvalCard?.querySelector<HTMLButtonElement>('[data-help-reject]')?.focus()
+    }
+  })
+
+  async function answerApproval(approved: boolean): Promise<void> {
+    const card = pendingApproval
+    if (!card || card.answered) return
+    try {
+      await helpApprovalAnswer(card.id, approved)
+      pendingApproval = { ...card, answered: true }
+    } catch {
+      error = t('help.approvalAnswerError')
+    }
+  }
+
   onMount(() => {
+    let unlisten: (() => void) | null = null
+    void listenHelpApproval((request) => {
+      pendingApproval = { ...request, answered: false }
+    }).then((stop) => {
+      if (destroyed) stop()
+      else unlisten = stop
+    })
     void helpStatus().then(
       (result) => {
         status = result.hasOpenrouterKey ? 'ready' : 'no-key'
@@ -90,6 +131,10 @@
         starters = fallbackStarters()
       }
     )
+    return () => {
+      destroyed = true
+      unlisten?.()
+    }
   })
 
   async function send(): Promise<void> {
@@ -138,6 +183,9 @@
           sources: answer.sources,
           local: answer.local,
           documents: answer.documents ?? [],
+          steps: answer.steps ?? [],
+          roundLimitReached: answer.roundLimitReached ?? false,
+          toolsUnavailable: answer.toolsUnavailable ?? false,
         },
       ]
     } catch (sendError) {
@@ -262,9 +310,53 @@
                   .join('; ')}
               </p>
             {/if}
+            {#if message.steps && message.steps.length > 0}
+              <p class="help-view__steps">
+                {$currentLocale && t('help.stepsUsed')}: {message.steps
+                  .map((step) => step.tool)
+                  .join(', ')}
+              </p>
+            {/if}
+            {#if message.roundLimitReached}
+              <p class="help-view__note">{$currentLocale && t('help.roundLimitReached')}</p>
+            {/if}
+            {#if message.toolsUnavailable}
+              <p class="help-view__note">{$currentLocale && t('help.toolsUnavailable')}</p>
+            {/if}
           </article>
         {/if}
       {/each}
+
+      {#if pendingApproval}
+        <article
+          class="help-view__bubble help-view__bubble--approval"
+          bind:this={approvalCard}
+          aria-live="polite"
+          aria-label={$currentLocale && t('help.approvalTitle')}
+        >
+          <p class="help-view__approval-title">{$currentLocale && t('help.approvalTitle')}</p>
+          <p class="help-view__approval-summary">{pendingApproval.summary}</p>
+          <div class="help-view__approval-actions">
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={pendingApproval.answered}
+              onclick={() => void answerApproval(true)}
+            >
+              {$currentLocale && t('help.approve')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              data-help-reject=""
+              disabled={pendingApproval.answered}
+              onclick={() => void answerApproval(false)}
+            >
+              {$currentLocale && t('help.reject')}
+            </Button>
+          </div>
+        </article>
+      {/if}
 
       {#if sending}
         <p class="help-view__state" role="status">{$currentLocale && t('help.thinking')}</p>
@@ -521,6 +613,45 @@
     margin: var(--space-2) 0 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
+  }
+
+  .help-view__steps {
+    margin: var(--space-2) 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+  }
+
+  .help-view__note {
+    margin: var(--space-2) 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-style: italic;
+  }
+
+  .help-view__bubble--approval {
+    align-self: flex-start;
+    background: var(--surface-panel);
+    border-color: color-mix(in srgb, var(--color-accent) 32%, var(--border-subtle));
+  }
+
+  .help-view__approval-title {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .help-view__approval-summary {
+    margin: var(--space-1) 0 0;
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .help-view__approval-actions {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
   }
 
   .help-view__sources li + li {

@@ -1,21 +1,202 @@
 //! Tauri commands of the in-app help assistant (T3): status, diagnostic
-//! preview and the OpenRouter-backed answer (S1–S3, S5). The prompt itself
-//! stays pure in `prompt.rs`; nothing here is stored (D4).
+//! preview and the OpenRouter-backed answer (S1–S3, S5), since T22 through
+//! the help agent loop (S15): the model drives the in-process agent MCP
+//! behind the help gate (D11, D12). The prompt itself stays pure in
+//! `prompt.rs`; nothing here is stored (D4).
 
-use std::sync::{Mutex, OnceLock};
+use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
+use tokio::sync::oneshot;
 
+use super::agent_llm::{
+    run_agent, AgentRequest, ChatTransport, HelpToolExecutor, OpenRouterChatTransport,
+};
 use super::diagnostics::{
     build_report, scrub_report, DiagnosticInputs, KEY_SETTINGS, SETTINGS_ALLOWLIST,
 };
-use super::documents::{DOCUMENTS_MAX_CHARS, DOCUMENTS_MAX_FRAGMENTS};
 use super::faq;
+use super::gate::{ApprovalAnswer, HelpApprover, HelpGateExecutor};
 use super::index::{HelpIndex, Hit};
+use super::mcp_bridge::HelpMcpBridge;
 use super::prompt::{
-    build_help_prompt, normalize_history_capped, pick_sections_with_budget, validate_question,
-    HelpAnswer, HelpDocument, HelpSource, HelpStatus, HelpTurn,
+    agent_step_status_wire, build_agent_system, build_help_prompt, normalize_history_capped,
+    pick_sections_with_budget, validate_question, HelpAnswer, HelpDocument, HelpSource, HelpStatus,
+    HelpStep, HelpTurn,
 };
+use crate::automation::access::AgentAccess;
+use crate::automation::server::AgentEndpointState;
+
+/// Tool rounds per question until T24 adds the setting (D13): at most 8
+/// tool-using model turns, then one final answer call.
+pub(crate) const HELP_AGENT_MAX_ROUNDS: usize = 8;
+
+/// How long an inline approval waits for the owner (D12): 10 minutes,
+/// then the call is denied.
+const HELP_APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The event the frontend listens to for inline approvals (D12): the
+/// payload carries `{ id, tool, summary }`, answered with
+/// `help_approval_answer(id, approved)`.
+pub(crate) const HELP_APPROVAL_EVENT: &str = "help://approval";
+
+/// Pending inline approvals (D12): one oneshot sender per card, keyed by id.
+/// Managed once in `lib.rs`; `help_approval_answer` takes the answer.
+#[derive(Clone, Default)]
+pub(crate) struct HelpApprovalPending {
+    senders: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+}
+
+/// Answers one inline approval card (D12): `id` is the `help://approval`
+/// payload's, `approved` the owner's choice. Unknown ids mean the card
+/// already timed out and were answered: an error either way.
+#[tauri::command]
+pub async fn help_approval_answer(
+    state: tauri::State<'_, HelpApprovalPending>,
+    id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let sender = state
+        .senders
+        .lock()
+        .map_err(|error| error.to_string())?
+        .remove(&id);
+    match sender {
+        Some(answer) => answer
+            .send(approved)
+            .map_err(|_| "El pedido ya venció o fue respondido.".to_string()),
+        None => Err("El pedido ya venció o fue respondido.".to_string()),
+    }
+}
+
+/// The approval counter for inline card ids (`help-apr-<n>`).
+static HELP_APPROVAL_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Asks the owner about a local write over the `help://approval` event and
+/// waits for `help_approval_answer`, at most [`HELP_APPROVAL_TIMEOUT`]
+/// (D12, S15). No Tauri type crosses `gate.rs`: this is the production
+/// [`HelpApprover`].
+struct TauriHelpApprover {
+    app: tauri::AppHandle,
+    pending: HelpApprovalPending,
+}
+
+impl HelpApprover for TauriHelpApprover {
+    async fn request_approval(
+        &self,
+        tool: &str,
+        _args: serde_json::Value,
+        summary: String,
+    ) -> ApprovalAnswer {
+        let id = format!(
+            "help-apr-{}",
+            HELP_APPROVAL_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let (tx, rx) = oneshot::channel();
+        match self.pending.senders.lock() {
+            Ok(mut senders) => {
+                senders.insert(id.clone(), tx);
+            }
+            Err(_) => return ApprovalAnswer::TimedOut,
+        }
+        let _ = self.app.emit(
+            HELP_APPROVAL_EVENT,
+            serde_json::json!({ "id": id, "tool": tool, "summary": summary }),
+        );
+        let answer = match tokio::time::timeout(HELP_APPROVAL_TIMEOUT, rx).await {
+            Ok(Ok(true)) => ApprovalAnswer::Approved,
+            Ok(Ok(false)) => ApprovalAnswer::Rejected,
+            _ => ApprovalAnswer::TimedOut,
+        };
+        if let Ok(mut senders) = self.pending.senders.lock() {
+            senders.remove(&id);
+        }
+        answer
+    }
+}
+
+/// The agent-level inputs `help_ask` assembled: everything [`run_help_agent`]
+/// needs besides the transport and the executor.
+pub(crate) struct AgentInputs {
+    pub system: String,
+    pub history: Vec<HelpTurn>,
+    pub question: String,
+    pub model: String,
+    pub max_tokens: i32,
+    pub temperature: f32,
+    pub max_rounds: usize,
+}
+
+/// The agent turn mapped to answer parts: the final text, every tool step
+/// and whether the round cap forced the closing call.
+pub(crate) struct AgentOutcome {
+    pub answer: String,
+    pub steps: Vec<HelpStep>,
+    pub round_limit_reached: bool,
+}
+
+/// Runs the bounded agent loop and maps the result to answer parts. Pure
+/// over the transport and the executor, so the whole decision flow — model
+/// calls a read tool, an action asks inline and is forwarded or denied,
+/// content tools gated by the box — is unit-testable with mocks.
+pub(crate) async fn run_help_agent<T, E>(
+    transport: &T,
+    executor: &E,
+    inputs: AgentInputs,
+) -> Result<AgentOutcome, String>
+where
+    T: ChatTransport,
+    E: HelpToolExecutor,
+{
+    let request = AgentRequest {
+        model: inputs.model,
+        system: inputs.system,
+        history: inputs
+            .history
+            .iter()
+            .map(|turn| (turn.role.clone(), turn.content.clone()))
+            .collect(),
+        question: inputs.question,
+        max_rounds: inputs.max_rounds,
+        max_tokens: inputs.max_tokens,
+        temperature: inputs.temperature,
+    };
+    // No «Detener» yet (T24 owns the button): a fresh flag that never fires.
+    let stop = AtomicBool::new(false);
+    let result = run_agent(transport, executor, request, &stop, |_| {}).await?;
+    Ok(AgentOutcome {
+        answer: result.answer,
+        steps: result
+            .steps
+            .iter()
+            .map(|step| HelpStep {
+                tool: step.tool.clone(),
+                args: step.args.clone(),
+                status: agent_step_status_wire(&step.status).to_string(),
+            })
+            .collect(),
+        round_limit_reached: result.round_limit_reached,
+    })
+}
+
+/// Whether an agent-loop error means the model or provider rejected tool
+/// use (an OpenRouter error saying the endpoint does not support tools or
+/// tool choice): the question is retried once without tools, with
+/// `toolsUnavailable` set. Anything else — key, credit, network — travels
+/// to the user unchanged.
+pub(crate) fn tools_unsupported_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("tool")
+        && (lower.contains("support")
+            || lower.contains("tool_choice")
+            || lower.contains("function call"))
+}
 
 /// The help index, opened lazily once per process (D6): the first question
 /// after start hashes the bundled manual and rebuilds
@@ -101,18 +282,22 @@ pub async fn help_diagnostics_preview(
     .map_err(|e| format!("help diagnostics task panicked: {e}"))?
 }
 
-/// Answers a help question from the manual excerpts (and the opted-in
-/// diagnostic report) on the user's own OpenRouter key (S1–S3, S5). The
-/// conversation lives in memory only; nothing is persisted (D4).
+/// Answers a help question through the help agent (T22, S15): the manual
+/// excerpts (and the opted-in diagnostic report) ground the system prompt on
+/// the user's own OpenRouter key (S1–S3, S5), and the model drives the
+/// in-process agent MCP behind the help gate (D11, D12). The conversation
+/// lives in memory only; nothing is persisted (D4).
 ///
 /// Before the key gate, a question that matches a bundled FAQ entry (S10)
 /// is answered locally with that entry's text, verbatim: no key needed, no
 /// network touched — unless `help_local_answers` is off, which sends every
 /// question to the model. Questions with diagnostics attached always go to
-/// the model. `documents` (S12) opts into local archive excerpts for this
-/// question only, camelCase on the wire, absent means off: the Chat's lexical
-/// retrieval runs locally (no embeddings) and its fragments join the prompt,
-/// and a question with documents on never gets a local FAQ answer.
+/// the model. `documents` (S12) opts into the CONTENT tools for this question
+/// only, camelCase on the wire, absent means off: document text reaches the
+/// model only through those tools (D16), and a question with documents on
+/// never gets a local FAQ answer.
+// A Tauri command: one State per shared service it touches.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn help_ask(
     app: tauri::AppHandle,
@@ -121,6 +306,9 @@ pub async fn help_ask(
     diagnostics: Option<String>,
     documents: Option<bool>,
     db: tauri::State<'_, crate::db::state::AppDbState>,
+    endpoint: tauri::State<'_, Arc<AgentEndpointState>>,
+    access: tauri::State<'_, Arc<AgentAccess>>,
+    pending: tauri::State<'_, HelpApprovalPending>,
 ) -> Result<HelpAnswer, String> {
     let question = validate_question(&question)?;
     // S12: opt-in per question, off when absent (S5 stands unchanged).
@@ -165,43 +353,23 @@ pub async fn help_ask(
             }],
             local: true,
             documents: Vec::new(),
+            steps: Vec::new(),
+            round_limit_reached: false,
+            tools_unavailable: false,
         });
     }
     let api_key = key_result?;
     let history = normalize_history_capped(history, help.history_turns)?;
-    // S12: the opted-in excerpts, retrieved locally on the worker connection
-    // like rag_ask. The key gate above already ran, so documents on with no
-    // key still reports help_no_openrouter_key without touching the archive.
-    let fragments = if with_documents {
-        let worker = db.worker_conn.clone();
-        let owned = question.clone();
-        tokio::task::spawn_blocking(move || {
-            let guard = worker.lock().map_err(|e| e.to_string())?;
-            super::documents::document_fragments(
-                &guard,
-                &owned,
-                DOCUMENTS_MAX_FRAGMENTS,
-                DOCUMENTS_MAX_CHARS,
-            )
-        })
-        .await
-        .map_err(|e| format!("help documents task panicked: {e}"))??
-    } else {
-        Vec::new()
-    };
     let picked: Vec<Hit> = {
-        // The guard drops before the network call below: the index is only
+        // The guard drops before the network calls below: the index is only
         // borrowed to rank, never across an await.
         let index = help_index(&app)?;
         pick_sections_with_budget(&index, &question, with_diagnostics, help.context_chars)
     };
-    let prompt = build_help_prompt(
-        &question,
-        &history,
-        &picked,
-        diagnostics.as_deref(),
-        &fragments,
-    );
+    // The agent system prompt (T22): manual/map excerpts plus diagnostics
+    // when opted in. Document text is never injected here (D16): with the
+    // box ticked the model reads it through the CONTENT tools instead.
+    let system = build_agent_system(&picked, diagnostics.as_deref());
     let sources = picked
         .iter()
         .map(|section| HelpSource {
@@ -210,24 +378,70 @@ pub async fn help_ask(
             kind: section.source.wire_kind().to_string(),
         })
         .collect();
-    let params = crate::llm::generation::OpenRouterGenerationParams::provider_defaults(
-        help.max_tokens,
-        help.temperature,
-    );
-    let answer = crate::llm::openrouter::OpenRouterClient::new(api_key, help.model)
-        .generate(&prompt, &params)
-        .await?;
-    Ok(HelpAnswer {
-        answer,
-        sources,
-        local: false,
-        documents: fragments
-            .iter()
-            .map(|fragment| HelpDocument {
-                title: fragment.title.clone(),
+    // The SAME agent MCP the app serves, in-process (D11, T21), behind the
+    // help gate (D12, T22).
+    let bridge = HelpMcpBridge::start(
+        db.db_path.clone(),
+        endpoint.cache_dir(),
+        endpoint.approvals(),
+        endpoint.corpus_events(),
+        Arc::clone(&access),
+    )
+    .await?;
+    let transport = OpenRouterChatTransport::new(api_key.clone());
+    let approver = TauriHelpApprover {
+        app: app.clone(),
+        pending: (*pending).clone(),
+    };
+    let gate = HelpGateExecutor::new(bridge, approver, with_documents);
+    let inputs = AgentInputs {
+        system,
+        history: history.clone(),
+        question: question.clone(),
+        model: help.model.clone(),
+        max_tokens: help.max_tokens,
+        temperature: help.temperature,
+        max_rounds: HELP_AGENT_MAX_ROUNDS,
+    };
+    match run_help_agent(&transport, &gate, inputs).await {
+        Ok(outcome) => Ok(HelpAnswer {
+            answer: outcome.answer,
+            sources,
+            local: false,
+            documents: gate
+                .content_titles()
+                .into_iter()
+                .map(|title| HelpDocument { title })
+                .collect(),
+            steps: outcome.steps,
+            round_limit_reached: outcome.round_limit_reached,
+            tools_unavailable: false,
+        }),
+        Err(error) if tools_unsupported_error(&error) => {
+            // The model or provider rejected tool use: retry once without
+            // tools (plain answer as before, no actions) and say so in the
+            // metadata. Document titles stay empty: without the CONTENT
+            // tools no document text travelled (D16).
+            let prompt = build_help_prompt(&question, &history, &picked, diagnostics.as_deref());
+            let params = crate::llm::generation::OpenRouterGenerationParams::provider_defaults(
+                help.max_tokens,
+                help.temperature,
+            );
+            let answer = crate::llm::openrouter::OpenRouterClient::new(api_key, help.model)
+                .generate(&prompt, &params)
+                .await?;
+            Ok(HelpAnswer {
+                answer,
+                sources,
+                local: false,
+                documents: Vec::new(),
+                steps: Vec::new(),
+                round_limit_reached: false,
+                tools_unavailable: true,
             })
-            .collect(),
-    })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// One starter button of the help chat (S10): the group it belongs to and
@@ -250,4 +464,312 @@ pub async fn help_faq_list() -> Result<Vec<HelpFaqItem>, String> {
             question: entry.question.clone(),
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::agent_llm::{
+        ChatRequest, ChatResponse, ChatTransport, HelpToolExecutor, ToolCall, ToolOutcome, ToolSpec,
+    };
+    use super::*;
+    use std::collections::VecDeque;
+
+    /// One scripted OpenRouter round-trip: records every request, answers
+    /// from the queue.
+    struct MockTransport {
+        responses: Mutex<VecDeque<ChatResponse>>,
+        recorded: Mutex<Vec<ChatRequest>>,
+    }
+
+    impl MockTransport {
+        fn new(responses: Vec<ChatResponse>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into()),
+                recorded: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn tool_names(&self, index: usize) -> Vec<String> {
+            self.recorded.lock().expect("lock")[index]
+                .tools
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect()
+        }
+
+        fn tool_texts(&self, index: usize) -> Vec<String> {
+            self.recorded.lock().expect("lock")[index]
+                .messages
+                .iter()
+                .filter(|message| message.role == "tool")
+                .filter_map(|message| message.content.clone())
+                .collect()
+        }
+    }
+
+    impl ChatTransport for MockTransport {
+        async fn send(&self, request: ChatRequest) -> Result<ChatResponse, String> {
+            self.recorded.lock().expect("lock").push(request);
+            self.responses
+                .lock()
+                .expect("lock")
+                .pop_front()
+                .ok_or_else(|| "sin respuesta programada".to_string())
+        }
+    }
+
+    /// A scripted bridge: offers `tools`, answers per name from `outcomes`.
+    #[derive(Clone)]
+    struct MockBridge {
+        tools: Vec<String>,
+        outcomes: Arc<Mutex<HashMap<String, ToolOutcome>>>,
+        calls: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    }
+
+    impl MockBridge {
+        fn new(tools: &[&str]) -> Self {
+            Self {
+                tools: tools.iter().map(|name| name.to_string()).collect(),
+                outcomes: Arc::new(Mutex::new(HashMap::new())),
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn calls(&self) -> Vec<(String, serde_json::Value)> {
+            self.calls.lock().expect("lock").clone()
+        }
+    }
+
+    impl HelpToolExecutor for MockBridge {
+        fn tools(&self) -> Vec<ToolSpec> {
+            self.tools
+                .iter()
+                .map(|name| ToolSpec {
+                    name: name.clone(),
+                    description: format!("hace {name}"),
+                    input_schema: serde_json::json!({"type": "object"}),
+                })
+                .collect()
+        }
+
+        async fn call(&self, name: &str, args: serde_json::Value) -> ToolOutcome {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push((name.to_string(), args));
+            self.outcomes
+                .lock()
+                .expect("lock")
+                .remove(name)
+                .unwrap_or(ToolOutcome::Ok {
+                    content: format!("eco de {name}"),
+                })
+        }
+    }
+
+    /// A scripted owner: answers inline cards from the queue.
+    #[derive(Clone)]
+    struct MockApprover {
+        answers: Arc<Mutex<VecDeque<ApprovalAnswer>>>,
+        requests: Arc<Mutex<Vec<(String, serde_json::Value, String)>>>,
+    }
+
+    impl MockApprover {
+        fn new(answers: Vec<ApprovalAnswer>) -> Self {
+            Self {
+                answers: Arc::new(Mutex::new(answers.into())),
+                requests: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn requests(&self) -> Vec<(String, serde_json::Value, String)> {
+            self.requests.lock().expect("lock").clone()
+        }
+    }
+
+    impl HelpApprover for MockApprover {
+        async fn request_approval(
+            &self,
+            tool: &str,
+            args: serde_json::Value,
+            summary: String,
+        ) -> ApprovalAnswer {
+            self.requests
+                .lock()
+                .expect("lock")
+                .push((tool.to_string(), args, summary));
+            self.answers
+                .lock()
+                .expect("lock")
+                .pop_front()
+                .unwrap_or(ApprovalAnswer::Rejected)
+        }
+    }
+
+    const BRIDGE_TOOLS: &[&str] = &[
+        "collections_list",
+        "collections_create",
+        "search_items",
+        "documents_get_text",
+        "search_passages",
+    ];
+
+    fn inputs(question: &str) -> AgentInputs {
+        AgentInputs {
+            system: "sos ayuda".to_string(),
+            history: Vec::new(),
+            question: question.to_string(),
+            model: "vendor/modelo".to_string(),
+            max_tokens: 200,
+            temperature: 0.2,
+            max_rounds: HELP_AGENT_MAX_ROUNDS,
+        }
+    }
+
+    fn answer(content: &str) -> ChatResponse {
+        ChatResponse {
+            content: Some(content.to_string()),
+            tool_calls: Vec::new(),
+        }
+    }
+
+    fn tool_call(id: &str, name: &str, args: &str) -> ChatResponse {
+        ChatResponse {
+            content: None,
+            tool_calls: vec![ToolCall {
+                id: id.to_string(),
+                name: name.to_string(),
+                arguments: args.to_string(),
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn a_question_runs_a_read_tool_and_answers() {
+        let transport = MockTransport::new(vec![
+            tool_call("id-1", "collections_list", "{}"),
+            answer("Tenés 3 colecciones."),
+        ]);
+        let bridge = MockBridge::new(BRIDGE_TOOLS);
+        let approver = MockApprover::new(vec![]);
+        let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let outcome = run_help_agent(&transport, &gate, inputs("¿qué colecciones tengo?"))
+            .await
+            .expect("debe responder");
+        assert_eq!(outcome.answer, "Tenés 3 colecciones.");
+        assert_eq!(outcome.steps.len(), 1);
+        assert_eq!(outcome.steps[0].tool, "collections_list");
+        assert_eq!(outcome.steps[0].status, "ok");
+        assert!(!outcome.round_limit_reached);
+        assert_eq!(bridge.calls().len(), 1);
+        assert!(approver.requests().is_empty(), "reads never ask");
+    }
+
+    #[tokio::test]
+    async fn an_action_asks_inline_and_forwards_when_approved() {
+        let transport = MockTransport::new(vec![
+            tool_call(
+                "id-1",
+                "collections_create",
+                r#"{"requestId":"r-1","name":"SIMAPE"}"#,
+            ),
+            answer("Colección SIMAPE creada."),
+        ]);
+        let bridge = MockBridge::new(BRIDGE_TOOLS);
+        let approver = MockApprover::new(vec![ApprovalAnswer::Approved]);
+        let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let outcome = run_help_agent(&transport, &gate, inputs("Creá una colección SIMAPE"))
+            .await
+            .expect("debe responder");
+        assert_eq!(outcome.answer, "Colección SIMAPE creada.");
+        assert_eq!(outcome.steps.len(), 1);
+        assert_eq!(outcome.steps[0].tool, "collections_create");
+        assert_eq!(outcome.steps[0].status, "ok");
+        let forwarded: Vec<_> = bridge
+            .calls()
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        assert_eq!(forwarded, vec!["collections_create".to_string()]);
+        let requests = approver.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "collections_create");
+        assert_eq!(requests[0].2, "Crear la colección «SIMAPE»");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_action_returns_the_denial_to_the_model() {
+        let transport = MockTransport::new(vec![
+            tool_call(
+                "id-1",
+                "collections_create",
+                r#"{"requestId":"r-1","name":"SIMAPE"}"#,
+            ),
+            answer("No puedo crearla sin tu aprobación."),
+        ]);
+        let bridge = MockBridge::new(BRIDGE_TOOLS);
+        let approver = MockApprover::new(vec![ApprovalAnswer::Rejected]);
+        let gate = HelpGateExecutor::new(bridge.clone(), approver.clone(), false);
+        let outcome = run_help_agent(&transport, &gate, inputs("Creá una colección SIMAPE"))
+            .await
+            .expect("debe responder");
+        assert_eq!(outcome.answer, "No puedo crearla sin tu aprobación.");
+        assert_eq!(outcome.steps.len(), 1);
+        assert_eq!(outcome.steps[0].status, "denied");
+        assert!(bridge.calls().is_empty(), "rejected means never forwarded");
+        let texts = transport.tool_texts(1);
+        assert_eq!(texts.len(), 1);
+        assert!(
+            texts[0].contains("rechazó"),
+            "el modelo ve el rechazo: {}",
+            texts[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn content_tools_are_absent_from_the_request_without_the_box() {
+        let transport = MockTransport::new(vec![answer("listo")]);
+        let bridge = MockBridge::new(BRIDGE_TOOLS);
+        let approver = MockApprover::new(vec![]);
+        let gate = HelpGateExecutor::new(bridge, approver, false);
+        run_help_agent(&transport, &gate, inputs("¿qué dice mi acta?"))
+            .await
+            .expect("debe responder");
+        let names = transport.tool_names(0);
+        assert!(!names.contains(&"documents_get_text".to_string()));
+        assert!(!names.contains(&"search_passages".to_string()));
+        assert!(names.contains(&"search_items".to_string()));
+        assert!(names.contains(&"collections_list".to_string()));
+    }
+
+    #[tokio::test]
+    async fn content_tools_are_present_with_the_box() {
+        let transport = MockTransport::new(vec![answer("listo")]);
+        let bridge = MockBridge::new(BRIDGE_TOOLS);
+        let approver = MockApprover::new(vec![]);
+        let gate = HelpGateExecutor::new(bridge, approver, true);
+        run_help_agent(&transport, &gate, inputs("¿qué dice mi acta?"))
+            .await
+            .expect("debe responder");
+        let names = transport.tool_names(0);
+        assert!(names.contains(&"documents_get_text".to_string()));
+        assert!(names.contains(&"search_passages".to_string()));
+    }
+
+    #[test]
+    fn tools_unsupported_error_names_the_provider_rejection() {
+        assert!(tools_unsupported_error(
+            "OpenRouter devolvió un error (400): this endpoint does not support tool use"
+        ));
+        assert!(tools_unsupported_error(
+            "No se pudo leer la respuesta: unexpected tool_choice"
+        ));
+        assert!(!tools_unsupported_error(
+            "Clave de OpenRouter inválida (401): revisá la clave"
+        ));
+        assert!(!tools_unsupported_error(
+            "No se pudo contactar a OpenRouter: timeout"
+        ));
+        assert!(!tools_unsupported_error("La herramienta falló: se rompió"));
+    }
 }

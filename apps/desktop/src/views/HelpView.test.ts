@@ -579,4 +579,134 @@ describe('HelpView', () => {
       expect(pre.closest('.help-view__composer')).toBeNull()
     })
   })
+
+  describe('agent approvals and steps (T22)', () => {
+    /** Fires a help://approval request the way the backend emits it. */
+    async function approvalRequest(request: { id: string; tool: string; summary: string }) {
+      const { listen } = await import('@tauri-apps/api/event')
+      // Renders accumulate listeners across tests: the live one is the last.
+      const handlers = vi
+        .mocked(listen)
+        .mock.calls.filter(([name]) => name === 'help://approval')
+        .map(([, handler]) => handler) as Array<(event: { payload: typeof request }) => void>
+      const handler = handlers.at(-1)
+      if (!handler) throw new Error('HelpView is not listening to help://approval')
+      handler({ payload: request })
+    }
+
+    it('shows an inline approval card with the summary and focuses Rechazar', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      await approvalRequest({
+        id: 'help-apr-1',
+        tool: 'collections_create',
+        summary: 'Crear la colección «SIMAPE»',
+      })
+
+      expect(await screen.findByText('Crear la colección «SIMAPE»')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Aprobar' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Rechazar' })).toHaveFocus()
+    })
+
+    it('Aprobar answers the card and disables the buttons', async () => {
+      const askCalls = backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      await approvalRequest({
+        id: 'help-apr-2',
+        tool: 'collections_create',
+        summary: 'Crear la colección «SIMAPE»',
+      })
+      await fireEvent.click(await screen.findByRole('button', { name: 'Aprobar' }))
+
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('help_approval_answer', {
+          id: 'help-apr-2',
+          approved: true,
+        })
+      )
+      expect(screen.getByRole('button', { name: 'Aprobar' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Rechazar' })).toBeDisabled()
+      expect(askCalls).toHaveLength(0)
+    })
+
+    it('Rechazar answers the card negatively', async () => {
+      backend({ hasKey: true })
+      render(HelpView)
+      await composer()
+
+      await approvalRequest({
+        id: 'help-apr-3',
+        tool: 'processing_control',
+        summary: 'Pausar el procesamiento «job-1»',
+      })
+      await fireEvent.click(await screen.findByRole('button', { name: 'Rechazar' }))
+
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('help_approval_answer', {
+          id: 'help-apr-3',
+          approved: false,
+        })
+      )
+    })
+
+    it('lists the tool steps under the answer', async () => {
+      backend({
+        hasKey: true,
+        ask: {
+          answer: 'Listo',
+          sources: [],
+          local: false,
+          documents: [],
+          steps: [
+            { tool: 'collections_list', args: '{}', status: 'ok' },
+            { tool: 'collections_create', args: '{"name":"SIMAPE"}', status: 'ok' },
+          ],
+          roundLimitReached: false,
+          toolsUnavailable: false,
+        },
+      })
+      render(HelpView)
+
+      await sendQuestion('Creá una colección SIMAPE')
+
+      expect(await screen.findByText('Listo')).toBeInTheDocument()
+      expect(screen.getByText('Usó: collections_list, collections_create')).toBeInTheDocument()
+    })
+
+    it('no steps line when the answer ran no tools', async () => {
+      backend({ hasKey: true, ask: answer('Respuesta de ayuda', []) })
+      render(HelpView)
+
+      await sendQuestion('¿Cómo importo?')
+
+      expect(await screen.findByText('Respuesta de ayuda')).toBeInTheDocument()
+      expect(screen.queryByText(/Usó:/)).not.toBeInTheDocument()
+    })
+
+    it('notes the round limit and unavailable tools', async () => {
+      backend({
+        hasKey: true,
+        ask: {
+          answer: 'A medias',
+          sources: [],
+          local: false,
+          documents: [],
+          steps: [{ tool: 'search_items', args: '{"query":"x"}', status: 'ok' }],
+          roundLimitReached: true,
+          toolsUnavailable: true,
+        },
+      })
+      render(HelpView)
+
+      await sendQuestion('Hacé muchas cosas')
+
+      expect(await screen.findByText('A medias')).toBeInTheDocument()
+      expect(screen.getByText(/límite de rondas/)).toBeInTheDocument()
+      expect(screen.getByText(/sin usar herramientas/)).toBeInTheDocument()
+    })
+  })
 })

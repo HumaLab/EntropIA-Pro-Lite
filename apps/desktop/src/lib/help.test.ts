@@ -3,12 +3,15 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   HELP_MANUAL_URL,
   HELP_NO_OPENROUTER_KEY,
+  helpApprovalAnswer,
   helpAsk,
   helpDiagnosticsPreview,
   helpFaqList,
   helpStatus,
   isNoKeyError,
+  listenHelpApproval,
   openHelpManual,
+  type HelpApprovalRequest,
 } from './help'
 
 describe('help backend wrappers', () => {
@@ -150,5 +153,48 @@ describe('help backend wrappers', () => {
     await openHelpManual()
 
     expect(invoke).toHaveBeenCalledWith('open_external_url', { url: HELP_MANUAL_URL })
+  })
+
+  it('helpApprovalAnswer sends the card answer to the backend', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+
+    await helpApprovalAnswer('help-apr-1', true)
+    expect(invoke).toHaveBeenCalledWith('help_approval_answer', {
+      id: 'help-apr-1',
+      approved: true,
+    })
+
+    await helpApprovalAnswer('help-apr-1', false)
+    expect(invoke).toHaveBeenCalledWith('help_approval_answer', {
+      id: 'help-apr-1',
+      approved: false,
+    })
+  })
+
+  it('listenHelpApproval relays the help://approval payload', async () => {
+    const { listen } = await import('@tauri-apps/api/event')
+    const seen: HelpApprovalRequest[] = []
+
+    await listenHelpApproval((request) => seen.push(request))
+
+    expect(listen).toHaveBeenCalledWith('help://approval', expect.any(Function))
+    const handler = vi
+      .mocked(listen)
+      .mock.calls.find(([name]) => name === 'help://approval')?.[1] as
+      ((event: { payload: HelpApprovalRequest }) => void) | undefined
+    handler?.({
+      payload: {
+        id: 'help-apr-1',
+        tool: 'collections_create',
+        summary: 'Crear la colección «SIMAPE»',
+      },
+    })
+    expect(seen).toEqual([
+      {
+        id: 'help-apr-1',
+        tool: 'collections_create',
+        summary: 'Crear la colección «SIMAPE»',
+      },
+    ])
   })
 })

@@ -958,6 +958,7 @@
 - «No se pudo inicializar la base de datos» `app.initError`
 - «No se pudo iniciar la investigación.» `research.startError`
 - «No se pudo obtener el diagnóstico.» `help.diagnosticsError`
+- «No se pudo responder el pedido. Probá de nuevo.» `help.approvalAnswerError`
 - «No se pudo responder. Probá de nuevo.» `help.sendError`
 - «no se pudo leer el archivo» `bibliography.reprocess.unreadableReadFailed`
 - «{assistant}: salida {exitCode}; {detail}» `assistants.install.command_failed`
@@ -1021,6 +1022,7 @@
 ### Varios
 
 - «Abrir Configuración» `help.openSettings`
+- «Aprobar» `help.approve`
 - «Ayuda» `help.title`
 - «Buscando en el manual…» `help.thinking`
 - «Buscar en mis documentos» `help.includeDocuments`
@@ -1031,19 +1033,24 @@
 - «De tus documentos» `help.documentsLabel`
 - «Del manual» `help.sourceManual, help.sourcesLabel`
 - «Del mapa de pantallas» `help.sourceScreenMap`
+- «El modelo no pudo usar herramientas en este turno; respondió sin usar herramientas.» `help.toolsUnavailable`
 - «Enviar» `help.send`
 - «Escribí tu pregunta…» `help.placeholder`
 - «Falló una transcripción, ¿qué hago?» `help.suggestion3`
 - «Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.» `help.documentsHint`
 - «Incluir diagnóstico» `help.includeDiagnostics`
+- «La ayuda pide aprobación» `help.approvalTitle`
 - «La ayuda usa tu cuenta de OpenRouter» `help.noKeyTitle`
+- «Llegó al límite de rondas de herramientas; la respuesta puede estar incompleta.» `help.roundLimitReached`
 - «Maximizar» `help.maximizePanel`
 - «Ocultar» `help.previewHide`
 - «Preguntá cómo usar EntropIA o qué hacer cuando algo falla» `help.subtitle`
 - «Preguntá, por ejemplo, cómo importar un PDF o qué hacer si falla una transcripción.» `help.emptyState`
 - «Probá con:» `help.suggestionsLabel`
+- «Rechazar» `help.reject`
 - «Respuesta local, sin consultar a OpenRouter» `help.localAnswer`
 - «Restaurar» `help.restorePanel`
+- «Usó» `help.stepsUsed`
 - «Ver el manual en línea» `help.openManual`
 - «Ver qué se envía» `help.previewToggle`
 - «Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.» `help.diagnosticsHint`

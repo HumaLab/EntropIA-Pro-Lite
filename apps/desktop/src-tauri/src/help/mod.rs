@@ -5,8 +5,8 @@
 pub(crate) mod agent_llm;
 pub(crate) mod commands;
 pub(crate) mod diagnostics;
-pub(crate) mod documents;
 pub(crate) mod faq;
+pub(crate) mod gate;
 pub(crate) mod index;
 pub(crate) mod intent;
 pub(crate) mod manual;

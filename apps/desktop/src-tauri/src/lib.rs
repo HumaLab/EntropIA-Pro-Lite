@@ -1072,6 +1072,10 @@ pub fn run() {
 
             app.manage(AppDbState::new(ui_conn, worker_conn, db_path.clone()));
 
+            // Pending inline help approvals (T22, D12): `help_ask` fills the
+            // cards, `help_approval_answer` takes the owner's answer.
+            app.manage(help::commands::HelpApprovalPending::default());
+
             // Asset integrity scan: reconciles `assets` rows against files on
             // disk. Off the critical path on purpose — a missing file is
             // worth logging, not worth making startup wait on or fail over.
@@ -1687,6 +1691,7 @@ pub fn run() {
             help::commands::help_diagnostics_preview,
             help::commands::help_ask,
             help::commands::help_faq_list,
+            help::commands::help_approval_answer,
             rag::commands::rag_chunk_coverage,
             rag::commands::rag_list_conversations,
             rag::commands::rag_search_conversations,
