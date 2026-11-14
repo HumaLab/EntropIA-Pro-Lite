@@ -144,6 +144,8 @@ Texto:
 /// Second (and later) map-reduce pass: fuse per-chunk summaries into the same
 /// 10-15 line shape as [`DEFAULT_SUMMARY_PROMPT`]. Internal step, not a user
 /// setting: chunk summaries already follow the user's summary prompt.
+/// Local-only: the only caller is the local-ml map-reduce summarizer.
+#[cfg(feature = "local-ml")]
 pub const SUMMARY_FUSION_PROMPT: &str = r#"Combiná estos resúmenes parciales de un mismo documento histórico en uno o dos párrafos concisos, de 10 a 15 líneas en total, sin repetir información. Preservá nombres propios, fechas, lugares y eventos clave, en el mismo idioma de los textos (por defecto, español). SIEMPRE terminá con una oración completa que termine en punto. NO superes las 15 líneas. NO cortes a mitad de frase.
 
 Resúmenes parciales:

@@ -55,6 +55,8 @@ pub struct PaddleVlRegion {
 
 /// One layout box from the layout-only `layout_v3.py` script: no content,
 /// recognition happens per box with the lightweight OCR engine.
+/// Paddle-only payload: the layout-V3 path does not exist in lean builds.
+#[cfg(feature = "paddle-ocr")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LayoutV3Box {
     pub label: String,
@@ -65,6 +67,8 @@ pub struct LayoutV3Box {
 }
 
 /// Parsed result from the layout-only `layout_v3.py` script.
+/// Paddle-only payload: the layout-V3 path does not exist in lean builds.
+#[cfg(feature = "paddle-ocr")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LayoutV3Output {
     pub method: String,

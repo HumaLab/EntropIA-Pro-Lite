@@ -259,7 +259,7 @@ pub fn download_model_file(
                 );
                 crate::app_logs::info(
                     app_handle,
-                    &format!("{event_scope}/download"),
+                    format!("{event_scope}/download"),
                     format!("Descarga de modelo local {pct}%"),
                 );
             }
@@ -274,7 +274,7 @@ pub fn download_model_file(
     );
     crate::app_logs::info(
         app_handle,
-        &format!("{event_scope}/download"),
+        format!("{event_scope}/download"),
         format!(
             "Descarga de modelo local completada: {}",
             display_destination.display()

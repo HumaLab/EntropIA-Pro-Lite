@@ -32,10 +32,10 @@ pub async fn llm_ocr_correction_is_available(
     }
     #[cfg(feature = "paddle-ocr")]
     {
-        return Ok(super::qwen_correction::local_correction_available_for(
+        Ok(super::qwen_correction::local_correction_available_for(
             &app_handle,
             &llm_queue.db_path,
-        ));
+        ))
     }
     #[cfg(not(feature = "paddle-ocr"))]
     Ok(false)

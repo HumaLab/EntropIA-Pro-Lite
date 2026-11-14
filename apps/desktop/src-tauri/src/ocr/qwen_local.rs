@@ -211,7 +211,8 @@ mod tests {
     fn correction_slots_fit_a_full_page_prompt() {
         // Truncation budget (prepare_remote_job_request n_ctx) must leave room
         // for the longest measured correction prompt (~6.5k tokens) plus the
-        // 8k-token flow cap inside one slot.
-        assert!(CORRECTION_SERVER_CONFIG.ctx_per_slot >= 16384);
+        // 8k-token flow cap inside one slot. Const-checked: violates at
+        // compile time instead of test time.
+        const _: () = assert!(CORRECTION_SERVER_CONFIG.ctx_per_slot >= 16384);
     }
 }

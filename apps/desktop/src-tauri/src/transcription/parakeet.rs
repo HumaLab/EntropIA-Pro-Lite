@@ -840,7 +840,7 @@ mod tests {
                 model_dir: std::path::PathBuf::from(&models).join(PARAKEET_MODEL_SUBDIR),
                 language: "es".to_string(),
             },
-            &nop,
+            nop,
         )
         .expect("load parakeet");
         let mut entries: Vec<_> = std::fs::read_dir(&audios)
@@ -857,7 +857,7 @@ mod tests {
             for diarize in [false, true] {
                 let start = Instant::now();
                 let (result, warning) = engine
-                    .transcribe(path.to_str().unwrap(), diarize, &nop)
+                    .transcribe(path.to_str().unwrap(), diarize, nop)
                     .expect("transcribe");
                 let elapsed = start.elapsed().as_secs_f64();
                 let speakers: usize = result

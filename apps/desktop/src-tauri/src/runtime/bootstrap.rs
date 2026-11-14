@@ -147,7 +147,7 @@ impl BootstrapController {
 }
 
 pub fn fetch_remote_catalog(source: BootstrapRemoteSource) -> BootstrapRemoteCatalog {
-    load_remote_catalog(source, |source| fetch_manifest_on_dedicated_thread(source))
+    load_remote_catalog(source, fetch_manifest_on_dedicated_thread)
 }
 
 /// Fetch the manifest with `reqwest::blocking` on a dedicated thread.
@@ -159,9 +159,7 @@ pub fn fetch_remote_catalog(source: BootstrapRemoteSource) -> BootstrapRemoteCat
 /// plain scheduler threads alike. Building, using and dropping the client on
 /// a dedicated thread is legal in every one of those contexts, so the fetch
 /// is always off-thread. The client's own 15s timeout bounds the join.
-fn fetch_manifest_on_dedicated_thread(
-    source: &BootstrapRemoteSource,
-) -> Result<String, String> {
+fn fetch_manifest_on_dedicated_thread(source: &BootstrapRemoteSource) -> Result<String, String> {
     let url = source.manifest_url.clone();
     std::thread::Builder::new()
         .name("runtime-bootstrap-fetch".to_string())

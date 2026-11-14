@@ -2468,7 +2468,8 @@ mod tests {
         rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)
     }
 
-    #[test]
+     #[test]
+     #[cfg(feature = "local-ml")]
     fn app_data_root_supports_models_and_hf_cache_layouts() {
         // BGE layout: <root>/models/<category>/<model>
         assert_eq!(

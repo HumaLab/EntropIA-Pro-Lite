@@ -3075,6 +3075,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "local-ml")]
     fn summary_chunks_cover_the_whole_text_without_loss() {
         let text =
             "Primera oración. Segunda oración con más palabras. Tercera. Cuarta oración final.";
@@ -3090,6 +3091,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "local-ml")]
     fn summary_chunking_scales_to_hundreds_of_kb() {
         // A ~300 KB document must split into bounded chunks without loss.
         let paragraph = "Esta es una oración de relleno con varias palabras. ";
@@ -3108,6 +3110,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "local-ml")]
     fn summary_chunking_keeps_an_oversized_block_verbatim() {
         // A single block longer than the budget becomes its own chunk: the
         // caller errors loudly instead of dropping it.

@@ -8,19 +8,19 @@ pub mod provider;
 #[cfg(feature = "paddle-ocr")]
 pub mod paddle;
 
+#[cfg(feature = "paddle-ocr")]
+pub mod glm_ocr_local;
 #[cfg(feature = "local-ml")]
 pub mod layout_onnx;
 #[cfg(feature = "paddle-ocr")]
-pub mod glm_ocr_local;
-#[cfg(feature = "paddle-ocr")]
 pub(crate) mod local_server;
-#[cfg(feature = "paddle-ocr")]
-pub mod qwen_local;
 #[cfg(feature = "paddle-ocr")]
 pub mod paddle_vl;
 pub mod paddle_vl_types;
 pub(crate) mod pdf;
 pub mod pdf_probe;
+#[cfg(feature = "paddle-ocr")]
+pub mod qwen_local;
 pub mod reading_order;
 
 pub(crate) fn init_pdfium_for_ocr_correction(app_handle: &AppHandle) {
@@ -247,6 +247,8 @@ fn glm_label_to_layout_category(label: &str) -> Option<LayoutCategory> {
 /// Mirrors the Python-side mapping in `layout_v3.py` / `glm_ocr_local.py`, so
 /// every engine agrees on what each box is. Unknown future labels fall back
 /// to plain text rather than dropping content.
+// Paddle-OCR layout path only; unit tests exercise it in every build.
+#[cfg_attr(not(feature = "paddle-ocr"), allow(dead_code))]
 fn layout_category_from_name(category: &str) -> LayoutCategory {
     match category {
         "title" => LayoutCategory::Title,
@@ -1391,6 +1393,8 @@ fn maybe_downscale_for_paddlevl(bytes: &[u8]) -> Vec<u8> {
 /// which typically produces much better results on newspaper clippings, forms,
 /// and other documents where PP-DocLayout-L gives sparse/wrong regions.
 ///
+// Paddle-OCR layout path only; unit tests exercise it in every build.
+#[cfg_attr(not(feature = "paddle-ocr"), allow(dead_code))]
 fn should_bypass_layout(
     regions: &[provider::LayoutRegion],
     image_width: u32,
@@ -1439,6 +1443,8 @@ fn should_bypass_layout(
 /// Clamps to image bounds. Returns `None` if the cropped region is too small
 /// (< 10px on either axis) — anything smaller cannot produce useful OCR.
 ///
+// Paddle-OCR layout path only; unit tests exercise it in every build.
+#[cfg_attr(not(feature = "paddle-ocr"), allow(dead_code))]
 fn crop_region(
     image: &image::DynamicImage,
     bbox: &provider::BoundingBox,
@@ -2042,7 +2048,7 @@ fn assemble_layout_output(
         ) {
             String::new()
         } else {
-            match crop_region(&image, &bbox) {
+            match crop_region(image, &bbox) {
                 Some(crop) => {
                     let mut png = Vec::new();
                     crop.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -2530,6 +2536,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "paddle-ocr")]
     fn layout_category_from_name_maps_v3_categories() {
         // Input is the mapped category (the script already maps raw labels).
         assert_eq!(layout_category_from_name("title"), LayoutCategory::Title);
@@ -2565,7 +2572,9 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "paddle-ocr")]
     struct FixedTextProvider;
+    #[cfg(feature = "paddle-ocr")]
     impl provider::OcrProvider for FixedTextProvider {
         fn name(&self) -> &str {
             "stub"
@@ -2579,6 +2588,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "paddle-ocr")]
     fn test_box(label: &str, category: &str, order: i32) -> paddle_vl_types::LayoutV3Box {
         paddle_vl_types::LayoutV3Box {
             label: label.to_string(),
@@ -2595,6 +2605,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "paddle-ocr")]
     fn light_layout_reads_boxes_in_order_and_skips_figures() {
         let provider: std::sync::Arc<dyn provider::OcrProvider> =
             std::sync::Arc::new(FixedTextProvider);
@@ -2621,6 +2632,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "paddle-ocr")]
     fn light_layout_bypass_matches_heuristic() {
         // A single box covering the page is "OCR the whole thing anyway".
         let provider: std::sync::Arc<dyn provider::OcrProvider> =

@@ -8,7 +8,9 @@
 //! like the UI buttons: `start_missing` returns what it queued, and the agent
 //! polls `status` to follow progress.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "local-ml")]
+use std::path::PathBuf;
 
 /// One installable local-model component.
 #[derive(Clone, Debug, serde::Serialize, schemars::JsonSchema)]
@@ -98,6 +100,9 @@ pub const COMPONENT_QWEN_CORRECT: &str = "qwen_correct";
 pub const COMPONENT_EMBEDDINGS: &str = "embeddings";
 pub const COMPONENT_RERANKER: &str = "reranker";
 
+// Reporting-only helpers: live only in local-ml builds (status/download),
+// but unit tests exercise them in every build.
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
 fn component(
     id: &str,
     label: &str,
@@ -119,10 +124,10 @@ pub fn status(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> ModelsSt
     #[cfg(not(feature = "local-ml"))]
     {
         let _ = (db_path, app_handle);
-        return ModelsStatus {
+        ModelsStatus {
             local_ml: false,
             components: Vec::new(),
-        };
+        }
     }
     #[cfg(feature = "local-ml")]
     {
@@ -282,10 +287,10 @@ pub async fn start_missing(
     #[cfg(not(feature = "local-ml"))]
     {
         let _ = (db_path, app_handle, only);
-        return Err(
+        Err(
             "Este build es solo OpenRouter (Lite): no hay modelos locales que instalar."
                 .to_string(),
-        );
+        )
     }
     #[cfg(feature = "local-ml")]
     {
@@ -341,6 +346,7 @@ async fn start_missing_local_ml(
 
 /// Flag filter ids that match no known component, so a typo does not look
 /// like "nothing to do".
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
 pub(crate) fn report_unknown_components(
     only: &[String],
     components: &[ComponentStatus],

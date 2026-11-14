@@ -30,14 +30,14 @@
   "script_files": [
     {
       "path": "scripts/paddle_vl.py",
-      "sha256": "f0dfff26cf1ac86ffd74face48fec542cfebf1b4226e9dbcb61b13015fc1207d",
-      "size": 14866,
+      "sha256": "a2c1ca3443d9f049655f37e3b99f3908b31f472aa9a2cf8473079752b913fc1f",
+      "size": 16489,
       "executable": false
     },
     {
       "path": "scripts/spacy_ner.py",
-      "sha256": "ce36bee68237de055bbc78bce52fe518f2d8724415ed2618462584c978e24fba",
-      "size": 2979,
+      "sha256": "531d12b4964ab69f1867eb53f8a23f6f38404d3e465c37d756c97d1133b87830",
+      "size": 2883,
       "executable": false
     },
     {
