@@ -174,7 +174,21 @@ mod tests {
     /// `sync/research_cycle.rs` opens `research/estado.sqlite`, the research
     /// engine's own state database (owned by `entropia-agent`), never the
     /// archive.
-    const DIRECT_OPEN_ALLOWED: &[&str] = &["baseline.rs", "research_cycle.rs"];
+    ///
+    /// `help/index.rs` opens `help-index.sqlite` in the cache dir, the help
+    /// assistant's rebuildable search index, never the archive.
+    ///
+    /// `help/history.rs` opens `help-history.sqlite` in the data dir, the help
+    /// assistant's own conversation history, never the archive.
+    ///
+    /// Entries are matched against the end of the file's path (with `/`), so a
+    /// generic name such as `index.rs` only exempts the file in its module.
+    const DIRECT_OPEN_ALLOWED: &[&str] = &[
+        "baseline.rs",
+        "research_cycle.rs",
+        "help/index.rs",
+        "help/history.rs",
+    ];
 
     fn collect_offenders(dir: &std::path::Path, found: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).expect("read src dir").flatten() {
@@ -187,7 +201,12 @@ mod tests {
                 Some(name) if name.ends_with(".rs") => name.to_string(),
                 _ => continue,
             };
-            if name == "open.rs" || DIRECT_OPEN_ALLOWED.contains(&name.as_str()) {
+            let unix_path = path.to_string_lossy().replace('\\', "/");
+            if name == "open.rs"
+                || DIRECT_OPEN_ALLOWED
+                    .iter()
+                    .any(|allowed| unix_path.ends_with(&format!("/{allowed}")))
+            {
                 continue;
             }
             // `<module>_tests.rs` files are declared `#[cfg(test)] mod ...;` and
