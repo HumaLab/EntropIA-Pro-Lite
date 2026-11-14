@@ -729,6 +729,28 @@ mod tests {
     }
 
     #[test]
+    fn allowlist_refuses_the_verify_report_cases() {
+        // T32/S16 follow-up: userinfo-smuggled host and `..` escape are
+        // refused. Hosts are case-insensitive (DNS), so the upper-case host
+        // below is accepted only because the URL is otherwise exact — same
+        // scheme, same host after lower-casing, same case-sensitive path —
+        // which is safe: it fetches the same public file as the lower-case
+        // form. The test pins that safe behaviour.
+        for evil in [
+            "https://raw.githubusercontent.com@evil.example/HumaLab/EntropIA-Pro-Lite/HEAD/README.md",
+            "https://raw.githubusercontent.com/HumaLab/EntropIA-Pro-Lite/HEAD/../../secret",
+        ] {
+            assert!(!is_allowed_url(evil), "{evil} debe estar prohibida");
+        }
+        assert!(
+            is_allowed_url(
+                "https://RAW.GITHUBUSERCONTENT.com/HumaLab/EntropIA-Pro-Lite/HEAD/README.md"
+            ),
+            "el host en mayúsculas con la ruta exacta es el mismo archivo público"
+        );
+    }
+
+    #[test]
     fn repo_paths_reject_escapes_schemes_and_absolute_paths() {
         for bad in [
             "../x",

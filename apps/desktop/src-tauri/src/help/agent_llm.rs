@@ -1,7 +1,6 @@
 //! Help agent tool loop (T20, S15, D13): OpenRouter tool calling over a
-//! narrow executor trait, with scripted mocks in tests. T21/T22 wire it
-//! into `help_ask`; until then only tests call it.
-#![cfg_attr(not(test), allow(dead_code))]
+//! narrow executor trait, with scripted mocks in tests. Wired into
+//! `help_ask` since T22 (help agent loop), so every item here is used.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -349,14 +348,12 @@ pub(crate) fn parse_chat_response(body: &str) -> Result<ChatResponse, String> {
 
 /// The reqwest OpenRouter transport (D13): `Authorization: Bearer <key>`,
 /// model, messages, tools, `tool_choice`, `max_tokens`, `temperature`.
-/// Tests use the scripted mock below; this type waits for T21 to be built.
-#[allow(dead_code)]
+/// Wired into `help_ask` since T22; tests use the scripted mock below.
 pub(crate) struct OpenRouterChatTransport {
     client: reqwest::Client,
     api_key: String,
 }
 
-#[allow(dead_code)]
 impl OpenRouterChatTransport {
     pub(crate) fn new(api_key: String) -> Self {
         let client = reqwest::Client::builder()

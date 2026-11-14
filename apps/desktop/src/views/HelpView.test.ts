@@ -1457,6 +1457,59 @@ describe('conversation history (S19)', () => {
     expect((askCalls[0] as { conversationId?: unknown }).conversationId).toBe('c-1')
   })
 
+  it('S12: a reopened document answer is not resent as history', async () => {
+    // A stored answer built from the user's documents (S12) carries its
+    // titles in `meta.documents`. Reopening it and asking again must not
+    // resend that answer: its consent covered one question only. The
+    // user's own question travels.
+    const askCalls: unknown[] = []
+    backend({
+      hasKey: true,
+      list: [
+        {
+          id: 'c-1',
+          title: '¿Qué dice mi acta?',
+          updatedAt: NOW - 5 * 60_000,
+          messageCount: 2,
+        },
+      ],
+      detail: {
+        id: 'c-1',
+        title: '¿Qué dice mi acta?',
+        messages: [
+          { role: 'user', content: '¿Qué dice mi acta?', meta: {} },
+          {
+            role: 'assistant',
+            content: 'El acta dice esto.',
+            meta: {
+              kind: 'answer',
+              sources: [],
+              documents: [{ title: 'Acta' }],
+              steps: [],
+              local: false,
+            },
+          },
+        ],
+      },
+      ask: answer('Otra respuesta', []),
+      askCalls,
+    })
+    render(HelpView)
+    await toggleHistory()
+
+    const list = document.querySelector('.help-view__history-list') as HTMLElement
+    await fireEvent.click(within(list).getByRole('button', { name: /¿Qué dice mi acta/ }))
+
+    expect(await screen.findByText('El acta dice esto.')).toBeInTheDocument()
+
+    await sendQuestion('¿Y después?')
+
+    await waitFor(() => expect(askCalls).toHaveLength(1))
+    const sent = askCalls[0] as { history: Array<{ role: string; content: string }> }
+    expect(sent.history.map((turn) => turn.content)).toContain('¿Qué dice mi acta?')
+    expect(sent.history.map((turn) => turn.content).join('\n')).not.toContain('El acta dice esto.')
+  })
+
   it('the first answer brings the conversation id and later questions continue it', async () => {
     const askCalls: unknown[] = []
     backend({
