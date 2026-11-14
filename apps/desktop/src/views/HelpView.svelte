@@ -61,6 +61,8 @@
   type HelpMessage = {
     role: 'user' | 'assistant'
     content: string
+    /** Disclosure state for the collapsed «Fuentes y pasos» metadata (S20): UI-only, never stored. */
+    metaOpen?: boolean
     sources?: HelpSource[]
     /** True when the backend answered from the bundled FAQ, with no network call (S10). */
     local?: boolean
@@ -164,6 +166,23 @@
     if (status === 'rejected') return $currentLocale && t('help.approvalOutcomeRejected')
     if (status === 'expired') return $currentLocale && t('help.approvalOutcomeExpired')
     return $currentLocale && t('help.approvalOutcomeFailed')
+  }
+
+  /** Entries hidden behind the collapsed «Fuentes y pasos» disclosure (S20):
+   * manual/screen-map sources plus the user's documents plus the agent steps. */
+  function metaCount(message: HelpMessage): number {
+    return (
+      (message.sources?.length ?? 0) +
+      (message.documents?.length ?? 0) +
+      (message.steps?.length ?? 0)
+    )
+  }
+
+  /** Flips one answer's metadata disclosure (S20). */
+  function toggleMeta(index: number): void {
+    messages = messages.map((message, at) =>
+      at === index ? { ...message, metaOpen: !message.metaOpen } : message
+    )
   }
 
   /** Applies one decided MCP approval (T26): the notice goes right after
@@ -482,7 +501,11 @@
   }
 </script>
 
-<div class="help-view page-shell" class:help-view--embedded={embedded}>
+<div
+  class="help-view page-shell"
+  class:help-view--embedded={embedded}
+  class:help-view--maximized={maximized}
+>
   {#if !embedded}
     <section class="page-header help-view__header" aria-labelledby="help-title-{paneId}">
       <div class="page-header__content">
@@ -586,15 +609,19 @@
       aria-label={$currentLocale && t('help.title')}
     >
       {#if messages.length === 0 && !sending}
-        <p class="help-view__empty">{$currentLocale && t('help.emptyState')}</p>
-        <div class="help-view__suggestions">
-          <p class="help-view__suggestions-label">{$currentLocale && t('help.suggestionsLabel')}</p>
-          <div class="help-view__suggestions-list">
-            {#each starters as starter (starter)}
-              <Button variant="secondary" size="sm" onclick={() => void send(starter)}>
-                {starter}
-              </Button>
-            {/each}
+        <div class="help-view__empty">
+          <p class="help-view__empty-text">{$currentLocale && t('help.emptyState')}</p>
+          <div class="help-view__suggestions">
+            <p class="help-view__suggestions-label">
+              {$currentLocale && t('help.suggestionsLabel')}
+            </p>
+            <div class="help-view__suggestions-list">
+              {#each starters as starter (starter)}
+                <Button variant="secondary" size="sm" onclick={() => void send(starter)}>
+                  {starter}
+                </Button>
+              {/each}
+            </div>
           </div>
         </div>
       {/if}
@@ -612,31 +639,57 @@
             {#if message.local}
               <p class="help-view__local">{$currentLocale && t('help.localAnswer')}</p>
             {/if}
-            {#if message.sources && message.sources.length > 0}
-              <ul class="help-view__sources" aria-label={$currentLocale && t('help.sourcesLabel')}>
-                {#each message.sources as source (source.chapter + source.title)}
-                  <li>
-                    {$currentLocale &&
-                      (source.kind === 'screenMap'
-                        ? t('help.sourceScreenMap')
-                        : t('help.sourceManual'))}: {source.chapter} › {source.title}
-                  </li>
-                {/each}
-              </ul>
-            {/if}
-            {#if message.documents && message.documents.length > 0}
-              <p class="help-view__doc-titles">
-                {$currentLocale && t('help.documentsLabel')}: {message.documents
-                  .map((document) => document.title)
-                  .join('; ')}
-              </p>
-            {/if}
-            {#if message.steps && message.steps.length > 0}
-              <p class="help-view__steps">
-                {$currentLocale && t('help.stepsUsed')}: {message.steps
-                  .map((step) => describeHelpStep(step, $currentLocale))
-                  .join(', ')}
-              </p>
+            {#if metaCount(message) > 0}
+              {@const metaId = `help-meta-${paneId}-${index}`}
+              <div class="help-view__meta">
+                <button
+                  type="button"
+                  class="help-view__meta-toggle"
+                  aria-expanded={message.metaOpen === true}
+                  onclick={() => toggleMeta(index)}
+                >
+                  <span class="help-view__meta-marker" aria-hidden="true"></span>
+                  {$currentLocale && t('help.metaToggle', { count: metaCount(message) })}
+                </button>
+                {#if message.metaOpen}
+                  <div
+                    class="help-view__meta-details"
+                    id={metaId}
+                    role="group"
+                    aria-label={$currentLocale && t('help.metaDetails')}
+                  >
+                    {#if message.sources && message.sources.length > 0}
+                      <ul
+                        class="help-view__sources"
+                        aria-label={$currentLocale && t('help.sourcesLabel')}
+                      >
+                        {#each message.sources as source (source.chapter + source.title)}
+                          <li>
+                            {$currentLocale &&
+                              (source.kind === 'screenMap'
+                                ? t('help.sourceScreenMap')
+                                : t('help.sourceManual'))}: {source.chapter} › {source.title}
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    {#if message.documents && message.documents.length > 0}
+                      <p class="help-view__doc-titles">
+                        {$currentLocale && t('help.documentsLabel')}: {message.documents
+                          .map((document) => document.title)
+                          .join('; ')}
+                      </p>
+                    {/if}
+                    {#if message.steps && message.steps.length > 0}
+                      <p class="help-view__steps">
+                        {$currentLocale && t('help.stepsUsed')}: {message.steps
+                          .map((step) => describeHelpStep(step, $currentLocale))
+                          .join(', ')}
+                      </p>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
             {/if}
             {#if message.notices && message.notices.length > 0}
               <ul class="help-view__notices" aria-live="polite">
@@ -813,6 +866,24 @@
     padding-block-end: 0;
   }
 
+  /* Readable answers when maximized (S20): the centred column caps the
+     measure at ~72ch instead of stretching across the whole window. The
+     user bubble keeps its right docking, only capped. */
+  .help-view--maximized .help-view__bubble {
+    max-width: 72ch;
+  }
+
+  .help-view--maximized .help-view__bubble--assistant {
+    align-self: center;
+    width: 100%;
+  }
+
+  .help-view--maximized .help-view__empty {
+    width: 100%;
+    max-width: 72ch;
+    margin-inline: auto;
+  }
+
   .help-view__header {
     flex-shrink: 0;
   }
@@ -858,10 +929,24 @@
     padding: var(--space-2) var(--space-1);
   }
 
+  /* The empty state (S20): one quiet card holding the invitation and the
+     starters, instead of a loose paragraph above a wall of pills. */
   .help-view__empty {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-dialog);
+    background: var(--surface-panel);
+  }
+
+  .help-view__empty-text {
     margin: 0;
-    color: var(--color-text-secondary);
+    color: var(--color-text-primary);
     font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    line-height: var(--line-height-base, 1.5);
   }
 
   .help-view__suggestions {
@@ -876,10 +961,13 @@
     font-size: var(--font-size-xs);
   }
 
+  /* Starters as a tidy list (S20): one column of full-width rows instead
+     of wrapping pills. */
   .help-view__suggestions-list {
     display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
   }
 
   .help-view__bubble {
@@ -899,18 +987,24 @@
     border-color: color-mix(in srgb, var(--color-accent) 24%, var(--border-subtle));
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
+    line-height: var(--line-height-base, 1.5);
     white-space: pre-wrap;
   }
 
+  /* The accent bar (S20) tells the assistant bubble apart from the user's
+     tinted one at a glance, in both themes, without relying on tint alone. */
   .help-view__bubble--assistant {
     align-self: flex-start;
     background: var(--surface-panel);
+    border-inline-start: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
+    line-height: var(--line-height-base, 1.5);
   }
 
   .help-view__markdown {
     white-space: normal;
+    line-height: var(--line-height-base, 1.5);
   }
 
   .help-view__markdown :global(p) {
@@ -958,7 +1052,7 @@
   }
 
   .help-view__sources {
-    margin: var(--space-2) 0 0;
+    margin: 0;
     padding: 0;
     list-style: none;
     color: var(--color-text-secondary);
@@ -973,15 +1067,66 @@
   }
 
   .help-view__doc-titles {
-    margin: var(--space-2) 0 0;
+    margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
   }
 
   .help-view__steps {
-    margin: var(--space-2) 0 0;
+    margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
+  }
+
+  /* Collapsed answer metadata (S20): one quiet line carrying the count; the
+     sources, documents and steps only render on demand inside the group. */
+  .help-view__meta {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin-top: var(--space-2);
+  }
+
+  .help-view__meta-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-height: 24px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--color-text-secondary);
+    font: inherit;
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+  }
+
+  .help-view__meta-toggle:hover {
+    color: var(--color-text-primary);
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+  }
+
+  .help-view__meta-toggle:focus-visible {
+    outline: none;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--focus-ring);
+  }
+
+  /* A text marker, not an icon: the disclosure state also lives on
+     aria-expanded, so no motion (and no reduced-motion query) is needed. */
+  .help-view__meta-marker::before {
+    content: '▸';
+  }
+
+  .help-view__meta-toggle[aria-expanded='true'] .help-view__meta-marker::before {
+    content: '▾';
+  }
+
+  .help-view__meta-details {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
   }
 
   .help-view__live-steps {
@@ -1049,6 +1194,7 @@
     flex-direction: column;
     gap: var(--space-2);
     padding-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
   }
 
   /* Opt-ins (T28): one wrapping row by default; a single line only with the
@@ -1080,7 +1226,11 @@
      tooltip; the label beside it keeps the checkbox meaning. */
   .help-view__info {
     display: inline-flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
+    min-width: 24px;
+    min-height: 24px;
     padding: 0;
     border: none;
     background: none;
@@ -1117,6 +1267,12 @@
     text-decoration: underline;
     text-underline-offset: 0.15em;
     cursor: pointer;
+  }
+
+  .help-view__preview-toggle:focus-visible {
+    outline: none;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--focus-ring);
   }
 
   /* Bounded (T15): its own scroll, so a long dump scrolls inside the

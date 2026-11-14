@@ -96,6 +96,11 @@ async function previewBlock(): Promise<HTMLElement> {
   return await screen.findByText((_content, element) => element?.textContent === PREVIEW_TEXT)
 }
 
+/** Opens the collapsed «Fuentes y pasos» disclosure of an answer (S20). */
+async function expandMeta(name: string | RegExp): Promise<void> {
+  await fireEvent.click(await screen.findByRole('button', { name }))
+}
+
 async function sendQuestion(text: string) {
   const input = await composer()
   await fireEvent.input(input, { target: { value: text } })
@@ -217,6 +222,7 @@ describe('HelpView', () => {
     await sendQuestion('¿Qué dice mi acta?')
 
     expect(await screen.findByText('Dice esto')).toBeInTheDocument()
+    await expandMeta('Fuentes y pasos (2)')
     expect(
       screen.getByText('De tus documentos: Acta del cabildo; Crónica del puerto')
     ).toBeInTheDocument()
@@ -245,6 +251,7 @@ describe('HelpView', () => {
 
     const strong = await screen.findByText('Importá')
     expect(strong.tagName).toBe('STRONG')
+    await expandMeta('Fuentes y pasos (1)')
     expect(
       screen.getByText('Del manual: Capítulo 1. Inicio rápido › 1.1 Importar archivos')
     ).toBeInTheDocument()
@@ -269,6 +276,7 @@ describe('HelpView', () => {
 
     await sendQuestion('¿Dónde está el botón Guardar cambios?')
 
+    await expandMeta('Fuentes y pasos (3)')
     expect(screen.getByText('Del mapa de pantallas: Sincronización › card')).toBeInTheDocument()
     expect(
       screen.getByText('Del manual: Capítulo 1. Inicio rápido › 1.1 Importar archivos')
@@ -667,7 +675,8 @@ describe('HelpView', () => {
 
       await sendQuestion('Creá una colección SIMAPE')
 
-      expect(await screen.findByText('Listo')).toBeInTheDocument()
+      await screen.findByText('Listo')
+      await expandMeta('Fuentes y pasos (2)')
       expect(
         screen.getByText('Usó: Listó colecciones, Creó la colección «SIMAPE»')
       ).toBeInTheDocument()
@@ -681,6 +690,8 @@ describe('HelpView', () => {
 
       expect(await screen.findByText('Respuesta de ayuda')).toBeInTheDocument()
       expect(screen.queryByText(/Usó:/)).not.toBeInTheDocument()
+      // No metadata at all: not even the disclosure toggle renders.
+      expect(screen.queryByRole('button', { name: /Fuentes y pasos/ })).not.toBeInTheDocument()
     })
 
     it('notes the round limit and unavailable tools', async () => {
@@ -803,7 +814,8 @@ describe('HelpView', () => {
 
       expect(await screen.findByText('Listo')).toBeInTheDocument()
       // The final list stays under the answer; the live list is gone, so no
-      // label shows twice.
+      // label shows twice. The final list lives behind the disclosure.
+      await expandMeta('Fuentes y pasos (2)')
       expect(screen.queryByText('Buscando en el manual…')).not.toBeInTheDocument()
       expect(document.querySelectorAll('.help-view__live-steps li')).toHaveLength(0)
       expect(
@@ -910,6 +922,7 @@ describe('HelpView', () => {
       await sendQuestion('Borrá la colección SIMAPE')
 
       expect(await screen.findByText('Pedí borrarla; aprobala en el diálogo.')).toBeInTheDocument()
+      await expandMeta('Fuentes y pasos (1)')
       const label = await screen.findByText('Usó: Pidió borrar la colección «SIMAPE»')
       expect(label).toBeInTheDocument()
       expect(screen.queryByText(new RegExp(UUID))).not.toBeInTheDocument()
@@ -939,6 +952,7 @@ describe('HelpView', () => {
       render(HelpView)
 
       await sendQuestion('Borrá la colección SIMAPE')
+      await expandMeta('Fuentes y pasos (1)')
       await screen.findByText('Usó: Pidió borrar la colección «SIMAPE»')
 
       await fireOutcome({
@@ -979,6 +993,7 @@ describe('HelpView', () => {
       render(HelpView)
 
       await sendQuestion('Borrá la colección SIMAPE')
+      await expandMeta('Fuentes y pasos (1)')
       await screen.findByText('Usó: Pidió borrar la colección «SIMAPE»')
 
       await fireOutcome({
@@ -1020,6 +1035,7 @@ describe('HelpView', () => {
       render(HelpView)
 
       await sendQuestion('Borrá la colección SIMAPE')
+      await expandMeta('Fuentes y pasos (1)')
       await screen.findByText('Usó: Pidió borrar la colección «SIMAPE»')
 
       await fireOutcome({
@@ -1213,6 +1229,146 @@ describe('HelpView', () => {
       // The hint icon reads as a superscript, not a paragraph.
       expect(rule('.help-view__info')).toMatch(/vertical-align:\s*super/)
     })
+  })
+})
+
+describe('answer metadata disclosure (S20)', () => {
+  // Like the `HelpView` block above: this top-level describe needs its own
+  // reset, otherwise the English test below leaks `en` into the history
+  // block that runs after it.
+  beforeEach(() => {
+    locale.set('es')
+    navigationRef.navigate.mockReset()
+    navigationRef.openRootSection.mockReset()
+    mockInvoke.mockReset()
+  })
+  const MIXED = {
+    answer: 'Pasos locales',
+    sources: [
+      { chapter: 'Capítulo 4', title: '4.2' },
+      { chapter: 'Sincronización', title: 'card', kind: 'screenMap' },
+    ],
+    local: true,
+    documents: [{ title: 'Acta del cabildo' }],
+    steps: [
+      { tool: 'collections_list', args: '{}', status: 'ok' },
+      { tool: 'collections_create', args: '{"name":"SIMAPE"}', status: 'ok' },
+    ],
+    roundLimitReached: false,
+    toolsUnavailable: false,
+  }
+
+  it('is collapsed by default: one quiet line with the count, metadata hidden', async () => {
+    backend({ hasKey: true, ask: MIXED })
+    render(HelpView)
+
+    await sendQuestion('¿Cómo importo un PDF?')
+
+    expect(await screen.findByText('Pasos locales')).toBeInTheDocument()
+    // 2 sources + 1 document + 2 steps.
+    const toggle = screen.getByRole('button', { name: 'Fuentes y pasos (5)' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    // The local badge stays visible above the disclosure; the details do not.
+    expect(screen.getByText('Respuesta local, sin consultar a OpenRouter')).toBeInTheDocument()
+    expect(screen.queryByText(/Del manual/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/De tus documentos/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Usó:/)).not.toBeInTheDocument()
+  })
+
+  it('expands on click and collapses again, with an accessible group label', async () => {
+    backend({ hasKey: true, ask: MIXED })
+    render(HelpView)
+
+    await sendQuestion('¿Cómo importo un PDF?')
+
+    const toggle = await screen.findByRole('button', { name: 'Fuentes y pasos (5)' })
+    await fireEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    const details = screen.getByRole('group', { name: 'Detalle de fuentes y pasos' })
+    expect(details).toBeInTheDocument()
+    expect(within(details).getByText('Del manual: Capítulo 4 › 4.2')).toBeInTheDocument()
+    expect(
+      within(details).getByText('Del mapa de pantallas: Sincronización › card')
+    ).toBeInTheDocument()
+    expect(within(details).getByText('De tus documentos: Acta del cabildo')).toBeInTheDocument()
+    expect(
+      within(details).getByText('Usó: Listó colecciones, Creó la colección «SIMAPE»')
+    ).toBeInTheDocument()
+
+    await fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/Del manual/)).not.toBeInTheDocument()
+  })
+
+  it('labels the toggle in English too', async () => {
+    locale.set('en')
+    backend({
+      hasKey: true,
+      ask: {
+        answer: 'Local steps',
+        sources: [{ chapter: 'Chapter 4', title: '4.2' }],
+        local: true,
+      },
+    })
+    render(HelpView)
+
+    const input = await screen.findByRole('textbox', { name: 'Type your question…' })
+    await fireEvent.input(input, { target: { value: 'How do I import a PDF?' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    expect(await screen.findByText('Local steps')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sources and steps (1)' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+  })
+
+  it('the maximized panel caps the measure and centres the column (stylesheet contract)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const styles = readFileSync(resolve(import.meta.dirname, 'HelpView.svelte'), 'utf-8')
+      .split('<style>')[1]
+      ?.replace(/\/\*[\s\S]*?\*\//g, '')
+    const rule = (selector: string): string => {
+      const match = new RegExp(
+        `(^|\\n)\\s*${selector.replace(/[.]/g, '\\.')}\\s*\\{([^}]*)\\}`
+      ).exec(styles ?? '')
+      expect(match, `${selector} is no longer in the stylesheet`).not.toBeNull()
+      return match?.[2] ?? ''
+    }
+    expect(rule('.help-view--maximized .help-view__bubble')).toMatch(/max-width:\s*72ch/)
+    expect(rule('.help-view--maximized .help-view__bubble--assistant')).toMatch(
+      /align-self:\s*center/
+    )
+    expect(rule('.help-view--maximized .help-view__bubble--assistant')).toMatch(/width:\s*100%/)
+    expect(rule('.help-view--maximized .help-view__empty')).toMatch(/max-width:\s*72ch/)
+  })
+
+  it('the starters read as a list and the quiet controls keep the shared focus ring', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const styles = readFileSync(resolve(import.meta.dirname, 'HelpView.svelte'), 'utf-8')
+      .split('<style>')[1]
+      ?.replace(/\/\*[\s\S]*?\*\//g, '')
+    const rule = (selector: string): string => {
+      const match = new RegExp(
+        `(^|\\n)\\s*${selector.replace(/[.]/g, '\\.')}\\s*\\{([^}]*)\\}`
+      ).exec(styles ?? '')
+      expect(match, `${selector} is no longer in the stylesheet`).not.toBeNull()
+      return match?.[2] ?? ''
+    }
+    // A tidy column of full-width rows, not wrapping pills.
+    expect(rule('.help-view__suggestions-list')).toMatch(/flex-direction:\s*column/)
+    expect(rule('.help-view__suggestions-list')).toMatch(/align-items:\s*stretch/)
+    // Every keyboard-reachable quiet control draws the shared ring.
+    expect(rule('.help-view__meta-toggle:focus-visible')).toMatch(/box-shadow:\s*var\(--focus-ring/)
+    expect(rule('.help-view__preview-toggle:focus-visible')).toMatch(
+      /box-shadow:\s*var\(--focus-ring/
+    )
+    // The superscript hint is a 12px glyph on a 24px target.
+    expect(rule('.help-view__info')).toMatch(/min-width:\s*24px/)
+    expect(rule('.help-view__info')).toMatch(/min-height:\s*24px/)
   })
 })
 

@@ -404,6 +404,8 @@ describe('i18n', () => {
       'Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.'
     )
     expect(t('help.documentsLabel')).toBe('De tus documentos')
+    expect(t('help.metaToggle', { count: 5 })).toBe('Fuentes y pasos (5)')
+    expect(t('help.metaDetails')).toBe('Detalle de fuentes y pasos')
     expect(t('help.stop')).toBe('Detener')
     expect(t('help.sourceManual')).toBe('Del manual')
     expect(t('help.sourceScreenMap')).toBe('Del mapa de pantallas')
@@ -481,6 +483,8 @@ describe('i18n', () => {
       'Excerpts from your documents go to OpenRouter for this question only.'
     )
     expect(t('help.documentsLabel')).toBe('From your documents')
+    expect(t('help.metaToggle', { count: 5 })).toBe('Sources and steps (5)')
+    expect(t('help.metaDetails')).toBe('Source and step details')
     expect(t('help.stop')).toBe('Stop')
     expect(t('help.sourceManual')).toBe('From the manual')
     expect(t('help.sourceScreenMap')).toBe('From the screen map')

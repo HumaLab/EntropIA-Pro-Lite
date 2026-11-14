@@ -1044,6 +1044,7 @@
 - «De tus documentos» `help.documentsLabel`
 - «Del manual» `help.sourceManual, help.sourcesLabel`
 - «Del mapa de pantallas» `help.sourceScreenMap`
+- «Detalle de fuentes y pasos» `help.metaDetails`
 - «Detener» `help.stop`
 - «El modelo no pudo usar herramientas en este turno; respondió sin usar herramientas.» `help.toolsUnavailable`
 - «Eliminar conversación» `help.deleteConversation`
@@ -1051,6 +1052,7 @@
 - «Escribí tu pregunta…» `help.placeholder`
 - «Falló una transcripción, ¿qué hago?» `help.suggestion3`
 - «Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.» `help.documentsHint`
+- «Fuentes y pasos ({count})» `help.metaToggle`
 - «Historial» `help.history`
 - «Historial ({count})» `help.historyCount`
 - «Incluir diagnóstico» `help.includeDiagnostics`
@@ -1073,11 +1075,11 @@
 - «Se eliminan todas las conversaciones guardadas en este equipo. No se puede deshacer.» `help.clearHistoryMessage`
 - «Todavía no hay conversaciones guardadas.» `help.historyEmpty`
 - «Usó» `help.stepsUsed`
-- «Venció» `help.approvalOutcomeExpired`
-- «Ver el manual en línea» `help.openManual`
 
 ### Varios (2/2)
 
+- «Venció» `help.approvalOutcomeExpired`
+- «Ver el manual en línea» `help.openManual`
 - «Ver qué se envía» `help.previewToggle`
 - «Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.» `help.diagnosticsHint`
 - «ahora mismo» `help.historyNow`
