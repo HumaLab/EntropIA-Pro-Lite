@@ -1,0 +1,561 @@
+{
+  "files": 97,
+  "totals": {
+    "hex": 33,
+    "rgba": 42,
+    "colorMixBlackWhite": 9,
+    "unknownTokens": 6,
+    "fallbacks": 158,
+    "publishedFallbacks": 137,
+    "fontSize": 22,
+    "fontWeight": 9,
+    "lineHeight": 48,
+    "letterSpacing": 66,
+    "disabledOpacity": 36,
+    "zIndex": 36,
+    "transitions": 26,
+    "globalOverrides": 36,
+    "rawInput": 63,
+    "textarea": 24,
+    "progress": 5,
+    "details": 8,
+    "radio": 27
+  },
+  "distinctValues": {
+    "unknownTokens": [
+      "--color-text-danger",
+      "--color-text-on-accent",
+      "--color-text-tertiary",
+      "--color-surface-hover"
+    ],
+    "lineHeight": ["0", "1", "1.2", "1.25", "1.3", "1.35", "1.4", "1.5", "1.55", "1.6"],
+    "letterSpacing": [
+      "-0.01em",
+      "0",
+      "0.01em",
+      "0.02em",
+      "0.04em",
+      "0.05em",
+      "0.06em",
+      "0.075em",
+      "0.08em",
+      "0.12em",
+      "0.15em"
+    ],
+    "disabledOpacity": ["0.4", "0.48", "0.5", "0.55", "0.56", "0.6", "0.72", "1"],
+    "zIndex": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "20",
+      "25",
+      "30",
+      "60",
+      "100",
+      "200",
+      "210",
+      "600",
+      "1000",
+      "1100",
+      "1200",
+      "1300",
+      "2000"
+    ]
+  },
+  "perFile": {
+    "apps/desktop/src/App.svelte": {
+      "fallbacks": 1,
+      "publishedFallbacks": 1,
+      "letterSpacing": 1,
+      "zIndex": 1
+    },
+    "apps/desktop/src/components/AgentApprovalDialog.svelte": {
+      "zIndex": 1
+    },
+    "apps/desktop/src/components/BibliographyAnnotationsPanel.svelte": {
+      "letterSpacing": 2,
+      "textarea": 1
+    },
+    "apps/desktop/src/components/BibliographyReprocessDialog.svelte": {
+      "letterSpacing": 1
+    },
+    "apps/desktop/src/components/HelpBubble.svelte": {
+      "hex": 1,
+      "zIndex": 2
+    },
+    "apps/desktop/src/components/ImageVersionsPanel.svelte": {
+      "lineHeight": 1
+    },
+    "apps/desktop/src/components/OcrRichText.svelte": {
+      "lineHeight": 2
+    },
+    "apps/desktop/src/components/OpenrouterModelList.svelte": {
+      "zIndex": 1,
+      "rawInput": 1
+    },
+    "apps/desktop/src/components/OtherVersionNotice.svelte": {
+      "lineHeight": 1
+    },
+    "apps/desktop/src/components/PassageOriginalViewer.svelte": {
+      "lineHeight": 1,
+      "letterSpacing": 2,
+      "zIndex": 1
+    },
+    "apps/desktop/src/components/RelationGraph3D.svelte": {
+      "disabledOpacity": 1,
+      "zIndex": 1
+    },
+    "apps/desktop/src/components/settings/AgentParametersTab.svelte": {
+      "letterSpacing": 1
+    },
+    "apps/desktop/src/components/settings/EntityAliasesTab.svelte": {
+      "disabledOpacity": 1
+    },
+    "apps/desktop/src/layout/AppShell.svelte": {
+      "rgba": 5,
+      "letterSpacing": 2,
+      "zIndex": 2,
+      "rawInput": 1
+    },
+    "apps/desktop/src/layout/BatchStatusIndicator.svelte": {
+      "letterSpacing": 1,
+      "transitions": 1
+    },
+    "apps/desktop/src/layout/DocumentExplorer.svelte": {
+      "colorMixBlackWhite": 4,
+      "fallbacks": 5,
+      "letterSpacing": 2,
+      "disabledOpacity": 1,
+      "zIndex": 1
+    },
+    "apps/desktop/src/layout/EntropicConstellation.svelte": {
+      "fallbacks": 5,
+      "publishedFallbacks": 5,
+      "zIndex": 1
+    },
+    "apps/desktop/src/layout/FontPresetGrid.svelte": {
+      "rawInput": 1,
+      "radio": 1
+    },
+    "apps/desktop/src/layout/NotificationBell.svelte": {
+      "hex": 2,
+      "rgba": 1,
+      "fallbacks": 3,
+      "publishedFallbacks": 3,
+      "fontSize": 1,
+      "lineHeight": 2,
+      "letterSpacing": 1,
+      "zIndex": 1
+    },
+    "apps/desktop/src/layout/SyncStatusIndicator.svelte": {
+      "letterSpacing": 1,
+      "transitions": 1
+    },
+    "apps/desktop/src/layout/TopBar.svelte": {
+      "letterSpacing": 2,
+      "zIndex": 1,
+      "rawInput": 1
+    },
+    "apps/desktop/src/test/LazyRouteStub.svelte": {
+      "textarea": 1
+    },
+    "apps/desktop/src/views/AppearanceTab.svelte": {
+      "disabledOpacity": 1
+    },
+    "apps/desktop/src/views/AssetProcessHistory.svelte": {
+      "lineHeight": 1,
+      "letterSpacing": 1
+    },
+    "apps/desktop/src/views/AssistantsTab.svelte": {
+      "hex": 1,
+      "rgba": 1,
+      "fallbacks": 4,
+      "publishedFallbacks": 4,
+      "disabledOpacity": 1
+    },
+    "apps/desktop/src/views/BatchFlowPicker.svelte": {
+      "hex": 1,
+      "fallbacks": 1,
+      "publishedFallbacks": 1
+    },
+    "apps/desktop/src/views/BatchProcessingTab.svelte": {
+      "disabledOpacity": 1
+    },
+    "apps/desktop/src/views/BatchSchemaPanel.svelte": {
+      "hex": 1,
+      "rgba": 2,
+      "fallbacks": 3,
+      "publishedFallbacks": 3,
+      "fontSize": 2
+    },
+    "apps/desktop/src/views/BibliographySearchTab.svelte": {
+      "unknownTokens": 1,
+      "fallbacks": 1
+    },
+    "apps/desktop/src/views/BibliographyWorkView.svelte": {
+      "lineHeight": 3,
+      "letterSpacing": 4,
+      "globalOverrides": 1
+    },
+    "apps/desktop/src/views/CollectionAnalysisPanel.svelte": {
+      "fontSize": 2,
+      "letterSpacing": 2,
+      "globalOverrides": 1,
+      "textarea": 1
+    },
+    "apps/desktop/src/views/CollectionsView.svelte": {
+      "rgba": 1,
+      "letterSpacing": 1,
+      "globalOverrides": 4,
+      "textarea": 1
+    },
+    "apps/desktop/src/views/CollectionView.svelte": {
+      "fallbacks": 1,
+      "publishedFallbacks": 1,
+      "disabledOpacity": 1,
+      "zIndex": 2,
+      "transitions": 1,
+      "globalOverrides": 6,
+      "progress": 1
+    },
+    "apps/desktop/src/views/DbBrowserView.svelte": {
+      "lineHeight": 2,
+      "letterSpacing": 2,
+      "disabledOpacity": 1,
+      "zIndex": 3,
+      "transitions": 1
+    },
+    "apps/desktop/src/views/DependenciasTab.svelte": {
+      "hex": 20,
+      "rgba": 17,
+      "fallbacks": 28,
+      "publishedFallbacks": 28,
+      "fontSize": 2,
+      "transitions": 1,
+      "rawInput": 1
+    },
+    "apps/desktop/src/views/HelpSettingsTab.svelte": {
+      "hex": 2,
+      "fallbacks": 2,
+      "publishedFallbacks": 2
+    },
+    "apps/desktop/src/views/HelpView.svelte": {
+      "fallbacks": 5,
+      "publishedFallbacks": 5,
+      "fontSize": 1,
+      "textarea": 1
+    },
+    "apps/desktop/src/views/HomeView.svelte": {
+      "fontSize": 7,
+      "lineHeight": 1,
+      "letterSpacing": 2
+    },
+    "apps/desktop/src/views/ImportSourcesDialog.svelte": {
+      "letterSpacing": 2,
+      "disabledOpacity": 1,
+      "rawInput": 3,
+      "progress": 1,
+      "radio": 2
+    },
+    "apps/desktop/src/views/InternetArchiveDialog.svelte": {
+      "unknownTokens": 1,
+      "fallbacks": 7,
+      "publishedFallbacks": 6,
+      "letterSpacing": 5,
+      "disabledOpacity": 3,
+      "rawInput": 10,
+      "progress": 1,
+      "radio": 4
+    },
+    "apps/desktop/src/views/InvestigationView.svelte": {
+      "fallbacks": 47,
+      "publishedFallbacks": 43,
+      "fontSize": 1,
+      "fontWeight": 7,
+      "lineHeight": 1,
+      "letterSpacing": 2,
+      "transitions": 1,
+      "rawInput": 1,
+      "textarea": 8,
+      "details": 1
+    },
+    "apps/desktop/src/views/ItemAnalysisPanel.svelte": {
+      "rgba": 1,
+      "disabledOpacity": 1,
+      "transitions": 1,
+      "rawInput": 6
+    },
+    "apps/desktop/src/views/ItemAssetPanel.svelte": {
+      "rgba": 1,
+      "lineHeight": 1,
+      "disabledOpacity": 1,
+      "zIndex": 1,
+      "globalOverrides": 1
+    },
+    "apps/desktop/src/views/ItemLayoutPanel.svelte": {
+      "lineHeight": 4,
+      "letterSpacing": 3
+    },
+    "apps/desktop/src/views/ItemMapViewer.svelte": {
+      "globalOverrides": 1
+    },
+    "apps/desktop/src/views/ItemMetadataPanel.svelte": {
+      "letterSpacing": 1
+    },
+    "apps/desktop/src/views/ItemNotesPanel.svelte": {
+      "fontSize": 1,
+      "lineHeight": 2,
+      "globalOverrides": 1
+    },
+    "apps/desktop/src/views/ItemSearchPanel.svelte": {
+      "rgba": 1,
+      "unknownTokens": 3,
+      "fallbacks": 3,
+      "lineHeight": 1,
+      "letterSpacing": 1,
+      "details": 2
+    },
+    "apps/desktop/src/views/ItemTextPanel.svelte": {
+      "rgba": 1,
+      "lineHeight": 2,
+      "textarea": 3,
+      "progress": 2,
+      "details": 3
+    },
+    "apps/desktop/src/views/ItemView.svelte": {
+      "fallbacks": 1,
+      "publishedFallbacks": 1,
+      "letterSpacing": 1,
+      "zIndex": 1,
+      "transitions": 1,
+      "globalOverrides": 2
+    },
+    "apps/desktop/src/views/LogsTab.svelte": {
+      "lineHeight": 1
+    },
+    "apps/desktop/src/views/MaintenanceSettingsCard.svelte": {
+      "lineHeight": 1
+    },
+    "apps/desktop/src/views/NavegadorCopyDialog.svelte": {
+      "fallbacks": 1,
+      "publishedFallbacks": 1,
+      "letterSpacing": 1,
+      "disabledOpacity": 1,
+      "rawInput": 3,
+      "radio": 2
+    },
+    "apps/desktop/src/views/NavegadorPdfViewer.svelte": {
+      "fallbacks": 1,
+      "publishedFallbacks": 1,
+      "zIndex": 1
+    },
+    "apps/desktop/src/views/NavegadorSources.svelte": {
+      "fallbacks": 3,
+      "publishedFallbacks": 3
+    },
+    "apps/desktop/src/views/NavegadorView.svelte": {
+      "fallbacks": 1,
+      "publishedFallbacks": 1,
+      "rawInput": 1
+    },
+    "apps/desktop/src/views/NavegadorZoteroDialog.svelte": {
+      "letterSpacing": 1,
+      "rawInput": 1,
+      "radio": 1
+    },
+    "apps/desktop/src/views/OccurrenceStepper.svelte": {
+      "disabledOpacity": 1
+    },
+    "apps/desktop/src/views/RagChatView.svelte": {
+      "fallbacks": 1,
+      "publishedFallbacks": 1,
+      "fontSize": 1,
+      "lineHeight": 1,
+      "letterSpacing": 4,
+      "disabledOpacity": 1,
+      "rawInput": 1,
+      "textarea": 1
+    },
+    "apps/desktop/src/views/ResearchView.svelte": {
+      "letterSpacing": 2,
+      "globalOverrides": 2,
+      "textarea": 1,
+      "details": 2
+    },
+    "apps/desktop/src/views/SettingsView.svelte": {
+      "rgba": 2,
+      "fontSize": 1,
+      "lineHeight": 6,
+      "letterSpacing": 2,
+      "zIndex": 1,
+      "transitions": 2,
+      "globalOverrides": 14,
+      "rawInput": 25,
+      "textarea": 5,
+      "radio": 16
+    },
+    "apps/desktop/src/views/SimilarAssetPreviewDialog.svelte": {
+      "lineHeight": 1,
+      "letterSpacing": 2,
+      "zIndex": 1
+    },
+    "apps/desktop/src/views/SyncSettingsCard.svelte": {
+      "lineHeight": 4,
+      "letterSpacing": 1,
+      "disabledOpacity": 1,
+      "globalOverrides": 1,
+      "textarea": 1
+    },
+    "apps/desktop/src/views/VercelFallbackCard.svelte": {
+      "globalOverrides": 1
+    },
+    "apps/desktop/src/views/WritingAgentTab.svelte": {
+      "letterSpacing": 1,
+      "globalOverrides": 1
+    },
+    "apps/desktop/src/views/WritingCitationEditor.svelte": {
+      "rawInput": 3
+    },
+    "apps/desktop/src/views/WritingCorpusTab.svelte": {
+      "letterSpacing": 1
+    },
+    "apps/desktop/src/views/WritingExportTab.svelte": {
+      "letterSpacing": 1,
+      "rawInput": 1,
+      "radio": 1
+    },
+    "apps/desktop/src/views/WritingHistoryPanel.svelte": {
+      "hex": 1,
+      "unknownTokens": 1,
+      "fallbacks": 5,
+      "publishedFallbacks": 4,
+      "fontSize": 1
+    },
+    "apps/desktop/src/views/WritingSharePanel.svelte": {
+      "hex": 1,
+      "fallbacks": 2,
+      "publishedFallbacks": 2,
+      "fontSize": 1
+    },
+    "apps/desktop/src/views/WritingView.svelte": {
+      "letterSpacing": 2,
+      "transitions": 1,
+      "rawInput": 2
+    },
+    "apps/desktop/src/views/WritingZoteroDetails.svelte": {
+      "fontWeight": 2
+    },
+    "apps/desktop/src/views/WritingZoteroTab.svelte": {
+      "rawInput": 1
+    },
+    "packages/ui/src/components/AnnotationToolbar/AnnotationToolbar.svelte": {
+      "lineHeight": 1,
+      "disabledOpacity": 1
+    },
+    "packages/ui/src/components/AudioPlayer/AudioPlayer.svelte": {
+      "transitions": 1
+    },
+    "packages/ui/src/components/Button/Button.svelte": {
+      "rgba": 1,
+      "disabledOpacity": 2,
+      "transitions": 1
+    },
+    "packages/ui/src/components/Checkbox/Checkbox.svelte": {
+      "disabledOpacity": 1
+    },
+    "packages/ui/src/components/CollectionCard/CollectionCard.svelte": {
+      "disabledOpacity": 1
+    },
+    "packages/ui/src/components/ConfirmDialog/ConfirmDialog.svelte": {
+      "lineHeight": 2,
+      "disabledOpacity": 1,
+      "zIndex": 1
+    },
+    "packages/ui/src/components/DocumentViewer/DocumentViewer.svelte": {
+      "hex": 1,
+      "rgba": 1,
+      "fallbacks": 2,
+      "publishedFallbacks": 1,
+      "zIndex": 2,
+      "transitions": 4
+    },
+    "packages/ui/src/components/EntityViewer/EntityViewer.svelte": {
+      "lineHeight": 1,
+      "letterSpacing": 3,
+      "disabledOpacity": 1,
+      "zIndex": 1,
+      "transitions": 3
+    },
+    "packages/ui/src/components/IconButton/IconButton.svelte": {
+      "disabledOpacity": 1
+    },
+    "packages/ui/src/components/Input/Input.svelte": {
+      "disabledOpacity": 2
+    },
+    "packages/ui/src/components/ItemCard/ItemCard.svelte": {
+      "zIndex": 1,
+      "transitions": 2
+    },
+    "packages/ui/src/components/MapViewer/MapViewer.svelte": {
+      "hex": 2,
+      "rgba": 1,
+      "fallbacks": 18,
+      "publishedFallbacks": 18,
+      "disabledOpacity": 1,
+      "zIndex": 1
+    },
+    "packages/ui/src/components/MetadataEditor/MetadataEditor.svelte": {
+      "letterSpacing": 1,
+      "transitions": 1
+    },
+    "packages/ui/src/components/NoteEditor/NoteEditor.svelte": {
+      "rgba": 1,
+      "colorMixBlackWhite": 5,
+      "fontSize": 1,
+      "lineHeight": 1,
+      "letterSpacing": 1,
+      "disabledOpacity": 3,
+      "zIndex": 1
+    },
+    "packages/ui/src/components/NumberField/NumberField.svelte": {
+      "fallbacks": 1,
+      "disabledOpacity": 2
+    },
+    "packages/ui/src/components/Panel/Panel.svelte": {
+      "rgba": 2
+    },
+    "packages/ui/src/components/PdfMarkup/PdfMarkupLayer.svelte": {
+      "rgba": 3,
+      "lineHeight": 1,
+      "zIndex": 3
+    },
+    "packages/ui/src/components/ResizeHandle/ResizeHandle.svelte": {
+      "transitions": 1
+    },
+    "packages/ui/src/components/Tabs/TabButton.svelte": {
+      "disabledOpacity": 1
+    },
+    "packages/ui/src/components/ToolbarMenu/ToolbarMenu.svelte": {
+      "zIndex": 1
+    },
+    "packages/ui/src/components/ToolbarMenu/ToolbarMenuList.svelte": {
+      "disabledOpacity": 1
+    },
+    "packages/ui/src/components/Tooltip/TooltipLayer.svelte": {
+      "zIndex": 1
+    },
+    "packages/ui/src/components/TopicEditor/TopicEditor.svelte": {
+      "lineHeight": 2,
+      "zIndex": 1,
+      "transitions": 2
+    },
+    "packages/ui/src/components/WritingEditor/WritingEditor.svelte": {
+      "fallbacks": 6,
+      "publishedFallbacks": 2,
+      "lineHeight": 1
+    }
+  }
+}

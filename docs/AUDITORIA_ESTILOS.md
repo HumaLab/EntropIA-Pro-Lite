@@ -44,7 +44,7 @@ Los problemas se concentran en **cuatro causas raíz**:
 | Métrica | Valor |
 | --- | --- |
 | `<button>` crudos / `<Button>` / `<IconButton>` | 250 / 255 / 107 |
-| `<input>` crudos, radios incluidos (sin contar los internos de `packages/ui`) / `<Input>` | ~60 / 50 |
+| `<input>` crudos, radios incluidos (sin contar los internos de `packages/ui`) / `<Input>` | 63 (27 radios, 33 `text`, 1 `password`, 2 sin `type`) / 50 |
 | `<textarea>` crudos (no existe componente) | 22 |
 | `<input type="radio">` nativos visibles sin `appearance: none` | 25 (16 con `accent-color`, 9 sin ningún estilo) |
 | `<progress>` nativos | 5 (3 sin ningún estilo) |
