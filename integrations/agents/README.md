@@ -23,8 +23,8 @@ installed” for the per-platform location.
 
 | Piece | What it does | State |
 |---|---|---|
-| App endpoint (`apps/desktop/src-tauri/src/automation/`) | Serves MCP Streamable HTTP on `127.0.0.1` at `/mcp`, authenticates each client by bearer token, offers the read tools and writes the local audit trail | Implemented |
-| Connector (`crates/entropia-agent-connector`) | Small stdio↔loopback relay. Reads the app's discovery file, reads the client token from the OS keyring (or the owner-only file when the machine has no keyring), forwards JSON-RPC. Stdout carries protocol messages only | Implemented, bundled with the installers |
+| App endpoint (`apps/desktop/src-tauri/src/automation/`) | Serves MCP Streamable HTTP on `127.0.0.1` at `/mcp` (and, on Windows, over an owner-only named pipe), authenticates each client by bearer token, offers the read tools and writes the local audit trail | Implemented |
+| Connector (`crates/entropia-agent-connector`) | Small stdio↔loopback relay (named pipe on Windows); `--check` diagnoses a connection in one line. Reads the app's discovery file, reads the client token from the OS keyring (or the owner-only file when the machine has no keyring), forwards JSON-RPC. Stdout carries protocol messages only | Implemented, bundled with the installers |
 | Skill (`integrations/agents/skill/`) | Teaches an agent how to investigate with the tools | Planned (stage 6) |
 
 The app owns the archive and is the only writer. Several clients can connect to
@@ -64,6 +64,31 @@ falls back to the bare `entropia-agent-connector`, which only works if it is on
 
 ## Pair a client
 
+The user manual covers this flow for end users, in Spanish and English:
+[`manual-usuario.md` § 13.4](../../manual/manual-usuario/manual-usuario.md#asistentes-externos) /
+[`manual-usuario.en.md` § 13.4](../../manual/manual-usuario/manual-usuario.en.md#asistentes-externos).
+
+**One click.** Under **"Conectar un asistente"**, the **Conectar Claude Code /
+Codex / OpenCode / Pi** buttons pair a read-only client and register the
+`entropia` server in that assistant (`automation/setup.rs`): they run `claude
+mcp add -s user …` (after removing any old `entropia` entry) or `codex mcp add
+…`, or edit only the `entropia` entry of OpenCode's / Pi's JSON config, keeping
+the rest. No token is read or written. If registration fails —assistant not
+found, installed through a wrapper script the app will not run, no answer in
+30 s, an invalid or symlinked config— the backend revokes the client it just
+paired and reports why (`assistants.install.*` messages); if even the rollback
+fails, the panel says so.
+
+**Any MCP agent.** Type a name and press **"Copiar instrucción para cualquier
+asistente"**: the app pairs a read-only client and copies a self-contained,
+secret-free setup request (`agentSetupInstruction` in
+`apps/desktop/src/lib/agent-access.ts`, in the UI language) with the JSON
+`mcpServers` and TOML `[mcp_servers.entropia]` forms, the Claude Code and Codex
+commands, the rule to replace an existing `entropia` entry, and a closing
+`--check` command to verify. Paste it into the agent's chat.
+
+**By hand:**
+
 1. Settings → **Asistentes** → turn on **"Permitir asistentes externos"**. The
    panel shows where the endpoint is listening.
 2. Under **"Conectar un asistente"**, type a name and press **"Conectar"**.
@@ -100,7 +125,7 @@ scope, and a user-scope entry does not shadow a local one — that combination i
 what made `claude mcp list` keep reporting the revoked client. Codex needs no
 such step: `codex mcp add` overwrites an existing entry of the same name.
 
-The same panel lists every paired client with its creation date and last use, and
+The same panel lists every paired client with its creation date and last use (or **sin usar** if it never connected), and
 **"Revocar"** (behind a confirmation) makes that credential useless on the next
 request, even for a copy someone saved earlier.
 
@@ -235,6 +260,11 @@ Linux `~/.cache/claude-cli-nodejs/<project>/mcp-logs-entropia/` (the per-project
 cache directory exists on this machine, with one `mcp-logs-<server>` per server).
 
 ### Known issues on Windows
+
+- **Network shields and loopback HTTP.** Some antivirus web shields intercept
+  `127.0.0.1` HTTP and broke MCP. Since 1.5.0 the endpoint also listens on a
+  per-start, owner-only named pipe and the connector uses it when the discovery
+  file names one (see `PROTOCOL.md` › Transport).
 
 - **Antivirus sandboxing delays every start.** Avast's Autosandbox (and similar
   "unknown program" sandboxes) holds an unsigned program that keeps running until
