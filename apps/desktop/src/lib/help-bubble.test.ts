@@ -2,17 +2,16 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   clampBubbleOffsets,
   clampBubblePosition,
+  clearStoredBubblePosition,
   defaultBubbleOffsets,
   exceedsDragThreshold,
   HELP_BUBBLE_DRAG_THRESHOLD_PX,
   HELP_BUBBLE_MAXIMIZED_KEY,
   HELP_BUBBLE_STORAGE_KEY,
   loadBubbleMaximized,
-  loadBubbleOffsets,
   offsetsToPosition,
   positionToOffsets,
   saveBubbleMaximized,
-  saveBubbleOffsets,
   type BubbleOffsets,
   type BubbleViewport,
 } from './help-bubble'
@@ -38,7 +37,7 @@ function storageWith(initial: Record<string, string> = {}): Storage {
   }
 }
 
-describe('help-bubble position helpers (S13, D9)', () => {
+describe('help-bubble position helpers (S13, T16)', () => {
   describe('defaultBubbleOffsets', () => {
     it('sits at the bottom-right with a margin that clears the status bar', () => {
       // 56px bubble: 24px from the right edge, 30px status bar + 16px above it.
@@ -149,88 +148,52 @@ describe('help-bubble position helpers (S13, D9)', () => {
     })
   })
 
-  describe('loadBubbleOffsets / saveBubbleOffsets', () => {
+  describe('clearStoredBubblePosition', () => {
     let storage: Storage
 
     beforeEach(() => {
       storage = storageWith()
     })
 
-    it('round-trips saved offsets', () => {
-      saveBubbleOffsets(storage, { right: 124, bottom: 96 })
-      expect(loadBubbleOffsets(storage, SMALL_VIEWPORT)).toEqual({ right: 124, bottom: 96 })
-    })
-
-    it('writes under a stable per-device key', () => {
+    it('uses a stable per-device key', () => {
       expect(HELP_BUBBLE_STORAGE_KEY).toBe('entropia.help-bubble.position')
-      saveBubbleOffsets(storage, { right: 1, bottom: 2 })
-      expect(storage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBe('{"right":1,"bottom":2}')
     })
 
-    it('returns null when nothing was saved', () => {
-      expect(loadBubbleOffsets(storage, SMALL_VIEWPORT)).toBeNull()
+    it('removes a stored T14 {right, bottom} value', () => {
+      storage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":124,"bottom":96}')
+      clearStoredBubblePosition(storage)
+      expect(storage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
     })
 
-    it('migrates a legacy {x, y} value using the current window size', () => {
-      // Chosen: convert, don't drop — the user put the bubble there.
+    it('removes a stored legacy {x, y} value: both shapes shared the one key', () => {
       storage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"x":120,"y":200}')
-      expect(loadBubbleOffsets(storage, SMALL_VIEWPORT)).toEqual({
-        right: 1024 - 56 - 120,
-        bottom: 700 - 56 - 200,
-      })
+      clearStoredBubblePosition(storage)
+      expect(storage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
     })
 
-    it('persists the migrated value so the legacy shape is read once', () => {
-      storage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"x":120,"y":200}')
-      loadBubbleOffsets(storage, SMALL_VIEWPORT)
-      expect(storage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBe(
-        `{"right":${1024 - 56 - 120},"bottom":${700 - 56 - 200}}`
-      )
+    it('is a no-op when nothing was stored', () => {
+      expect(() => clearStoredBubblePosition(storage)).not.toThrow()
+      expect(storage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
     })
 
-    it('clamps a migrated legacy value that no longer fits the window', () => {
-      storage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"x":5000,"y":5000}')
-      const offsets = loadBubbleOffsets(storage, SMALL_VIEWPORT)
-      expect(offsets).not.toBeNull()
-      const position = offsetsToPosition(offsets!, SMALL_VIEWPORT)
-      expect(position.x + 56).toBeLessThanOrEqual(SMALL_VIEWPORT.width)
-      expect(position.y + 56).toBeLessThanOrEqual(SMALL_VIEWPORT.height)
+    it('leaves the maximized key alone', () => {
+      storage.setItem(HELP_BUBBLE_MAXIMIZED_KEY, 'true')
+      storage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":1,"bottom":2}')
+      clearStoredBubblePosition(storage)
+      expect(storage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
+      expect(storage.getItem(HELP_BUBBLE_MAXIMIZED_KEY)).toBe('true')
     })
 
-    it.each([
-      ['not json at all', 'not json at all'],
-      ['a bare number', '42'],
-      ['an array', '[1,2]'],
-      ['a missing bottom', '{"right":1}'],
-      ['a missing right', '{"bottom":2}'],
-      ['a NaN offset', '{"right":NaN,"bottom":2}'],
-      ['an infinite offset', '{"right":1e999,"bottom":2}'],
-      ['a string offset', '{"right":"1","bottom":2}'],
-      ['a legacy NaN x', '{"x":NaN,"y":2}'],
-      ['a legacy string y', '{"x":1,"y":"2"}'],
-    ])('falls back to default on corrupt storage (%s)', (_label, raw) => {
-      storage.setItem(HELP_BUBBLE_STORAGE_KEY, raw)
-      expect(loadBubbleOffsets(storage, SMALL_VIEWPORT)).toBeNull()
-    })
-
-    it('falls back to default when storage itself is unavailable', () => {
-      expect(loadBubbleOffsets(null, SMALL_VIEWPORT)).toBeNull()
-      expect(loadBubbleOffsets(undefined, SMALL_VIEWPORT)).toBeNull()
-      expect(() => saveBubbleOffsets(null, { right: 1, bottom: 2 })).not.toThrow()
-    })
-
-    it('falls back to default when storage throws', () => {
+    it('never throws when storage is unavailable or denies access', () => {
+      expect(() => clearStoredBubblePosition(null)).not.toThrow()
+      expect(() => clearStoredBubblePosition(undefined)).not.toThrow()
       const throwing: Storage = {
         ...storage,
-        getItem: () => {
-          throw new Error('denied')
-        },
-        setItem: () => {
+        removeItem: () => {
           throw new Error('denied')
         },
       }
-      expect(loadBubbleOffsets(throwing, SMALL_VIEWPORT)).toBeNull()
-      expect(() => saveBubbleOffsets(throwing, { right: 1, bottom: 2 })).not.toThrow()
+      expect(() => clearStoredBubblePosition(throwing)).not.toThrow()
     })
   })
 

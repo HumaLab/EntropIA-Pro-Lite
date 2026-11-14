@@ -1,18 +1,19 @@
 /**
- * Floating help bubble (S13, D9): position helpers.
+ * Floating help bubble (S13, T16): position helpers.
  *
- * The bubble lives in one place for the whole app and remembers where the
- * user left it. Position is persisted per device in localStorage (D9), so it
- * is naturally per-device: nothing syncs it. Every helper here is pure and
- * takes its inputs as arguments, so the component stays thin and these are
- * unit-testable without a window.
+ * The bubble lives in one place for the whole app. It starts at the default
+ * bottom-right offsets on every launch (T16, superseding the persisted
+ * position of D9): nothing about the position is written to localStorage, a
+ * drag lasts for the session only, and any stale stored value is removed
+ * once on mount. The panel's maximized state is still persisted per device
+ * (T14). Every helper here is pure and takes its inputs as arguments, so the
+ * component stays thin and these are unit-testable without a window.
  *
- * Anchoring (T14): the stored value is the bubble's distance to the window's
+ * Anchoring (T14): the offsets are the bubble's distance to the window's
  * RIGHT and BOTTOM edges, not an absolute left/top. The bubble is drawn at
  * `innerWidth - right - size`, `innerHeight - bottom - size`, so by default
  * it follows the bottom-right corner across resizes and maximize/restore,
- * and after a drag it keeps its distance to that corner. A legacy absolute
- * `{x, y}` value is migrated once, converting with the current window size.
+ * and a drag keeps its distance to that corner for the session.
  */
 
 export interface BubbleViewport {
@@ -46,7 +47,7 @@ export const HELP_BUBBLE_STORAGE_KEY = 'entropia.help-bubble.position'
 /** Per-device storage for the panel's maximized state (T14). */
 export const HELP_BUBBLE_MAXIMIZED_KEY = 'entropia.help-bubble.maximized'
 
-type BubbleStorage = Pick<Storage, 'getItem' | 'setItem'> | null | undefined
+type BubbleStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null | undefined
 
 function finiteOr(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback
@@ -121,70 +122,20 @@ export function exceedsDragThreshold(from: BubblePosition, to: BubblePosition): 
   return Math.hypot(dx, dy) > HELP_BUBBLE_DRAG_THRESHOLD_PX
 }
 
-function isValidOffsets(value: unknown): value is BubbleOffsets {
-  if (typeof value !== 'object' || value === null) return false
-  const { right, bottom } = value as Record<string, unknown>
-  return (
-    typeof right === 'number' &&
-    Number.isFinite(right) &&
-    typeof bottom === 'number' &&
-    Number.isFinite(bottom)
-  )
-}
-
-function isValidPosition(value: unknown): value is BubblePosition {
-  if (typeof value !== 'object' || value === null) return false
-  const { x, y } = value as Record<string, unknown>
-  return typeof x === 'number' && Number.isFinite(x) && typeof y === 'number' && Number.isFinite(y)
-}
-
 /**
- * The stored offsets, or null when nothing valid was stored (corrupt storage
- * falls back to the default). A legacy absolute `{x, y}` value is migrated
- * once: converted with the current window size so the bubble stays where the
- * user left it, clamped into the window, and written back in the new shape.
+ * Removes any stale stored bubble position once (T16). Both the legacy
+ * absolute `{x, y}` shape and the T14 `{right, bottom}` shape lived under
+ * HELP_BUBBLE_STORAGE_KEY, so one removal clears either. The bubble always
+ * starts at the default bottom-right offsets; a drag lasts for the session
+ * only. Never throws. The panel's maximized key is left alone (the owner did
+ * not ask to change it).
  */
-export function loadBubbleOffsets(
-  storage: BubbleStorage,
-  viewport: BubbleViewport
-): BubbleOffsets | null {
-  if (!storage) return null
-  let raw: string | null
+export function clearStoredBubblePosition(storage: BubbleStorage): void {
+  if (!storage) return
   try {
-    raw = storage.getItem(HELP_BUBBLE_STORAGE_KEY)
+    storage.removeItem(HELP_BUBBLE_STORAGE_KEY)
   } catch {
-    return null
-  }
-  if (raw === null) return null
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return null
-  }
-  if (isValidOffsets(parsed)) return { right: parsed.right, bottom: parsed.bottom }
-  if (isValidPosition(parsed)) {
-    const migrated = clampBubbleOffsets(positionToOffsets(parsed, viewport), viewport)
-    try {
-      storage.setItem(HELP_BUBBLE_STORAGE_KEY, JSON.stringify(migrated))
-    } catch {
-      // Best effort: the bubble keeps working for the session without persistence.
-    }
-    return migrated
-  }
-  return null
-}
-
-/** Persists the offsets; never throws (a full or denied storage must not break the bubble). */
-export function saveBubbleOffsets(storage: BubbleStorage, offsets: BubbleOffsets): void {
-  if (!storage || !isValidOffsets(offsets)) return
-  try {
-    storage.setItem(
-      HELP_BUBBLE_STORAGE_KEY,
-      JSON.stringify({ right: offsets.right, bottom: offsets.bottom })
-    )
-  } catch {
-    // Best effort: the bubble keeps working for the session without persistence.
+    // Best effort: without storage access there is simply nothing to clear.
   }
 }
 

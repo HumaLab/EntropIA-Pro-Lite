@@ -51,7 +51,7 @@ function setWindowSize(width: number, height: number): void {
   Object.defineProperty(window, 'innerHeight', { value: height, configurable: true })
 }
 
-describe('HelpBubble (S13, D9)', () => {
+describe('HelpBubble (S13, T16)', () => {
   const realWidth = window.innerWidth
   const realHeight = window.innerHeight
 
@@ -143,7 +143,7 @@ describe('HelpBubble (S13, D9)', () => {
     }
   })
 
-  it('a drag beyond the threshold moves the bubble, saves offsets, and does not open the panel', async () => {
+  it('a drag beyond the threshold moves the bubble for the session, writes nothing, and does not open the panel', async () => {
     render(HelpBubble)
 
     const button = bubbleButton()
@@ -163,8 +163,9 @@ describe('HelpBubble (S13, D9)', () => {
 
     expect(button.style.left).toBe(`${from.x - 100}px`)
     expect(button.style.top).toBe(`${from.y - 50}px`)
-    // Stored as distances to the right/bottom edges, not absolute left/top.
-    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBe('{"right":124,"bottom":96}')
+    // Session-only (T16): the drag is in-memory, nothing about the
+    // position is written to localStorage.
+    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
     expect(screen.queryByRole('textbox', { name: 'Escribí tu pregunta…' })).not.toBeInTheDocument()
   })
 
@@ -185,40 +186,43 @@ describe('HelpBubble (S13, D9)', () => {
     expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
   })
 
-  it('restores the stored offsets on mount', () => {
-    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":124,"bottom":96}')
+  it('restores nothing: a stored {right, bottom} far from the corner still starts at the default', () => {
+    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":900,"bottom":600}')
     render(HelpBubble)
 
     const button = bubbleButton()
     const expected = defaultPosition()
-    expect(button.style.left).toBe(`${expected.x - 100}px`)
-    expect(button.style.top).toBe(`${expected.y - 50}px`)
+    expect(button.style.left).toBe(`${expected.x}px`)
+    expect(button.style.top).toBe(`${expected.y}px`)
+    // …and the stale value is removed once, so it can never come back.
+    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
   })
 
-  it('migrates a legacy absolute position using the current window size', () => {
+  it('restores nothing: a stored legacy absolute position still starts at the default', () => {
     localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"x":120,"y":200}')
     render(HelpBubble)
 
-    // The bubble stays where the user left it: conversion, not a reset.
+    // The bubble ignores the stale value and starts at the default corner…
     const button = bubbleButton()
-    expect(button.style.left).toBe('120px')
-    expect(button.style.top).toBe('200px')
-    // …and the legacy shape is rewritten once, in the new shape.
-    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBe(
-      `{"right":${window.innerWidth - 56 - 120},"bottom":${window.innerHeight - 56 - 200}}`
-    )
+    const expected = defaultPosition()
+    expect(button.style.left).toBe(`${expected.x}px`)
+    expect(button.style.top).toBe(`${expected.y}px`)
+    // …and the legacy shape is removed once, so it can never come back.
+    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
   })
 
-  it('clamps stored offsets that no longer fit the window', () => {
+  it('ignores stored offsets that would no longer fit the window', () => {
     localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":-1000,"bottom":-1000}')
     render(HelpBubble)
 
     const button = bubbleButton()
-    expect(Number.parseFloat(button.style.left)).toBeLessThanOrEqual(window.innerWidth - 56)
-    expect(Number.parseFloat(button.style.top)).toBeLessThanOrEqual(window.innerHeight - 56)
+    const expected = defaultPosition()
+    expect(button.style.left).toBe(`${expected.x}px`)
+    expect(button.style.top).toBe(`${expected.y}px`)
+    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
   })
 
-  it('falls back to the default when the stored position is corrupt', () => {
+  it('falls back to the default when the stored position is corrupt, and clears it', () => {
     localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, 'not json at all')
     render(HelpBubble)
 
@@ -226,9 +230,10 @@ describe('HelpBubble (S13, D9)', () => {
     const button = bubbleButton()
     expect(button.style.left).toBe(`${expected.x}px`)
     expect(button.style.top).toBe(`${expected.y}px`)
+    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
   })
 
-  it('keeps the dragged offsets across remounts', async () => {
+  it('a remount after a drag returns to the default: dragging lasts for the session only', async () => {
     const { unmount } = render(HelpBubble)
 
     const button = bubbleButton()
@@ -244,11 +249,32 @@ describe('HelpBubble (S13, D9)', () => {
       pointerId: 1,
     })
     await fireEvent.pointerUp(button, { clientX: from.x - 22, clientY: from.y + 28, pointerId: 1 })
+    expect(button.style.left).toBe(`${from.x - 50}px`)
     unmount()
 
     render(HelpBubble)
+    const expected = defaultPosition()
     const again = bubbleButton()
-    expect(again.style.left).toBe(`${from.x - 50}px`)
+    expect(again.style.left).toBe(`${expected.x}px`)
+    expect(again.style.top).toBe(`${expected.y}px`)
+    expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
+  })
+
+  it('mounting at 1024x700 or at 1920x1080 starts at the same corner offset', () => {
+    for (const [width, height] of [
+      [1024, 700],
+      [1920, 1080],
+    ] as const) {
+      setWindowSize(width, height)
+      const { unmount } = render(HelpBubble)
+      try {
+        const button = bubbleButton()
+        expect(button.style.left).toBe(`${width - 56 - 24}px`)
+        expect(button.style.top).toBe(`${height - 56 - 46}px`)
+      } finally {
+        unmount()
+      }
+    }
   })
 
   it('the default stays in the bottom-right corner after a resize (1024x700 -> 1920x1080)', async () => {
@@ -293,7 +319,8 @@ describe('HelpBubble (S13, D9)', () => {
         clientY: from.y + 28 - 50,
         pointerId: 1,
       })
-      expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBe('{"right":124,"bottom":96}')
+      // Session-only: the drag never reaches localStorage.
+      expect(localStorage.getItem(HELP_BUBBLE_STORAGE_KEY)).toBeNull()
 
       setWindowSize(1920, 1080)
       window.dispatchEvent(new Event('resize'))
@@ -317,9 +344,22 @@ describe('HelpBubble (S13, D9)', () => {
     expect(panel).toHaveAttribute('data-vertical', 'above')
   })
 
-  it('the panel flips sides when the bubble sits at the top-left', async () => {
-    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":9000,"bottom":9000}')
+  it('the panel flips sides when the bubble is dragged to the top-left', async () => {
     render(HelpBubble)
+    const button = bubbleButton()
+    const from = defaultPosition()
+
+    await fireEvent.pointerDown(button, {
+      clientX: from.x + 28,
+      clientY: from.y + 28,
+      pointerId: 1,
+    })
+    await fireEvent.pointerMove(button, { clientX: 28, clientY: 28, pointerId: 1 })
+    await fireEvent.pointerUp(button, { clientX: 28, clientY: 28, pointerId: 1 })
+    expect(button.style.left).toBe('8px')
+    expect(button.style.top).toBe('8px')
+    // The click right after a drag is swallowed: one more opens the panel.
+    await fireEvent.click(button)
     await openPanel()
 
     const panel = screen.getByRole('dialog', { name: 'Ayuda' })
@@ -328,15 +368,26 @@ describe('HelpBubble (S13, D9)', () => {
   })
 
   it('re-clamps the bubble when the window shrinks', async () => {
-    localStorage.setItem(HELP_BUBBLE_STORAGE_KEY, '{"right":900,"bottom":600}')
     render(HelpBubble)
     const button = bubbleButton()
+    const from = defaultPosition()
+
+    // Drag to the top-left corner: the offsets grow to the far edges.
+    await fireEvent.pointerDown(button, {
+      clientX: from.x + 28,
+      clientY: from.y + 28,
+      pointerId: 1,
+    })
+    await fireEvent.pointerMove(button, { clientX: 28, clientY: 28, pointerId: 1 })
+    await fireEvent.pointerUp(button, { clientX: 28, clientY: 28, pointerId: 1 })
+    expect(button.style.left).toBe('8px')
+    expect(button.style.top).toBe('8px')
 
     setWindowSize(500, 400)
     try {
       window.dispatchEvent(new Event('resize'))
       await waitFor(() => {
-        // Pushed back inside with 8px of air from the shrunken edges.
+        // The far-edge offsets no longer fit: pulled back inside with 8px of air.
         expect(button.style.left).toBe('8px')
         expect(button.style.top).toBe('8px')
       })

@@ -2,15 +2,14 @@
   import { locale, t } from '$lib/i18n'
   import {
     clampBubbleOffsets,
+    clearStoredBubblePosition,
     defaultBubbleOffsets,
     exceedsDragThreshold,
     HELP_BUBBLE_SIZE_PX,
     loadBubbleMaximized,
-    loadBubbleOffsets,
     offsetsToPosition,
     positionToOffsets,
     saveBubbleMaximized,
-    saveBubbleOffsets,
     type BubbleOffsets,
     type BubbleViewport,
   } from '$lib/help-bubble'
@@ -26,7 +25,7 @@
   /** …with the status-bar clearance below, like the bubble's own default. */
   const PANEL_MAXIMIZED_BOTTOM_PX = 46
 
-  function readStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
+  function readStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null {
     try {
       return globalThis.localStorage ?? null
     } catch {
@@ -40,8 +39,11 @@
   }
 
   function initialOffsets(viewport: BubbleViewport): BubbleOffsets {
-    const stored = loadBubbleOffsets(readStorage(), viewport)
-    return clampBubbleOffsets(stored ?? defaultBubbleOffsets(), viewport)
+    // T16: every launch starts at the default bottom-right corner, whatever
+    // was stored before. Clear the stale position once so old values can
+    // never come back; a drag lasts for the session only.
+    clearStoredBubblePosition(readStorage())
+    return clampBubbleOffsets(defaultBubbleOffsets(), viewport)
   }
 
   // Snapshot once: the live viewport below re-reads the window on resize,
@@ -144,12 +146,12 @@
     offsets.bottom = moved.bottom
   }
 
-  function endPress(event: PointerEvent, save: boolean): void {
+  function endPress(event: PointerEvent): void {
     if (!pressStart) return
     pressStart = null
     releaseCapture(event.currentTarget as HTMLElement, event.pointerId)
-    if (dragging && save) {
-      saveBubbleOffsets(readStorage(), offsets)
+    if (dragging) {
+      // Session-only (T16): the drag stays in memory, nothing is stored.
       // Browsers fire a click after a drag: it must not toggle the panel.
       suppressClick = true
     }
@@ -157,11 +159,11 @@
   }
 
   function handlePointerUp(event: PointerEvent): void {
-    endPress(event, true)
+    endPress(event)
   }
 
   function handlePointerCancel(event: PointerEvent): void {
-    endPress(event, false)
+    endPress(event)
   }
 
   // Whether the chat was ever opened: once mounted, HelpView stays mounted
