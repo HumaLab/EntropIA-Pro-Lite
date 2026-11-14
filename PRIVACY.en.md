@@ -19,6 +19,9 @@ Some network paths fire **automatically**, without you asking for them at that m
 | Writing manuscripts and their version history         | Stored locally in the app database.                            |
 | Biblioteca (catalog, text and embeddings of Zotero works) | Stored locally; it does not travel with sync.              |
 | Backups                                               | Written only to the folder you choose.                         |
+| Each document's process history                      | Stored locally; it does not travel with sync.                  |
+| Help chat conversations and its manual index          | Stored locally (history in the data folder, index in the cache); they do not travel with sync. |
+| External assistants' credentials                      | In the OS credential manager or in a file only your user can read; local audit log. |
 | Local model files and runtime dependencies (Pro)      | Stored locally in app/runtime directories.                     |
 | Provider API keys and the sync session token          | Stored in the operating system's credential manager, not in the app database nor in backups. |
 
@@ -44,7 +47,12 @@ Some network paths fire **automatically**, without you asking for them at that m
 | Cross-device sync                 | EntropIA's sync service, operated by HLab (`entropia-cloud.app.hlab.com.ar`) | Sends credentials when registering or signing in, and the rows and files of what is synced (see below).                                                 |
 | Sharing a manuscript              | The same sync service                                             | The shared manuscript, with its images, reaches the account you shared it with.                                                                                      |
 | Send to hlab.com.ar               | `hlab.com.ar`                                                     | Only when you ask: the manuscript's title and text, with the publishing key you saved.                                                                               |
-| Zotero Web API key                | `api.zotero.org`                                                  | Only if you save a key: verifies it and shows its permissions. Today only an experimental feature, not enabled in published builds, uses it.                         |
+| Zotero Web API key                | `api.zotero.org`                                                  | Only if you save a key: verifies it and shows its permissions; reads and writes the annotations on your personal library's PDFs (highlights, comments) and, from the Browser, fills in an item's empty fields on **Copy to Zotero**. |
+| OpenAI-compatible server (optional) | The address you type on the OpenRouter card                     | If filled in, the text of generation tasks (correction, summaries, relations, schemas, Chat) goes to that server instead of OpenRouter, with no key and no Vercel fallback. A local server sends nothing off the machine. |
+| Browser                           | The sites you visit                                               | The pages you open and the PDFs you download, as in any browser; it keeps no cookies or sessions between uses. |
+| Pro local models                  | Hugging Face (the models' repositories)                           | Only when you click their download (or an assistant asks for it with `models_setup`): Parakeet TDT and the diarization model, local GLM-OCR, Qwen3-VL, BGE-M3 and the reranker. Afterwards they run offline. |
+| Help chat (in development)        | OpenRouter API; GitHub and `hlab.com.ar`                          | Questions that are not answered on the machine, with the manual excerpts the model consults. Only if you tick each box: the scrubbed diagnostics (version, modes, keys as yes/no, latest errors without paths or quoted text) and fragments of your documents. For questions outside the manual it may read the public GitHub repository and the EntropIA page on hlab.com.ar. The history stays on this machine only. |
+| External assistants (MCP)         | The assistant you connect and its AI provider                     | Off by default. EntropIA serves only this computer (127.0.0.1 and, on Windows, a named pipe of your user). What the assistant reads from your archive goes into its conversation and to its provider (Anthropic, OpenAI or another). Spending, importing, replacing text or deleting requires your approval. |
 | OpenRouter model list             | OpenRouter API                                                    | When testing the connection or opening a model picker, requests the model catalog with your key.                                                                     |
 | Update notice (Lite on Windows)   | Microsoft Store                                                   | Asks the Store whether a newer version is published. It downloads and installs nothing.                                                                              |
 | External links in the UI          | System browser/handler                                            | Opens the selected URL outside the app.                                                                                                                              |
@@ -59,7 +67,8 @@ Sync is **off until you sign in**. When you turn it on:
 - the connection requires HTTPS;
 - the session token is stored in the operating system's credential manager — the keyring on Linux, Credential Manager on Windows, Keychain on macOS — and not in the app database;
 - the service receives collections, documents and their files, texts, notes, topics, annotations, entities, relations, AI results, embeddings, Chat conversations, manuscripts with their images, and finished or failed investigations, with the same sensitivity as your collections;
-- it does not receive the Biblioteca, custom schemas, preferences, sample collections, or API keys.
+- it also receives each collection's context for the AI, entity aliases and each relation's source sentence;
+- it does not receive the Biblioteca, custom schemas, the process history, help chat conversations, paired assistants, preferences, sample collections, or API keys.
 
 To cut the remote path entirely, sign out of sync. **Borrar mis datos del servidor**, in Settings → Sync, deletes your account's remote data and keeps the local data.
 
@@ -77,6 +86,7 @@ The OpenRouter, Vercel AI Gateway, AssemblyAI, GLM-OCR, and Zotero API keys and 
 - Remove provider API keys from Settings (the **Quitar clave** button) to disable those remote paths. Without an OpenRouter API key no automatic conversation title is generated and the Biblioteca is not processed for meaning search; without a Vercel key there is no fallback.
 - Do not sync Zotero libraries into the Biblioteca if you do not want the text of their works sent to OpenRouter and GLM-OCR.
 - Do not mark entities as places, or do not save them, if you do not want their text queried against Nominatim.
+- Leave **Permitir asistentes externos** (allow external assistants) off if you do not use assistants, revoke the ones you no longer use, and in the help do not tick **Include diagnostics** or **Search my documents** if you do not want that information to travel to OpenRouter.
 - Sign out of sync so nothing leaves through that path.
 - Backups contain your whole archive: keep them in a protected folder.
 - Delete the local app data directory if you want to remove local databases, logs, runtime files, and generated outputs. API keys and the sync token do not live there: remove them from Settings or by signing out.

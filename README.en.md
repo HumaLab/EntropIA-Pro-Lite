@@ -10,9 +10,9 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 
 |                     | **EntropIA Pro**                                         | **EntropIA Lite**                                                                                 |
 | ------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| OCR                 | local PaddleOCR (Light) + PaddleOCR-VL or GLM-OCR (High) | remote GLM-OCR (Light and High use the same provider)                                             |
-| Transcription       | local faster-whisper + AssemblyAI                        | AssemblyAI                                                                                        |
-| LLM / NER / RAG     | local Gemma 4 + OpenRouter; local spaCy for NER          | OpenRouter (Gemma 4 by default); optional Vercel AI Gateway fallback                              |
+| OCR                 | layout-assisted local PaddleOCR (Light) + PaddleOCR-VL, local GLM-OCR (NVIDIA GPU) or remote GLM-OCR (High); local Qwen3-VL corrector | remote GLM-OCR (Light and High use the same provider)                                             |
+| Transcription       | local Parakeet TDT or faster-whisper (optional Sortformer diarization) + AssemblyAI | AssemblyAI                                                                                        |
+| LLM / NER / RAG     | local Gemma 4 + OpenRouter; local spaCy for NER; local BGE reranker | OpenRouter (Gemma 4 by default) or a self-hosted OpenAI-compatible server; optional Vercel AI Gateway fallback |
 | Embeddings          | local BGE-M3 (ONNX) + OpenRouter (`baai/bge-m3`)         | OpenRouter (`baai/bge-m3`)                                                                        |
 | Native ML runtime   | yes (downloads itself at startup)                        | no                                                                                                |
 | Installer           | Windows: NSIS + MSI · Linux: DEB (GitHub)                | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: universal DMG (GitHub) · Linux: DEB (GitHub) |
@@ -24,7 +24,7 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 
 ## Quick start
 
-- **User manual**: [User manual](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html) — full usage guide, in Spanish.
+- **User manual**: [User manual](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.en.html) — full usage guide for Lite and Pro, in English and [Spanish](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html). Inside the app, the help bubble answers from that same manual.
 - **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`; Linux x64 (Ubuntu 22.04 or later): `.deb`. On both, the local-ML runtime downloads itself at startup —a banner shows the progress and lets you pause or retry— and the AI dependencies then install themselves. Available from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
 - **EntropIA Lite** — Windows x64: Microsoft Store (<https://apps.microsoft.com/detail/9N328K9L95JD>) or `.exe`/`.msi`; macOS (Apple Silicon and Intel): universal `.dmg`; Linux x64 (Ubuntu 22.04 or later): `.deb`. All from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
   - **macOS**: requires **macOS 13.3 Ventura or later**. The app runs on the system's web engine, and PDFs need the one shipped with Safari 16.4 or later. The `.dmg` is not notarized by Apple. On first launch macOS blocks it: open **System Settings → Privacy & Security** and click **Open Anyway**.
@@ -78,7 +78,7 @@ pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri
 > - To run it from the **repo root** without `cd`, use `pnpm --filter @entropia-pro/desktop exec tauri ...`.
 > - Lite is Cargo's lean default. Do not pass `--features local-ml` when using `tauri.lite.conf.json`.
 > - In PowerShell `$env:VITE_LOCAL_ML` **persists for the session** → set it on every variant switch (or open a new terminal). In bash it goes inline: `VITE_LOCAL_ML=0 pnpm exec tauri …`.
-> - Lite uses `identifier com.entropia.lite` → **separate app data** from Pro (you can run both without clobbering each other).
+> - Lite uses `identifier com.entropia.lite` and Pro `com.entropia.pro.desktop` (separate installs, shortcuts and uninstall entries), but **both open the same archive** in `com.entropia.shared` (see `src-tauri/src/path_utils.rs`): do not open them at the same time.
 > - Lite's `tauri build` produces the **`.exe` (NSIS) + `.msi`**; the final Store **MSIX** comes from the repack (see _Release &amp; installers_).
 > - With the committed fixture `runtime-pack`, a Windows/Linux **Pro** (`--features local-ml`) release `tauri build` requires all three variables `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL`, `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID`, and `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64` to be set to the values in [`.github/workflows/release.yml`](./.github/workflows/release.yml). **Lite needs none**: without `local-ml` the runtime is compiled out and the `build.rs` guard does not run. `tauri dev` does not need them either.
 
@@ -100,19 +100,20 @@ Both variants cover the same core research workflows; the engine changes (local 
 
 - Home: startup view with what to resume, corpus status (OCR, embeddings, pending work), and quick access to Collections, Chat, Research, and Writing. A new archive comes with three sample collections, analysis included, kept off sync.
 - Corpus organization into collections, items, and local assets (SQLite).
-- Image, PDF, and audio ingestion; import of public PDFs from Internet Archive (search, collection or link, with verification, deduplication and resume); exporting a collection to JSON (documents, text, notes, entities, layout).
-- OCR Light + OCR High with layout persistence (blocks, regions, pages, bounding boxes).
-- Audio transcription.
-- LLM-assisted correction, summary, and semantic extraction.
-- Entities, triples, NER, FTS, and asset-level embeddings (RAG).
-- Batch processing: OCR, embeddings, entities, triples and extraction with a user-defined schema (a table downloadable as CSV) over entire collections from Settings, in the background, with priority, saved flows, per-item retries and resume after closes or outages.
+- Image, PDF, and audio ingestion, with a PDF's native text stored at import; import of PDFs and images from Internet Archive (search, collection or link; file-kind filter, whole records and whole-search queues imported in batches, with verification, deduplication and resume); exporting a collection to JSON (documents, text, notes, entities, layout) and all its text to TXT, Markdown, PDF, Word or CSV.
+- OCR Light + OCR High with layout persistence (blocks, regions, pages, bounding boxes), manual box correction re-recognised with GLM-OCR, and a record of the file each layout and text came from, to warn when they belong to another image version.
+- Audio transcription, with speaker renaming; hand-corrected transcriptions and texts are never replaced without confirmation.
+- LLM-assisted correction, summary, and semantic extraction, with a per-collection project context read by the chat, research, correction and the writing agent.
+- Entities (with global aliases and merge suggestions), triples with their source sentence, NER, FTS, and asset-level embeddings (RAG).
+- Batch processing: OCR (optionally over native-text pages too), embeddings, entities, triples, OCR correction, per-page summaries and extraction with a user-defined schema (a table downloadable as CSV) over entire collections from Settings, in the background, with priority, saved flows, per-item retries and resume after closes or outages.
 - Notes, annotations, and manual result editing: entities and triples are created, edited and deleted by hand, not only read.
-- Per-process status on each document (indexing, embeddings, NER, triples), so what already ran is visible without running it again.
-- A 3D graph of a collection's relations (triples), with each name's details and the documents it comes from.
+- Per-process status on each document (indexing, embeddings, NER, triples), so what already ran is visible without running it again, and an auditable process history (tool, model, versions and SHA-256 fingerprints), exportable to JSON.
+- Versions of each edited image, choosing which one is shown, and a maintenance review that repairs those that do not match their layout.
+- A configurable 3D graph of a collection's relations (thresholds, appearance and layout algorithms) that opens each relation highlighted in the text and exports to GEXF for Gephi; frequent phrases, G² collocates and a word tree per collection.
 - Research chat over the corpus, the Biblioteca or both, with each new conversation titled automatically and sources that open the cited fragment.
 - Staged research (agent) with a selectable model, a scope of collections and/or the Biblioteca, a budget, and a report with verifiable sources.
 - Biblioteca: sync of Zotero libraries (catalog, text of PDFs and web snapshots, hybrid text and meaning search), a view per work, and reprocessing of damaged text with an estimated cost.
-- Writing: a manuscript editor with an outline, a research panel, and citations anchored to the corpus, to Biblioteca passages, or to a local Zotero library (CSL styling); an AI writing agent that never edits on its own; a version history with restore; its own sync, manuscripts shared across accounts and sending to the hlab.com.ar blog; export to Markdown, HTML, or Word with footnotes and a bibliography.
+- Writing: a manuscript editor with an outline, a research panel, and citations anchored to the corpus, to Biblioteca passages, or to a local Zotero library (CSL styling); an AI writing agent that never edits on its own; a version history with full or single-section restore; its own sync, manuscripts shared across accounts and sending to the hlab.com.ar blog; export to Markdown, HTML, or Word with footnotes and a bibliography.
 - Browser-style tabs (up to 4) and a two-pane split view, each pane with its own navigation.
 - Collection grid with keyset pagination and thumbnails generated for what is looked at, not for everything loaded.
 - Sidebar collection tree, with each collection paged in batches.
@@ -122,6 +123,8 @@ Both variants cover the same core research workflows; the engine changes (local 
 - Backups of the whole archive (database and files) into a chosen folder, by hand or daily/weekly, keeping the last N.
 - Archive maintenance: migrations applied in Rust at startup, a trigger/view audit, and compaction at close when worthwhile.
 - Microsoft Store update notice (Lite on Windows): detects a newer published version and opens the Store listing; it does not download or install anything on its own.
+- External assistants over MCP (Claude Code, Codex, OpenCode, Pi or any other): one-click connection or a setup instruction for any assistant, `--check` diagnostics, a connector bundled with every installer, local transport (loopback and, on Windows, a per-user named pipe) and in-app approval of anything that spends, imports, replaces text or deletes. See [integrations/agents](./integrations/agents/README.md).
+- In-app help chat (in development): answers from the bundled manual, with local answers for frequent questions, optional scrubbed diagnostics, and the same MCP tools behind approvals.
 
 ## How the variant flag works
 

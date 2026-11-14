@@ -141,6 +141,15 @@ be blocked by them. The tables are local only and stay out of device sync;
 each device pulls its annotations from the Zotero Web API. Keep comments in
 the SQL free of semicolons: the runner splits statements on them.
 
+## 0060_processing_ocr_correction_summary_tasks
+
+Kind CHECK widening for batch OCR correction and per-page summaries
+(`ocr_correction`, `summary`). Like 0058 it rebuilds `processing_tasks`
+and its child tables (`processing_batch_tasks`, `processing_attempts`,
+`processing_checkpoints`) through `_backup_0060_*` copies inside the same
+migration, trigger-safe and single-batch; a leftover `_backup_0060_*` table
+means it did not finish.
+
 ## 0061_asset_process_events
 
 Process history of each asset (import, page split, image edits, OCR, text
@@ -177,3 +186,14 @@ version of the image. Two nullable columns on each of the synced `layouts` and
 before, and there is no backfill because SQL cannot read a file. The first
 push from an updated device raises the account schema_tag; devices not yet
 updated drop the columns on apply.
+
+## 0065_entity_aliases
+
+A global alias list for entities: each row joins an alternative form
+(`alias`, matched through the normalised `alias_key`, UNIQUE) to its
+`canonical` name across the whole archive. Mentions are never rewritten;
+reads resolve aliases when listing entities and relations (Relaciones 3D,
+the item's entity list). No foreign keys: aliases resolve by text, so they
+survive the deletion of the documents that suggested them. The table is
+synced once the server accepts it; the first push from an updated device
+raises the account schema_tag.

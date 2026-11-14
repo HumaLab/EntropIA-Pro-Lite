@@ -6,7 +6,7 @@
 
 ## Alcance
 
-Esta lista reúne las funciones de las dos variantes de EntropIA —**Lite** y **Pro**— e indica en qué capítulo del manual se explican. Casi todas son comunes; cuando una cambia entre variantes, la columna central lo dice («En Lite…», «En Pro…»), y las diferencias de motor están juntas en [Diferencias entre Lite y Pro](#seccion-diferencias-entre-lite-y-pro). Indicamos si una función necesita conexión a Internet, una cuenta o una clave. Las funciones marcadas **(próxima versión)** ya están en el manual pero llegan en la versión posterior a la 1.7.1.
+Esta lista reúne las funciones de las dos variantes de EntropIA —**Lite** y **Pro**— e indica en qué capítulo del manual se explican. Casi todas son comunes; cuando una cambia entre variantes, la columna central lo dice («En Lite…», «En Pro…»), y las diferencias de motor están juntas en la sección **Diferencias entre Lite y Pro**, más abajo, y explicadas en el [capítulo 2 del manual](manual-usuario.md#lite-y-pro). Indicamos si una función necesita conexión a Internet, una cuenta o una clave. Las funciones marcadas **(próxima versión)** ya están en el manual pero llegan en la versión posterior a la 1.7.1.
 
 El manual combina capturas reales de EntropIA Lite, detalles recortados de esas capturas y diagramas de proceso identificados como tales. Cada imagen tiene una descripción y se puede abrir a tamaño completo desde la edición web.
 

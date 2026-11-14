@@ -97,7 +97,7 @@ MCP Streamable HTTP served by `rmcp` 3.8 over hyper/tower, inside the app
 
 | Property | Value |
 |---|---|
-| Bind address | `127.0.0.1:0` — loopback only, ephemeral port, never `0.0.0.0` |
+| Bind address | `127.0.0.1:0` — loopback only, ephemeral port, never `0.0.0.0`. On Windows the same service is **also** served over a named pipe (`automation/pipe.rs`): `\\.\pipe\entropia-agent-<random>`, a fresh unguessable name each start, a protected DACL granting the current user only (no SYSTEM, no inherited ACEs), remote clients rejected and first-instance creation enforced. Pipe connections go through the same guard, HTTP driver, instance proof, bearer check, scopes, revocation and size limit as the port. The connector prefers the pipe when the discovery file names one, so antivirus network shields that break loopback HTTP do not break MCP |
 | Path | The path component must be exactly `/mcp`. The guard compares `request.uri().path()`, so a query string is ignored by that comparison: `/mcp?x=1` reaches `rmcp`, `/mcp/` and `/mcp/anything` are `404 not_found` |
 | Session mode | Stateless (`legacy_session_mode: false`). No `Mcp-Session-Id` is trusted; nothing caches identity between requests |
 | Response encoding | JSON (`json_response: true`); SSE keep-alive disabled |
@@ -157,6 +157,7 @@ port) and removed when the endpoint stops or the app exits.
 | `variant` | string | `pro` with the `local-ml` feature, `lite` without |
 | `profile` | string or `null` | Active dev profile name; `null` in a release build |
 | `instanceKey` | string | 64 hex characters (32 bytes) minted per start from the OS generator; the D12 proof key, never sent over HTTP |
+| `pipe` | string, Windows only | The named pipe path, written only while the pipe listens and removed on stop; absent on macOS and Linux |
 
 The connector re-reads this file for **every** message, so an app restart on a
 new port is followed without restarting the agent. A file that cannot be parsed,
@@ -311,7 +312,7 @@ this machine through the tool itself. Clients rely on this; Codex cancels a
 non-interactive call to a tool that does not declare itself read-only, so it asks
 before calling a writing tool.
 
-Twenty-two tools are served (`automation/mcp.rs`; `tools/list` order is
+Twenty-three tools are served (`automation/mcp.rs`; `tools/list` order is
 alphabetical). The seven archive tools:
 
 | Tool | Arguments | Result |
@@ -587,6 +588,42 @@ A success is a normal MCP tool result with `structuredContent` and
 | `provider_not_configured` | Lite, an operation that needs the OpenRouter key, and no key configured | `jobs.rs` |
 | `unavailable` | The archive could not be opened or read right now; a processing error the contract has no code for also lands here, with its detail kept in the app log | `read.rs`, `jobs.rs`, `mcp.rs` |
 | `internal_error` | A request reached a tool without an authenticated principal — a server bug, never something the caller caused | `mcp.rs` (`caller`) |
+
+### Local models (`models_setup`)
+
+`models_setup` takes `action: "status" | "install"`. `status` (read scope)
+reports each local component (runtime, Gemma, GLM-OCR, Qwen3-VL, BGE-M3
+embeddings, reranker), whether it is installed and what it enables. `install`
+(needs `local_write`) starts the same background downloads as the Settings
+buttons and returns what it started; poll `status` to follow progress. It
+spends nothing paid, so it has no approval of its own, but it downloads
+several GB. In Lite (no `local-ml` feature) `status` reports no components
+and `install` starts nothing.
+
+### The in-app help principal
+
+The in-app help chat (branch `feat/in-app-help-assistant`) drives this same
+server in-process: an `rmcp` client over an in-memory duplex talks to an
+`AgentServer` built with a synthetic principal named **Ayuda** (stable client
+id, scopes `read` + `local_write` + `remote_spend`). Only in-process code can
+insert that principal into the request extensions; HTTP and pipe requests
+still authenticate by bearer token. The help layer adds its own gate on top:
+tools that read document text are offered only when the person ticks «Buscar
+en mis documentos» for that question, tools that change something without an
+approval of their own wait for an inline approval, and file-system paths in
+results are replaced before reaching the model. Its calls are audited like any
+client's, labelled Ayuda. It does not depend on the «Permitir asistentes
+externos» switch.
+
+### Diagnosing a connection (`--check`)
+
+`<connector> --check --client <id> [--profile <name>]` runs one `initialize`
+and one `tools/list` against the running app and prints a single line:
+`ok: EntropIA <version> · <n> herramientas`, or `<code>: <message>` with the
+same codes as the table below (plus `timeout` when the app does not answer and
+`data_dir_unavailable` when no data directory can be resolved). It exits `0`
+on success and `1` otherwise. The setup instruction the app copies for any
+assistant ends with this command.
 
 ## Connector errors
 

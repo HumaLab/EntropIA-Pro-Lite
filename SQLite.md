@@ -2,13 +2,13 @@
 
 **English:** [SQLite.en.md](./SQLite.en.md)
 
-Guía operativa del esquema SQLite actual, su creación en runtime y las consultas de diagnóstico. El horizonte migrado es **`0058_processing_ner_tasks`**.
+Guía operativa del esquema SQLite actual, su creación en runtime y las consultas de diagnóstico. El horizonte migrado es **`0065_entity_aliases`**.
 
 ## Contrato actual en una mirada
 
 | Capa | Autoridad | Qué crea |
 |---|---|---|
-| Esquema migrado | `packages/store/src/migrations/*.sql` (`0001`..`0058`), aplicado por Rust (`apps/desktop/src-tauri/src/db/migrations.rs`); fixture `schema_full.sql` | Tablas de negocio, procesamiento por lotes, Escritura, Zotero/Biblioteca, capturas web, esquemas propios, `vec_assets`, `rag_chunks`, FTS e índices/triggers de migración |
+| Esquema migrado | `packages/store/src/migrations/*.sql` (`0001`..`0065`), aplicado por Rust (`apps/desktop/src-tauri/src/db/migrations.rs`); fixture `schema_full.sql` | Tablas de negocio, procesamiento por lotes, Escritura, Zotero/Biblioteca, capturas web, esquemas propios, `vec_assets`, `rag_chunks`, FTS e índices/triggers de migración |
 | Inicio/runtime Rust | `db/repairs.rs`, `db/schema_audit.rs`, `settings.rs`, `nlp/embeddings.rs`, `sync/schema.rs` | Reparaciones idempotentes, auditoría de triggers/vistas, `app_settings`, `rag_asset_embedding_state` y diez tablas `sync_*` |
 | Internas de SQLite/FTS5 | SQLite | `sqlite_sequence` y tablas shadow de `fts_items`, `rag_chunks_fts` y `bibliographic_profile_fts` |
 
@@ -79,7 +79,19 @@ Las copias de seguridad (**Configuración → Copias**) son carpetas `entropia-b
 
 ### Capturas web y esquemas propios (`0057`, `0058`)
 
-`web_sources`, `web_captures` (capturas del Navegador experimental) y `extraction_schemas`, `extraction_records` (esquemas propios de Lotes; locales, no se sincronizan).
+`web_sources`, `web_captures` (capturas del Navegador) y `extraction_schemas`, `extraction_records` (esquemas propios de Lotes; locales, no se sincronizan).
+
+### Anotaciones, historial de procesos y alias (`0059`–`0065`)
+
+- `0059_zotero_annotations`: `zotero_annotation_items` y `zotero_annotation_sync_state`, anotaciones de los PDF de la Biblioteca con su estado de sincronización con la Web API de Zotero (`sync_state IN ('synced','pending','waiting_parent','conflict','error')`). Locales: cada equipo las trae de Zotero.
+- `0060_processing_ocr_correction_summary_tasks`: reconstruye `processing_tasks` y sus tablas hijas para sumar los `kind` `ocr_correction` y `summary` (lotes de corrección OCR y resúmenes por página).
+- `0061_asset_process_events`: `asset_process_events` (`asset_id` CASCADE, `process`, `tool`, `tool_version`, `model`, `model_version`, `app_version`, `params_json`, huellas de entrada y salida), el historial de procesos de cada asset. Local, fuera de la sincronización.
+- `0062_triple_evidence`: columnas `evidence_text`, `evidence_start`, `evidence_end` en `triples` (oración de origen y su tramo UTF-16). Sincronizadas.
+- `0063_collection_ai_context`: columna `ai_context` en `collections` (contexto para la IA). Sincronizada.
+- `0064_derived_source_path`: columnas `source_path` y `source_sha256` en `layouts` y `extractions` (archivo del que salieron, para detectar otra versión de la imagen). Sincronizadas; `NULL` = origen desconocido.
+- `0065_entity_aliases`: `entity_aliases` (`alias_key` UNIQUE, `alias`, `canonical`), alias globales de entidades. Sincronizada.
+
+Cada columna nueva de una tabla sincronizada sube el `schema_tag` de la cuenta en el primer push de un equipo actualizado; los equipos sin actualizar descartan esas columnas al aplicar. Ver `packages/store/src/migrations/NOTES.md`.
 
 ### Técnicas migradas
 
@@ -105,7 +117,7 @@ El árbol usa el orden canónico de una instalación nueva; una tabla `layouts` 
 ```text
 entropia.sqlite
 ├── migrado: negocio
-│   ├── collections: id, name, description, created_at, updated_at
+│   ├── collections: id, name, description, created_at, updated_at, ai_context
 │   ├── items: id, title, collection_id, metadata, created_at, updated_at, search_text, source_dir, imported_at
 │   ├── assets: id, item_id, path, type, size, created_at, sort_index, parent_asset_id, page_number
 │   ├── notes: id, item_id, content, created_at, updated_at, asset_id
@@ -113,10 +125,10 @@ entropia.sqlite
 │   ├── item_topics: id, item_id, topic_id, created_at
 │   ├── annotations: id, asset_id, page, kind, color, x, y, width, height, created_at, updated_at
 │   ├── entities: id, item_id, entity_type, value, start_offset, end_offset, confidence, source, model_name, created_at, latitude, longitude, geo_status, asset_id, manual_lat, manual_lon
-│   ├── triples: id, item_id, subject, predicate, object, created_at, asset_id
-│   ├── extractions: id, asset_id, text_content, method, confidence, created_at
+│   ├── triples: id, item_id, subject, predicate, object, created_at, asset_id, evidence_text, evidence_start, evidence_end
+│   ├── extractions: id, asset_id, text_content, method, confidence, created_at, source_path, source_sha256
 │   ├── transcriptions: id, asset_id, text_content, language, duration_ms, model, segments, confidence, created_at
-│   ├── layouts: id, asset_id, regions, blocks, model, image_width, image_height, created_at
+│   ├── layouts: id, asset_id, regions, blocks, model, image_width, image_height, created_at, source_path, source_sha256
 │   ├── llm_results: id, target_id, target_type, job_type, result, created_at
 │   ├── rag_conversations: id, title, created_at, updated_at
 │   └── rag_messages: id, conversation_id, sort_index, role, content, sources, model, created_at
@@ -299,12 +311,12 @@ El resto de PK son `TEXT` UUIDv4; la PK de `vec_assets` es `asset_id`.
 
 `rag_chunks.source_id` apunta lógicamente a `extractions.id` o `transcriptions.id` según `source_kind`, pero no tiene FK física. Lo mismo ocurre con varias referencias auxiliares y sync: su integridad depende del runtime.
 
-### Familias nuevas (`0032`–`0058`)
+### Familias nuevas (`0032`–`0065`)
 
 | Tabla | PK | FK físicas y constraints principales |
 |---|---|---|
 | `processing_batches` | `id` | `origin IN ('user','manual','repair','bibliography')`; `state` entre `preparing`…`completed_with_errors`; `desired_state IN ('run','pause','cancel')`; `priority IN (0,1,2)` |
-| `processing_tasks` | `id` | `kind IN ('ocr','embedding','bibliography_sync','bibliography_profile','bibliography_extract','ner','triples','schema_extract')`; `state IN ('pending','blocked','running','retry_wait','interrupted','succeeded','failed','skipped','cancelled')`; UNIQUE parcial por sujeto activo (`domain`, `subject_kind`, `subject_id`) |
+| `processing_tasks` | `id` | `kind IN ('ocr','embedding','bibliography_sync','bibliography_profile','bibliography_extract','ner','triples','schema_extract','ocr_correction','summary')`; `state IN ('pending','blocked','running','retry_wait','interrupted','succeeded','failed','skipped','cancelled')`; UNIQUE parcial por sujeto activo (`domain`, `subject_kind`, `subject_id`) |
 | `processing_batch_collections`, `processing_batch_members`, `processing_requests` | `(batch_id, …)` / `request_id` | `batch_id -> processing_batches.id ON DELETE CASCADE` |
 | `processing_batch_tasks` | `(batch_id, task_id)` | `batch_id` CASCADE; `task_id` y `dependency_task_id -> processing_tasks.id` |
 | `processing_attempts`, `processing_checkpoints` | `(task_id, attempt_number)` / `(task_id, unit_key)` | `task_id -> processing_tasks.id ON DELETE CASCADE` |
@@ -328,6 +340,9 @@ El resto de PK son `TEXT` UUIDv4; la PK de `vec_assets` es `asset_id`.
 | `bibliographic_ingest_operations` | `id` | `library_id -> zotero_libraries.id ON DELETE CASCADE` |
 | `web_captures` | `id` | `web_source_id -> web_sources.id ON DELETE CASCADE` |
 | `extraction_records` | `id` | `schema_id -> extraction_schemas.id` y `asset_id -> assets.id`, ambas CASCADE |
+| `zotero_annotation_items`, `zotero_annotation_sync_state` | `(library_row_id, …)` | `library_row_id -> zotero_libraries.id ON DELETE CASCADE`; sin FK a `zotero_attachments` a propósito |
+| `asset_process_events` | `id` | `asset_id -> assets.id ON DELETE CASCADE`; `params_json` válido como JSON |
+| `entity_aliases` | `id` | `alias_key` UNIQUE; sin FK (los alias se resuelven por texto) |
 
 ## Índices relevantes
 
@@ -506,7 +521,7 @@ LIMIT 10;
 
 SELECT name
 FROM _migrations
-WHERE name = '0058_processing_ner_tasks';
+WHERE name = '0065_entity_aliases';
 
 -- Si aparece alguna, una migración de reconstrucción no terminó.
 SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '\_backup\_%' ESCAPE '\';
@@ -783,7 +798,7 @@ ORDER BY s.name;
 ## Checklist de diagnóstico
 
 1. Confirmá que abriste la base correcta: la compartida o la de un perfil de desarrollo, y no una copia de seguridad.
-2. Verificá que `_migrations` contenga `0058_processing_ner_tasks`, el horizonte actual, y que no queden tablas `_backup_*`.
+2. Verificá que `_migrations` contenga `0065_entity_aliases`, el horizonte actual, y que no queden tablas `_backup_*`.
 3. Revisá `PRAGMA foreign_keys`, `journal_mode` y la estructura real con `table_xinfo`/`index_list`.
 4. Para FTS de ítems, uní `fts_items` con `items` por `rowid`; no leas payload de la tabla contentless.
 5. Para RAG, revisá en conjunto `vec_assets`, `rag_chunks`, `rag_chunks_fts` y `rag_asset_embedding_state`.

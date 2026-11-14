@@ -6,7 +6,7 @@
 
 ## Scope
 
-This list gathers the features of both EntropIA variants —**Lite** and **Pro**— and says which manual chapter explains each one. Almost all are common; when one changes between variants, the middle column says so ("In Lite…", "In Pro…"), and the engine differences are gathered in [Differences between Lite and Pro](#seccion-differences-between-lite-and-pro). We state whether a feature needs an Internet connection, an account or a key. Features marked **(next version)** are already in the manual but arrive in the version after 1.7.1.
+This list gathers the features of both EntropIA variants —**Lite** and **Pro**— and says which manual chapter explains each one. Almost all are common; when one changes between variants, the middle column says so ("In Lite…", "In Pro…"), and the engine differences are gathered in the **Differences between Lite and Pro** section below and explained in [chapter 2 of the manual](manual-usuario.en.md#lite-y-pro). We state whether a feature needs an Internet connection, an account or a key. Features marked **(next version)** are already in the manual but arrive in the version after 1.7.1.
 
 The manual combines real screenshots of EntropIA Lite, details cropped from those screenshots and process diagrams labelled as such. Each image has a description and can be opened full size from the web edition. The screenshots show the Spanish interface.
 
