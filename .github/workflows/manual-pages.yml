@@ -1,8 +1,8 @@
 name: Manual Pages
 
-# Builds the EntropIA Lite user manual (manual/) into the published site
-# layout and deploys it to GitHub Pages. Source of truth for the manual's
-# content and styling is manual/manual-usuario/build_html.py; see
+# Builds the EntropIA Pro and Lite user manual (manual/), in Spanish and
+# English, into the published site layout and deploys it to GitHub Pages.
+# Source of truth for the manual's content and styling is manual/manual-usuario/build_html.py; see
 # manual/manual-usuario/build_html.py --out _site for a local build.
 
 on:

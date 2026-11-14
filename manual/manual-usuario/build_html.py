@@ -3,8 +3,13 @@
 Install the pinned renderer with ``python -m pip install -r requirements.txt``,
 then run ``python build_html.py`` from any working directory to write the
 HTML next to the Markdown sources, or ``python build_html.py --out _site``
-to build the full published site layout (index page, ``.nojekyll``, the two
-manual pages and their images) into ``_site/``.
+to build the full published site layout (index page, ``.nojekyll``, the
+manual and inventory pages in Spanish and English, and their images) into
+``_site/``.
+
+Each document has a Spanish source (``*.md``, the default language) and an
+English one (``*.en.md``); both editions share the images, the anchors and the
+page template, and each page links to its counterpart in the other language.
 """
 
 from __future__ import annotations
@@ -23,10 +28,11 @@ from markdown_it import MarkdownIt
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
-MANUAL_SOURCE = ROOT / "manual-usuario.md"
-INVENTORY_SOURCE = ROOT / "inventario-funciones-manual.md"
-MANUAL_OUTPUT = ROOT / "manual-usuario.html"
-INVENTORY_OUTPUT = ROOT / "inventario-funciones-manual.html"
+# Spanish (default) and English editions of each document. The stems are
+# shared: `<stem><suffix>.md` is rendered to `<stem><suffix>.html`.
+MANUAL_STEM = "manual-usuario"
+INVENTORY_STEM = "inventario-funciones-manual"
+LANG_SUFFIX = {"es": "", "en": ".en"}
 INDEX_SOURCE = ROOT.parent / "index.html"
 IMAGES_SOURCE = ROOT / "images"
 # The app's own mark (the 'e', black on transparent), used as a mask so it
@@ -37,13 +43,15 @@ EXPECTED_CHAPTERS = 21
 
 CHAPTER_PATTERN = re.compile(
     r'(?m)^<a id="(?P<anchor>capitulo-\d+[^\"]*)"></a>\r?\n'
-    r'## Capítulo (?P<number>\d+)\.\s*(?P<title>[^\r\n]+)$'
+    r'## (?:Capítulo|Chapter) (?P<number>\d+)\.\s*(?P<title>[^\r\n]+)$'
 )
 # Annexes follow the last chapter and are lettered, not numbered.
 ANNEX_PATTERN = re.compile(
     r'(?m)^<a id="(?P<anchor>anexo-[a-z][^\"]*)"></a>\r?\n'
-    r'## Anexo (?P<letter>[A-Z])\.\s*(?P<title>[^\r\n]+)$'
+    r'## (?:Anexo|Annex) (?P<letter>[A-Z])\.\s*(?P<title>[^\r\n]+)$'
 )
+# The inline chapter list the HTML sidebar replaces.
+INDEX_PATTERN = re.compile(r"(?ms)^## (?:Índice|Contents)[ \t]*\n.*?^---\s*$")
 IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 # The editions must work offline: no stylesheet, font or script may load
 # from the network (links to external pages in the text are fine).
@@ -490,7 +498,7 @@ PAGE_SCRIPT = r"""
   const input = document.querySelector("[data-nav-filter]");
   const items = Array.from(document.querySelectorAll("[data-nav-item]"));
   const empty = document.querySelector("[data-no-results]");
-  const normalize = (text) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es");
+  const normalize = (text) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase(document.documentElement.lang || "es");
   if (input && items.length) {
     const filterItems = () => {
       const query = normalize(input.value.trim());
@@ -537,7 +545,7 @@ PAGE_SCRIPT = r"""
 """
 
 PAGE_TEMPLATE = """<!doctype html>
-<html lang="es">
+<html lang="@@LANG@@">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -552,17 +560,17 @@ PAGE_TEMPLATE = """<!doctype html>
   </style>
 </head>
 <body>
-  <a class="skip-link" href="#contenido">Saltar al contenido principal</a>
+  <a class="skip-link" href="#contenido">@@SKIP_LINK@@</a>
   <header class="topbar">
     <div class="progress" data-progress aria-hidden="true"></div>
     <div class="topbar-inner">
-      <a class="brand" href="manual-usuario.html">
+      <a class="brand" href="@@HOME_HREF@@">
         <span class="brand-mark" style="--brand-mark: url(@@BRAND_MARK@@)" aria-hidden="true"></span>
-        EntropIA Lite
+        EntropIA Pro &amp; Lite
       </a>
 @@DOCUMENT_NAV@@
       <div class="topbar-actions">
-        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Cambiar entre tema claro y oscuro">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="@@THEME_LABEL@@">
           <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M4.4 4.4l1.7 1.7M17.9 17.9l1.7 1.7M2.5 12h2.4M19.1 12h2.4M4.4 19.6l1.7-1.7M17.9 6.1l1.7-1.7"/></svg>
           <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 14.2A8.2 8.2 0 1 1 9.8 4a6.6 6.6 0 0 0 10.2 10.2z"/></svg>
         </button>
@@ -575,10 +583,10 @@ PAGE_TEMPLATE = """<!doctype html>
         <summary>@@SUMMARY@@</summary>
         <div class="filter-control">
           <label for="nav-filter">@@FILTER_LABEL@@</label>
-          <input id="nav-filter" type="search" data-nav-filter aria-controls="section-nav" autocomplete="off" placeholder="Escribí un título o tema">
+          <input id="nav-filter" type="search" data-nav-filter aria-controls="section-nav" autocomplete="off" placeholder="@@FILTER_PLACEHOLDER@@">
         </div>
 @@SECTION_NAV@@
-        <p class="filter-empty" data-no-results role="status" hidden>No hay coincidencias en este índice.</p>
+        <p class="filter-empty" data-no-results role="status" hidden>@@NO_RESULTS@@</p>
         <a class="other-document" href="@@OTHER_HREF@@">@@OTHER_LABEL@@</a>
       </details>
     </aside>
@@ -588,7 +596,7 @@ PAGE_TEMPLATE = """<!doctype html>
     </main>
   </div>
   <footer class="site-footer">
-    <p>Desarrollado por <a href="https://hlab.com.ar/" rel="noopener">HLab</a></p>
+    <p>@@FOOTER@@ <a href="https://hlab.com.ar/" rel="noopener">HLab</a></p>
   </footer>
   <script>
 @@PAGE_SCRIPT@@
@@ -596,6 +604,76 @@ PAGE_TEMPLATE = """<!doctype html>
 </body>
 </html>
 """
+
+
+UI = {
+    "es": {
+        "skip_link": "Saltar al contenido principal",
+        "theme_label": "Cambiar entre tema claro y oscuro",
+        "filter_placeholder": "Escribí un título o tema",
+        "no_results": "No hay coincidencias en este índice.",
+        "footer": "Desarrollado por",
+        "print_index": "Índice para impresión",
+        "documents": "Documentos",
+        "manual": "Manual",
+        "inventory": "Inventario de funciones",
+        "other_language": "English",
+        "other_language_label": "Read this page in English",
+        "annex": "Anexo",
+        "figure_open": "Abrir imagen a tamaño completo (nueva pestaña)",
+        "figure_hint": "Pulsá la imagen para verla a tamaño completo en otra pestaña.",
+        "manual_title": "Manual de usuario · EntropIA Pro y Lite",
+        "manual_aside": "Índice del manual",
+        "manual_summary": "Índice de capítulos",
+        "manual_filter": "Filtrar capítulos",
+        "manual_sections": "Capítulos del manual",
+        "manual_other": "Ver inventario de funciones",
+        "inventory_title": "Inventario de funciones · EntropIA Pro y Lite",
+        "inventory_aside": "Índice del inventario",
+        "inventory_summary": "Índice de secciones",
+        "inventory_filter": "Filtrar secciones",
+        "inventory_sections": "Secciones del inventario",
+        "inventory_other": "Volver al manual de usuario",
+        "built": "Generado",
+        "chapters": "capítulos",
+        "sections": "secciones",
+    },
+    "en": {
+        "skip_link": "Skip to main content",
+        "theme_label": "Switch between light and dark theme",
+        "filter_placeholder": "Type a title or topic",
+        "no_results": "No matches in this index.",
+        "footer": "Developed by",
+        "print_index": "Print index",
+        "documents": "Documents",
+        "manual": "Manual",
+        "inventory": "Feature inventory",
+        "other_language": "Español",
+        "other_language_label": "Leer esta página en español",
+        "annex": "Annex",
+        "figure_open": "Open the image full size (new tab)",
+        "figure_hint": "Click the image to see it full size in another tab.",
+        "manual_title": "User manual · EntropIA Pro and Lite",
+        "manual_aside": "Manual contents",
+        "manual_summary": "Chapter index",
+        "manual_filter": "Filter chapters",
+        "manual_sections": "Manual chapters",
+        "manual_other": "See the feature inventory",
+        "inventory_title": "Feature inventory · EntropIA Pro and Lite",
+        "inventory_aside": "Inventory contents",
+        "inventory_summary": "Section index",
+        "inventory_filter": "Filter sections",
+        "inventory_sections": "Inventory sections",
+        "inventory_other": "Back to the user manual",
+        "built": "Built",
+        "chapters": "chapters",
+        "sections": "sections",
+    },
+}
+
+
+def page_name(stem: str, lang: str, ext: str = ".html") -> str:
+    return f"{stem}{LANG_SUFFIX[lang]}{ext}"
 
 
 def slugify(value: str) -> str:
@@ -614,7 +692,7 @@ def check_local_images(markdown: str) -> None:
             raise ValueError(f"No se encontró la imagen local: {target}")
 
 
-def chapter_items(markdown: str) -> List[Tuple[str, str]]:
+def chapter_items(markdown: str, lang: str = "es") -> List[Tuple[str, str]]:
     matches = list(CHAPTER_PATTERN.finditer(markdown))
     numbers = [int(match.group("number")) for match in matches]
     expected = list(range(1, EXPECTED_CHAPTERS + 1))
@@ -626,7 +704,7 @@ def chapter_items(markdown: str) -> List[Tuple[str, str]]:
         for match in matches
     ]
     items += [
-        (match.group("anchor"), f"Anexo {match.group('letter')}. {match.group('title')}")
+        (match.group("anchor"), f"{UI[lang]['annex']} {match.group('letter')}. {match.group('title')}")
         for match in ANNEX_PATTERN.finditer(markdown)
     ]
     if len({anchor for anchor, _ in items}) != len(items):
@@ -662,22 +740,34 @@ def nav_markup(items: List[Tuple[str, str]], label: str) -> str:
     )
 
 
-def document_switcher(current: str) -> str:
+def document_switcher(current: str, lang: str) -> str:
+    ui = UI[lang]
+    other = "en" if lang == "es" else "es"
     pages = (
-        ("manual", "manual-usuario.html", "Manual"),
-        ("inventory", "inventario-funciones-manual.html", "Inventario de funciones"),
+        ("manual", page_name(MANUAL_STEM, lang), ui["manual"]),
+        ("inventory", page_name(INVENTORY_STEM, lang), ui["inventory"]),
     )
     links = []
     for key, href, label in pages:
         current_attr = ' aria-current="page"' if key == current else ""
         links.append(f'        <a href="{href}"{current_attr}>{label}</a>')
-    return '      <nav class="document-nav" aria-label="Documentos">\n' + "\n".join(links) + "\n      </nav>"
+    stem = MANUAL_STEM if current == "manual" else INVENTORY_STEM
+    links.append(
+        f'        <a href="{page_name(stem, other)}" hreflang="{other}" lang="{other}" '
+        f'aria-label="{html.escape(ui["other_language_label"], quote=True)}">{ui["other_language"]}</a>'
+    )
+    return (
+        f'      <nav class="document-nav" aria-label="{ui["documents"]}">\n'
+        + "\n".join(links)
+        + "\n      </nav>"
+    )
 
 
 def rewrite_document_links(rendered: str) -> str:
-    pairs = (
-        ("manual-usuario.md", "manual-usuario.html"),
-        ("inventario-funciones-manual.md", "inventario-funciones-manual.html"),
+    pairs = tuple(
+        (page_name(stem, lang, ".md"), page_name(stem, lang))
+        for stem in (MANUAL_STEM, INVENTORY_STEM)
+        for lang in LANG_SUFFIX
     )
     for source, target in pairs:
         pattern = re.compile(rf'href="{re.escape(source)}(?P<fragment>#[^\"]*)?"')
@@ -705,13 +795,13 @@ def classify_callouts(rendered: str) -> str:
     def replace(match: re.Match[str]) -> str:
         inner = match.group(1)
         opening = re.sub(r"<[^>]+>", "", inner)[:160]
-        if "Atención" in opening:
+        if "Atención" in opening or "Warning" in opening:
             kind = "warning"
-        elif "Importante" in opening:
+        elif "Importante" in opening or "Important" in opening:
             kind = "important"
-        elif "Consejo" in opening:
+        elif "Consejo" in opening or "Tip" in opening:
             kind = "tip"
-        elif "Cómo leer" in opening:
+        elif "Cómo leer" in opening or "How to read" in opening:
             kind = "guide"
         else:
             kind = "note"
@@ -720,7 +810,8 @@ def classify_callouts(rendered: str) -> str:
     return re.sub(r"<blockquote>(.*?)</blockquote>", replace, rendered, flags=re.S)
 
 
-def optimize_images(rendered: str) -> str:
+def optimize_images(rendered: str, lang: str = "es") -> str:
+    ui = UI[lang]
     seen = 0
 
     def replace(match: re.Match[str]) -> str:
@@ -753,25 +844,24 @@ def optimize_images(rendered: str) -> str:
         return (
             f'<figure class="manual-figure"><a href="{source.group(1)}" '
             f'target="_blank" rel="noopener" '
-            f'aria-label="{caption.group(1)} — Abrir imagen a tamaño completo (nueva pestaña)">'
+            f'aria-label="{caption.group(1)} — {ui["figure_open"]}">'
             f'{image}</a><figcaption>{caption.group(1)}'
-            '<span class="figure-hint">Pulsá la imagen para verla a tamaño completo '
-            'en otra pestaña.</span></figcaption></figure>'
+            f'<span class="figure-hint">{ui["figure_hint"]}</span></figcaption></figure>'
         )
 
     return re.sub(r"<p>(<img [^>]+>)</p>", figure, rendered)
 
 
-def prepare_body(rendered: str) -> str:
-    return optimize_images(classify_callouts(attach_explicit_ids(rendered)))
+def prepare_body(rendered: str, lang: str = "es") -> str:
+    return optimize_images(classify_callouts(attach_explicit_ids(rendered)), lang)
 
 
-def print_index(items: List[Tuple[str, str]]) -> str:
+def print_index(items: List[Tuple[str, str]], lang: str = "es") -> str:
     links = "".join(
         f'<li><a href="#{html.escape(anchor, quote=True)}">{html.escape(title)}</a></li>'
         for anchor, title in items
     )
-    return f'<nav class="print-index" aria-label="Índice para impresión"><ol>{links}</ol></nav>'
+    return f'<nav class="print-index" aria-label="{UI[lang]["print_index"]}"><ol>{links}</ol></nav>'
 
 
 def brand_mark_uri() -> str:
@@ -781,6 +871,7 @@ def brand_mark_uri() -> str:
 
 
 def page_markup(
+    lang: str,
     title: str,
     current: str,
     aside_label: str,
@@ -792,11 +883,19 @@ def page_markup(
     other_label: str,
     body: str,
 ) -> str:
+    ui = UI[lang]
     replacements = {
+        "@@LANG@@": lang,
+        "@@HOME_HREF@@": page_name(MANUAL_STEM, lang),
+        "@@SKIP_LINK@@": html.escape(ui["skip_link"]),
+        "@@THEME_LABEL@@": html.escape(ui["theme_label"], quote=True),
+        "@@FILTER_PLACEHOLDER@@": html.escape(ui["filter_placeholder"], quote=True),
+        "@@NO_RESULTS@@": html.escape(ui["no_results"]),
+        "@@FOOTER@@": html.escape(ui["footer"]),
         "@@TITLE@@": html.escape(title),
         "@@STYLES@@": STYLES,
         "@@THEME_INIT_SCRIPT@@": THEME_INIT_SCRIPT,
-        "@@DOCUMENT_NAV@@": document_switcher(current),
+        "@@DOCUMENT_NAV@@": document_switcher(current, lang),
         "@@BRAND_MARK@@": brand_mark_uri(),
         "@@ASIDE_LABEL@@": html.escape(aside_label),
         "@@SUMMARY@@": html.escape(summary),
@@ -804,7 +903,7 @@ def page_markup(
         "@@SECTION_NAV@@": nav_markup(items, section_label),
         "@@OTHER_HREF@@": html.escape(other_href, quote=True),
         "@@OTHER_LABEL@@": html.escape(other_label),
-        "@@PRINT_INDEX@@": print_index(items),
+        "@@PRINT_INDEX@@": print_index(items, lang),
         "@@DOCUMENT_BODY@@": body,
         "@@PAGE_SCRIPT@@": PAGE_SCRIPT,
     }
@@ -827,8 +926,9 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Site output directory (e.g. _site). When given, the full "
             "published layout is written there: index.html, .nojekyll, "
-            "manual-usuario/{manual-usuario.html,inventario-funciones-manual.html,images/}. "
-            "When omitted, the two HTML files are written next to their "
+            "manual-usuario/{manual-usuario,inventario-funciones-manual}{,.en}.html "
+            "and manual-usuario/images/. "
+            "When omitted, the HTML files are written next to their "
             "Markdown sources, matching the previous behaviour."
         ),
     )
@@ -849,69 +949,70 @@ def build_site(out_dir: Path) -> None:
     (out_dir / ".nojekyll").touch()
 
 
+def build_language(parser: MarkdownIt, lang: str, out_dir: Path) -> None:
+    """Render the manual and the inventory of one language into `out_dir`."""
+    ui = UI[lang]
+    manual = (ROOT / page_name(MANUAL_STEM, lang, ".md")).read_text(encoding="utf-8")
+    inventory = (ROOT / page_name(INVENTORY_STEM, lang, ".md")).read_text(encoding="utf-8")
+    check_local_images(manual)
+    check_local_images(inventory)
+
+    chapters = chapter_items(manual, lang)
+    # The sidebar replaces the repeated inline chapter list in the HTML edition.
+    manual_html_source = INDEX_PATTERN.sub("", manual, count=1)
+    manual_body = prepare_body(rewrite_document_links(parser.render(manual_html_source)), lang)
+
+    inventory_body, sections = inventory_body_and_items(parser, inventory)
+    inventory_body = prepare_body(rewrite_document_links(inventory_body), lang)
+
+    manual_page = page_markup(
+        lang=lang,
+        title=ui["manual_title"],
+        current="manual",
+        aside_label=ui["manual_aside"],
+        summary=ui["manual_summary"],
+        filter_label=ui["manual_filter"],
+        section_label=ui["manual_sections"],
+        items=chapters,
+        other_href=page_name(INVENTORY_STEM, lang),
+        other_label=ui["manual_other"],
+        body=manual_body,
+    )
+    inventory_page = page_markup(
+        lang=lang,
+        title=ui["inventory_title"],
+        current="inventory",
+        aside_label=ui["inventory_aside"],
+        summary=ui["inventory_summary"],
+        filter_label=ui["inventory_filter"],
+        section_label=ui["inventory_sections"],
+        items=sections,
+        other_href=page_name(MANUAL_STEM, lang),
+        other_label=ui["inventory_other"],
+        body=inventory_body,
+    )
+
+    manual_output = out_dir / page_name(MANUAL_STEM, lang)
+    inventory_output = out_dir / page_name(INVENTORY_STEM, lang)
+    manual_output.parent.mkdir(parents=True, exist_ok=True)
+    manual_output.write_text(manual_page, encoding="utf-8")
+    inventory_output.write_text(inventory_page, encoding="utf-8")
+    print(f"{ui['built']}: {manual_output.name} ({len(chapters)} {ui['chapters']})")
+    print(f"{ui['built']}: {inventory_output.name} ({len(sections)} {ui['sections']})")
+
+
 def main() -> None:
     args = parse_args()
     if args.out is not None:
         out_dir = args.out.resolve()
-        manual_output = out_dir / "manual-usuario" / "manual-usuario.html"
-        inventory_output = out_dir / "manual-usuario" / "inventario-funciones-manual.html"
+        build_site(out_dir)
+        pages_dir = out_dir / "manual-usuario"
     else:
-        out_dir = None
-        manual_output = MANUAL_OUTPUT
-        inventory_output = INVENTORY_OUTPUT
-
-    manual = MANUAL_SOURCE.read_text(encoding="utf-8")
-    inventory = INVENTORY_SOURCE.read_text(encoding="utf-8")
-    check_local_images(manual)
-    check_local_images(inventory)
+        pages_dir = ROOT
 
     parser = MarkdownIt("default", {"html": True})
-    chapters = chapter_items(manual)
-    # The sidebar replaces the repeated inline chapter list in the HTML edition.
-    manual_html_source = re.sub(
-        r"(?ms)^## Índice\s*\n.*?^---\s*$",
-        "",
-        manual,
-        count=1,
-    )
-    manual_body = prepare_body(rewrite_document_links(parser.render(manual_html_source)))
-
-    inventory_body, sections = inventory_body_and_items(parser, inventory)
-    inventory_body = prepare_body(rewrite_document_links(inventory_body))
-
-    manual_page = page_markup(
-        title="Manual de usuario · EntropIA Lite",
-        current="manual",
-        aside_label="Índice del manual",
-        summary="Índice de capítulos",
-        filter_label="Filtrar capítulos",
-        section_label="Capítulos del manual",
-        items=chapters,
-        other_href="inventario-funciones-manual.html",
-        other_label="Ver inventario de funciones",
-        body=manual_body,
-    )
-    inventory_page = page_markup(
-        title="Inventario de funciones · EntropIA Lite",
-        current="inventory",
-        aside_label="Índice del inventario",
-        summary="Índice de secciones",
-        filter_label="Filtrar secciones",
-        section_label="Secciones del inventario",
-        items=sections,
-        other_href="manual-usuario.html",
-        other_label="Volver al manual de usuario",
-        body=inventory_body,
-    )
-
-    if out_dir is not None:
-        build_site(out_dir)
-
-    manual_output.parent.mkdir(parents=True, exist_ok=True)
-    manual_output.write_text(manual_page, encoding="utf-8")
-    inventory_output.write_text(inventory_page, encoding="utf-8")
-    print(f"Generado: {manual_output.name} ({len(chapters)} capítulos)")
-    print(f"Generado: {inventory_output.name} ({len(sections)} secciones)")
+    for lang in LANG_SUFFIX:
+        build_language(parser, lang, pages_dir)
 
 
 if __name__ == "__main__":

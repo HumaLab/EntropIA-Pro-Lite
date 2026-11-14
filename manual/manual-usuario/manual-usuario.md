@@ -1665,7 +1665,7 @@ Si usás sincronización, al volver a abrir EntropIA la copia recuperada se sinc
 
 1. Creá o elegí una colección y pulsá **Importar documento**.
 2. Abrí el PDF y elegí su primera página.
-3. En **Texto**, ejecutá **OCRH**. Necesitás GLM-OCR configurado y conexión.
+3. En **Texto**, ejecutá **OCRH**. En Lite necesitás GLM-OCR configurado y conexión; en Pro podés usar **OCRL** u **OCRH** local, sin conexión.
 4. Compará el texto con la imagen; corregí nombres o cifras mal leídos. Si falta un párrafo entero o el final de uno, abrí **Layout** y [corregí esa caja](#corregir-cajas) en vez de escribirlo a mano.
 5. Buscá una palabra en **Búsquedas** o en la barra superior. Si no aparece, usá **Análisis → INDEX** y repetí la búsqueda.
 
@@ -1695,7 +1695,7 @@ Si usás sincronización, al volver a abrir EntropIA la copia recuperada se sinc
 
 1. Importá las fuentes y obtené el texto de cada documento que lo necesite.
 2. Abrí cada documento y seleccioná la página o archivo con texto. Usá **OCRR/Resumen** para resumirlo, **NER** para proponer nombres de personas o lugares o **TRIPLET** para sugerir relaciones, como quién hizo qué. Para muchos documentos, **Entidades**, **Tripletes**, **Corrección OCR** y **Resúmenes** también corren por lote: los resúmenes quedan página por página, no como un resumen general de la colección. Revisá el alcance de la salida.
-3. Contrastá cada salida con su texto original; usá **Análisis textual** en la colección para observar frecuencias de palabras.
+3. Contrastá cada salida con su texto original; usá **Análisis textual** en la colección para observar frecuencias de palabras y **Frases** para expresiones recurrentes.
 4. Registrá coincidencias y diferencias en notas, citando qué documento las respalda.
 
 ### 18.5. Quiero redactar un texto académico a partir de mis documentos
@@ -1722,10 +1722,10 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 ### 18.7. Tengo una entrevista y quiero transcribirla
 
 1. Conservá el audio original y comprobá que tenés autorización para enviarlo al servicio de transcripción.
-2. Configurá **AssemblyAI** en **APIs remotas**, probá la conexión y guardá. Elegí si necesitás identificar intervenciones de hablantes.
+2. En Lite, configurá **AssemblyAI** en **APIs remotas**, probá la conexión y guardá, y elegí si necesitás identificar intervenciones de hablantes. En Pro podés elegir **Modo STT → Local** para que el audio no salga del equipo (y **Detectar hablantes**).
 3. Importá el audio en una colección, abrilo y escuchá un fragmento para comprobar el archivo.
 4. En **Texto**, pulsá **STT** y esperá el resultado. Importar o reproducir no inicia la transcripción.
-5. Escuchá de nuevo los pasajes que vas a citar; corregí nombres, fechas y atribuciones. Anotá en una nota los tramos dudosos.
+5. Escuchá de nuevo los pasajes que vas a citar; corregí nombres, fechas y atribuciones. Si hay etiquetas de hablantes, usá **Renombrar hablantes**. Anotá en una nota los tramos dudosos.
 6. Seleccioná y copiá la transcripción desde su campo editable a un archivo propio. No hay menú **Descargar** para audio; conservá también el original.
 
 ### 18.8. Quiero comprobar un informe antes de usarlo
@@ -1779,7 +1779,7 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 
 | Problema | Qué revisar |
 |---|---|
-| No aparece texto después de importar | La importación no reconoce texto automáticamente. Abrí **Texto** y usá **OCRH** para una imagen o PDF compatible, o **STT** para pasar el audio a texto. |
+| No aparece texto después de importar | La importación no reconoce texto automáticamente (solo guarda el texto nativo de los PDF digitales). Abrí **Texto** y usá **OCRH** para una imagen o PDF compatible, o **STT** para pasar el audio a texto. |
 | El reconocimiento de texto produjo errores | Compará el resultado con la imagen y corregí lo necesario. Para fotos, usá PNG/JPG y revisá que la imagen no esté borrosa, inclinada u oscura. |
 | OCRH no está disponible o da error | En Lite, el reconocimiento de texto necesita Internet. Revisá GLM-OCR en **Configuración → APIs remotas**, probá la conexión y guardá los cambios. En Pro, revisá el **Modo OCRH** y el motor local elegido. |
 | No encuentro un documento | Abrí la colección correcta, limpiá los filtros y buscá por nombre en **Buscar documentos...** o usá la búsqueda superior. |
@@ -1797,7 +1797,7 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 | La investigación se detuvo por un error | Leé el mensaje que muestra y pulsá **Reintentar** cuando el problema se haya resuelto, por ejemplo la clave o el crédito de OpenRouter ([10.2](#capitulo-10-investigacion)). |
 | Quiero saber qué se le hizo a un documento | Abrí **Metadatos → Historial de procesos**: muestra cada proceso con su herramienta, modelo y versiones, y se exporta en JSON ([5.5](#historial-de-procesos)). |
 | Escritura no guardó un cambio | Esperá el estado **Guardado**. Si aparece **Error de guardado**, pulsá **Reintentar** si está disponible y copiá el texto importante antes de cerrar. |
-| Quiero volver a una versión anterior de un manuscrito | Pulsá **Historial de versiones** en la barra del manuscrito, elegí la versión y **Restaurar esta versión**. Lo que tenías queda guardado como otra versión. Ver [11.3](#historial-de-versiones). |
+| Quiero volver a una versión anterior de un manuscrito | Pulsá **Historial de versiones** en la barra del manuscrito, elegí la versión y **Restaurar esta versión** (o **Restaurar solo este apartado**). Lo que tenías queda guardado como otra versión. Ver [11.3](#historial-de-versiones). |
 | No puedo abrir otra pestaña | El máximo es 4. Cerrá una con **Cerrar pestaña** y volvé a pulsar **Abrir nueva pestaña**. |
 | No veo el explorador en vista dividida | No queda fijo a la izquierda. En el panel activo, pulsá **Abrir explorador de documentos**. Esc lo cierra. |
 | Escritura aparece en otra pestaña | Solo puede estar abierta en una. Elegí esa pestaña o pulsá **Ir a esa pestaña**. |
@@ -1817,9 +1817,9 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 | La lista de modelos está vacía o pide ir a Configuración | La lista se carga con la clave de OpenRouter guardada. Cargala en **Configuración → APIs remotas** y volvé a abrir la pantalla. |
 | OpenRouter se quedó sin crédito o no responde | Revisá tu cuenta de OpenRouter. Si configuraste el respaldo de **Vercel AI Gateway**, la corrección, los resúmenes, entidades, tripletes, esquemas y el Chat siguen por Vercel; Investigar, el Agente de Escritura y los embeddings no. |
 | Un PDF de Internet Archive dice restringido, cifrado o privado | Internet Archive no permite descargarlo. Buscá otra edición o un archivo derivado que sí esté disponible. |
-| Se cortó una importación de Internet Archive | Abrí de nuevo el diálogo de Internet Archive y usá **Importaciones en curso → Retomar importación**. |
+| Se cortó una importación de Internet Archive | Abrí de nuevo el diálogo de Internet Archive y usá **Importaciones en curso → Retomar importación** (o, para una cola de toda una búsqueda, **Continuar la cola**). |
 | La Biblioteca está vacía | Todavía no sincronizaste ninguna biblioteca. Abrí Zotero y, en **Escritura → Zotero**, pulsá **Sincronizar biblioteca**. |
-| La sincronización de la Biblioteca está en pausa o en espera | **En pausa:** Zotero no responde o su comunicación local está apagada; se reintenta sola. **En espera:** falta configurar OpenRouter o GLM-OCR; el mensaje indica cuál. |
+| La sincronización de la Biblioteca está en pausa o en espera | **En pausa:** Zotero no responde o su comunicación local está apagada; se reintenta sola. **En espera:** falta configurar OpenRouter o GLM-OCR (o, en Pro, el motor local elegido); el mensaje indica cuál. |
 | El Chat dice que no buscó en la Biblioteca | No hay bibliotecas elegidas sincronizadas, el indexado no terminó o no se pudo calcular la consulta con el proveedor de embeddings. Leé el aviso y revisá **Configuración → APIs remotas → OpenRouter**. |
 | **Relaciones 3D** no muestra nada | La colección todavía no tiene tripletas. Extraelas con **TRIPLET** o con un lote de **Tripletes**. |
 | La copia de seguridad falla | Comprobá que la carpeta elegida exista y tenga espacio (por ejemplo, que el disco esté conectado). Si hay otra copia en curso, esperá a que termine. |
@@ -1906,7 +1906,7 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 - **Esquema propio:** lista de campos que definís para que un lote arme una tabla con los datos de cada documento.
 - **Flujo guardado:** combinación de operaciones de lote guardada con un nombre.
 - **Historial de versiones:** estados anteriores de un manuscrito que Escritura conserva para leerlos o restaurarlos.
-- **Internet Archive:** biblioteca digital pública (archive.org) desde la que se pueden importar PDF.
+- **Internet Archive:** biblioteca digital pública (archive.org) desde la que se pueden importar PDF e imágenes.
 - **Ítem:** palabra que algunos mensajes de EntropIA usan para referirse a un documento.
 - **Layout:** herramienta que marca zonas de una página, como títulos, párrafos, tablas o figuras.
 - **Metadatos:** datos que describen un archivo o documento.
@@ -1946,8 +1946,8 @@ EntropIA combina cuatro técnicas. Cada buscador usa una o varias:
 |---|---|---|---|
 | **Léxica (FTS5 con BM25)** | Las palabras escritas, sin mayúsculas ni acentos. | Rápida, local y exacta: encuentra el término que escribiste. | No reconoce sinónimos ni paráfrasis. |
 | **Aproximada (variantes)** | Palabras del índice que difieren en una o dos letras. | Recupera errores de OCR y de tipeo. | Puede traer una palabra distinta parecida; por eso se marca. |
-| **Semántica (embeddings)** | Representaciones numéricas del significado del texto. | Encuentra contenido parecido aunque use otras palabras. | Necesita material preparado e Internet; la semejanza no es una prueba. |
-| **Híbrida (fusión y reordenamiento)** | Las listas léxica y semántica combinadas y, en el Chat, reordenadas por un modelo. | Reúne lo mejor de ambas. | Depende de proveedores remotos; si fallan, la búsqueda se degrada y lo avisa. |
+| **Semántica (embeddings)** | Representaciones numéricas del significado del texto. | Encuentra contenido parecido aunque use otras palabras. | Necesita material preparado (y, en Lite, Internet); la semejanza no es una prueba. |
+| **Híbrida (fusión y reordenamiento)** | Las listas léxica y semántica combinadas y, en el Chat, reordenadas por un modelo. | Reúne lo mejor de ambas. | Depende de los motores o proveedores; si fallan, la búsqueda se degrada y lo avisa. |
 
 | Buscador | Técnicas | Orden de los resultados |
 |---|---|---|
@@ -1961,11 +1961,12 @@ EntropIA combina cuatro técnicas. Cada buscador usa una o varias:
 | **Notas** | Coincidencia de palabras con tolerancia a errores. | Exactas primero, luego aproximadas. |
 | **Chat de investigación** | Híbrida + reordenamiento por modelo. | Relevancia según el reordenador. |
 | **Investigar** | Híbrida + reordenamiento, paso a paso. | La decide el agente en cada paso. |
+| **Chat de ayuda** | Índice FTS5 propio, con trigramas, sobre este manual, el mapa de pantallas y las preguntas frecuentes. | Relevancia; lo consulta solo cuando la pregunta lo necesita. |
 
 <a id="anexo-a-indice-lexico"></a>
 ### A.2. El índice de texto completo
 
-Casi todos los buscadores parten del mismo índice local, construido con **SQLite FTS5**. Cada documento ocupa una fila con tres campos: **título**, **metadatos** y **texto** (el OCR y las transcripciones de todas sus páginas, en orden). El índice se actualiza al obtener texto o al pulsar **Análisis → INDEX**.
+Casi todos los buscadores parten del mismo índice local, construido con **SQLite FTS5**. Cada documento ocupa una fila con tres campos: **título**, **metadatos** y **texto** (el OCR, el texto nativo y las transcripciones de todas sus páginas, en orden). El índice se actualiza al obtener texto o al pulsar **Análisis → INDEX**.
 
 Al indexar y al buscar, el texto pasa por el mismo tokenizador (`unicode61` con eliminación de diacríticos):
 
@@ -2082,7 +2083,7 @@ El Chat no busca y muestra una lista: **recupera** fragmentos y se los entrega a
    - 24 candidatos por parte, fusionados con RRF (constante 60) en una lista de hasta 40.
 4. **Biblioteca, si la incluiste.** Los pasajes de Zotero se buscan por separado (ver [A.7](#anexo-a-biblioteca)) y se intercalan por posición con los del corpus, nunca por puntaje.
 5. **Reordenamiento.** Los 16 mejores candidatos pasan por un **reordenador** (*reranker*): un modelo que lee la pregunta y cada fragmento juntos y estima cuánto responde uno a la otra. Es más preciso que la búsqueda inicial, pero también más lento, por eso solo se aplica a los finalistas. En Lite es `cohere/rerank-4-fast` vía OpenRouter; en Pro, el reranker local BGE v2 M3 cuando está instalado. Si falla o no hay clave, se conserva el orden de la fusión.
-6. **Armado del contexto.** Se quedan las 6 mejores fuentes, con hasta 3 pasajes por página (los pasajes vecinos se unen) y unos 10.000 caracteres en total. El modelo responde con citas `[n]` que remiten a esas fuentes.
+6. **Armado del contexto.** Se quedan las 6 mejores fuentes, con hasta 3 pasajes por página (los pasajes vecinos se unen) y unos 10.000 caracteres en total. El modelo responde con citas `[n]` que remiten a esas fuentes. Los fragmentos recuperados van marcados como datos, así que las instrucciones escritas dentro de un documento no se obedecen.
 
 Todos estos valores (fuentes finales, candidatos por parte, constante RRF, profundidad de reordenamiento, similitud mínima, modelo del reordenador y presupuestos de texto) se pueden ajustar en **Configuración → RAG Params** ([16.2](#capitulo-16-configuracion-y-herramientas-generales)). Si alguna etapa no puede ejecutarse, por ejemplo sin embeddings, la respuesta indica qué parte de la recuperación quedó fuera.
 
