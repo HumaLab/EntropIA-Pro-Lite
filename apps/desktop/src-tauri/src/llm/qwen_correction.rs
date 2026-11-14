@@ -237,6 +237,12 @@ fn correct_one_pass(
 /// Split text into runs of whole paragraphs of at most `max_chars` each.
 /// Splits only at blank lines (never mid-sentence); an unsplittable block
 /// becomes its own chunk and the caller errors loudly instead of cutting it.
+/// A stub tail (under a quarter of `max_chars`: dot-leader tables, page
+/// numbers) folds into the previous chunk instead of going to the model
+/// alone, where it comes back near-empty and burns a server call plus a
+/// retention refusal. At most one fold, so the merged chunk stays within
+/// ~125% of `max_chars` and still fits the 16K server slot.
+const TAIL_MERGE_RATIO: f64 = 0.25;
 fn split_text_for_correction(text: &str, max_chars: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current = String::new();
@@ -257,6 +263,20 @@ fn split_text_for_correction(text: &str, max_chars: usize) -> Vec<String> {
     }
     if !current.trim().is_empty() {
         chunks.push(current);
+    }
+    if chunks.len() > 1 {
+        let tail_chars = chunks.last().map(|c| c.chars().count()).unwrap_or(0);
+        if tail_chars < (max_chars as f64 * TAIL_MERGE_RATIO) as usize {
+            let tail = chunks.pop().unwrap();
+            let prev = chunks.last_mut().unwrap();
+            prev.push_str("\n\n");
+            prev.push_str(&tail);
+            log::info!(
+                target: "llm-local",
+                "local Qwen correction: stub tail of {tail_chars} chars folded into previous chunk, {} chunks total",
+                chunks.len()
+            );
+        }
     }
     chunks
 }
@@ -559,7 +579,9 @@ mod tests {
         let joined: String = chunks.join("\n\n");
         let norm = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
         assert_eq!(norm(&joined), norm(&text));
-        assert!(chunks.iter().all(|c| c.chars().count() <= 4000));
+        assert!(chunks
+            .iter()
+            .all(|c| c.chars().count() <= 4000 + (4000.0 * TAIL_MERGE_RATIO) as usize));
     }
 
     #[test]
@@ -581,5 +603,37 @@ mod tests {
         let headers = "LA CAPITAL\n\n".repeat(10)
             + "Cuerpo largo con contenido real y distinto del encabezado repetido.";
         assert!(check_no_repetition_loops(&headers).is_ok());
+    }
+
+    #[test]
+    fn stub_tail_folds_into_previous_chunk() {
+        // Full chunks plus a stub tail (page number, dot table): no stub
+        // survives alone, and nothing is lost.
+        let body = "Párrafo de cuerpo con contenido real para llenar el bloque.\n\n";
+        let text = body.repeat(200) + "12";
+        let chunks = split_text_for_correction(&text, 4000);
+        assert!(
+            chunks.len() >= 2,
+            "need chunks to fold, got {}",
+            chunks.len()
+        );
+        let stub_max = (4000.0 * TAIL_MERGE_RATIO) as usize;
+        assert!(
+            chunks.iter().all(|c| c.chars().count() >= stub_max),
+            "stub tail survived: {:?}",
+            chunks.iter().map(|c| c.chars().count()).collect::<Vec<_>>()
+        );
+        let norm = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        assert_eq!(norm(&chunks.join("\n\n")), norm(&text));
+    }
+
+    #[test]
+    fn healthy_tail_stays_its_own_chunk() {
+        // Two balanced halves: no fold, both within budget.
+        let half = "Mitad equilibrada de la página con varios párrafos reales.\n\n";
+        let text = half.repeat(100);
+        let chunks = split_text_for_correction(&text, 4000);
+        assert!(chunks.len() >= 2);
+        assert!(chunks.iter().all(|c| c.chars().count() <= 4000));
     }
 }
