@@ -1255,7 +1255,7 @@
     bottom: 4px;
     width: 1px;
     border-radius: var(--radius-xs);
-    background: color-mix(in srgb, var(--color-accent) 70%, white 12%);
+    background: var(--color-accent);
     opacity: 0;
     transform: scaleY(0.7);
     transition:
@@ -1279,7 +1279,7 @@
   }
 
   .explorer__node.is-active .explorer__node-main {
-    color: color-mix(in srgb, var(--color-text-primary) 92%, white 8%);
+    color: var(--color-text-primary);
   }
 
   .explorer__node.is-active::before {
@@ -1307,7 +1307,7 @@
     width: 15px;
     height: 15px;
     flex: 0 0 15px;
-    color: color-mix(in srgb, var(--color-text-secondary) 88%, white 12%);
+    color: var(--color-text-secondary);
   }
 
   .explorer__node-icon :global(svg) {
@@ -1325,7 +1325,7 @@
   }
 
   .explorer__node.is-active .explorer__node-icon {
-    color: color-mix(in srgb, var(--color-accent) 34%, white 26%);
+    color: var(--color-accent);
   }
 
   .explorer__node-main {

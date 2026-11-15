@@ -873,7 +873,7 @@
   }
 
   .note-editor__surface :global(.ProseMirror pre) {
-    background: color-mix(in srgb, var(--color-surface) 76%, black 24%);
+    background: var(--color-surface-sunken);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
     padding: var(--space-3);
