@@ -63,7 +63,7 @@
 
   .checkbox--disabled {
     cursor: not-allowed;
-    opacity: 0.55;
+    opacity: var(--opacity-disabled);
   }
 
   .checkbox--disabled:hover {

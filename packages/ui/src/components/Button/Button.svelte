@@ -80,13 +80,13 @@
 
   .btn:disabled {
     cursor: not-allowed;
-    opacity: 0.48;
+    opacity: var(--opacity-disabled);
     transform: none;
   }
   /* A principal button that is off must still be seen (and hovered for its
      tooltip); at 48 % it melted into the surface. */
   .btn--primary:disabled {
-    opacity: 0.72;
+    opacity: var(--opacity-disabled-primary);
   }
 
   .btn:focus-visible {
@@ -100,7 +100,7 @@
     color: var(--control-primary-text);
     border-color: var(--control-primary-border);
     font-weight: var(--font-weight-semibold);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    box-shadow: var(--shadow-highlight);
   }
   .btn--primary:hover:not(:disabled) {
     background: var(--control-primary-bg-hover);
@@ -189,7 +189,7 @@
     border: 2px solid currentColor;
     border-right-color: transparent;
     border-radius: var(--radius-full);
-    animation: spin 0.6s linear infinite;
+    animation: spin calc(var(--duration-slow) * 2) linear infinite;
     position: absolute;
   }
 
@@ -246,6 +246,12 @@
   @keyframes spin {
     to {
       transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn {
+      transition: none;
     }
   }
 </style>

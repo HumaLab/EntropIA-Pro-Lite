@@ -88,7 +88,7 @@
   }
 
   .toolbar-menu__item:disabled {
-    opacity: 0.4;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 

@@ -72,7 +72,7 @@
 
   .icon-button:disabled {
     cursor: not-allowed;
-    opacity: 0.48;
+    opacity: var(--opacity-disabled);
   }
 
   .icon-button--xs {
@@ -136,5 +136,11 @@
   .icon-button :global(svg) {
     flex-shrink: 0;
     pointer-events: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .icon-button {
+      transition: none;
+    }
   }
 </style>

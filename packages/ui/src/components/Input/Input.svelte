@@ -100,7 +100,7 @@
 
   .input-field__input:disabled {
     cursor: not-allowed;
-    opacity: 0.56;
+    opacity: var(--opacity-disabled);
     background-color: var(--color-surface-raised);
   }
 
@@ -126,6 +126,12 @@
   }
 
   .input-field--disabled .input-field__label {
-    opacity: 0.5;
+    opacity: var(--opacity-disabled);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .input-field__input {
+      transition: none;
+    }
   }
 </style>
