@@ -4,14 +4,33 @@
   let {
     variant = 'neutral',
     size = 'sm',
+    tone = 'danger',
+    count,
+    max,
+    role,
     children,
     class: className = '',
     ...rest
   }: StatusBadgeProps = $props()
+
+  const isCount = $derived(variant === 'count')
+  const colour = $derived(isCount ? tone : variant)
+  const countText = $derived(
+    count === undefined ? '' : max !== undefined && count > max ? `${max}+` : String(count)
+  )
+  // A bare number on a generic span cannot carry a name; as an image it can.
+  const resolvedRole = $derived(role ?? (isCount && rest['aria-label'] ? 'img' : undefined))
 </script>
 
-<span class="status-badge status-badge--{variant} status-badge--{size} {className}" {...rest}>
-  {#if children}
+<span
+  class="status-badge status-badge--{colour} status-badge--{size} {className}"
+  class:status-badge--count={isCount}
+  role={resolvedRole}
+  {...rest}
+>
+  {#if isCount && count !== undefined}
+    {countText}
+  {:else if children}
     {@render children()}
   {/if}
 </span>
@@ -30,18 +49,32 @@
     font-weight: var(--font-weight-medium);
     line-height: var(--line-height-tight);
     white-space: nowrap;
+    min-height: var(--status-badge-height);
+  }
+
+  .status-badge--xs {
+    --status-badge-height: 18px;
+    padding: 0 var(--space-1);
+    font-size: var(--font-size-2xs);
   }
 
   .status-badge--sm {
-    min-height: 22px;
+    --status-badge-height: 22px;
     padding: 0 var(--space-2);
     font-size: var(--font-size-xs);
   }
 
   .status-badge--md {
-    min-height: 28px;
+    --status-badge-height: var(--control-height-xs);
     padding: 0 var(--space-3);
     font-size: var(--font-size-sm);
+  }
+
+  /* A count is a pill at least as wide as it is tall, so one digit is round. */
+  .status-badge--count {
+    min-width: var(--status-badge-height);
+    border-radius: var(--radius-full);
+    font-variant-numeric: tabular-nums;
   }
 
   .status-badge--neutral {
@@ -92,5 +125,12 @@
     background: var(--state-evidence-soft);
     border-color: var(--state-evidence-border);
     color: var(--state-evidence);
+  }
+
+  /* A danger count is the one solid badge: it has to read at a glance. */
+  .status-badge--count.status-badge--danger {
+    background: var(--color-danger);
+    border-color: transparent;
+    color: var(--color-on-danger);
   }
 </style>

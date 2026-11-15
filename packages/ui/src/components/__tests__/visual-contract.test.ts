@@ -353,6 +353,7 @@ const STAGE_C_COMPONENTS: string[] = [
   'RadioGroup',
   'SelectTrigger',
   'ProgressBar',
+  'StatusBadge',
 ]
 
 describe('stage C component contract', () => {
