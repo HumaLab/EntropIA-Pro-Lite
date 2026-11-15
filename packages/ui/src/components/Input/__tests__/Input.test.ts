@@ -127,4 +127,14 @@ describe('Input', () => {
     render(Input, { props: { label: 'Find', type: 'search' } })
     expect(screen.getByLabelText('Find')).toHaveAttribute('type', 'text')
   })
+
+  it('sets keys, paths and other machine text in the mono face when asked', () => {
+    render(Input, { props: { label: 'Key', font: 'mono' } })
+    expect(screen.getByLabelText('Key')).toHaveClass('input-field__input--mono')
+  })
+
+  it('keeps the interface face by default', () => {
+    render(Input, { props: { label: 'Name' } })
+    expect(screen.getByLabelText('Name')).not.toHaveClass('input-field__input--mono')
+  })
 })

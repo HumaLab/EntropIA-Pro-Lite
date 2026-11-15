@@ -1909,6 +1909,105 @@ describe('SettingsView', () => {
       }
     })
   })
+
+  describe('the prompt and parameter tabs draw their fields with the design system', () => {
+    it('renders each prompt as a Textarea named by its label', async () => {
+      render(SettingsView)
+
+      await fireEvent.click(await screen.findByRole('tab', { name: 'Prompts' }))
+      for (const name of [
+        'OCR correction prompt',
+        'Summary prompt',
+        'NER prompt',
+        'Triplets prompt',
+      ]) {
+        expect(screen.getByLabelText(name).closest('.textarea-field')).not.toBeNull()
+      }
+    })
+
+    it('renders each flow’s stop sequences as a Textarea with its hint', async () => {
+      render(SettingsView)
+
+      await fireEvent.click(await screen.findByRole('tab', { name: 'Model Params' }))
+      const fields = screen.getAllByLabelText('stopSequences')
+      expect(fields.length).toBeGreaterThan(0)
+      for (const field of fields) {
+        expect(field.closest('.textarea-field')).not.toBeNull()
+        expect(field).toHaveAttribute('aria-describedby')
+      }
+    })
+  })
+
+  describe('the remote APIs tab draws its controls with the design system', () => {
+    it('gives each key field its reveal and clear actions as IconButtons', async () => {
+      render(SettingsView)
+
+      const clear = await screen.findByRole('button', { name: 'Quitar clave de OpenRouter' })
+      expect(clear).toHaveClass('icon-button')
+      const reveals = screen.getAllByRole('button', { name: 'Mostrar API key' })
+      expect(reveals).toHaveLength(4)
+      for (const reveal of reveals) expect(reveal).toHaveClass('icon-button')
+    })
+
+    it('renders every key as an Input field, still named by its own label', async () => {
+      render(SettingsView)
+
+      const keys = await screen.findAllByLabelText('API Key')
+      expect(keys).toHaveLength(3)
+      for (const key of keys) {
+        expect(key.closest('.input-field')).not.toBeNull()
+        // A key is read character by character: it keeps the mono face.
+        expect(key).toHaveClass('input-field__input--mono')
+      }
+      expect(screen.getByLabelText('API key de Zotero').closest('.input-field')).not.toBeNull()
+      expect(
+        screen.getByPlaceholderText('http://127.0.0.1:11434').closest('.input-field')
+      ).not.toBeNull()
+    })
+
+    it.runIf(LOCAL_ML)('draws every mode choice as a RadioCard with its description', async () => {
+      render(SettingsView)
+
+      await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(11))
+      for (const radio of screen.getAllByRole('radio')) {
+        expect(radio.closest('.radio-card')).not.toBeNull()
+        expect(radio.closest('[role="radiogroup"]')).not.toBeNull()
+      }
+      const onnx = screen.getByRole('radio', { name: 'Local ONNX' })
+      expect(onnx).toHaveAccessibleDescription(/S/)
+    })
+
+    it('opens the speaker-label choice from a SelectTrigger', async () => {
+      render(SettingsView)
+
+      const trigger = await screen.findByRole('button', {
+        name: 'Identificación de hablantes en audio de colección Activado',
+      })
+      expect(trigger).toHaveClass('select-trigger')
+    })
+
+    it.runIf(LOCAL_ML)('reports a model download as a progressbar', async () => {
+      llmIsAvailableMock.mockResolvedValue(false)
+      llmLocalModelInfoMock.mockResolvedValue({
+        exists: false,
+        available: true,
+        can_auto_download: true,
+        disabled_reason: null,
+        path: '/home/test/models/gemma-model.gguf',
+        size_bytes: null,
+        filename: 'gemma-model.gguf',
+        source_url: 'https://example.com/models/gemma-model.gguf',
+      })
+      llmDownloadModelMock.mockReturnValue(new Promise(() => {}))
+      render(SettingsView)
+
+      await screen.findByLabelText('Fuente de descarga')
+      await fireEvent.click(screen.getByRole('button', { name: 'Descargar modelo' }))
+
+      const bar = await screen.findByRole('progressbar', { name: 'Descargando modelo…' })
+      expect(bar).toHaveAttribute('aria-valuenow', '0')
+    })
+  })
 })
 
 describe('settings dirty detection helpers', () => {
@@ -2156,7 +2255,7 @@ describe('the remote APIs tab packs its providers by width', () => {
   })
 
   it('lets a long key ellipse rather than push its buttons onto another line', () => {
-    const input = ruleFor('.settings__provider-grid .settings__input-row .settings__input {')
+    const input = ruleFor('.settings__key-field {')
 
     // min-width is the one dropped as redundant and is not: a flex item
     // refuses to shrink below its content without it.
@@ -2221,6 +2320,23 @@ function containerBlock(styles: string, query: string): string {
   }
   return styles.slice(at, end + 1)
 }
+
+/**
+ * Settings used to repaint the shared Card, Input and Button for the whole
+ * view, so its controls never looked like the rest of the app (audit G1).
+ */
+describe('the settings stylesheet leaves the design-system components alone', () => {
+  it('restyles no Card, Input or Button through :global', () => {
+    const styles = stylesOf(settingsViewSource)
+    expect(styles).not.toMatch(/:global\(\.(card|input-field|btn)/)
+  })
+
+  it('writes no colour literal and no hand-made highlight', () => {
+    const styles = stylesOf(settingsViewSource)
+    expect(styles).not.toMatch(/rgba?\(/)
+    expect(styles).not.toMatch(/inset 0 1px 0/)
+  })
+})
 
 /**
  * The prompt/params/param-card grids collapse at the pane's own width, not

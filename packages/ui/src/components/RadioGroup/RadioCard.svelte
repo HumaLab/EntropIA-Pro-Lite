@@ -19,7 +19,15 @@
 
   const uid = $props.id()
 
-  let { value, label, description, disabled = false, children, embedded }: RadioCardProps = $props()
+  let {
+    value,
+    label,
+    description,
+    wrapDescription = false,
+    disabled = false,
+    children,
+    embedded,
+  }: RadioCardProps = $props()
 
   const group = getContext<RadioGroupContext>(RADIO_GROUP_CONTEXT)
   if (!group) throw new Error('RadioCard must be rendered inside a RadioGroup')
@@ -48,6 +56,7 @@
   class:radio-card--selected={selected}
   class:radio-card--disabled={disabled}
   class:radio-card--rich={!!children}
+  class:radio-card--wrap-description={wrapDescription}
   onclick={chooseFromCard}
 >
   <label class="radio-card__hit">
@@ -225,6 +234,13 @@
     font-weight: var(--font-weight-normal);
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .radio-card--wrap-description .radio-card__description {
+    overflow: visible;
+    line-height: var(--line-height-base);
+    text-overflow: clip;
+    white-space: normal;
   }
 
   .radio-card__embedded {

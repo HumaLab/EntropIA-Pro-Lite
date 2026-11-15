@@ -4,6 +4,8 @@ import type { HTMLInputAttributes } from 'svelte/elements'
 /** A search box is never an Input: search fields are always SearchBar. */
 export type InputType = 'text' | 'password' | 'email' | 'url' | 'tel' | 'number'
 export type InputSize = 'sm' | 'md'
+/** `mono` is for machine text a person reads character by character: keys, paths. */
+export type InputFont = 'ui' | 'mono'
 
 export interface InputProps extends Omit<
   HTMLInputAttributes,
@@ -20,6 +22,8 @@ export interface InputProps extends Omit<
   class?: string
   /** Control height: `md` (default) or `sm`, both capped at their token. */
   size?: InputSize
+  /** Typeface of the value: `ui` (default) or `mono`. */
+  font?: InputFont
   /** The native input, for `bind:element` (focus, selection, measuring). */
   element?: HTMLInputElement | null | undefined
   /** Icon-sized content on the input's leading edge (a magnifier, a unit). */

@@ -10,6 +10,7 @@
     disableB = false,
     hideLabel = false,
     columnMin,
+    wrapDescription = false,
     onchange,
   }: {
     value?: string
@@ -18,6 +19,7 @@
     disableB?: boolean
     hideLabel?: boolean
     columnMin?: string
+    wrapDescription?: boolean
     onchange?: (value: string) => void
   } = $props()
 
@@ -25,7 +27,7 @@
 </script>
 
 <RadioGroup label="Destino" bind:value {variant} {disabled} {hideLabel} {columnMin} {onchange}>
-  <RadioCard value="a" label="Alfa" description="Primera opción">
+  <RadioCard value="a" label="Alfa" description="Primera opción" {wrapDescription}>
     <span data-testid="preview-a" aria-hidden="true">Vista previa</span>
   </RadioCard>
   <RadioCard value="b" label="Beta" disabled={disableB} />

@@ -43,14 +43,17 @@
   import { writing } from '$lib/writing'
   import { appendLog } from '$lib/logs'
   import {
-    tooltip,
     ActionIcon,
     Button,
     Card,
     Checkbox,
     ConfirmDialog,
+    IconButton,
     Input,
     NumberField,
+    SelectTrigger,
+    StatusBadge,
+    Textarea,
     ToolbarMenu,
     type ToolbarMenuItem,
   } from '@entropia/ui'
@@ -604,23 +607,23 @@
           placeholder={t('sync.card.emailPlaceholder')}
         />
 
-        <div class="sync-card__password">
-          <Input
-            label={t('sync.card.passwordLabel')}
-            type={showPassword ? 'text' : 'password'}
-            bind:value={password}
-            placeholder={t('sync.card.passwordPlaceholder')}
-          />
-          <button
-            class="sync-card__password-toggle"
-            type="button"
-            onclick={() => (showPassword = !showPassword)}
-            aria-label={showPassword ? t('settings.hideApiKey') : t('settings.showApiKey')}
-            use:tooltip={showPassword ? t('settings.hideApiKey') : t('settings.showApiKey')}
-          >
-            <ActionIcon name={showPassword ? 'eye-off' : 'eye'} size={14} />
-          </button>
-        </div>
+        <Input
+          label={t('sync.card.passwordLabel')}
+          type={showPassword ? 'text' : 'password'}
+          bind:value={password}
+          placeholder={t('sync.card.passwordPlaceholder')}
+        >
+          {#snippet trailing()}
+            <IconButton
+              size="xs"
+              onclick={() => (showPassword = !showPassword)}
+              label={showPassword ? t('settings.hideApiKey') : t('settings.showApiKey')}
+              title={showPassword ? t('settings.hideApiKey') : t('settings.showApiKey')}
+            >
+              <ActionIcon name={showPassword ? 'eye-off' : 'eye'} size={12} />
+            </IconButton>
+          {/snippet}
+        </Input>
       </div>
 
       <div class="settings__button-row sync-card__actions">
@@ -651,13 +654,11 @@
         <!-- ── Auto-sync ── -->
         <div class="sync-card__block">
           <h3>{t('sync.card.autoSyncTitle')}</h3>
-          <Checkbox
-            class="sync-card__check"
-            bind:checked={autoEnabled}
-            onchange={handleAutoSyncChange}
-          >
-            {t('sync.card.autoSyncToggle')}
-          </Checkbox>
+          <div class="sync-card__check">
+            <Checkbox bind:checked={autoEnabled} onchange={handleAutoSyncChange}>
+              {t('sync.card.autoSyncToggle')}
+            </Checkbox>
+          </div>
           <div class="sync-card__interval">
             <label class="sync-card__label number-field-label" for="sync-auto-interval">
               {t('sync.card.autoSyncInterval')}
@@ -691,12 +692,14 @@
                     <span class="sync-card__device-name">
                       {device.name || device.platform}
                       {#if device.current}
-                        <span class="sync-card__tag">{t('sync.card.deviceCurrent')}</span>
+                        <StatusBadge variant="info" size="xs"
+                          >{t('sync.card.deviceCurrent')}</StatusBadge
+                        >
                       {/if}
                       {#if device.revoked}
-                        <span class="sync-card__tag sync-card__tag--muted">
-                          {t('sync.card.deviceRevoked')}
-                        </span>
+                        <StatusBadge variant="neutral" size="xs"
+                          >{t('sync.card.deviceRevoked')}</StatusBadge
+                        >
                       {/if}
                     </span>
                     <span class="settings__hint">
@@ -913,35 +916,29 @@
           bind:open={planMenuOpen}
         >
           {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              id="sync-plan-target"
-              class="sync-plan-modal__trigger"
-              class:sync-plan-modal__trigger--open={open}
-              aria-labelledby="sync-plan-target-label sync-plan-target-value"
-              disabled={plansLoading || targetPlans.length === 0}
-              {...props}
-            >
-              <span class="sync-plan-modal__trigger-label" id="sync-plan-target-value"
-                >{selectedPlanLabel}</span
-              >
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
+            <!-- A grid cell, so the trigger takes the field's whole width. It is
+                 named by the visible label and its own value: it lists itself
+                 in aria-labelledby. -->
+            <div class="sync-plan-modal__trigger">
+              <SelectTrigger
+                {...props}
+                id="sync-plan-target"
+                {open}
+                label={selectedPlanLabel}
+                aria-labelledby="sync-plan-target-label sync-plan-target"
+                disabled={plansLoading || targetPlans.length === 0}
+              />
+            </div>
           {/snippet}
         </ToolbarMenu>
       </div>
 
-      <div class="sync-plan-modal__field">
-        <label class="sync-card__label" for="sync-plan-note">
-          {t('sync.upgrade.noteLabel')}
-        </label>
-        <textarea
-          id="sync-plan-note"
-          class="sync-card__number-input sync-plan-modal__textarea"
-          bind:value={planNote}
-          placeholder={t('sync.upgrade.notePlaceholder')}
-          rows="3"></textarea>
-      </div>
+      <Textarea
+        label={t('sync.upgrade.noteLabel')}
+        bind:value={planNote}
+        placeholder={t('sync.upgrade.notePlaceholder')}
+        rows={3}
+      />
 
       <p class="sync-plan-modal__disclaimer">{t('sync.upgrade.disclaimer')}</p>
     </div>
@@ -953,8 +950,7 @@
      `settings-*` classes scoped to SettingsView do NOT reach it. Re-declare the
      layout/typography it relies on here, using the shared design tokens, so the
      card matches the rest of the Settings surface regardless of where it mounts.
-     Form fields use the @entropia/ui <Input>, which also inherits SettingsView's
-     `:global(.input-field__input)` theming when rendered inside the api tab. */
+     Form fields are the @entropia/ui components, drawn as they are anywhere. */
   .sync-card {
     display: flex;
     flex-direction: column;
@@ -971,14 +967,13 @@
     margin: 0;
     font-size: var(--font-size-base);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: -0.01em;
   }
 
   .settings-card-section__copy p {
     margin: 0;
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
   }
 
   .settings__feedback {
@@ -989,7 +984,7 @@
     margin: 0;
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
   }
 
   .settings__button-row {
@@ -1010,44 +1005,8 @@
     gap: var(--space-3);
   }
 
-  /* Password field: the shared <Input> has no trailing slot, so overlay the
-     show/hide toggle and reserve room for it on the right of the input box. */
-  .sync-card__password {
-    position: relative;
-  }
-
-  .sync-card__password :global(.input-field__input) {
-    padding-right: calc(var(--control-height-md) + var(--space-2));
-  }
-
-  .sync-card__password-toggle {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--control-height-md);
-    height: var(--control-height-md);
-    border: none;
-    background: transparent;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    border-radius: var(--radius-control);
-    transition: color var(--transition-base);
-  }
-
-  .sync-card__password-toggle:hover {
-    color: var(--color-text-primary);
-  }
-
-  .sync-card__password-toggle:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  /* Numeric interval field: <Input> doesn't forward onchange, so keep a raw
-     input but mirror the component's token-based styling exactly. */
+  /* The label of the interval field and of the plan choice, in Input's
+     label type. */
   .sync-card__label {
     display: block;
     margin-bottom: var(--space-2);
@@ -1055,31 +1014,6 @@
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     color: var(--color-text-secondary);
-  }
-
-  .sync-card__number-input {
-    width: 100%;
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-    background-color: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-input);
-    outline: none;
-    box-sizing: border-box;
-    transition:
-      border-color var(--transition-smooth),
-      box-shadow var(--transition-smooth),
-      background-color var(--transition-smooth);
-  }
-
-  .sync-card__number-input:focus,
-  .sync-card__number-input:focus-visible {
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background-color: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
   }
 
   .sync-card__grid {
@@ -1114,10 +1048,9 @@
     margin-top: 0;
   }
 
-  /* The control itself is the shared Checkbox: this row only sets its type,
-     which the native control here never had — it was rendering system blue. */
-  :global(.sync-card__check) {
-    justify-self: start;
+  /* The control itself is the shared Checkbox, which inherits its type: this
+     wrapper sets it. */
+  .sync-card__check {
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
   }
@@ -1146,7 +1079,7 @@
   .sync-card__device-info {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     min-width: 0;
   }
 
@@ -1158,23 +1091,10 @@
     color: var(--color-text-primary);
   }
 
-  .sync-card__tag {
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-sm);
-    background: color-mix(in srgb, var(--color-accent) 14%, transparent);
-    color: var(--color-accent);
-    font-size: var(--font-size-2xs);
-  }
-
-  .sync-card__tag--muted {
-    background: color-mix(in srgb, var(--color-text-muted) 14%, transparent);
-    color: var(--color-text-muted);
-  }
-
   .sync-card__usage {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     margin: 0;
     padding-left: var(--space-4);
     font-size: var(--font-size-sm);
@@ -1221,55 +1141,9 @@
     flex-direction: column;
   }
 
-  /* The trigger of the plan choice. It replaces the native select the modal
-     used to render (the project rule forbids one): label, name, chevron, in
-     this card's own input look. */
+  /* A grid item stretches: the plan trigger fills the field's width. */
   .sync-plan-modal__trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-    background-color: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-input);
-    cursor: pointer;
-  }
-
-  .sync-plan-modal__trigger:hover,
-  .sync-plan-modal__trigger--open {
-    border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-hairline));
-  }
-
-  .sync-plan-modal__trigger:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .sync-plan-modal__trigger:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .sync-plan-modal__trigger-label {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-align: start;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .sync-plan-modal__textarea {
-    min-height: calc(var(--control-height-md) * 2);
-    padding-top: var(--space-2);
-    padding-bottom: var(--space-2);
-    line-height: 1.5;
-    resize: vertical;
+    display: grid;
   }
 
   .sync-plan-modal__disclaimer {
@@ -1279,7 +1153,7 @@
     background: color-mix(in srgb, var(--color-accent) 8%, transparent);
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
-    line-height: 1.5;
+    line-height: var(--line-height-base);
   }
 
   .sync-card__block--danger {

@@ -18,7 +18,7 @@ export type {
 } from './components/Button/index'
 
 export { Input } from './components/Input/index'
-export type { InputProps, InputSize, InputType } from './components/Input/index'
+export type { InputFont, InputProps, InputSize, InputType } from './components/Input/index'
 export { NumberField } from './components/NumberField/index'
 export type { NumberFieldProps } from './components/NumberField/index'
 

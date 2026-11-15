@@ -11,6 +11,7 @@
     hint,
     class: className = '',
     size = 'md',
+    font = 'ui',
     element = $bindable(),
     leading,
     trailing,
@@ -49,6 +50,7 @@
       bind:this={element}
       id={inputId}
       class="input-field__input {className}"
+      class:input-field__input--mono={font === 'mono'}
       type={inputType}
       {placeholder}
       {disabled}
@@ -123,6 +125,10 @@
       background-color var(--transition-smooth);
     box-sizing: border-box;
     line-height: var(--line-height-base);
+  }
+
+  .input-field__input--mono {
+    font-family: var(--font-mono);
   }
 
   .input-field--sm .input-field__input {

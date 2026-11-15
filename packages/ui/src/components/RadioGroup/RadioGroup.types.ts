@@ -37,6 +37,12 @@ export interface RadioCardProps {
   label: string
   /** Secondary line, linked to the radio by `aria-describedby`. */
   description?: string | Snippet
+  /**
+   * Let the description wrap over as many lines as it needs. By default it is
+   * a one-line caption cut with an ellipsis; a sentence-long explanation of
+   * the option needs to be read whole.
+   */
+  wrapDescription?: boolean
   disabled?: boolean
   /**
    * Extra visual content under the head (a preview, a sample). It is not

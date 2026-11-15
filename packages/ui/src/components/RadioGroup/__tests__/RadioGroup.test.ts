@@ -160,6 +160,21 @@ describe('RadioCard', () => {
     expect(field.closest('.radio-card')).toBe(radio('Nueva colección').closest('.radio-card'))
   })
 
+  it('keeps a short description to one line by default', () => {
+    render(RadioGroupTestHost)
+    expect(radio('Alfa').closest('.radio-card')).not.toHaveClass('radio-card--wrap-description')
+    expect(ruleFor(CARD_CSS, '.radio-card__description')).toMatch(/white-space:\s*nowrap/)
+  })
+
+  it('wraps a sentence-long description when asked, without cutting it', () => {
+    render(RadioGroupTestHost, { wrapDescription: true })
+    expect(radio('Alfa').closest('.radio-card')).toHaveClass('radio-card--wrap-description')
+    const rule = ruleFor(CARD_CSS, '.radio-card--wrap-description .radio-card__description')
+    expect(rule).toMatch(/white-space:\s*normal/)
+    expect(rule).toMatch(/text-overflow:\s*clip/)
+    expect(rule).toMatch(/line-height:\s*var\(--line-height-base\)/)
+  })
+
   it('wraps a long label instead of cutting it', () => {
     expect(ruleFor(CARD_CSS, '.radio-card__label')).not.toMatch(/white-space:\s*nowrap/)
   })
