@@ -150,6 +150,8 @@
     IconButton,
     Input,
     ProgressBar,
+    RadioCard,
+    RadioGroup,
     SelectTrigger,
     StatusBadge,
     Textarea,
@@ -2098,50 +2100,45 @@
                 <p>{currentModeDescription}</p>
               </div>
 
-              <div class="settings__mode-options">
-                <label class="settings__radio" class:active={llmMode === 'local'}>
-                  <input type="radio" name="llm_mode" value="local" bind:group={llmMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.llmMode.local.label')}</strong>
-                    <span class="settings__radio-desc">
-                      {t('settings.llmMode.local.description')}
-                      {#if localModel?.exists}
-                        <StatusBadge variant="success" size="xs"
-                          >{t('settings.badge.available')}</StatusBadge
-                        >
-                      {:else if localModel?.can_auto_download || localAvailable}
-                        <StatusBadge variant="warning" size="xs"
-                          >{t('settings.badge.downloadable')}</StatusBadge
-                        >
-                      {:else}
-                        <StatusBadge variant="warning" size="xs"
-                          >{t('settings.badge.notFound')}</StatusBadge
-                        >
-                      {/if}
-                    </span>
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={llmMode === 'openrouter'}>
-                  <input type="radio" name="llm_mode" value="openrouter" bind:group={llmMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.llmMode.openrouter.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.llmMode.openrouter.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={llmMode === 'auto'}>
-                  <input type="radio" name="llm_mode" value="auto" bind:group={llmMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.llmMode.auto.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.llmMode.auto.description')}</span
-                    >
-                  </div>
-                </label>
-              </div>
+              <RadioGroup
+                name="llm_mode"
+                value={llmMode}
+                onchange={(next) => (llmMode = next as LlmMode)}
+                label={t('settings.llmModeTitle')}
+                hideLabel
+                columnMin="100%"
+              >
+                <RadioCard value="local" label={t('settings.llmMode.local.label')} wrapDescription>
+                  {#snippet description()}
+                    {t('settings.llmMode.local.description')}
+                    {#if localModel?.exists}
+                      <StatusBadge variant="success" size="xs"
+                        >{t('settings.badge.available')}</StatusBadge
+                      >
+                    {:else if localModel?.can_auto_download || localAvailable}
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.badge.downloadable')}</StatusBadge
+                      >
+                    {:else}
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.badge.notFound')}</StatusBadge
+                      >
+                    {/if}
+                  {/snippet}
+                </RadioCard>
+                <RadioCard
+                  value="openrouter"
+                  label={t('settings.llmMode.openrouter.label')}
+                  description={t('settings.llmMode.openrouter.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="auto"
+                  label={t('settings.llmMode.auto.label')}
+                  description={t('settings.llmMode.auto.description')}
+                  wrapDescription
+                />
+              </RadioGroup>
             </section>
           </Card>
         {/if}
@@ -2256,37 +2253,27 @@
                 <p>{t('settings.embeddingProvider.description', { product: PRODUCT_NAME })}</p>
               </div>
 
-              <div class="settings__mode-options">
-                <label class="settings__radio" class:active={embeddingProvider === 'api'}>
-                  <input
-                    type="radio"
-                    name="embedding_provider"
-                    value="api"
-                    bind:group={embeddingProvider}
-                  />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.embeddingProvider.api.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.embeddingProvider.api.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={embeddingProvider === 'local'}>
-                  <input
-                    type="radio"
-                    name="embedding_provider"
-                    value="local"
-                    bind:group={embeddingProvider}
-                  />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.embeddingProvider.local.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.embeddingProvider.local.description')}</span
-                    >
-                  </div>
-                </label>
-              </div>
+              <RadioGroup
+                name="embedding_provider"
+                value={embeddingProvider}
+                onchange={(next) => (embeddingProvider = next as EmbeddingProvider)}
+                label={t('settings.embeddingProvider.title')}
+                hideLabel
+                columnMin="100%"
+              >
+                <RadioCard
+                  value="api"
+                  label={t('settings.embeddingProvider.api.label')}
+                  description={t('settings.embeddingProvider.api.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="local"
+                  label={t('settings.embeddingProvider.local.label')}
+                  description={t('settings.embeddingProvider.local.description')}
+                  wrapDescription
+                />
+              </RadioGroup>
 
               {#if embeddingProvider === 'local'}
                 <div class="settings__field settings__field--stacked">
@@ -2611,80 +2598,64 @@
                 <p>{currentSttModeDescription}</p>
               </div>
 
-              <div class="settings__mode-options">
-                <label class="settings__radio" class:active={sttMode === 'local'}>
-                  <input type="radio" name="stt_mode" value="local" bind:group={sttMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.sttMode.local.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.sttMode.local.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={sttMode === 'assemblyai'}>
-                  <input type="radio" name="stt_mode" value="assemblyai" bind:group={sttMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.sttMode.assemblyai.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.sttMode.assemblyai.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={sttMode === 'auto'}>
-                  <input type="radio" name="stt_mode" value="auto" bind:group={sttMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.sttMode.auto.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.sttMode.auto.description')}</span
-                    >
-                  </div>
-                </label>
-              </div>
+              <RadioGroup
+                name="stt_mode"
+                value={sttMode}
+                onchange={(next) => (sttMode = next as SttMode)}
+                label={t('settings.sttModeTitle')}
+                hideLabel
+                columnMin="100%"
+              >
+                <RadioCard
+                  value="local"
+                  label={t('settings.sttMode.local.label')}
+                  description={t('settings.sttMode.local.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="assemblyai"
+                  label={t('settings.sttMode.assemblyai.label')}
+                  description={t('settings.sttMode.assemblyai.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="auto"
+                  label={t('settings.sttMode.auto.label')}
+                  description={t('settings.sttMode.auto.description')}
+                  wrapDescription
+                />
+              </RadioGroup>
 
               {#if sttMode === 'local'}
                 <div class="settings__field settings__field--stacked">
-                  <span class="settings__label">{t('settings.sttLocalEngine.title')}</span>
-                  <div class="settings__mode-options">
-                    <label class="settings__radio" class:active={sttLocalEngine === 'parakeet'}>
-                      <input
-                        type="radio"
-                        name="stt_local_engine"
-                        value="parakeet"
-                        bind:group={sttLocalEngine}
-                      />
-                      <div class="settings__radio-content">
-                        <strong>{t('settings.sttLocalEngine.parakeet.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.sttLocalEngine.parakeet.description')}</span
-                        >
-                      </div>
-                    </label>
-                    <label class="settings__radio" class:active={sttLocalEngine === 'whisper'}>
-                      <input
-                        type="radio"
-                        name="stt_local_engine"
-                        value="whisper"
-                        bind:group={sttLocalEngine}
-                      />
-                      <div class="settings__radio-content">
-                        <strong>{t('settings.sttLocalEngine.whisper.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.sttLocalEngine.whisper.description')}</span
-                        >
-                      </div>
-                    </label>
-                  </div>
+                  <RadioGroup
+                    name="stt_local_engine"
+                    value={sttLocalEngine}
+                    onchange={(next) => (sttLocalEngine = next as SttLocalEngine)}
+                    label={t('settings.sttLocalEngine.title')}
+                    columnMin="100%"
+                  >
+                    <RadioCard
+                      value="parakeet"
+                      label={t('settings.sttLocalEngine.parakeet.label')}
+                      description={t('settings.sttLocalEngine.parakeet.description')}
+                      wrapDescription
+                    />
+                    <RadioCard
+                      value="whisper"
+                      label={t('settings.sttLocalEngine.whisper.label')}
+                      description={t('settings.sttLocalEngine.whisper.description')}
+                      wrapDescription
+                    />
+                  </RadioGroup>
                   {#if sttLocalEngine === 'parakeet'}
-                    <label class="settings__check">
-                      <Checkbox bind:checked={sttLocalDiarize}>
-                        <strong>{t('settings.sttLocalDiarize.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.sttLocalDiarize.description')}</span
-                        >
-                      </Checkbox>
-                    </label>
+                    <!-- Checkbox is its own label: no wrapping label around it. -->
+                    <Checkbox bind:checked={sttLocalDiarize}>
+                      <strong>{t('settings.sttLocalDiarize.label')}</strong>
+                      <span class="settings__check-desc"
+                        >{t('settings.sttLocalDiarize.description')}</span
+                      >
+                    </Checkbox>
                   {/if}
                 </div>
               {/if}
@@ -2835,37 +2806,33 @@
                 <p>{currentOcrhModeDescription}</p>
               </div>
 
-              <div class="settings__mode-options">
-                <label class="settings__radio" class:active={ocrhMode === 'local'}>
-                  <input type="radio" name="ocrh_mode" value="local" bind:group={ocrhMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.ocrhMode.local.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.ocrhMode.local.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={ocrhMode === 'glm_ocr'}>
-                  <input type="radio" name="ocrh_mode" value="glm_ocr" bind:group={ocrhMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.ocrhMode.glm_ocr.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.ocrhMode.glm_ocr.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={ocrhMode === 'auto'}>
-                  <input type="radio" name="ocrh_mode" value="auto" bind:group={ocrhMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.ocrhMode.auto.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.ocrhMode.auto.description')}</span
-                    >
-                  </div>
-                </label>
-              </div>
+              <RadioGroup
+                name="ocrh_mode"
+                value={ocrhMode}
+                onchange={(next) => (ocrhMode = next as OcrhMode)}
+                label={t('settings.ocrhModeTitle')}
+                hideLabel
+                columnMin="100%"
+              >
+                <RadioCard
+                  value="local"
+                  label={t('settings.ocrhMode.local.label')}
+                  description={t('settings.ocrhMode.local.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="glm_ocr"
+                  label={t('settings.ocrhMode.glm_ocr.label')}
+                  description={t('settings.ocrhMode.glm_ocr.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="auto"
+                  label={t('settings.ocrhMode.auto.label')}
+                  description={t('settings.ocrhMode.auto.description')}
+                  wrapDescription
+                />
+              </RadioGroup>
 
               {#if ocrhMode !== 'local'}
                 <p class="settings__hint settings__hint--privacy">
@@ -2875,53 +2842,32 @@
 
               {#if ocrhMode === 'local'}
                 <div class="settings__field settings__field--stacked">
-                  <span class="settings__label">{t('settings.ocrhLocalEngine.title')}</span>
-                  <div class="settings__mode-options">
-                    <label class="settings__radio" class:active={ocrhLocalEngine === 'auto'}>
-                      <input
-                        type="radio"
-                        name="ocrh_local_engine"
-                        value="auto"
-                        bind:group={ocrhLocalEngine}
-                      />
-                      <div class="settings__radio-content">
-                        <strong>{t('settings.ocrhLocalEngine.auto.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.ocrhLocalEngine.auto.description')}</span
-                        >
-                      </div>
-                    </label>
-
-                    <label class="settings__radio" class:active={ocrhLocalEngine === 'glm_ocr'}>
-                      <input
-                        type="radio"
-                        name="ocrh_local_engine"
-                        value="glm_ocr"
-                        bind:group={ocrhLocalEngine}
-                      />
-                      <div class="settings__radio-content">
-                        <strong>{t('settings.ocrhLocalEngine.glm_ocr.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.ocrhLocalEngine.glm_ocr.description')}</span
-                        >
-                      </div>
-                    </label>
-
-                    <label class="settings__radio" class:active={ocrhLocalEngine === 'paddle_vl'}>
-                      <input
-                        type="radio"
-                        name="ocrh_local_engine"
-                        value="paddle_vl"
-                        bind:group={ocrhLocalEngine}
-                      />
-                      <div class="settings__radio-content">
-                        <strong>{t('settings.ocrhLocalEngine.paddle_vl.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.ocrhLocalEngine.paddle_vl.description')}</span
-                        >
-                      </div>
-                    </label>
-                  </div>
+                  <RadioGroup
+                    name="ocrh_local_engine"
+                    value={ocrhLocalEngine}
+                    onchange={(next) => (ocrhLocalEngine = next as OcrhLocalEngine)}
+                    label={t('settings.ocrhLocalEngine.title')}
+                    columnMin="100%"
+                  >
+                    <RadioCard
+                      value="auto"
+                      label={t('settings.ocrhLocalEngine.auto.label')}
+                      description={t('settings.ocrhLocalEngine.auto.description')}
+                      wrapDescription
+                    />
+                    <RadioCard
+                      value="glm_ocr"
+                      label={t('settings.ocrhLocalEngine.glm_ocr.label')}
+                      description={t('settings.ocrhLocalEngine.glm_ocr.description')}
+                      wrapDescription
+                    />
+                    <RadioCard
+                      value="paddle_vl"
+                      label={t('settings.ocrhLocalEngine.paddle_vl.label')}
+                      description={t('settings.ocrhLocalEngine.paddle_vl.description')}
+                      wrapDescription
+                    />
+                  </RadioGroup>
                 </div>
 
                 {#if glmOcrLocal}
@@ -3896,57 +3842,8 @@
     text-decoration: underline;
   }
 
-  .settings__mode-options {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-
-  .settings__radio {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-3);
-    padding: var(--space-4);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    background: color-mix(in srgb, var(--color-surface-glass) 76%, transparent);
-    transition:
-      border-color var(--transition-smooth),
-      background-color var(--transition-smooth),
-      box-shadow var(--transition-smooth),
-      transform var(--transition-smooth);
-  }
-
-  .settings__radio:hover {
-    border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-hairline));
-    background: color-mix(in srgb, var(--color-surface-glass) 86%, transparent);
-    transform: translateY(-1px);
-  }
-
-  .settings__radio.active {
-    border-color: var(--color-accent);
-    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-glass));
-    box-shadow: var(--shadow-sm);
-  }
-
-  .settings__radio input[type='radio'] {
-    margin-top: 3px;
-    accent-color: var(--color-accent);
-  }
-
-  .settings__radio-content {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .settings__radio-content strong {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-  }
-
-  .settings__radio-desc {
+  /* The explanation under the diarization checkbox's label. */
+  .settings__check-desc {
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
     line-height: var(--line-height-base);

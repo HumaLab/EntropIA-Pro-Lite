@@ -1961,6 +1961,18 @@ describe('SettingsView', () => {
       ).not.toBeNull()
     })
 
+    it.runIf(LOCAL_ML)('draws every mode choice as a RadioCard with its description', async () => {
+      render(SettingsView)
+
+      await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(11))
+      for (const radio of screen.getAllByRole('radio')) {
+        expect(radio.closest('.radio-card')).not.toBeNull()
+        expect(radio.closest('[role="radiogroup"]')).not.toBeNull()
+      }
+      const onnx = screen.getByRole('radio', { name: 'Local ONNX' })
+      expect(onnx).toHaveAccessibleDescription(/S/)
+    })
+
     it('opens the speaker-label choice from a SelectTrigger', async () => {
       render(SettingsView)
 
