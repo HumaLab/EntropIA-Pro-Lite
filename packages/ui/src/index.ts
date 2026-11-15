@@ -43,6 +43,7 @@ export type {
   IconButtonProps,
   IconButtonSize,
   IconButtonVariant,
+  IconButtonHoverTone,
 } from './components/IconButton/index'
 export { ToolbarMenu, ToolbarMenuList, placeMenu } from './components/ToolbarMenu/index'
 export type {

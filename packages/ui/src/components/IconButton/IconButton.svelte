@@ -5,6 +5,7 @@
   let {
     variant = 'ghost',
     size = 'md',
+    hoverTone,
     label,
     active = false,
     disabled = false,
@@ -19,6 +20,8 @@
 <button
   class="icon-button icon-button--{variant} icon-button--{size} {className}"
   class:icon-button--active={active}
+  class:icon-button--hover-danger={hoverTone === 'danger'}
+  class:icon-button--hover-success={hoverTone === 'success'}
   aria-label={label}
   aria-pressed={active ? 'true' : undefined}
   {disabled}
@@ -131,6 +134,19 @@
     background: var(--color-danger-soft);
     border-color: color-mix(in srgb, var(--color-danger) 24%, transparent);
     color: var(--color-danger);
+  }
+
+  /* Hover tones come after the variants, which they override by order.
+     Danger may tint the surface, its colour being its meaning; success only
+     colours the icon and keeps the variant's own hover surface. */
+  .icon-button--hover-danger:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--color-danger) 24%, transparent);
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+
+  .icon-button--hover-success:hover:not(:disabled) {
+    color: var(--color-success);
   }
 
   /* The strip that opens and closes a side panel: 20px wide and as tall as
