@@ -251,7 +251,7 @@
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
-    line-height: 1.4;
+    line-height: var(--line-height-base);
   }
 
   .history-error {
@@ -317,7 +317,7 @@
   .history-event__details dt {
     font-size: var(--font-size-2xs);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: var(--letter-spacing-caps);
     color: var(--color-text-muted);
   }
 

@@ -597,7 +597,7 @@
   .analysis-header__title {
     font-family: var(--font-ui);
     font-size: var(--font-size-md);
-    font-weight: var(--font-weight-bold);
+    font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
   }
 
@@ -714,7 +714,7 @@
   .settings-section-title {
     margin: 0;
     font-size: var(--font-size-md);
-    font-weight: var(--font-weight-bold);
+    font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
   }
 
@@ -726,7 +726,7 @@
 
   .settings-label {
     font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-bold);
+    font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
   }
 

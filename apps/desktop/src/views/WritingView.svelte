@@ -1683,7 +1683,7 @@
   }
 
   :global(.writing__sync--spinning svg) {
-    animation: writing-sync-spin 1s linear infinite;
+    animation: writing-sync-spin var(--duration-spin) linear infinite;
   }
 
   @keyframes writing-sync-spin {
@@ -1927,7 +1927,7 @@
   }
 
   .writing__outline-item:hover {
-    background: var(--color-surface-elevated);
+    background: var(--state-hover-row);
     color: var(--color-text-primary);
   }
 

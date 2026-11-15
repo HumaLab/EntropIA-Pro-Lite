@@ -710,7 +710,7 @@
     color: var(--color-text-secondary);
     cursor: pointer;
     font-size: var(--font-size-md);
-    line-height: 1;
+    line-height: var(--line-height-none);
     pointer-events: auto;
     transition:
       background-color var(--transition-base),
@@ -767,7 +767,7 @@
 
   .annotation-toolbar__button:disabled,
   .annotation-toolbar__swatch:disabled {
-    opacity: 0.48;
+    opacity: var(--opacity-disabled);
     cursor: not-allowed;
   }
 

@@ -512,7 +512,7 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
-    line-height: 1;
+    line-height: var(--line-height-none);
     pointer-events: auto;
     text-size-adjust: none;
     forced-color-adjust: none;
@@ -573,6 +573,8 @@
     cursor: pointer;
   }
 
+  /* An SVG shape takes no box-shadow, so a focused mark shows the ring as its
+     own stroke instead of the shared --focus-ring. */
   .pdf-markup:focus-visible {
     outline: none;
   }
@@ -592,14 +594,14 @@
   }
 
   .pdf-markup__note {
-    stroke: rgb(0 0 0 / 0.25);
+    stroke: var(--annotation-ink-soft);
     stroke-width: 1;
-    filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.35));
+    filter: var(--annotation-shadow);
   }
 
   /* Drawn on the note's own color: dark ink reads on every Zotero swatch. */
   .pdf-markup__note-line {
-    stroke: rgb(0 0 0 / 0.45);
+    stroke: var(--annotation-ink);
     stroke-linecap: round;
     pointer-events: none;
   }
@@ -667,10 +669,16 @@
     height: 16px;
     padding: 0;
     border: 1px solid color-mix(in srgb, var(--color-text-primary) 20%, transparent);
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     cursor: pointer;
   }
 
+  .pdf-markup-popover__swatch:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  /* The ring marks the chosen colour, not focus: focus is the shared ring above. */
   .pdf-markup-popover__swatch--active {
     outline: 2px solid var(--color-accent);
     outline-offset: 1px;

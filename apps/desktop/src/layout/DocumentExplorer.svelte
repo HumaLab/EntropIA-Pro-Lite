@@ -1362,7 +1362,7 @@
     align-self: flex-start;
     padding: var(--space-1) var(--space-2);
     border: 1px dashed var(--color-hairline);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: transparent;
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);

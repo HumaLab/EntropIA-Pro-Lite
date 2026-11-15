@@ -77,7 +77,7 @@
     background: color-mix(in srgb, var(--color-warning) 12%, var(--surface-card));
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: 1.4;
+    line-height: var(--line-height-base);
   }
 
   .notice__message {

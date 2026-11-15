@@ -25,21 +25,23 @@
 | Superficies | `--surface-app`, `--surface-panel`, `--surface-toolbar`, `--surface-card`, `--surface-input`, `--surface-overlay`, `--surface-glass`; primitivas `--color-bg`, `--color-surface`, `--color-surface-raised`, `--color-surface-elevated`, `--color-surface-sunken`, `--color-surface-glass` | Preferí el alias semántico (`--surface-input` para un campo) sobre la primitiva. |
 | Bordes | `--color-hairline` (separaciones finas), `--border-subtle`, `--border-panel`, `--color-border-strong`, `--color-border-hover`, `--border-focus` | Un borde translúcido se arma con `color-mix(in srgb, var(--color-*) N%, transparent)`. |
 | Texto | `--color-text-primary`, `--color-text-secondary`, `--color-text-muted` | Son los **tres únicos** niveles: no existe `--color-text-tertiary`. Todos cumplen 4.5:1 en cada tema y contraste. |
-| Acento | `--color-accent`, `--color-accent-hover`, `--color-accent-soft`, `--color-accent-faint` | `soft` para seleccionado/hover marcado, `faint` para hover suave. |
+| Acento | `--color-accent`, `--color-accent-hover`, `--color-accent-soft`, `--color-accent-faint`; `--color-on-accent` (marca sobre un relleno de acento) | `soft` para seleccionado/hover marcado, `faint` para hover suave. |
+| Hover de fila | `--state-hover-row` | El hover de una fila de lista (historial, recientes, resultados, filas de tabla). Las opciones de un menú usan el de `ToolbarMenuList` (`--surface-toolbar`). |
 | Estados | `--color-danger`/`-hover`/`-soft`, `--color-success`/`-soft`, `--color-warning`/`-soft`, `--color-info`/`-soft`; `--state-ai*`, `--state-evidence*` | Texto e ícono con el color pleno, fondo con `-soft`, borde con `color-mix(… 28–34%, transparent)` del mismo color. |
 | Texto sobre relleno de estado | `--color-on-danger` **(propuesto)**; mientras tanto, `--color-text-primary` sobre `--color-danger-soft` | Nunca `#fff` fijo. |
 | Primario | `--control-primary-bg`, `-bg-hover`, `-bg-active`, `-border`, `-text` | Solo a través de `Button variant="primary"`. |
 | Espaciado | `--space-1` (4) … `--space-8` (32); `--space-0-5` (2) **(propuesto)** | Todo `padding`, `margin` y `gap`. Hasta que exista `--space-0-5`, `2px` es el único literal tolerado (ajustes ópticos). |
-| Tipografía | `--font-ui`, `--font-reading`, `--font-mono`; `--font-size-2xs` (11) … `--font-size-xl` (22); `--font-weight-normal/medium/semibold`; `--line-height-tight`, `--line-height-base` | La familia se elige por **función** (operar la app / leer / identificadores), nunca por nombre. 11px es el mínimo. |
-| Lectura | `--line-height-reading` **(propuesto)**; mientras tanto `--line-height-base` | Para manuscrito, notas, OCR, respuestas largas. |
-| Versalitas | `--letter-spacing-caps` **(propuesto)**; mientras tanto `0.075em` (el de `.page-header__eyebrow`) | Etiquetas en mayúsculas. |
+| Tipografía | `--font-ui`, `--font-reading`, `--font-mono`; `--font-size-2xs` (11) … `--font-size-xl` (22); `--font-weight-normal/medium/semibold`; `--line-height-none` (1), `--line-height-tight`, `--line-height-base`; `--font-size-code-inline` (0.9em) | La familia se elige por **función** (operar la app / leer / identificadores), nunca por nombre. 11px es el mínimo. **`semibold` es el peso más alto**: `--font-weight-bold` valía lo mismo (600) y se eliminó (F9). `--line-height-none` es para glifos de ícono y la capa de texto del PDF; `--font-size-code-inline` para código en línea dentro de un texto. |
+| Lectura | `--line-height-reading` | Para manuscrito, notas, OCR, respuestas largas. |
+| Espaciado de letras | `--letter-spacing-caps` (versalitas), `--letter-spacing-heading` (títulos), `--letter-spacing-tag` (etiquetas y contadores chicos en negrita) | Toda etiqueta en mayúsculas lleva `--letter-spacing-caps`. |
 | Radios | `--radius-control` (botones, triggers), `--radius-input` (campos), `--radius-surface` (tarjetas, paneles), `--radius-dialog` (diálogos), `--radius-full` (píldoras, círculos); `--radius-xs` solo para decoraciones pequeñas | Para controles usá la escala **semántica**; `--radius-sm/md/lg/xl` quedan para casos que no son un control. |
 | Sombras | `--shadow-surface` (brillo superior de una superficie), `--shadow-sm/md/lg`, `--shadow-glow` | Los temas claros las anulan: no las repitas a mano. |
 | Alturas de control | `--control-height-sm` (30), `-md` (36), `-lg` (40); `--control-height-xs` (28) **(propuesto)** | Toda altura de botón, campo o trigger. Un cuadrado de solo ícono usa la escala de `IconButton` (24/28/32/40). |
 | Foco | `--focus-ring`, `--focus-ring-danger` | `box-shadow: var(--focus-ring)` en `:focus-visible`. |
-| Movimiento | `--transition-base` (0.14s), `--transition-smooth` (0.18s); `--duration-fast` (0.08s), `-base` (0.14s), `-smooth` (0.18s), `-slow` (0.3s) **(propuesto)** | Toda transición; respetar `prefers-reduced-motion`. |
+| Movimiento | `--transition-base` (0.14s), `--transition-smooth` (0.18s); `--duration-fast` (0.08s), `-base` (0.14s), `-smooth` (0.18s), `-slow` (0.3s); bucles `--duration-spin` (0.8s, una vuelta de spinner) y `--duration-pulse` (1.6s, un latido de estado) | Toda transición y animación; respetar `prefers-reduced-motion`. |
 | Deshabilitado | `--opacity-disabled` **(propuesto)**; mientras tanto `0.48` (el de `Button`), y `0.72` solo para el primario | Un único valor en toda la app. |
-| Capas | `--z-sticky`, `--z-dropdown`, `--z-popover`, `--z-dialog`, `--z-tooltip`, `--z-blocking` **(propuesto)**; mientras tanto respetar el orden de la auditoría §2.10 (menús 210, diálogos 1000–1200, tooltip 1300) | `z-index` local (0–5) libre dentro de un componente con su propio contexto de apilamiento. |
+| Capas | `--z-sticky`, `--z-drawer`, `--z-popover`, `--z-popover-raised`, `--z-floating`, `--z-dropdown`, `--z-menu`, `--z-assistant`, `--z-dialog`, `--z-dialog-nested`, `--z-dialog-top`, `--z-tooltip`, `--z-blocking` | `z-index` local (0–5) libre dentro de un componente con su propio contexto de apilamiento. |
+| Marcas sobre la página | `--annotation-ink`, `--annotation-ink-soft`, `--annotation-shadow`, `--viewer-layout-block` | Anotaciones del PDF y regiones de OCR: se dibujan sobre la página o el escaneo, no sobre el tema, así que su tinta es la misma en todos; `--annotation-shadow` se anula donde el tema anula las sombras. |
 | Paleta del manuscrito | `--writing-text-*`, `--writing-highlight-*`, `--writing-blend-highlight` | Solo en `WritingEditor`/`ColorPalette`. |
 
 ### Componentes base (`@entropia/ui`)
@@ -90,6 +92,18 @@
 ### Excepciones aceptadas (elementos nativos con estilo propio)
 
 Se permite `<button>` crudo, con estilos completos y tokens, cuando **no es un botón visual** sino una superficie clicable: filas de lista y de tabla, nodos del árbol del explorador, tarjetas clicables, celdas editables inline, swatches de color, pestañas de `TabStrip`. Se permite `<input>` crudo sin borde para la edición inline dentro de otro control (`TopicEditor`, `EntityViewer`, título del documento). Se permiten colores literales en datos que no dependen del tema: colores de impresión/exportación (`PRINT_COLORS`, `ocr-pdf.ts`) y la paleta de anotación compatible con Zotero (`PdfMarkup/types.ts`).
+
+Excepciones permanentes, con su motivo:
+
+- **Foco dentro de un SVG** (`PdfMarkupLayer`): una forma SVG no admite `box-shadow`, así que la marca enfocada muestra el anillo como su propio trazo en `--color-accent`. Los botones del mismo componente usan `--focus-ring`.
+- **`outline: none` en un contenedor con foco programático** (`VirtualGrid`, `tabindex="-1"`): solo recibe el foco por código, nunca con Tab, cuando desaparece la tarjeta que lo tenía y no hay otra a la que pasárselo; así el foco no cae en `<body>`. No hay nada que marcar: el siguiente Tab lleva a una tarjeta, que sí muestra su anillo.
+- **`line-height: 0`** en el contenedor de imagen de `WritingEditor`: impide que el contenedor agregue una línea propia alrededor de la imagen.
+- **Tablas de datos** hechas a mano (`InvestigationView`, `DbBrowserView`) mientras no exista un componente `Table`: usan tokens para color, borde, tipografía y espaciado.
+- **El botón punteado de agregar campo** de `MetadataEditor`: es una zona de alta, no un botón de acción; ninguna variante de `Button` dibuja un borde punteado.
+- **Colores de las regiones en los overlays de `DocumentViewer`**, calculados en el script (relleno y trazo de las regiones de layout y del recorte): pintan sobre el escaneo, no sobre el tema, igual que `--viewer-layout-block`.
+- **`@media` contra el viewport** solo en el cromo de la ventana (`App`, `TopBar`, `TabStrip`), en diálogos (anclados a la ventana) y en la barra de anotación (que reacciona a la altura de la ventana). Una vista dentro de un panel usa `@container pane`.
+- **`z-index` local** de 0 a 5 dentro del contexto de apilamiento de un componente.
+- **Tamaños fuera de la escala** listados en `OFF_SCALE_BY_DESIGN` (`apps/desktop/src/design-tokens.test.ts`): el botón de reproducir de `AudioPlayer` (56px) y la acción de 20px de los chips de `EntityViewer`.
 
 ---
 

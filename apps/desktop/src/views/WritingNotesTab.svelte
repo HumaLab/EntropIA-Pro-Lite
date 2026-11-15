@@ -330,7 +330,7 @@
   }
 
   .notes__row:hover {
-    background: var(--color-accent-faint);
+    background: var(--state-hover-row);
   }
 
   .notes__row-text {

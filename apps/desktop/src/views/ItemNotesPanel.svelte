@@ -355,12 +355,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--color-text-primary);
-    line-height: 1.35;
+    line-height: var(--line-height-tight);
   }
 
   .note-content {
     color: var(--color-text-primary);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
     word-break: break-word;
   }
 
@@ -402,7 +402,7 @@
     background: color-mix(in srgb, var(--color-border) 65%, transparent);
     border-radius: var(--radius-sm);
     padding: 0.1rem 0.3rem;
-    font-size: 0.95em;
+    font-size: var(--font-size-code-inline);
   }
 
   .note-content--rich :global(pre) {
@@ -441,7 +441,7 @@
 
   :global(.icon-button.note-action-button) {
     --icon-button-size: 1.75rem;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: transparent;
     box-shadow: none;
     color: var(--color-text-muted);

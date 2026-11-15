@@ -2132,7 +2132,7 @@
   .document-viewer__image-rotator {
     position: relative;
     transform-origin: center center;
-    transition: transform 0.08s linear;
+    transition: transform var(--duration-fast) linear;
   }
 
   .document-viewer__image {
@@ -2148,9 +2148,9 @@
 
   .document-viewer__layout-region {
     transition:
-      fill 0.15s ease,
-      stroke 0.15s ease,
-      stroke-width 0.15s ease;
+      fill var(--transition-base),
+      stroke var(--transition-base),
+      stroke-width var(--transition-base);
   }
 
   .document-viewer__layout-region.editable {
@@ -2160,7 +2160,7 @@
 
   .document-viewer__layout-handle {
     fill: var(--color-surface);
-    stroke: rgb(245, 158, 11);
+    stroke: var(--viewer-layout-block);
     stroke-width: 1.5;
     touch-action: none;
   }
@@ -2208,7 +2208,7 @@
     left: 50%;
     top: 50%;
     transform-origin: center;
-    transition: transform 0.08s linear;
+    transition: transform var(--duration-fast) linear;
   }
 
   .document-viewer__pdf-crop-frame {
@@ -2245,7 +2245,7 @@
     border: 2px solid currentColor;
     border-right-color: transparent;
     border-radius: var(--radius-full);
-    animation: spin 0.6s linear infinite;
+    animation: spin var(--duration-spin) linear infinite;
   }
 
   .document-viewer__error {

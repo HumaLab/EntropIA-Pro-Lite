@@ -2369,7 +2369,7 @@
     color: var(--color-text-secondary);
   }
 
-  @media (max-width: 820px) {
+  @container pane (max-width: 820px) {
     .investigation-view__toolbar {
       justify-content: start;
     }

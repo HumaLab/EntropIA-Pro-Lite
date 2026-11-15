@@ -1109,7 +1109,7 @@
     background: var(--border-subtle);
   }
 
-  @media (max-width: 900px) {
+  @container pane (max-width: 900px) {
     .db-browser-toolbar,
     .db-browser-toolbar__search,
     .db-browser-toolbar__field {

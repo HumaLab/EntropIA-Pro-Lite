@@ -1,6 +1,1 @@
-{
-  "color-literal": [
-    "components/DocumentViewer/DocumentViewer.svelte",
-    "components/PdfMarkup/PdfMarkupLayer.svelte"
-  ]
-}
+{}

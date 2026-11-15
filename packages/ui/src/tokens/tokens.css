@@ -27,6 +27,8 @@
      danger and danger-hover (contrast-floor.test.ts), so the ink follows the
      theme instead of being a fixed #fff that fails on the dark palettes. */
   --color-on-danger: var(--color-bg);
+  /* A mark on an accent fill (the help bubble's logo): white on every theme. */
+  --color-on-accent: #fff;
   --color-success: #79c39f;
   --color-success-soft: rgba(121, 195, 159, 0.11);
   --color-warning: #d8ad6a;
@@ -58,6 +60,8 @@
   --state-evidence: var(--color-info);
   --state-evidence-soft: var(--color-info-soft);
   --state-evidence-border: color-mix(in srgb, var(--color-info) 28%, transparent);
+  /* The hover of a row in a list (history, recents, results): one quiet step. */
+  --state-hover-row: var(--color-accent-faint);
 
   /* Spacing (4px base unit; 0-5 is the one half step, for hairline gaps) */
   --space-0-5: 2px;
@@ -84,11 +88,18 @@
   --font-weight-normal: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
-  --font-weight-bold: 600;
   --line-height-tight: 1.22;
   --line-height-base: 1.46;
   --line-height-reading: 1.6;
+  /* A box exactly as tall as its font: icon glyphs, and the PDF text layer,
+     whose spans must sit on the rendered page. */
+  --line-height-none: 1;
   --letter-spacing-caps: 0.075em;
+  /* Headings tighten; a small bold tag or badge opens up a little. */
+  --letter-spacing-heading: -0.025em;
+  --letter-spacing-tag: 0.04em;
+  /* Inline code inside running text, relative to that text. */
+  --font-size-code-inline: 0.9em;
 
   /* Border Radius */
   --radius-xs: 4px;
@@ -112,6 +123,13 @@
   --shadow-highlight: 0 1px 0 rgba(255, 255, 255, 0.025) inset;
   /* The recessed edge of a sunken panel. */
   --shadow-inset: 0 1px 0 rgba(0, 0, 0, 0.18) inset;
+  /* Marks drawn over a page or a scan, not over the theme: Zotero's fixed
+     annotation swatches and the OCR layout regions read the same everywhere.
+     The note's lift follows the theme's shadows and goes where they go. */
+  --annotation-ink: rgb(0 0 0 / 0.45);
+  --annotation-ink-soft: rgb(0 0 0 / 0.25);
+  --annotation-shadow: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.35));
+  --viewer-layout-block: rgb(245 158 11);
 
   /* Controls. xs is the dense row (tabs, menu items, badges); an icon-only
      square follows IconButton's own ladder (24/28/32/40) instead. */
@@ -144,6 +162,9 @@
   --duration-base: 0.14s;
   --duration-smooth: 0.18s;
   --duration-slow: 0.3s;
+  /* Loops: one turn of a spinner, one beat of a status pulse. */
+  --duration-spin: 0.8s;
+  --duration-pulse: 1.6s;
   --transition-base: var(--duration-base) ease;
   --transition-smooth: var(--duration-smooth) cubic-bezier(0.2, 0.8, 0.2, 1);
 
@@ -286,6 +307,7 @@
   --shadow-lg: none;
   --shadow-highlight: none;
   --shadow-inset: none;
+  --annotation-shadow: none;
   --shadow-glow: 0 0 0 1px var(--color-hairline);
   --focus-ring: 0 0 0 2px rgba(90, 103, 216, 0.25);
   --focus-ring-danger: 0 0 0 2px rgba(229, 62, 62, 0.25);
@@ -372,6 +394,7 @@
   --shadow-lg: none;
   --shadow-highlight: none;
   --shadow-inset: none;
+  --annotation-shadow: none;
   --shadow-glow: 0 0 0 1px var(--color-hairline);
   --focus-ring: 0 0 0 2px rgba(71, 119, 107, 0.28);
   --focus-ring-danger: 0 0 0 2px rgba(176, 58, 58, 0.25);
@@ -447,6 +470,7 @@
   --shadow-lg: none;
   --shadow-highlight: none;
   --shadow-inset: none;
+  --annotation-shadow: none;
   --shadow-glow: 0 0 0 1px var(--color-hairline);
   --focus-ring: 0 0 0 2px rgba(139, 74, 36, 0.28);
   --focus-ring-danger: 0 0 0 2px rgba(168, 50, 44, 0.25);

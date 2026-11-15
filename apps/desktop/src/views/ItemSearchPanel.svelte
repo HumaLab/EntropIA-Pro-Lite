@@ -370,7 +370,7 @@
   }
 
   .similar-item:hover {
-    background: var(--surface-panel);
+    background: var(--state-hover-row);
     border-color: var(--color-accent);
   }
 
@@ -497,7 +497,7 @@
     font-weight: var(--font-weight-normal);
   }
 
-  @media (max-width: 720px) {
+  @container pane (max-width: 720px) {
     .similar-item-btn {
       grid-template-columns: 56px minmax(0, 1fr);
       gap: var(--space-2);

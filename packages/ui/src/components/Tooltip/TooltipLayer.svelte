@@ -57,7 +57,7 @@
     position: fixed;
     /* Above every menu, panel and dialog in the app; the highest z-index in use
        elsewhere is 1200. A tooltip that a dropdown can cover is not a tooltip. */
-    z-index: 1300;
+    z-index: var(--z-tooltip);
     max-width: 280px;
     /* File names and paths have no spaces to break at. */
     overflow-wrap: anywhere;

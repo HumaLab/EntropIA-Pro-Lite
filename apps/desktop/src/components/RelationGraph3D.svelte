@@ -1088,8 +1088,8 @@
 
   .relation-graph__open:disabled,
   .relation-graph__relation:disabled {
-    cursor: default;
-    opacity: 0.6;
+    cursor: not-allowed;
+    opacity: var(--opacity-disabled);
   }
 
   /* How often the relation is stated: read, never drawn as a thicker link. */

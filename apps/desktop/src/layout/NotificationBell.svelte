@@ -270,7 +270,7 @@
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
-    letter-spacing: 0;
+    letter-spacing: normal;
   }
 
   /* The link button takes its type from here: the panel sits in the mono
