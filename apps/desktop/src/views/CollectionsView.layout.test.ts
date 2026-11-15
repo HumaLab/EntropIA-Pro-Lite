@@ -44,8 +44,19 @@ describe('the collections toolbar keeps its content height at a narrow pane widt
     // Button.svelte caps an icon-only button at its token on both axes
     // (packages/ui control-block-size.test.ts), so the view no longer carries
     // its own exception to the full-width rule.
+    // The search field and the form buttons size through their own wrappers,
+    // so no rule reaches into SearchBar or Button with :global().
     const block = blockFor('@container pane (max-width: 720px)')
-    expect(block).toMatch(/\.collections-controls\s*:global\(\.search-bar\)/)
+    expect(block).toMatch(/\.collections-controls__search\s*\{/)
+    expect(STYLES).not.toMatch(/:global\(\.(?:btn|search-bar)\b/)
     expect(STYLES).not.toMatch(/btn--icon-only/)
+  })
+})
+
+describe('the collection edit form is built on the design system', () => {
+  it('writes the AI context in the Textarea component, not a raw textarea', () => {
+    const markup = SOURCE.replace(/<style\b[\s\S]*?<\/style>/g, '')
+    expect(markup).not.toMatch(/<textarea\b/)
+    expect(markup).toMatch(/<Textarea\b/)
   })
 })

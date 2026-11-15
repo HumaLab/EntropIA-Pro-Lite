@@ -790,41 +790,37 @@
                         <span class="db-browser-table__cell">{cell.rawText}</span>
                         <div class="db-browser-table__cell-actions">
                           {#if cell.hasValue}
-                            <span class="db-browser-action-shell" data-tooltip={copyCellLabel}>
-                              <IconButton
-                                size="sm"
-                                variant="secondary"
-                                class="db-browser-table__cell-action"
-                                label={copyCellLabel}
-                                title={copyCellLabel}
-                                onclick={() => copyCellValue(cell.copyText)}
-                              >
-                                <ActionIcon name="copy" size={14} />
-                              </IconButton>
-                            </span>
+                            <IconButton
+                              size="sm"
+                              variant="secondary"
+                              class="db-browser-table__cell-action"
+                              label={copyCellLabel}
+                              title={copyCellLabel}
+                              onclick={() => copyCellValue(cell.copyText)}
+                            >
+                              <ActionIcon name="copy" size={14} />
+                            </IconButton>
                           {/if}
                           {#if cell.canExpand}
-                            <span class="db-browser-action-shell" data-tooltip={expandCellLabel}>
-                              <IconButton
-                                size="sm"
-                                variant="secondary"
-                                class="db-browser-table__cell-action"
-                                label={expandCellLabel}
-                                title={expandCellLabel}
-                                onclick={(event) =>
-                                  openExpandedCell(
-                                    column.name,
-                                    cell.expandedText,
-                                    cell.isJson,
-                                    column.name === EMBEDDING_COLUMN_NAME
-                                      ? embeddingCellContext(row)
-                                      : null,
-                                    event.currentTarget as HTMLElement
-                                  )}
-                              >
-                                <ActionIcon name="expand" size={14} />
-                              </IconButton>
-                            </span>
+                            <IconButton
+                              size="sm"
+                              variant="secondary"
+                              class="db-browser-table__cell-action"
+                              label={expandCellLabel}
+                              title={expandCellLabel}
+                              onclick={(event) =>
+                                openExpandedCell(
+                                  column.name,
+                                  cell.expandedText,
+                                  cell.isJson,
+                                  column.name === EMBEDDING_COLUMN_NAME
+                                    ? embeddingCellContext(row)
+                                    : null,
+                                  event.currentTarget as HTMLElement
+                                )}
+                            >
+                              <ActionIcon name="expand" size={14} />
+                            </IconButton>
                           {/if}
                         </div>
                       </div>
@@ -930,30 +926,26 @@
             </p>
           </div>
           <div class="db-browser-modal__actions">
-            <span class="db-browser-action-shell" data-tooltip={copyExpandedLabel}>
-              <IconButton
-                size="sm"
-                variant="secondary"
-                class="db-browser-table__cell-action db-browser-modal__icon-action"
-                label={copyExpandedLabel}
-                title={copyExpandedLabel}
-                onclick={() => copyCellValue(activeExpandedCell.text)}
-              >
-                <ActionIcon name="copy" size={14} />
-              </IconButton>
-            </span>
-            <span class="db-browser-action-shell" data-tooltip={closeExpandedLabel}>
-              <IconButton
-                size="sm"
-                variant="secondary"
-                class="db-browser-table__cell-action db-browser-modal__icon-action"
-                label={closeExpandedLabel}
-                title={closeExpandedLabel}
-                onclick={closeExpandedCell}
-              >
-                <ActionIcon name="close" size={14} />
-              </IconButton>
-            </span>
+            <IconButton
+              size="sm"
+              variant="secondary"
+              class="db-browser-table__cell-action db-browser-modal__icon-action"
+              label={copyExpandedLabel}
+              title={copyExpandedLabel}
+              onclick={() => copyCellValue(activeExpandedCell.text)}
+            >
+              <ActionIcon name="copy" size={14} />
+            </IconButton>
+            <IconButton
+              size="sm"
+              variant="secondary"
+              class="db-browser-table__cell-action db-browser-modal__icon-action"
+              label={closeExpandedLabel}
+              title={closeExpandedLabel}
+              onclick={closeExpandedCell}
+            >
+              <ActionIcon name="close" size={14} />
+            </IconButton>
           </div>
         </div>
 
@@ -1035,7 +1027,7 @@
 
   .db-browser-menu-trigger:disabled {
     cursor: not-allowed;
-    opacity: 0.55;
+    opacity: var(--opacity-disabled);
   }
 
   .db-browser-menu-trigger-label {
@@ -1116,7 +1108,7 @@
     min-height: 12rem;
     overflow: auto;
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-surface);
     background: var(--color-surface-sunken);
   }
 
@@ -1138,7 +1130,7 @@
   .db-browser-table thead th {
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: var(--z-sticky);
     background: var(--color-surface);
   }
 
@@ -1158,7 +1150,7 @@
 
   .db-browser-table__sort:focus-visible {
     outline: none;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-control);
     box-shadow: var(--focus-ring);
   }
 
@@ -1189,52 +1181,6 @@
     gap: var(--space-1);
   }
 
-  .db-browser-action-shell {
-    position: relative;
-    display: inline-flex;
-  }
-
-  .db-browser-action-shell::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    left: 50%;
-    bottom: calc(100% + var(--space-2));
-    transform: translateX(-50%) translateY(4px);
-    opacity: 0;
-    pointer-events: none;
-    z-index: 3;
-    min-width: max-content;
-    max-width: 220px;
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid color-mix(in srgb, var(--color-accent) 24%, var(--color-border-subtle));
-    border-radius: var(--radius-sm);
-    background: var(--color-surface-elevated);
-    box-shadow: var(--shadow-md);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-2xs);
-    line-height: 1.35;
-    text-align: center;
-    white-space: normal;
-    transition:
-      opacity 0.14s ease,
-      transform 0.14s ease;
-  }
-
-  /* The class is now only a hook: it drives the tooltip shell and the accent
-     hover. Size, border, radius and focus ring come from IconButton size="sm". */
-  .db-browser-action-shell:has(:global(.db-browser-table__cell-action):hover)::after,
-  .db-browser-action-shell:has(:global(.db-browser-table__cell-action):focus-visible)::after {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-
-  :global(.db-browser-table__cell-action):hover:not(:disabled),
-  :global(.db-browser-table__cell-action):focus-visible {
-    border-color: var(--color-accent);
-    color: var(--color-text-primary);
-    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-raised));
-  }
-
   .modal-overlay {
     position: fixed;
     inset: 0;
@@ -1242,8 +1188,8 @@
     align-items: center;
     justify-content: center;
     padding: var(--space-4);
-    background-color: var(--surface-overlay);
-    z-index: 1000;
+    background-color: var(--color-overlay);
+    z-index: var(--z-dialog);
   }
 
   .modal-title {
@@ -1284,11 +1230,11 @@
     padding: var(--space-4);
     overflow: auto;
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-surface);
     background: var(--color-surface-sunken);
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -1304,7 +1250,7 @@
   .db-browser-pagination__actions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: var(--space-0-5);
   }
 
   .db-browser-pagination__divider {

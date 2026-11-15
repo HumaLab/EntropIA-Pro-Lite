@@ -33,15 +33,18 @@ function styleBlock(source: string): string {
 describe('dead width/height overrides on IconButton call sites are gone, not silently re-enabled', () => {
   it('TopBar no longer sets width/height on .topbar__icon-btn or .topbar__window-btn', () => {
     const style = styleBlock(TOPBAR_SOURCE)
-    // The rules themselves stay (border-radius, color, the --settings hook);
-    // only the size declarations that never won are gone.
-    expect(style).toMatch(/:global\(\.topbar__icon-btn\)\s*\{[^}]*border-radius:/)
-    expect(style).toMatch(/:global\(\.topbar__window-btn\)\s*\{[^}]*border-radius:/)
-    for (const selector of [':global(.topbar__icon-btn)', ':global(.topbar__window-btn)']) {
-      const at = style.indexOf(selector)
-      const close = style.indexOf('}', at)
-      const body = style.slice(at, close)
-      expect(body, `${selector} still sets a dead width/height`).not.toMatch(/\b(width|height):/)
+    // Step 27 removed both :global restyles of IconButton (their radius and
+    // colour only repeated IconButton's own). Whatever rule still names these
+    // classes, the hover-only ones included, must not bring a size back.
+    for (const selector of [':global(.topbar__icon-btn', ':global(.topbar__window-btn']) {
+      let at = style.indexOf(selector)
+      while (at !== -1) {
+        const body = style.slice(at, style.indexOf('}', at))
+        expect(body, `${selector} sets a dead width/height`).not.toMatch(
+          /(?<![-\w])(width|height):/
+        )
+        at = style.indexOf(selector, at + 1)
+      }
     }
   })
 
