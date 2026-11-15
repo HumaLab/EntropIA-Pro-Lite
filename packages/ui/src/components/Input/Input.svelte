@@ -9,35 +9,73 @@
     label,
     error,
     hint,
+    class: className = '',
+    size = 'md',
+    element = $bindable(),
+    leading,
+    trailing,
+    id,
+    oninput,
+    ...rest
   }: InputProps = $props()
 
-  const inputId = $props.id()
+  const generatedId = $props.id()
+  let inputId = $derived(id ?? generatedId)
   let hasError = $derived(!!error)
+  // The types refuse a search box; a caller that forces one past them still
+  // gets a plain text field, because search fields are always SearchBar.
+  let inputType = $derived((type as string) === 'search' ? 'text' : type)
 
-  function handleInput(e: Event) {
-    const target = e.target as HTMLInputElement
-    value = target.value
+  function handleInput(e: Event & { currentTarget: EventTarget & HTMLInputElement }) {
+    value = e.currentTarget.value
+    oninput?.(e)
   }
 </script>
 
-<div class="input-field" class:input-field--disabled={disabled} class:input-field--error={hasError}>
+<div
+  class="input-field input-field--{size}"
+  class:input-field--disabled={disabled}
+  class:input-field--error={hasError}
+>
   {#if label}
     <label class="input-field__label" for={inputId}>
       {label}
     </label>
   {/if}
 
-  <input
-    id={inputId}
-    class="input-field__input"
-    {type}
-    {placeholder}
-    {disabled}
-    {value}
-    oninput={handleInput}
-    aria-invalid={hasError}
-    aria-describedby={error ? `${inputId}-error` : hint ? `${inputId}-hint` : undefined}
-  />
+  {#snippet field()}
+    <input
+      {...rest}
+      bind:this={element}
+      id={inputId}
+      class="input-field__input {className}"
+      type={inputType}
+      {placeholder}
+      {disabled}
+      {value}
+      oninput={handleInput}
+      aria-invalid={hasError}
+      aria-describedby={error ? `${inputId}-error` : hint ? `${inputId}-hint` : undefined}
+    />
+  {/snippet}
+
+  {#if leading || trailing}
+    <div
+      class="input-field__control"
+      class:input-field__control--leading={!!leading}
+      class:input-field__control--trailing={!!trailing}
+    >
+      {#if leading}
+        <span class="input-field__leading">{@render leading()}</span>
+      {/if}
+      {@render field()}
+      {#if trailing}
+        <span class="input-field__trailing">{@render trailing()}</span>
+      {/if}
+    </div>
+  {:else}
+    {@render field()}
+  {/if}
 
   {#if error}
     <span class="input-field__error" id={`${inputId}-error`} role="alert">
@@ -85,6 +123,61 @@
       background-color var(--transition-smooth);
     box-sizing: border-box;
     line-height: var(--line-height-base);
+  }
+
+  .input-field--sm .input-field__input {
+    min-height: var(--control-height-sm);
+    max-height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    font-size: var(--font-size-xs);
+  }
+
+  /* Adornments sit over the input's edges, as the search field's magnifier
+     does: the input keeps its own border, focus ring and height, and only
+     owes the adornment its inline padding. They are icon-sized. */
+  .input-field__control {
+    --input-field-adornment-size: 16px;
+    --input-field-adornment-inset: calc(
+      var(--space-3) + var(--input-field-adornment-size) + var(--space-2)
+    );
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+  }
+
+  .input-field__leading,
+  .input-field__trailing {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--input-field-adornment-size);
+    color: var(--color-text-secondary);
+  }
+
+  .input-field__leading {
+    inset-inline-start: var(--space-3);
+    pointer-events: none;
+  }
+
+  .input-field__trailing {
+    inset-inline-end: var(--space-3);
+  }
+
+  .input-field__control--leading .input-field__input {
+    padding-inline-start: var(--input-field-adornment-inset);
+  }
+
+  .input-field__control--trailing .input-field__input {
+    padding-inline-end: var(--input-field-adornment-inset);
+  }
+
+  .input-field--disabled .input-field__leading,
+  .input-field--disabled .input-field__trailing {
+    opacity: var(--opacity-disabled);
   }
 
   .input-field__input::placeholder {

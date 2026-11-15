@@ -1,2 +1,2 @@
 export { default as Input } from './Input.svelte'
-export type { InputProps, InputType } from './Input.types'
+export type { InputProps, InputSize, InputType } from './Input.types'
