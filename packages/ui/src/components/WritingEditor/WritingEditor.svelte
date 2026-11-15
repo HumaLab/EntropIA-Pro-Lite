@@ -4,6 +4,7 @@
   import ActionIcon from '../Button/ActionIcon.svelte'
   import Button from '../Button/Button.svelte'
   import IconButton from '../IconButton/IconButton.svelte'
+  import Input from '../Input/Input.svelte'
   import SearchBar from '../SearchBar/SearchBar.svelte'
   import ToolbarMenu from '../ToolbarMenu/ToolbarMenu.svelte'
   import ToolbarMenuList from '../ToolbarMenu/ToolbarMenuList.svelte'
@@ -1342,16 +1343,18 @@
         <!-- A one-field disclosure rather than a dialog: the shared modal shell
              does not exist yet, and a link does not warrant inventing one. -->
         <div class="writing-editor__link-row">
-          <input
-            class="writing-editor__link-input"
-            type="url"
-            inputmode="url"
-            placeholder="https://"
-            aria-label={labels.link}
-            onkeydown={onLinkKeydown}
-            onblur={(event) => commitLink(event.currentTarget.value)}
-            {@attach (node) => node.focus()}
-          />
+          <div class="writing-editor__link-field">
+            <Input
+              size="sm"
+              type="url"
+              inputmode="url"
+              placeholder="https://"
+              aria-label={labels.link}
+              onkeydown={onLinkKeydown}
+              onblur={(event) => commitLink(event.currentTarget.value)}
+              {@attach (node) => node.focus()}
+            />
+          </div>
         </div>
       {/if}
     {/if}
@@ -1553,6 +1556,11 @@
     padding: var(--space-1) var(--space-2);
     border-bottom: 1px solid var(--border-subtle);
     background: var(--surface-toolbar);
+  }
+
+  /* The link field keeps the width it had before it became the shared Input. */
+  .writing-editor__link-field {
+    max-width: 48ch;
   }
 
   .writing-editor__link-input {

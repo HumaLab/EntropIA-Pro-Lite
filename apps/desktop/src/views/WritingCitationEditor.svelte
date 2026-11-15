@@ -30,6 +30,7 @@
     Button,
     Checkbox,
     IconButton,
+    Input,
     ToolbarMenu,
     tooltip,
     type ToolbarMenuItem,
@@ -45,6 +46,7 @@
   }
 
   let { items, affixes, style = DEFAULT_STYLE, ondraftchange, onapply, onclose }: Props = $props()
+  const uid = $props.id()
 
   const LOCATOR_KINDS = [
     { value: 'page', label: 'writing.locatorPage' },
@@ -203,11 +205,12 @@
         </div>
 
         <div class="cite__row">
-          <label class="cite__field">
-            <span class="cite__label">{t('writing.citeLocator')}</span>
-            <input
-              class="cite__input"
-              type="text"
+          <div class="cite__field">
+            <label class="cite__label" for="{uid}-locator-{index}">{t('writing.citeLocator')}</label
+            >
+            <Input
+              id="{uid}-locator-{index}"
+              size="sm"
               value={work.locator}
               placeholder={t('writing.citeLocatorPlaceholder')}
               oninput={(event) => {
@@ -215,7 +218,7 @@
                 changed()
               }}
             />
-          </label>
+          </div>
           <div class="cite__field">
             <span class="cite__label" id="cite-locator-kind-label-{index}"
               >{t('writing.citeLocatorKind')}</span
@@ -259,11 +262,11 @@
 
   <p class="cite__help">{t('writing.citeSuppressHelp')}</p>
 
-  <label class="cite__field">
-    <span class="cite__label">{t('writing.citePrefix')}</span>
-    <input
-      class="cite__input"
-      type="text"
+  <div class="cite__field">
+    <label class="cite__label" for="{uid}-prefix">{t('writing.citePrefix')}</label>
+    <Input
+      id="{uid}-prefix"
+      size="sm"
       value={prefix}
       placeholder={t('writing.citePrefixPlaceholder')}
       oninput={(event) => {
@@ -271,13 +274,13 @@
         changed()
       }}
     />
-  </label>
+  </div>
 
-  <label class="cite__field">
-    <span class="cite__label">{t('writing.citeSuffix')}</span>
-    <input
-      class="cite__input"
-      type="text"
+  <div class="cite__field">
+    <label class="cite__label" for="{uid}-suffix">{t('writing.citeSuffix')}</label>
+    <Input
+      id="{uid}-suffix"
+      size="sm"
       value={suffix}
       placeholder={t('writing.citeSuffixPlaceholder')}
       oninput={(event) => {
@@ -285,7 +288,7 @@
         changed()
       }}
     />
-  </label>
+  </div>
 
   <div class="cite__preview-block">
     <p class="cite__label">{t('writing.citePreview')}</p>
@@ -377,7 +380,7 @@
   .cite__field {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
   }
 
   .cite__label {
@@ -386,30 +389,9 @@
     font-size: var(--font-size-2xs);
   }
 
-  .cite__input {
-    box-sizing: border-box;
-    width: 100%;
-    min-width: 0;
-    max-width: 100%;
-    min-height: 28px;
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: var(--font-size-xs);
-  }
-
-  .cite__input:focus-visible {
-    outline: none;
-    border-color: var(--border-focus);
-    box-shadow: var(--focus-ring);
-  }
-
-  /* The locator-kind trigger. It replaces the native select that wore
-     .cite__input, so it keeps that field look and adds the canonical
-     label/name/chevron shape of the other choice menus. */
+  /* The locator-kind trigger stays hand-built: it spans its grid column like
+     the Input beside it, and SelectTrigger has no full-width form yet. Same
+     height as that Input (sm). */
   .cite__menu-trigger {
     display: inline-flex;
     align-items: center;
@@ -417,7 +399,7 @@
     width: 100%;
     min-width: 0;
     max-width: 100%;
-    min-height: 28px;
+    min-height: var(--control-height-sm);
     padding: 0 var(--space-2);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-input);
@@ -451,7 +433,7 @@
   .cite__preview-block {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
   }
 
   .cite__preview {
