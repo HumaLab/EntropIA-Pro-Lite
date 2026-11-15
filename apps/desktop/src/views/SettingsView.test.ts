@@ -1954,7 +1954,11 @@ describe('SettingsView', () => {
 
       const keys = await screen.findAllByLabelText('API Key')
       expect(keys).toHaveLength(3)
-      for (const key of keys) expect(key.closest('.input-field')).not.toBeNull()
+      for (const key of keys) {
+        expect(key.closest('.input-field')).not.toBeNull()
+        // A key is read character by character: it keeps the mono face.
+        expect(key).toHaveClass('input-field__input--mono')
+      }
       expect(screen.getByLabelText('API key de Zotero').closest('.input-field')).not.toBeNull()
       expect(
         screen.getByPlaceholderText('http://127.0.0.1:11434').closest('.input-field')

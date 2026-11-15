@@ -2191,6 +2191,7 @@
                       <Input
                         id="local-model-filename-{paneId}"
                         size="sm"
+                        font="mono"
                         bind:value={localModelFilename}
                         placeholder={localModel?.filename ?? ''}
                       />
@@ -2203,6 +2204,7 @@
                       <Input
                         id="local-model-source-{paneId}"
                         size="sm"
+                        font="mono"
                         bind:value={localModelSourceUrl}
                         placeholder="https://…"
                       />
@@ -2283,6 +2285,7 @@
                   <Input
                     id="local-embedding-model-dir-{paneId}"
                     size="sm"
+                    font="mono"
                     bind:value={localEmbeddingModelDir}
                     placeholder={t('settings.embeddingProvider.localPathPlaceholder')}
                   />
@@ -2468,6 +2471,7 @@
                     id="api-key-{paneId}"
                     type={showApiKey ? 'text' : 'password'}
                     size="sm"
+                    font="mono"
                     bind:value={apiKey}
                     placeholder={t('settings.apiKeyPlaceholder')}
                   />
@@ -2537,6 +2541,7 @@
               <Input
                 id="openai-base-url-{paneId}"
                 size="sm"
+                font="mono"
                 bind:value={openaiCompatibleBaseUrl}
                 placeholder="http://127.0.0.1:11434"
               />
@@ -2704,6 +2709,7 @@
                     id="assemblyai-api-key-{paneId}"
                     type={showAssemblyAiApiKey ? 'text' : 'password'}
                     size="sm"
+                    font="mono"
                     bind:value={assemblyAiApiKey}
                     placeholder={t('settings.assemblyAiApiKeyPlaceholder')}
                   />
@@ -3019,6 +3025,7 @@
                     id="glm-ocr-api-key-{paneId}"
                     type={showGlmOcrApiKey ? 'text' : 'password'}
                     size="sm"
+                    font="mono"
                     bind:value={glmOcrApiKey}
                     placeholder={t('settings.glmOcrApiKeyPlaceholder')}
                   />
@@ -3111,6 +3118,7 @@
                     id="zotero-api-key-{paneId}"
                     type={showZoteroApiKey ? 'text' : 'password'}
                     size="sm"
+                    font="mono"
                     bind:value={zoteroApiKey}
                     placeholder={t('settings.zotero.keyPlaceholder')}
                     autocomplete="off"
