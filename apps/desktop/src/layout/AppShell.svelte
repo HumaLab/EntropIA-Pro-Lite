@@ -1002,7 +1002,7 @@
     display: flex;
     align-items: center;
     gap: 1px;
-    padding: 3px 4px;
+    padding: 3px var(--space-1);
     border-bottom: 1px solid var(--border-subtle);
     background: color-mix(in srgb, var(--surface-toolbar) 78%, transparent);
     flex-shrink: 0;
@@ -1010,7 +1010,7 @@
 
   .sidebar--collapsed .sidebar__toolbar {
     flex-direction: column;
-    padding: 4px 3px;
+    padding: var(--space-1) 3px;
   }
 
   .sidebar__toolbar-spacer {

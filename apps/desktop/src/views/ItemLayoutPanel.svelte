@@ -811,10 +811,10 @@
   }
 
   .layout-inspector__eyebrow {
-    margin: 0 0 4px;
+    margin: 0 0 var(--space-1);
     font-size: var(--font-size-2xs);
     text-transform: uppercase;
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     color: var(--color-text-muted);
   }
 
@@ -841,7 +841,7 @@
   .layout-inspector__field {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--space-1);
   }
 
   .layout-inspector__field--wide {
@@ -850,10 +850,10 @@
 
   .layout-inspector__label {
     display: block;
-    margin-bottom: 4px;
+    margin-bottom: var(--space-1);
     font-size: var(--font-size-2xs);
     text-transform: uppercase;
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     color: var(--color-text-muted);
   }
 
@@ -874,7 +874,7 @@
     display: inline-flex;
     align-items: center;
     width: fit-content;
-    padding: 4px 10px;
+    padding: var(--space-1) 10px;
     border-radius: var(--radius-control);
     background: color-mix(in srgb, var(--color-accent) 12%, var(--surface-card));
     border: 1px solid color-mix(in srgb, var(--color-accent) 35%, var(--border-subtle));

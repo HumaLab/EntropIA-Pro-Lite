@@ -712,7 +712,7 @@
 
   .sources__problem {
     margin: 0;
-    color: var(--color-danger, var(--color-text-primary));
+    color: var(--color-danger);
   }
 
   .sources__list,
@@ -780,11 +780,11 @@
   }
 
   .sources__chip--good {
-    color: var(--color-success, var(--color-text-primary));
+    color: var(--color-success);
   }
 
   .sources__chip--bad {
-    color: var(--color-danger, var(--color-text-primary));
+    color: var(--color-danger);
   }
 
   .sources__chip--pending {

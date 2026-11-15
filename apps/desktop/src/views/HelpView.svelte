@@ -977,7 +977,7 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
-    line-height: var(--line-height-base, 1.5);
+    line-height: var(--line-height-base);
   }
 
   .help-view__suggestions {
@@ -1018,7 +1018,7 @@
     border-color: color-mix(in srgb, var(--color-accent) 24%, var(--border-subtle));
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: var(--line-height-base, 1.5);
+    line-height: var(--line-height-base);
     white-space: pre-wrap;
   }
 
@@ -1030,12 +1030,12 @@
     border-inline-start: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: var(--line-height-base, 1.5);
+    line-height: var(--line-height-base);
   }
 
   .help-view__markdown {
     white-space: normal;
-    line-height: var(--line-height-base, 1.5);
+    line-height: var(--line-height-base);
   }
 
   .help-view__markdown :global(p) {
@@ -1201,7 +1201,7 @@
   }
 
   .help-view__notice--approved .help-view__notice-mark {
-    color: var(--color-success, var(--color-accent));
+    color: var(--color-success);
   }
 
   .help-view__notice--rejected .help-view__notice-mark,

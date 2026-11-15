@@ -511,12 +511,12 @@
 
 <style>
   .constellation {
-    --constellation-bg-start: var(--surface-app, var(--color-bg));
-    --constellation-bg-mid: var(--color-bg-ambient, var(--surface-panel));
-    --constellation-bg-end: var(--surface-panel, var(--color-surface));
+    --constellation-bg-start: var(--surface-app);
+    --constellation-bg-mid: var(--color-bg-ambient);
+    --constellation-bg-end: var(--surface-panel);
     --constellation-haze-core: var(--color-accent);
-    --constellation-haze-mid: var(--surface-glass, var(--color-surface-glass));
-    --constellation-haze-edge: var(--surface-app, var(--color-bg));
+    --constellation-haze-mid: var(--surface-glass);
+    --constellation-haze-edge: var(--surface-app);
     --constellation-link: var(--color-border);
     --constellation-point: var(--color-accent);
 

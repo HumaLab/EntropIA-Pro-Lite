@@ -2159,7 +2159,7 @@
   }
 
   .document-viewer__layout-handle {
-    fill: var(--color-surface, #fff);
+    fill: var(--color-surface);
     stroke: rgb(245, 158, 11);
     stroke-width: 1.5;
     touch-action: none;

@@ -1971,7 +1971,7 @@
 
   .investigation-chat__report :global(strong) {
     color: var(--color-text-primary);
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
   }
 
   /* La advertencia usa el ámbar del sistema, pero como acento fino, no como
@@ -1995,7 +1995,7 @@
   .report__title {
     min-width: 0;
     margin: 0;
-    font-size: var(--font-size-lg, 1.25rem);
+    font-size: var(--font-size-lg);
     line-height: 1.3;
   }
 
@@ -2006,66 +2006,66 @@
 
   .report__label {
     margin: 0 0 var(--space-2);
-    font-size: var(--font-size-xs, 0.75rem);
-    font-weight: 500;
-    letter-spacing: 0.075em;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
-    color: var(--color-text-muted, inherit);
+    color: var(--color-text-muted);
   }
 
   .report__coverage,
   .report__framing,
   .report__query,
   .report__sources {
-    margin-bottom: var(--space-5, 1.5rem);
+    margin-bottom: var(--space-5);
   }
 
   .report__query-text {
     margin: 0;
-    font-size: var(--font-size-sm, 0.875rem);
-    font-weight: var(--font-weight-medium, 500);
-    color: var(--color-text-primary, inherit);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
   }
 
   .report__table {
     width: 100%;
     border-collapse: collapse;
-    font-size: var(--font-size-sm, 0.875rem);
+    font-size: var(--font-size-sm);
   }
 
   .report__table th,
   .report__table td {
     padding: var(--space-1) var(--space-2);
-    border-bottom: 1px solid var(--border-subtle, currentColor);
+    border-bottom: 1px solid var(--border-subtle);
     text-align: right;
   }
 
   .report__table th[scope='row'],
   .report__table th[scope='col']:first-child {
     text-align: left;
-    font-weight: 500;
+    font-weight: var(--font-weight-medium);
   }
 
   .report__table-total th,
   .report__table-total td {
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     border-bottom: none;
   }
 
   .report__bias {
     margin: var(--space-2) 0 0;
-    font-size: var(--font-size-xs, 0.75rem);
-    color: var(--color-text-muted, inherit);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
   }
 
   /* La advertencia de cobertura no es decorativa: dice qué no se pudo leer. */
   .report__warning {
-    margin-bottom: var(--space-5, 1.5rem);
+    margin-bottom: var(--space-5);
     padding: var(--space-3);
-    border-left: 3px solid var(--color-warning, currentColor);
-    border-radius: var(--radius-sm, 4px);
-    background: var(--surface-toolbar, transparent);
-    font-size: var(--font-size-sm, 0.875rem);
+    border-left: 3px solid var(--color-warning);
+    border-radius: var(--radius-sm);
+    background: var(--surface-toolbar);
+    font-size: var(--font-size-sm);
   }
 
   .report__warning p,
@@ -2080,19 +2080,19 @@
 
   .report__framing-list {
     margin: 0;
-    font-size: var(--font-size-sm, 0.875rem);
+    font-size: var(--font-size-sm);
   }
 
   .report__framing-list dt {
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     margin-top: var(--space-2);
   }
 
   .report__framing-list dd {
     margin: var(--space-1) 0 0;
     padding-left: var(--space-3);
-    border-left: 2px solid var(--border-subtle, currentColor);
-    color: var(--color-text-muted, inherit);
+    border-left: 2px solid var(--border-subtle);
+    color: var(--color-text-muted);
     white-space: pre-line;
   }
 
@@ -2101,13 +2101,13 @@
   }
 
   .report__section {
-    margin-bottom: var(--space-5, 1.5rem);
+    margin-bottom: var(--space-5);
   }
 
   .report__technical-detail {
     margin-top: var(--space-1);
-    font-size: var(--font-size-xs, 0.75rem);
-    color: var(--color-text-muted, inherit);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
   }
 
   .report__technical-detail summary {
@@ -2123,9 +2123,9 @@
 
   .report__section-mark {
     margin: 0 0 var(--space-2);
-    font-size: var(--font-size-xs, 0.75rem);
+    font-size: var(--font-size-xs);
     font-style: italic;
-    color: var(--color-text-muted, inherit);
+    color: var(--color-text-muted);
   }
 
   .report__section-actions {
@@ -2155,8 +2155,8 @@
     box-sizing: border-box;
     padding: var(--space-2) var(--space-3);
     border: 1px solid transparent;
-    border-left: 3px solid var(--border-subtle, currentColor);
-    border-radius: var(--radius-sm, 4px);
+    border-left: 3px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
     background: none;
     cursor: pointer;
     text-align: left;
@@ -2169,20 +2169,20 @@
 
   .report__quote:hover,
   .report__source:hover {
-    background: var(--surface-toolbar, transparent);
-    border-color: var(--border-subtle, currentColor);
+    background: var(--surface-toolbar);
+    border-color: var(--border-subtle);
   }
 
   .report__quote:focus-visible,
   .report__source:focus-visible {
     outline: none;
-    box-shadow: var(--focus-ring, 0 0 0 2px currentColor);
+    box-shadow: var(--focus-ring);
   }
 
   /* El fragmento es literal: se muestra tal cual, con sus saltos de línea. */
   .report__quote-text {
     white-space: pre-line;
-    font-size: var(--font-size-sm, 0.875rem);
+    font-size: var(--font-size-sm);
   }
 
   .report__quote-meta,
@@ -2191,12 +2191,12 @@
     flex-wrap: wrap;
     align-items: baseline;
     gap: var(--space-2);
-    font-size: var(--font-size-xs, 0.75rem);
-    color: var(--color-text-muted, inherit);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
   }
 
   .report__quote-ref {
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     font-variant-numeric: tabular-nums;
   }
 
@@ -2216,12 +2216,12 @@
 
   .investigation-round__title {
     margin: 0 0 var(--space-1);
-    font-size: var(--font-size-md, 1rem);
+    font-size: var(--font-size-md);
   }
 
   .investigation-round__intro {
     margin: 0 0 var(--space-3);
-    color: var(--color-text-muted, inherit);
+    color: var(--color-text-muted);
   }
 
   .investigation-round {
@@ -2239,14 +2239,14 @@
   }
 
   .investigation-round__axis {
-    font-size: var(--font-size-xs, 0.75rem);
+    font-size: var(--font-size-xs);
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--color-text-muted, inherit);
+    color: var(--color-text-muted);
   }
 
   .investigation-round__question {
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
   }
 
   .investigation-design {
@@ -2256,7 +2256,7 @@
     align-items: start;
     width: 100%;
     padding-bottom: var(--space-3);
-    border-bottom: 1px solid var(--border-subtle, currentColor);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .investigation-design h4 {
@@ -2274,7 +2274,7 @@
 
   .investigation-plan__list {
     margin: 0;
-    padding-left: var(--space-5, 1.5rem);
+    padding-left: var(--space-5);
   }
 
   .investigation-plan__actions {
@@ -2288,9 +2288,9 @@
     width: 100%;
     resize: vertical;
     padding: var(--space-2);
-    border: 1px solid var(--color-border, currentColor);
-    border-radius: var(--radius-sm, 4px);
-    background: var(--color-surface, transparent);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
     color: inherit;
     font: inherit;
   }
@@ -2378,8 +2378,8 @@
     align-items: end;
     gap: var(--space-3);
     padding: var(--space-3);
-    border: 1px solid var(--color-border, currentColor);
-    border-radius: var(--radius-sm, 4px);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
   }
 
   .investigation-budget .investigation-round__field {

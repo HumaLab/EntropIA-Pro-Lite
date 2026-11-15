@@ -1107,7 +1107,7 @@
     font-weight: var(--font-weight-medium);
     color: var(--color-text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
   }
 
   .explorer__tree {
@@ -1319,7 +1319,7 @@
   .explorer__node-icon--collection,
   .explorer__node-icon--item,
   .explorer__node-icon--asset {
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     background: transparent;
     box-shadow: none;
   }
@@ -1344,7 +1344,7 @@
     font-size: var(--font-size-2xs);
     color: color-mix(in srgb, var(--color-text-muted) 82%, transparent);
     text-transform: uppercase;
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
   }
 
   .explorer__node.is-active .explorer__node-meta,
@@ -1399,7 +1399,8 @@
   }
 
   .explorer__message--nested {
-    padding: 4px 0 5px calc((var(--tree-level, 0) * var(--tree-indent-step)) + 20px);
+    padding: var(--space-1) 0 5px
+      calc((var(--tree-level, 0) * var(--tree-indent-step)) + var(--space-5));
   }
 
   .explorer__message--error {

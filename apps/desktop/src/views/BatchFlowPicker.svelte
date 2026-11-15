@@ -171,6 +171,6 @@
 
   .flow-picker__error {
     flex-basis: 100%;
-    color: var(--color-danger, #c0392b);
+    color: var(--color-danger);
   }
 </style>

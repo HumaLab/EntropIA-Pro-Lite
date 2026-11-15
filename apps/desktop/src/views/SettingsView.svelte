@@ -4015,7 +4015,7 @@
   .settings__badge {
     display: inline-block;
     margin-left: var(--space-2);
-    padding: 2px 8px;
+    padding: 2px var(--space-2);
     border-radius: var(--radius-full);
     font-size: 10px;
     font-weight: var(--font-weight-medium);
@@ -4172,7 +4172,7 @@
     color: var(--color-text-muted);
     margin-bottom: var(--space-1);
     text-transform: uppercase;
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
   }
 
   .settings__input-row {

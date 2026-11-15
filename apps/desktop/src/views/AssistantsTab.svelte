@@ -732,7 +732,7 @@
   }
 
   .assistants-tab__meta {
-    color: var(--color-text-muted, #6b7280);
+    color: var(--color-text-muted);
     font-size: var(--font-size-xs);
   }
 
@@ -751,7 +751,7 @@
     height: 20px;
     padding: 0;
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-full, 9999px);
+    border-radius: var(--radius-full);
     background: var(--color-surface-sunken);
     cursor: pointer;
     transition: background var(--transition-base);
@@ -805,7 +805,7 @@
     align-self: flex-start;
     padding: 2px var(--space-2);
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-full, 9999px);
+    border-radius: var(--radius-full);
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
   }
@@ -873,7 +873,7 @@
     min-width: 0;
     padding: var(--space-1) var(--space-2);
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-sm);
     background: var(--color-surface);
     color: var(--color-text-primary);
     font-family: var(--font-mono);
