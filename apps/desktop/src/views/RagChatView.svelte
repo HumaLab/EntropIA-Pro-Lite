@@ -43,10 +43,13 @@
     Button,
     ConfirmDialog,
     IconButton,
+    Input,
     Panel,
     SearchBar,
+    SelectTrigger,
     TabButton,
     TabList,
+    Textarea,
     ToolbarMenu,
     type ToolbarMenuItem,
   } from '@entropia/ui'
@@ -56,7 +59,7 @@
 
   let messagesEl = $state<HTMLDivElement | undefined>()
   let conversationSearchInput = $state<HTMLInputElement | undefined>()
-  let conversationTitleInput = $state<HTMLInputElement | undefined>()
+  let conversationTitleInput = $state<HTMLInputElement | null | undefined>()
   let conversationEditButton = $state<HTMLButtonElement | undefined>()
   let editingConversationId = $state<string | null>(null)
   let editingConversationTitle = $state('')
@@ -878,15 +881,7 @@
               bind:open={collectionMenuOpen}
             >
               {#snippet trigger(props, { open })}
-                <button
-                  type="button"
-                  class="rag-chat__library-trigger"
-                  class:rag-chat__library-trigger--open={open}
-                  {...props}
-                >
-                  <span>{collectionTriggerLabel}</span>
-                  <ActionIcon name="chevron-down" size={12} />
-                </button>
+                <SelectTrigger {...props} size="sm" {open} label={collectionTriggerLabel} />
               {/snippet}
             </ToolbarMenu>
           {/if}
@@ -897,15 +892,7 @@
               bind:open={libraryMenuOpen}
             >
               {#snippet trigger(props, { open })}
-                <button
-                  type="button"
-                  class="rag-chat__library-trigger"
-                  class:rag-chat__library-trigger--open={open}
-                  {...props}
-                >
-                  <span>{libraryTriggerLabel}</span>
-                  <ActionIcon name="chevron-down" size={12} />
-                </button>
+                <SelectTrigger {...props} size="sm" {open} label={libraryTriggerLabel} />
               {/snippet}
             </ToolbarMenu>
           {/if}
@@ -932,16 +919,18 @@
             handleSend()
           }}
         >
-          <textarea
-            class="rag-chat__input"
-            rows="2"
-            maxlength="4000"
-            value={$ragChat.draft}
-            oninput={(event) => ragChat.setDraft(event.currentTarget.value)}
-            placeholder={$currentLocale && t('ragChat.placeholder')}
-            aria-label={$currentLocale && t('ragChat.placeholder')}
-            onkeydown={handleComposerKeydown}
-            disabled={$ragChat.loading}></textarea>
+          <div class="rag-chat__input">
+            <Textarea
+              rows={2}
+              maxlength={4000}
+              value={$ragChat.draft}
+              oninput={(event) => ragChat.setDraft(event.currentTarget.value)}
+              placeholder={$currentLocale && t('ragChat.placeholder')}
+              aria-label={$currentLocale && t('ragChat.placeholder')}
+              onkeydown={handleComposerKeydown}
+              disabled={$ragChat.loading}
+            />
+          </div>
           <Button
             variant="primary"
             iconOnly
@@ -1014,29 +1003,30 @@
                 $ragChat.activeConversationId}
             >
               {#if editingConversationId === conversation.id}
-                <input
-                  bind:this={conversationTitleInput}
-                  class="rag-chat__conversation-title-input"
-                  type="text"
-                  value={editingConversationTitle}
-                  aria-label={$currentLocale && t('ragChat.editConversationName')}
-                  aria-invalid={conversationEditError ? 'true' : undefined}
-                  disabled={savingConversationId === conversation.id}
-                  oninput={(event) => {
-                    editingConversationTitle = event.currentTarget.value
-                    conversationEditError = null
-                  }}
-                  onkeydown={(event) => {
-                    if (event.isComposing || event.keyCode === 229) return
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      void saveConversationTitle(conversation.id)
-                    } else if (event.key === 'Escape') {
-                      event.preventDefault()
-                      cancelConversationEditing()
-                    }
-                  }}
-                />
+                <div class="rag-chat__conversation-title-field">
+                  <Input
+                    bind:element={conversationTitleInput}
+                    size="sm"
+                    value={editingConversationTitle}
+                    aria-label={$currentLocale && t('ragChat.editConversationName')}
+                    error={conversationEditError ?? undefined}
+                    disabled={savingConversationId === conversation.id}
+                    oninput={(event) => {
+                      editingConversationTitle = event.currentTarget.value
+                      conversationEditError = null
+                    }}
+                    onkeydown={(event) => {
+                      if (event.isComposing || event.keyCode === 229) return
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        void saveConversationTitle(conversation.id)
+                      } else if (event.key === 'Escape') {
+                        event.preventDefault()
+                        cancelConversationEditing()
+                      }
+                    }}
+                  />
+                </div>
               {:else}
                 <button
                   type="button"
@@ -1076,7 +1066,6 @@
                   </IconButton>
                   <IconButton
                     size="sm"
-                    class="rag-chat__conversation-delete"
                     label={$currentLocale && t('ragChat.deleteConversation')}
                     title={$currentLocale && t('ragChat.deleteConversation')}
                     onclick={() => {
@@ -1096,11 +1085,6 @@
                     ? $currentLocale && t('ragChat.downloadedConversation')
                     : $currentLocale && t('ragChat.downloadConversationError')}
                 </span>
-              {/if}
-              {#if editingConversationId === conversation.id && conversationEditError}
-                <p class="rag-chat__conversation-edit-error" role="alert">
-                  {conversationEditError}
-                </p>
               {/if}
             </li>
           {/each}
@@ -1221,7 +1205,7 @@
     flex-direction: column;
     gap: var(--space-1);
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     transition:
       background-color var(--transition-base),
       border-color var(--transition-base);
@@ -1259,25 +1243,17 @@
     padding: 0 var(--space-2) var(--space-2);
   }
 
-  .rag-chat__conversation-title-input {
-    width: auto;
-    align-self: stretch;
+  /* Seats the rename field where the title button sits; Input draws the
+     field, its focus ring and its error. */
+  .rag-chat__conversation-title-field {
     min-width: 0;
-    box-sizing: border-box;
     margin: var(--space-2) var(--space-2) 0;
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--color-accent);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font: inherit;
-    box-shadow: var(--focus-ring);
   }
 
   .rag-chat__conversation-button:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
   }
 
   .rag-chat__conversation-title {
@@ -1313,17 +1289,6 @@
     justify-content: flex-end;
     min-width: 0;
     margin: 0;
-  }
-
-  .rag-chat__conversation-actions :global(.rag-chat__conversation-delete) {
-    margin: 0;
-  }
-
-  .rag-chat__conversation-edit-error {
-    margin: 0;
-    padding: 0 var(--space-2) var(--space-2);
-    color: var(--color-danger);
-    font-size: var(--font-size-xs);
   }
 
   .rag-chat__action-feedback {
@@ -1451,11 +1416,11 @@
   }
 
   .rag-chat__markdown :global(code) {
-    padding: 0.1em 0.35em;
-    border-radius: var(--radius-sm);
+    padding: var(--space-0-5) var(--space-1);
+    border-radius: var(--radius-control);
     background: var(--surface-toolbar);
     font-family: var(--font-mono);
-    font-size: 0.9em;
+    font-size: var(--font-size-xs);
   }
 
   .rag-chat__markdown :global(a) {
@@ -1473,7 +1438,7 @@
   .rag-chat__markdown :global(h3) {
     margin: var(--space-2) 0 var(--space-1);
     font-weight: var(--font-weight-semibold);
-    line-height: 1.3;
+    line-height: var(--line-height-tight);
   }
 
   .rag-chat__markdown :global(h1) {
@@ -1487,7 +1452,7 @@
   .rag-chat__markdown :global(h3) {
     font-size: var(--font-size-xs);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: var(--letter-spacing-caps);
   }
 
   .rag-chat__sources {
@@ -1525,7 +1490,7 @@
     box-sizing: border-box;
     padding: var(--space-2) var(--space-3);
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: none;
     cursor: pointer;
     text-align: left;
@@ -1587,7 +1552,7 @@
     align-self: flex-start;
     margin: 0;
     padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: var(--surface-toolbar);
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
@@ -1626,42 +1591,6 @@
     overflow-wrap: anywhere;
   }
 
-  /* The trigger of the library choice: a ToolbarMenu painted with the app's
-     own tokens, same recipe as the other menu triggers (never a native
-     <select>). */
-  .rag-chat__library-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base);
-  }
-
-  .rag-chat__library-trigger:hover,
-  .rag-chat__library-trigger--open {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
-  }
-
-  .rag-chat__library-trigger:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .rag-chat__library-trigger :global(svg) {
-    color: var(--color-text-muted);
-  }
-
   .rag-chat__notice {
     margin: 0;
     color: var(--color-text-secondary);
@@ -1671,7 +1600,7 @@
   .rag-chat__source-scope {
     padding: 0 var(--space-1);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);
   }
@@ -1689,33 +1618,10 @@
     flex-shrink: 0;
   }
 
+  /* The composer row's flexible cell; Textarea draws the field. */
   .rag-chat__input {
     flex: 1;
-    min-height: var(--control-height-lg);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    resize: vertical;
-    transition:
-      border-color var(--transition-smooth),
-      box-shadow var(--transition-smooth),
-      background-color var(--transition-smooth);
-  }
-
-  .rag-chat__input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: var(--surface-panel);
-  }
-
-  .rag-chat__input:disabled {
-    cursor: not-allowed;
-    opacity: 0.48;
+    min-width: 0;
   }
 
   /* Keyed to this pane's own width, not the window's: in a narrow split pane
