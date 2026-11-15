@@ -13,8 +13,15 @@ export type IconButtonSize = 'xs' | 'sm' | 'md' | 'lg'
 /** `edge` is the strip that opens and closes a side panel: 20px wide, as tall as its parent. */
 export type IconButtonVariant = 'ghost' | 'secondary' | 'primary' | 'danger' | 'edge'
 
+/**
+ * A colour the button takes only on hover, to warn what it does: `danger` for
+ * closing or deleting, `success` for confirming. At rest it keeps its variant.
+ */
+export type IconButtonHoverTone = 'danger' | 'success'
+
 export interface IconButtonProps extends HTMLButtonAttributes {
   variant?: IconButtonVariant
+  hoverTone?: IconButtonHoverTone
   size?: IconButtonSize
   label: string
   active?: boolean

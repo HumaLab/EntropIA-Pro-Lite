@@ -672,9 +672,10 @@
       </IconButton>
 
       <IconButton
-        class="topbar__window-btn topbar__window-btn--close"
+        class="topbar__window-btn"
         size="sm"
         variant="ghost"
+        hoverTone="danger"
         label="Cerrar ventana"
         title="Cerrar ventana"
         onclick={closeWindow}
@@ -771,15 +772,6 @@
     margin-left: var(--space-1);
     padding-left: var(--space-2);
     border-left: 1px solid var(--border-subtle);
-  }
-
-  /* Size, radius and colour come from IconButton (`size="sm"`, ghost). The
-     close button's danger hover is the one look IconButton has no variant
-     for (its `danger` variant is red at rest), so it stays here. */
-  :global(.topbar__window-btn--close:hover:not(:disabled)) {
-    border-color: color-mix(in srgb, var(--color-danger) 24%, transparent);
-    background: var(--color-danger-soft);
-    color: var(--color-danger);
   }
 
   .topbar__window-glyph {

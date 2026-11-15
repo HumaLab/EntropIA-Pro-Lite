@@ -100,3 +100,34 @@ describe('IconButton', () => {
     expect(screen.getByRole('button', { name: 'Plain action' })).not.toHaveAttribute('aria-pressed')
   })
 })
+
+/**
+ * A neutral button that warns only on hover: the window's close button turns
+ * red, a notification's "mark read" turns green. Views used to get it with a
+ * :global hover rule over IconButton; the component owns it now.
+ */
+describe('IconButton hover tone', () => {
+  it('adds no tone class by default', () => {
+    render(IconButtonTestHost, { props: { label: 'Plain' } })
+    const button = screen.getByRole('button', { name: 'Plain' })
+    expect(button.className).not.toMatch(/icon-button--hover-/)
+  })
+
+  it.each(['danger', 'success'] as const)('marks the %s tone', (tone) => {
+    render(IconButtonTestHost, { props: { label: tone, hoverTone: tone } })
+    expect(screen.getByRole('button', { name: tone })).toHaveClass(`icon-button--hover-${tone}`)
+  })
+
+  it.each(['danger', 'success'] as const)('paints the %s tone only on hover', (tone) => {
+    const hover = rule(`.icon-button--hover-${tone}:hover:not(:disabled)`)
+    expect(hover).toMatch(new RegExp(String.raw`color:\s*var\(--color-${tone}\)`))
+    expect(STYLES).not.toMatch(new RegExp(String.raw`\.icon-button--hover-${tone}\s*\{`))
+  })
+
+  it('tints the surface for danger only; success stays on the variant surface', () => {
+    expect(rule('.icon-button--hover-danger:hover:not(:disabled)')).toMatch(
+      /background:\s*var\(--color-danger-soft\)/
+    )
+    expect(rule('.icon-button--hover-success:hover:not(:disabled)')).not.toMatch(/background/)
+  })
+})
