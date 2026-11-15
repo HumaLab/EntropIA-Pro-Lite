@@ -441,6 +441,15 @@ vi.mock('@entropia/ui', async () => {
   const ActualIconButton = (
     await import('../../../../packages/ui/src/components/IconButton/IconButton.svelte')
   ).default
+  const ActualDisclosure = (
+    await import('../../../../packages/ui/src/components/Disclosure/Disclosure.svelte')
+  ).default
+  const ActualProgressBar = (
+    await import('../../../../packages/ui/src/components/ProgressBar/ProgressBar.svelte')
+  ).default
+  const ActualTextarea = (
+    await import('../../../../packages/ui/src/components/Textarea/Textarea.svelte')
+  ).default
   const ActualMetadataEditor = (
     await import('../../../../packages/ui/src/components/MetadataEditor/MetadataEditor.svelte')
   ).default
@@ -481,8 +490,11 @@ vi.mock('@entropia/ui', async () => {
     Button: MockButton,
     Card: MockCard,
     EntityViewer: MockEntityViewer,
+    Disclosure: ActualDisclosure,
     IconButton: ActualIconButton,
     MapViewer: MockMapViewer,
+    ProgressBar: ActualProgressBar,
+    Textarea: ActualTextarea,
     Panel: ActualPanel,
     StatusBadge: ActualStatusBadge,
     SearchClearButton: ActualSearchClearButton,
