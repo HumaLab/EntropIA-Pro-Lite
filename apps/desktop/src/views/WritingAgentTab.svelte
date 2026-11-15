@@ -242,9 +242,9 @@
       {#each snapshot.actions as action (action.id)}
         <li class="agent__action" use:tooltip={actionTitle(action)}>
           <Button
-            class="agent__action-btn"
             variant="secondary"
             size="sm"
+            wrap
             disabled={!action.available || snapshot.busy || searching !== null || !documentId}
             onclick={() => ask(action.id)}
           >
@@ -444,30 +444,8 @@
   /* Grid items stretch to their row, and the button fills its item, so one
      two-line label lifts its whole row instead of leaving neighbours short. */
   .agent__action {
-    display: flex;
+    display: grid;
     min-width: 0;
-  }
-
-  /* Only geometry is overridden. `secondary` already carries the hairline
-     border, the raised surface, the hover lift, --focus-ring and the disabled
-     opacity, so none of those are restated here. */
-  .agent__actions :global(.agent__action-btn) {
-    flex: 1;
-    min-width: 0;
-    height: auto;
-    /* A card-like action whose label may wrap to two lines: it opts out of
-       the Button's token-height cap (control-block-size.test.ts). */
-    max-height: none;
-    padding: var(--space-2);
-    justify-content: flex-start;
-    text-align: left;
-    white-space: normal;
-    line-height: var(--line-height-tight);
-  }
-
-  .agent__actions :global(.agent__action-btn .btn__label) {
-    min-width: 0;
-    text-align: left;
   }
 
   /* Kept for a screen reader. The same words reach a sighted reader as the

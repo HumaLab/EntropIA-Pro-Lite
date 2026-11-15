@@ -10,6 +10,12 @@ export interface ButtonProps extends HTMLButtonAttributes {
   variant?: ButtonVariant
   size?: ButtonSize
   iconOnly?: boolean
+  /**
+   * The label may take more than one line: an action card in a grid. The
+   * button keeps its size's floor, drops the height cap and starts the text
+   * at the leading edge.
+   */
+  wrap?: boolean
   disabled?: boolean
   loading?: boolean
   type?: 'button' | 'submit' | 'reset'

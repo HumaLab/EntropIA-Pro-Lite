@@ -91,11 +91,13 @@
     </div>
     <p class="vercel-card__text">{$currentLocale && t('settings.vercel.description')}</p>
     <div class="vercel-card__row">
-      <Input
-        type="password"
-        bind:value={key}
-        placeholder={hasKey ? t('settings.vercel.saved') : t('settings.vercel.placeholder')}
-      />
+      <div class="vercel-card__field">
+        <Input
+          type="password"
+          bind:value={key}
+          placeholder={hasKey ? t('settings.vercel.saved') : t('settings.vercel.placeholder')}
+        />
+      </div>
       <Button variant="secondary" size="sm" disabled={busy || !key.trim()} onclick={save}>
         {$currentLocale && t('settings.vercel.save')}
       </Button>
@@ -161,8 +163,9 @@
     gap: var(--space-2);
   }
 
-  .vercel-card__row :global(.input-field) {
+  .vercel-card__field {
     flex: 1;
+    min-width: 0;
   }
 
   .vercel-card__ok {

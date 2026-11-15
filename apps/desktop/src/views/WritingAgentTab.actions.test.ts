@@ -44,28 +44,18 @@ describe('the action grid reflows with the panel', () => {
 })
 
 describe('a long action name takes a second line instead of the panel', () => {
-  it('undoes the nowrap every button carries', () => {
-    const button = ruleFor('.agent__actions :global(.agent__action-btn) {')
-
-    // `.btn` in the shared component sets `white-space: nowrap`. Without this
-    // override `Buscar evidencia en contra` renders on one line and widens its
-    // own column past the grid.
-    expect(button).toMatch(/white-space:\s*normal/)
-    expect(button).toMatch(/height:\s*auto/)
+  it('asks the shared Button to wrap its label', () => {
+    // `.btn` sets `white-space: nowrap` and caps its height: without `wrap`
+    // `Buscar evidencia en contra` renders on one line and widens its own
+    // column past the grid. The prop lifts both inside Button itself.
+    expect(SOURCE).toMatch(/<Button\s+variant="secondary"\s+size="sm"\s+wrap\b/)
   })
 
-  it('leaves every interaction state to the shared button', () => {
-    const button = ruleFor('.agent__actions :global(.agent__action-btn) {')
-
-    // The variant already carries hover, focus-visible and disabled. Restating
-    // any of them here is how a control starts to look like it came from
-    // somewhere else, so the override is geometry only.
-    expect([
-      /background/.test(button),
-      /border-color/.test(button),
-      /box-shadow/.test(button),
-      /opacity/.test(button),
-    ]).toEqual([false, false, false, false])
+  it('leaves every state and the geometry to the shared button', () => {
+    // A :global restyle is how a control starts to look like it came from
+    // somewhere else; the grid cell stretches the button instead.
+    expect(STYLES).not.toMatch(/:global\(/)
+    expect(ruleFor('.agent__action {')).toMatch(/display:\s*grid/)
   })
 })
 

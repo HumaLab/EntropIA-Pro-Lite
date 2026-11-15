@@ -3,6 +3,18 @@ import { describe, expect, it, vi } from 'vitest'
 import ButtonTestHost from './ButtonTestHost.svelte'
 
 describe('Button', () => {
+  it('marks a button whose label may wrap', () => {
+    render(ButtonTestHost, { props: { wrap: true, label: 'Find evidence against' } })
+
+    expect(screen.getByRole('button', { name: 'Find evidence against' })).toHaveClass('btn--wrap')
+  })
+
+  it('keeps a label on one line by default', () => {
+    render(ButtonTestHost, { props: { label: 'Save' } })
+
+    expect(screen.getByRole('button', { name: 'Save' })).not.toHaveClass('btn--wrap')
+  })
+
   it('keeps its own classes when the caller adds one', () => {
     render(ButtonTestHost, {
       props: {

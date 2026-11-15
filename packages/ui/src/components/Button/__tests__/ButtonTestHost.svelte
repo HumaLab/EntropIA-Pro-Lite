@@ -4,6 +4,7 @@
 
   let {
     iconOnly = false,
+    wrap = false,
     size = 'md',
     variant,
     disabled,
@@ -12,6 +13,7 @@
     class: className,
   }: {
     iconOnly?: boolean
+    wrap?: boolean
     size?: 'sm' | 'md' | 'lg'
     variant?: ButtonVariant
     disabled?: boolean
@@ -22,6 +24,7 @@
 
   const buttonProps = $derived({
     iconOnly,
+    wrap,
     size,
     'aria-label': label,
     ...(variant === undefined ? {} : { variant }),

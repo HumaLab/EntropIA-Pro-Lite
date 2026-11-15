@@ -76,6 +76,20 @@ describe('control primitives keep their token height under any flex or grid pare
     })
   })
 
+  it('lets a wrapping Button grow past its cap with its label at the leading edge', () => {
+    // An action card in a grid: a long name takes a second line instead of
+    // widening its column. The size keeps its floor; only the cap goes.
+    const wrap = declarations(stylesOf('../Button/Button.svelte'), '.btn--wrap')
+
+    expect(wrap).toMatchObject({
+      'max-height': 'none',
+      'white-space': 'normal',
+      'justify-content': 'flex-start',
+      'text-align': 'start',
+    })
+    expect(wrap).not.toHaveProperty('min-height')
+  })
+
   it('makes an icon-only Button a fixed square that never flexes', () => {
     const button = stylesOf('../Button/Button.svelte')
 
