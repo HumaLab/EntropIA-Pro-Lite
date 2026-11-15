@@ -217,3 +217,5 @@ export type {
   WritingEditorLabels,
   WritingEditorProps,
 } from './components/WritingEditor/index'
+export { Textarea } from './components/Textarea/index'
+export type { TextareaFont, TextareaProps } from './components/Textarea/index'
