@@ -191,13 +191,11 @@
             ? translate('item.assetPageLabel', { page: selectedAssetIndex + 1 })
             : (getAssetFilename(selectedAsset) ?? translate('item.assetNoSelection'))}
         </span>
-        <StatusBadge
-          variant={getJobStatusBadgeVariant(ocrState.status)}
-          size="sm"
-          class="ocr-status-badge"
-        >
-          {ocrState.status}
-        </StatusBadge>
+        <span class="ocr-status">
+          <StatusBadge variant={getJobStatusBadgeVariant(ocrState.status)} size="sm">
+            {ocrState.status}
+          </StatusBadge>
+        </span>
         <div class="ocr-btn-group">
           {#if !isPdfAsset && localOcrAvailable}
             <Button
@@ -341,13 +339,11 @@
             {getAssetFilename(selectedAsset) ?? translate('item.audioLabel')}
           </span></span
         >
-        <StatusBadge
-          variant={getJobStatusBadgeVariant(transcriptionState.status)}
-          size="sm"
-          class="ocr-status-badge"
-        >
-          {transcriptionState.status}
-        </StatusBadge>
+        <span class="ocr-status">
+          <StatusBadge variant={getJobStatusBadgeVariant(transcriptionState.status)} size="sm">
+            {transcriptionState.status}
+          </StatusBadge>
+        </span>
         <div class="ocr-btn-group">
           <Button
             variant="secondary"
@@ -586,9 +582,9 @@
     white-space: nowrap;
   }
 
-  :global(.ocr-status-badge) {
+  .ocr-status {
+    display: inline-flex;
     flex-shrink: 0;
-    text-transform: uppercase;
   }
 
   /* Surface, states and geometry all come from Button; only how the control

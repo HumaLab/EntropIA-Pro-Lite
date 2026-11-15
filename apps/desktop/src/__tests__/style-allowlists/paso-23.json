@@ -1,7 +1,3 @@
 {
-  "color-literal": [
-    "views/ItemAnalysisPanel.svelte",
-    "views/ItemAssetPanel.svelte",
-    "views/ItemSearchPanel.svelte"
-  ]
+  "color-literal": ["views/ItemAssetPanel.svelte", "views/ItemSearchPanel.svelte"]
 }
