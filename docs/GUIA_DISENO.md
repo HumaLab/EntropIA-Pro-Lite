@@ -35,9 +35,9 @@
 | Versalitas | `--letter-spacing-caps` **(propuesto)**; mientras tanto `0.075em` (el de `.page-header__eyebrow`) | Etiquetas en mayúsculas. |
 | Radios | `--radius-control` (botones, triggers), `--radius-input` (campos), `--radius-surface` (tarjetas, paneles), `--radius-dialog` (diálogos), `--radius-full` (píldoras, círculos); `--radius-xs` solo para decoraciones pequeñas | Para controles usá la escala **semántica**; `--radius-sm/md/lg/xl` quedan para casos que no son un control. |
 | Sombras | `--shadow-surface` (brillo superior de una superficie), `--shadow-sm/md/lg`, `--shadow-glow` | Los temas claros las anulan: no las repitas a mano. |
-| Alturas de control | `--control-height-sm` (30), `-md` (36), `-lg` (40); `--control-height-xs` (24) **(propuesto)** | Toda altura de botón, campo o trigger. |
+| Alturas de control | `--control-height-sm` (30), `-md` (36), `-lg` (40); `--control-height-xs` (28) **(propuesto)** | Toda altura de botón, campo o trigger. Un cuadrado de solo ícono usa la escala de `IconButton` (24/28/32/40). |
 | Foco | `--focus-ring`, `--focus-ring-danger` | `box-shadow: var(--focus-ring)` en `:focus-visible`. |
-| Movimiento | `--transition-base` (0.14s), `--transition-smooth` (0.18s); `--duration-*` **(propuesto)** | Toda transición; respetar `prefers-reduced-motion`. |
+| Movimiento | `--transition-base` (0.14s), `--transition-smooth` (0.18s); `--duration-fast` (0.08s), `-base` (0.14s), `-smooth` (0.18s), `-slow` (0.3s) **(propuesto)** | Toda transición; respetar `prefers-reduced-motion`. |
 | Deshabilitado | `--opacity-disabled` **(propuesto)**; mientras tanto `0.48` (el de `Button`), y `0.72` solo para el primario | Un único valor en toda la app. |
 | Capas | `--z-sticky`, `--z-dropdown`, `--z-popover`, `--z-dialog`, `--z-tooltip`, `--z-blocking` **(propuesto)**; mientras tanto respetar el orden de la auditoría §2.10 (menús 210, diálogos 1000–1200, tooltip 1300) | `z-index` local (0–5) libre dentro de un componente con su propio contexto de apilamiento. |
 | Paleta del manuscrito | `--writing-text-*`, `--writing-highlight-*`, `--writing-blend-highlight` | Solo en `WritingEditor`/`ColorPalette`. |

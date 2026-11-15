@@ -12,7 +12,10 @@
   --scrollbar-thumb-active: color-mix(in srgb, var(--color-text-primary) 32%, transparent);
 }
 
-:root[data-theme='light'] {
+/* Every light page: the default track above is a white wash for dark ones. */
+:root[data-theme='light'],
+:root[data-theme='lite'],
+:root[data-theme='paper'] {
   --scrollbar-track: rgba(0, 0, 0, 0.02);
   --scrollbar-thumb: rgba(0, 0, 0, 0.1);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.2);

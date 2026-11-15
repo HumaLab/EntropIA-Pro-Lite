@@ -23,6 +23,10 @@
   --color-danger: #e26f7f;
   --color-danger-hover: #f28a98;
   --color-danger-soft: rgba(226, 111, 127, 0.11);
+  /* Text on a danger fill. Each theme's page colour clears 4.5:1 on its own
+     danger and danger-hover (contrast-floor.test.ts), so the ink follows the
+     theme instead of being a fixed #fff that fails on the dark palettes. */
+  --color-on-danger: var(--color-bg);
   --color-success: #79c39f;
   --color-success-soft: rgba(121, 195, 159, 0.11);
   --color-warning: #d8ad6a;
@@ -55,7 +59,8 @@
   --state-evidence-soft: var(--color-info-soft);
   --state-evidence-border: color-mix(in srgb, var(--color-info) 28%, transparent);
 
-  /* Spacing (4px base unit) */
+  /* Spacing (4px base unit; 0-5 is the one half step, for hairline gaps) */
+  --space-0-5: 2px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -73,12 +78,17 @@
   --font-size-base: var(--font-size-md);
   --font-size-lg: 18px;
   --font-size-xl: 22px;
+  /* Display sizes, for the home cover only (F4). */
+  --font-size-2xl: 26px;
+  --font-size-3xl: 30px;
   --font-weight-normal: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 600;
   --line-height-tight: 1.22;
   --line-height-base: 1.46;
+  --line-height-reading: 1.6;
+  --letter-spacing-caps: 0.075em;
 
   /* Border Radius */
   --radius-xs: 4px;
@@ -98,8 +108,14 @@
   --shadow-lg: 0 18px 42px rgba(0, 0, 0, 0.34);
   --shadow-glow: 0 0 0 1px var(--color-hairline), 0 10px 24px rgba(0, 0, 0, 0.18);
   --shadow-surface: 0 1px 0 rgba(255, 255, 255, 0.025) inset, 0 1px 2px rgba(0, 0, 0, 0.28);
+  /* The top highlight alone, without --shadow-surface's outer drop. */
+  --shadow-highlight: 0 1px 0 rgba(255, 255, 255, 0.025) inset;
+  /* The recessed edge of a sunken panel. */
+  --shadow-inset: 0 1px 0 rgba(0, 0, 0, 0.18) inset;
 
-  /* Controls */
+  /* Controls. xs is the dense row (tabs, menu items, badges); an icon-only
+     square follows IconButton's own ladder (24/28/32/40) instead. */
+  --control-height-xs: 28px;
   --control-height-sm: 30px;
   --control-height-md: 36px;
   --control-height-lg: 40px;
@@ -116,8 +132,40 @@
   --control-primary-text: #eef1f7;
   --focus-ring: 0 0 0 2px rgba(154, 164, 199, 0.22);
   --focus-ring-danger: 0 0 0 2px rgba(226, 111, 127, 0.22);
-  --transition-base: 0.14s ease;
-  --transition-smooth: 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Disabled controls. Primary keeps more of its fill so it still reads as
+     the primary action while unavailable. */
+  --opacity-disabled: 0.48;
+  --opacity-disabled-primary: 0.72;
+
+  /* Motion. fast is press feedback, base most state changes, smooth panels
+     and popovers, slow progress and larger moves. */
+  --duration-fast: 0.08s;
+  --duration-base: 0.14s;
+  --duration-smooth: 0.18s;
+  --duration-slow: 0.3s;
+  --transition-base: var(--duration-base) ease;
+  --transition-smooth: var(--duration-smooth) cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /*
+   * Layers, low to high. Every global z-index in the app today has a rung here,
+   * so moving a literal onto its token changes nothing on screen. A component's
+   * local 0–5 inside its own stacking context needs no token.
+   */
+  --z-sticky: 20;
+  --z-drawer: 25;
+  --z-popover: 30;
+  --z-popover-raised: 60;
+  --z-floating: 100;
+  --z-dropdown: 200;
+  --z-menu: 210;
+  /* The help assistant's bubble and panel: above menus, below every dialog. */
+  --z-assistant: 600;
+  --z-dialog: 1000;
+  --z-dialog-nested: 1100;
+  --z-dialog-top: 1200;
+  --z-tooltip: 1300;
+  --z-blocking: 2000;
 
   /*
    * The manuscript's colours (WritingEditor/writing-colors.ts). A manuscript
@@ -236,6 +284,8 @@
   --shadow-sm: none;
   --shadow-md: none;
   --shadow-lg: none;
+  --shadow-highlight: none;
+  --shadow-inset: none;
   --shadow-glow: 0 0 0 1px var(--color-hairline);
   --focus-ring: 0 0 0 2px rgba(90, 103, 216, 0.25);
   --focus-ring-danger: 0 0 0 2px rgba(229, 62, 62, 0.25);
@@ -320,6 +370,8 @@
   --shadow-sm: none;
   --shadow-md: none;
   --shadow-lg: none;
+  --shadow-highlight: none;
+  --shadow-inset: none;
   --shadow-glow: 0 0 0 1px var(--color-hairline);
   --focus-ring: 0 0 0 2px rgba(71, 119, 107, 0.28);
   --focus-ring-danger: 0 0 0 2px rgba(176, 58, 58, 0.25);
@@ -393,6 +445,8 @@
   --shadow-sm: none;
   --shadow-md: none;
   --shadow-lg: none;
+  --shadow-highlight: none;
+  --shadow-inset: none;
   --shadow-glow: 0 0 0 1px var(--color-hairline);
   --focus-ring: 0 0 0 2px rgba(139, 74, 36, 0.28);
   --focus-ring-danger: 0 0 0 2px rgba(168, 50, 44, 0.25);
