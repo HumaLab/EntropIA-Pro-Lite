@@ -449,6 +449,9 @@ vi.mock('@entropia/ui', async () => {
   ).default
   const ActualInput = (await import('../../../../packages/ui/src/components/Input/Input.svelte'))
     .default
+  const ActualToolbarMenu = (
+    await import('../../../../packages/ui/src/components/ToolbarMenu/ToolbarMenu.svelte')
+  ).default
   const ActualTextarea = (
     await import('../../../../packages/ui/src/components/Textarea/Textarea.svelte')
   ).default
@@ -498,6 +501,7 @@ vi.mock('@entropia/ui', async () => {
     MapViewer: MockMapViewer,
     ProgressBar: ActualProgressBar,
     Textarea: ActualTextarea,
+    ToolbarMenu: ActualToolbarMenu,
     Panel: ActualPanel,
     StatusBadge: ActualStatusBadge,
     SearchClearButton: ActualSearchClearButton,

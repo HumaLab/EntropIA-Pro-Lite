@@ -2,7 +2,7 @@
   import { getAssetUrl } from '$lib/file-import'
   import { getAssetDisplayPath, getAssetPathLabel, getAssetTypeLabel } from '$lib/item-metadata'
   import { splitHighlightedSegments } from '$lib/item-view-search'
-  import { SearchBar } from '@entropia/ui'
+  import { Disclosure, SearchBar } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { SimilarAsset } from '$lib/nlp'
 
@@ -137,9 +137,7 @@
         {/if}
 
         {#if isDev}
-          <details class="fts-debug-panel">
-            <summary>{translate('item.ftsDebugTitle')}</summary>
-
+          <Disclosure variant="card" size="sm" summary={translate('item.ftsDebugTitle')}>
             <div class="fts-debug-grid">
               <div class="fts-debug-row">
                 <span class="fts-debug-label">{translate('item.ftsDebug.indexedRows')}</span>
@@ -170,7 +168,7 @@
                 <code>{ftsDebug?.resultIds.join(', ') || '—'}</code>
               </div>
             </div>
-          </details>
+          </Disclosure>
         {/if}
       </div>
 
@@ -210,23 +208,23 @@
                     {/if}
                   </span>
                 </button>
-                <details class="similar-technical-meta">
-                  <summary
-                    >{getAssetTypeLabel(asset.assetType)} · {getAssetPathLabel(
-                      asset.assetPath
-                    )}</summary
+                <div class="similar-technical-meta">
+                  <Disclosure
+                    size="sm"
+                    summary={`${getAssetTypeLabel(asset.assetType)} · ${getAssetPathLabel(asset.assetPath)}`}
                   >
-                  <span>
-                    {translate('item.assetMetaLine', {
-                      assetId: asset.assetId,
-                      itemId: asset.itemId,
-                      collectionId: asset.collectionId,
-                    })}
-                  </span>
-                  {#if asset.assetPath && getAssetPathLabel(asset.assetPath) !== asset.assetPath}
-                    <span>{getAssetDisplayPath(asset.assetPath)}</span>
-                  {/if}
-                </details>
+                    <span>
+                      {translate('item.assetMetaLine', {
+                        assetId: asset.assetId,
+                        itemId: asset.itemId,
+                        collectionId: asset.collectionId,
+                      })}
+                    </span>
+                    {#if asset.assetPath && getAssetPathLabel(asset.assetPath) !== asset.assetPath}
+                      <span>{getAssetDisplayPath(asset.assetPath)}</span>
+                    {/if}
+                  </Disclosure>
+                </div>
               </li>
             {/each}
           </ul>
@@ -276,7 +274,7 @@
     border-radius: 0 0 var(--radius-surface) var(--radius-surface);
     overflow: hidden;
     background: var(--surface-card);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+    box-shadow: var(--shadow-highlight);
   }
 
   .analysis-panel--tabbed {
@@ -312,29 +310,14 @@
   .fts-match {
     background: color-mix(in srgb, var(--color-warning) 30%, transparent);
     color: var(--color-text-primary);
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     padding: 0 1px;
-  }
-
-  .fts-debug-panel {
-    border: 1px dashed var(--color-hairline);
-    border-radius: var(--radius-sm);
-    padding: var(--space-2);
-    background: var(--surface-card);
-  }
-
-  .fts-debug-panel summary {
-    cursor: pointer;
-    font-size: var(--font-size-xs);
-    color: var(--color-text-secondary);
-    font-weight: var(--font-weight-medium);
   }
 
   .fts-debug-grid {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    margin-top: var(--space-2);
   }
 
   .fts-debug-row {
@@ -361,7 +344,7 @@
     background: var(--surface-input);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-xs);
-    padding: 2px var(--space-2);
+    padding: var(--space-0-5) var(--space-2);
     flex: 1;
   }
 
@@ -437,7 +420,7 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.04em;
+    letter-spacing: var(--letter-spacing-caps);
   }
 
   .similar-thumbnail img {
@@ -464,7 +447,7 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-semibold);
-    line-height: 1.3;
+    line-height: var(--line-height-tight);
     word-break: break-word;
   }
 
@@ -490,15 +473,10 @@
     font-size: var(--font-size-2xs);
   }
 
-  .similar-technical-meta summary {
-    cursor: pointer;
-    width: fit-content;
-    opacity: 0.72;
-  }
-
   .similar-technical-meta span {
     display: block;
-    margin-top: 2px;
+    color: var(--color-text-muted);
+    margin-top: var(--space-0-5);
     word-break: break-word;
   }
 
@@ -508,7 +486,7 @@
     background: var(--surface-input);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-control);
-    padding: 2px var(--space-2);
+    padding: var(--space-0-5) var(--space-2);
     white-space: nowrap;
     font-weight: var(--font-weight-semibold);
   }
