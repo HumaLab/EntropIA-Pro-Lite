@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte'
 import { describe, expect, it, vi } from 'vitest'
 import TopicEditor from '../TopicEditor.svelte'
+import topicEditorSource from '../TopicEditor.svelte?raw'
 
 describe('TopicEditor', () => {
   it('renders remove-topic controls with accessible names and no textual multiplication sign', () => {
@@ -41,5 +42,24 @@ describe('TopicEditor', () => {
     await rerender({ topics: ['ARCHIVE'] })
 
     expect(screen.getByPlaceholderText('Agregar más...')).toBeInTheDocument()
+  })
+
+  it('draws each topic as a neutral StatusBadge, never an accent fill', () => {
+    render(TopicEditor, { props: { topics: ['ARCHIVE'] } })
+
+    const remove = screen.getByRole('button', { name: 'Quitar tópico ARCHIVE' })
+    const chip = remove.closest('.topic-editor__chip')
+    expect(chip).toHaveClass('status-badge', 'status-badge--neutral')
+  })
+
+  it('marks a hovered suggestion by contrast and takes layers and motion from tokens', () => {
+    const styles = topicEditorSource.slice(topicEditorSource.indexOf('<style>'))
+    expect(styles).not.toMatch(/background(-color)?:\s*var\(--color-accent\)/)
+    expect(styles).not.toMatch(/z-index:\s*\d/)
+    expect(styles).not.toMatch(/transition:[^;]*\d+(\.\d+)?m?s\b/)
+    expect(styles).not.toMatch(/line-height:\s*\d/)
+    expect(styles).toMatch(
+      /\.topic-editor__chip-remove:focus-visible\s*\{[^}]*var\(--focus-ring\)/s
+    )
   })
 })
