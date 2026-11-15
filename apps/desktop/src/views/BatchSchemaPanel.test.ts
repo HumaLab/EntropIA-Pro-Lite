@@ -62,6 +62,16 @@ afterEach(() => {
   cleanup()
 })
 
+describe('BatchSchemaPanel schema picker', () => {
+  it('draws the schema choice with the shared SelectTrigger', async () => {
+    render(BatchSchemaPanel)
+
+    const trigger = await screen.findByRole('button', { name: 'Esquema propio Ninguno' })
+    expect(trigger).toHaveClass('select-trigger')
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
+  })
+})
+
 describe('BatchSchemaPanel model field', () => {
   it('guarda el modelo elegido con el esquema', async () => {
     render(BatchSchemaPanel)

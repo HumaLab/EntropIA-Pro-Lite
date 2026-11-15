@@ -46,6 +46,7 @@
     Card,
     Checkbox,
     ConfirmDialog,
+    SelectTrigger,
     ToolbarMenu,
     type ToolbarMenuItem,
   } from '@entropia/ui'
@@ -907,17 +908,15 @@
           </span>
           <ToolbarMenu label={t('batch.priority')} items={priorityItems}>
             {#snippet trigger(props, { open })}
-              <button
-                type="button"
-                class="batch-select"
-                class:batch-select--open={open}
+              <SelectTrigger
+                {...props}
+                id="batch-priority-value"
+                size="sm"
+                {open}
+                label={priorityLabel(detail!.priority)}
                 aria-labelledby="batch-priority-label batch-priority-value"
                 disabled={busyBatchId === detail!.id}
-                {...props}
-              >
-                <span id="batch-priority-value">{priorityLabel(detail!.priority)}</span>
-                <ActionIcon name="chevron-down" size={12} />
-              </button>
+              />
             {/snippet}
           </ToolbarMenu>
         {/if}
@@ -975,16 +974,14 @@
         </span>
         <ToolbarMenu label={t('batch.filterState')} items={taskFilterItems}>
           {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="batch-select"
-              class:batch-select--open={open}
-              aria-labelledby="batch-task-filter-label batch-task-filter-value"
+            <SelectTrigger
               {...props}
-            >
-              <span id="batch-task-filter-value">{taskFilterLabel}</span>
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
+              id="batch-task-filter-value"
+              size="sm"
+              {open}
+              label={taskFilterLabel}
+              aria-labelledby="batch-task-filter-label batch-task-filter-value"
+            />
           {/snippet}
         </ToolbarMenu>
         <span class="batch-toolbar__count">
@@ -1720,7 +1717,7 @@
     overflow-y: auto;
     padding: var(--space-2);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-input);
     background: var(--surface-input);
   }
 
@@ -1807,7 +1804,7 @@
     text-align: start;
     background: none;
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: inherit;
     cursor: pointer;
     padding: var(--space-2) var(--space-3);
@@ -2029,7 +2026,7 @@
     padding: 0;
     background: none;
     border: 0;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-control);
     color: inherit;
     font: inherit;
     cursor: pointer;
@@ -2127,7 +2124,7 @@
     height: var(--control-height-sm);
     padding: 0 var(--space-1);
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: none;
     color: var(--color-text-secondary);
     font: inherit;
@@ -2153,7 +2150,7 @@
 
   .batch-pager__step:disabled,
   .batch-pager__page:disabled {
-    opacity: 0.4;
+    opacity: var(--opacity-disabled);
     cursor: not-allowed;
   }
 
@@ -2223,42 +2220,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* The trigger of the state filter. It replaces a native <select>, so it
-     states every surface the operating system used to decide: the sunken
-     input background, one hairline, the app's control radius and height. */
-  .batch-select {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base);
-  }
-
-  .batch-select:hover,
-  .batch-select--open {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
-  }
-
-  .batch-select:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .batch-select :global(svg) {
-    color: var(--color-text-muted);
-  }
-
   .batch-tab__detail-head {
     display: flex;
     flex-wrap: wrap;
@@ -2277,7 +2238,6 @@
 
   @media (prefers-reduced-motion: reduce) {
     .batch-tab__progress-bar,
-    .batch-select,
     .batch-pager__step,
     .batch-pager__page,
     .batch-tab__batch-row {
