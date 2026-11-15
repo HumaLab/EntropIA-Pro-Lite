@@ -1228,9 +1228,9 @@
     margin-inline: var(--space-5);
     margin-bottom: var(--space-4);
     padding: var(--space-3);
-    border: 1px solid rgba(245, 158, 11, 0.32);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
     border-radius: var(--radius-md);
-    background: rgba(245, 158, 11, 0.08);
+    background: var(--color-warning-soft);
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
   }
@@ -1257,7 +1257,7 @@
     height: 6px;
     overflow: hidden;
     border-radius: var(--radius-sm);
-    background: rgba(245, 158, 11, 0.18);
+    background: color-mix(in srgb, var(--color-warning) 30%, transparent);
   }
 
   .deps-banner__bar-fill {
