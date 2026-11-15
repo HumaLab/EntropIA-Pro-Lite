@@ -355,6 +355,7 @@ const STAGE_C_COMPONENTS: string[] = [
   'ProgressBar',
   'StatusBadge',
   'Switch',
+  'Disclosure',
   'Dialog',
   'ConfirmDialog',
 ]

@@ -244,5 +244,12 @@ export type {
 export { Switch } from './components/Switch/index'
 export type { SwitchProps, SwitchSize } from './components/Switch/index'
 
+export { Disclosure } from './components/Disclosure/index'
+export type {
+  DisclosureProps,
+  DisclosureSize,
+  DisclosureVariant,
+} from './components/Disclosure/index'
+
 export { Dialog } from './components/Dialog/index'
 export type { DialogProps, DialogSize } from './components/Dialog/index'
