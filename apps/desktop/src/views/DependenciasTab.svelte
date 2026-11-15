@@ -1,7 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-  import { ActionIcon, Button, IconButton } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    Dialog,
+    IconButton,
+    Input,
+    ProgressBar,
+    StatusBadge,
+  } from '@entropia/ui'
   import { dependencyStatusIcon, dependencyStatusIconClass } from '$lib/deps-status'
   import { registerListeners } from '$lib/register-listeners'
   import {
@@ -45,7 +53,6 @@
     type EmbeddingDownloadProgressPayload,
     type LocalEmbeddingModelInfo,
   } from '$lib/embeddings'
-  import { getFocusableElements, getNextFocusTrapTarget } from '$lib/modal-focus'
 
   // ---------------------------------------------------------------------------
   // State
@@ -71,8 +78,6 @@
   let resetConfirmationOpen = $state(false)
   let resetConfirmationText = $state('')
   let resetting = $state(false)
-  let resetConfirmationEl: HTMLElement | undefined = $state()
-  let resetConfirmationTriggerEl: HTMLElement | null = null
   let runtimeOperationInFlight = false
 
   const RESET_CONFIRMATION_PHRASE = 'resetear entorno'
@@ -424,9 +429,9 @@
     }
   }
 
+  // Dialog owns focus: it moves it to the typed-phrase input on open, traps
+  // Tab, answers Escape and gives focus back to the trigger once it closes.
   function openResetConfirmation() {
-    resetConfirmationTriggerEl =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
     resetConfirmationOpen = true
     resetConfirmationText = ''
     errorBanner = null
@@ -436,30 +441,6 @@
     if (resetting) return
     resetConfirmationOpen = false
     resetConfirmationText = ''
-    resetConfirmationTriggerEl?.focus()
-    resetConfirmationTriggerEl = null
-  }
-
-  function handleResetConfirmationKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      cancelResetConfirmation()
-      return
-    }
-
-    if (event.key !== 'Tab') return
-
-    const target = getNextFocusTrapTarget(
-      getFocusableElements(resetConfirmationEl ?? null),
-      event.target instanceof HTMLElement ? event.target : null,
-      event.shiftKey,
-      resetConfirmationEl ?? null
-    )
-
-    if (target) {
-      event.preventDefault()
-      target.focus()
-    }
   }
 
   async function handleReset() {
@@ -472,21 +453,12 @@
       await refreshAllState()
       resetConfirmationOpen = false
       resetConfirmationText = ''
-      resetConfirmationTriggerEl = null
     } catch (e) {
       errorBanner = String(e)
     } finally {
       resetting = false
     }
   }
-
-  $effect(() => {
-    if (!resetConfirmationOpen || !resetConfirmationEl) return
-
-    setTimeout(() => {
-      getFocusableElements(resetConfirmationEl ?? null)[0]?.focus()
-    }, 0)
-  })
 
   async function handleRuntimeRepair() {
     try {
@@ -801,10 +773,12 @@
   <!-- Progress bar -->
   {#if installing}
     <div class="deps-progress">
-      <div class="deps-progress__bar">
-        <div class="deps-progress__fill" style="width: {overallProgress()}%"></div>
+      <div class="deps-progress__track">
+        <ProgressBar value={overallProgress()} aria-labelledby="deps-progress-label" />
       </div>
-      <span class="deps-progress__label">{overallProgress()}% instalado</span>
+      <span id="deps-progress-label" class="deps-progress__label"
+        >{overallProgress()}% instalado</span
+      >
     </div>
   {/if}
 
@@ -838,12 +812,14 @@
           <div class="deps-row__name-line">
             <strong class="deps-row__name">{getDepDisplayName(dep)}</strong>
             {#if isCritical(dep.id)}
-              <span class="deps-badge deps-badge--required">Requerido</span>
+              <StatusBadge variant="info" size="xs">Requerido</StatusBadge>
             {/if}
             {#if dep.status.type === 'installed'}
               {@const version = getInstalledVersion(dep)}
               {#if version}
-                <span class="deps-badge deps-badge--version">{version}</span>
+                <StatusBadge variant="success" size="xs">
+                  <span class="deps-row__version">{version}</span>
+                </StatusBadge>
               {/if}
             {/if}
           </div>
@@ -852,11 +828,12 @@
           <!-- Installing progress per-item -->
           {#if dep.status.type === 'installing'}
             <div class="deps-row__progress">
-              <div class="deps-progress__bar deps-progress__bar--sm">
-                <div
-                  class="deps-progress__fill"
-                  style="width: {getInstallingPercent(dep.status)}%"
-                ></div>
+              <div class="deps-row__progress-track">
+                <ProgressBar
+                  size="sm"
+                  value={getInstallingPercent(dep.status)}
+                  label={`Instalando ${getDepDisplayName(dep)}`}
+                />
               </div>
               <span class="deps-row__progress-pct">{getInstallingPercent(dep.status)}%</span>
             </div>
@@ -864,13 +841,11 @@
 
           <!-- Error detail (expandable) -->
           {#if dep.status.type === 'failed'}
-            <button
-              class="deps-row__error-toggle"
-              type="button"
-              onclick={() => toggleError(dep.id)}
-            >
-              {expandedErrors.has(dep.id) ? 'Ocultar detalle' : 'Ver detalle del error'}
-            </button>
+            <span class="deps-row__error-toggle">
+              <Button variant="link" onclick={() => toggleError(dep.id)}>
+                {expandedErrors.has(dep.id) ? 'Ocultar detalle' : 'Ver detalle del error'}
+              </Button>
+            </span>
             {#if expandedErrors.has(dep.id)}
               <pre class="deps-row__error-detail">{getFailedMessage(dep.status)}</pre>
             {/if}
@@ -923,52 +898,41 @@
     </p>
   </div>
 
-  {#if resetConfirmationOpen}
-    <div
-      bind:this={resetConfirmationEl}
-      class="deps-reset-confirmation"
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="deps-reset-title"
-      aria-describedby="deps-reset-description"
-      tabindex="-1"
-      onkeydown={handleResetConfirmationKeydown}
-    >
-      <div class="deps-reset-confirmation__copy">
-        <strong id="deps-reset-title">Confirmar reseteo del entorno</strong>
-        <p id="deps-reset-description">
-          Esta acción elimina el entorno administrado de IA y limpia las rutas Python usadas por
-          OCR, transcripción y NLP. Para confirmar, escribí <code>{RESET_CONFIRMATION_PHRASE}</code
-          >.
-        </p>
-      </div>
-      <label class="deps-reset-confirmation__label" for="deps-reset-confirmation-input">
-        Confirmación requerida
-      </label>
-      <input
-        id="deps-reset-confirmation-input"
-        class="deps-reset-confirmation__input"
-        type="text"
-        bind:value={resetConfirmationText}
-        placeholder={RESET_CONFIRMATION_PHRASE}
-        disabled={resetting}
-        autocomplete="off"
-      />
-      <div class="deps-reset-confirmation__actions">
-        <Button variant="ghost" onclick={cancelResetConfirmation} disabled={resetting}>
-          Cancelar
-        </Button>
-        <Button
-          variant="danger"
-          onclick={handleReset}
-          disabled={resetConfirmationText !== RESET_CONFIRMATION_PHRASE || resetting}
-          loading={resetting}
-        >
-          Confirmar reseteo
-        </Button>
-      </div>
-    </div>
-  {/if}
+  <Dialog
+    bind:open={() => resetConfirmationOpen, (next) => !next && cancelResetConfirmation()}
+    title="Confirmar reseteo del entorno"
+    titleId="deps-reset-title"
+    description="Esta acción elimina el entorno administrado de IA y limpia las rutas Python usadas por OCR, transcripción y NLP."
+    dismissible={!resetting}
+    dismissOnBackdrop={false}
+  >
+    <p class="deps-reset-confirmation__phrase">
+      Para confirmar, escribí <code>{RESET_CONFIRMATION_PHRASE}</code>.
+    </p>
+    <Input
+      id="deps-reset-confirmation-input"
+      label="Confirmación requerida"
+      font="mono"
+      bind:value={resetConfirmationText}
+      placeholder={RESET_CONFIRMATION_PHRASE}
+      disabled={resetting}
+      autocomplete="off"
+      data-dialog-initial-focus
+    />
+    {#snippet footer()}
+      <Button variant="secondary" onclick={cancelResetConfirmation} disabled={resetting}>
+        Cancelar
+      </Button>
+      <Button
+        variant="danger"
+        onclick={handleReset}
+        disabled={resetConfirmationText !== RESET_CONFIRMATION_PHRASE || resetting}
+        loading={resetting}
+      >
+        Confirmar reseteo
+      </Button>
+    {/snippet}
+  </Dialog>
 </div>
 
 <style>
@@ -1130,25 +1094,9 @@
     gap: var(--space-3);
   }
 
-  .deps-progress__bar {
+  .deps-progress__track {
     flex: 1;
-    height: 6px;
-    background: var(--color-border-subtle);
-    border-radius: var(--radius-full);
-    overflow: hidden;
-  }
-
-  .deps-progress__bar--sm {
-    flex: none;
-    width: 120px;
-    height: 4px;
-  }
-
-  .deps-progress__fill {
-    height: 100%;
-    background: var(--color-accent);
-    border-radius: var(--radius-full);
-    transition: width 0.3s ease;
+    min-width: 0;
   }
 
   .deps-progress__label {
@@ -1238,20 +1186,20 @@
     margin-top: var(--space-1);
   }
 
+  .deps-row__progress-track {
+    flex: none;
+    width: 120px;
+  }
+
   .deps-row__progress-pct {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
   }
 
+  /* Sizes the link-style Button, which takes its text size from here. */
   .deps-row__error-toggle {
-    background: none;
-    border: none;
-    cursor: pointer;
+    align-self: flex-start;
     font-size: var(--font-size-xs);
-    color: var(--color-warning);
-    padding: 0;
-    text-decoration: underline;
-    text-align: left;
   }
 
   .deps-row__error-detail {
@@ -1273,24 +1221,8 @@
     flex: 0 0 auto;
   }
 
-  /* Badges */
-  .deps-badge {
-    display: inline-block;
-    padding: 2px 7px;
-    border-radius: var(--radius-full);
-    font-size: 10px;
-    font-weight: var(--font-weight-medium);
-    vertical-align: middle;
-  }
-
-  .deps-badge--required {
-    background: var(--color-accent-soft);
-    color: var(--color-accent);
-  }
-
-  .deps-badge--version {
-    background: var(--color-success-soft);
-    color: var(--color-success);
+  /* A version is machine text: mono inside the badge. */
+  .deps-row__version {
     font-family: var(--font-mono);
   }
 
@@ -1329,66 +1261,17 @@
     flex: 1;
   }
 
-  .deps-reset-confirmation {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-    padding: var(--space-4);
-    border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
-    border-radius: var(--radius-md);
-    background: var(--color-danger-soft);
-  }
-
-  .deps-reset-confirmation__copy {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .deps-reset-confirmation__copy strong {
-    color: var(--color-text-primary);
-  }
-
-  .deps-reset-confirmation__copy p {
+  .deps-reset-confirmation__phrase {
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
   }
 
-  .deps-reset-confirmation__copy code {
-    padding: 2px 6px;
+  .deps-reset-confirmation__phrase code {
+    padding: var(--space-0-5) var(--space-1);
     border-radius: var(--radius-sm);
     background: var(--color-danger-soft);
     color: var(--color-danger);
     font-family: var(--font-mono);
-  }
-
-  .deps-reset-confirmation__label {
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    color: var(--color-text-primary);
-  }
-
-  .deps-reset-confirmation__input {
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--color-surface);
-    color: var(--color-text-primary);
-    font-family: var(--font-mono);
-  }
-
-  .deps-reset-confirmation__input:focus {
-    outline: none;
-    box-shadow: var(--focus-ring);
-    border-color: var(--color-danger);
-  }
-
-  .deps-reset-confirmation__actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--space-2);
-    flex-wrap: wrap;
   }
 </style>
