@@ -42,6 +42,11 @@ vi.mock('@entropia/ui', async () => {
 
 import ResearchView from './ResearchView.svelte'
 
+/** The collection scope is a Disclosure, collapsed until the person opens it. */
+async function openCollections() {
+  await fireEvent.click(await screen.findByRole('button', { name: 'Alcance de colecciones' }))
+}
+
 function listPayload() {
   return {
     jobs: [],
@@ -75,11 +80,23 @@ describe('ResearchView', () => {
     })
   })
 
+  it('el alcance de colecciones arranca plegado y se despliega', async () => {
+    render(ResearchView)
+    const header = await screen.findByRole('button', { name: 'Alcance de colecciones' })
+    expect(header).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('checkbox', { name: /Voces/ })).not.toBeInTheDocument()
+
+    await fireEvent.click(header)
+    expect(header).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('checkbox', { name: /Voces/ })).toBeInTheDocument()
+  })
+
   it('arranca con las colecciones que tienen material procesado', async () => {
     render(ResearchView)
     await waitFor(() => {
       expect(screen.getByText('Conflicto SOIP 1965-66')).toBeInTheDocument()
     })
+    await openCollections()
     const casillas = screen.getAllByRole('checkbox') as HTMLInputElement[]
     expect(casillas.every((c) => c.checked)).toBe(true)
   })
@@ -89,6 +106,7 @@ describe('ResearchView', () => {
     render(ResearchView)
 
     await vi.advanceTimersByTimeAsync(0)
+    await fireEvent.click(screen.getByRole('button', { name: 'Alcance de colecciones' }))
     const casillas = () => screen.getAllByRole('checkbox') as HTMLInputElement[]
     expect(casillas().every((c) => c.checked)).toBe(true)
 
@@ -105,6 +123,7 @@ describe('ResearchView', () => {
 
   it('el botón alterna entre seleccionar y deseleccionar', async () => {
     render(ResearchView)
+    await openCollections()
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Deseleccionar todas' })).toBeInTheDocument()
     })
@@ -306,6 +325,7 @@ describe('ResearchView alcance de la investigación', () => {
       expect(screen.getByText('Conflicto SOIP 1965-66')).toBeInTheDocument()
     })
 
+    await openCollections()
     // Uncheck "Voces": the person now chose only the first collection.
     await fireEvent.click(screen.getByRole('checkbox', { name: /Voces/ }))
     await writeQuestion()

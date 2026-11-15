@@ -33,9 +33,12 @@
     Card,
     Checkbox,
     ConfirmDialog,
+    Disclosure,
     IconButton,
     Input,
+    SelectTrigger,
     TabButton,
+    Textarea,
     TabList,
     ToolbarMenu,
     type ToolbarMenuItem,
@@ -485,19 +488,20 @@
                 <span class="research-job-card__question" use:tooltip={job.title}>{job.title}</span>
                 <span class="research-job-card__meta">{statusLabel(job)}</span>
               </button>
-              <IconButton
-                class="research-job-card__discard"
-                variant="ghost"
-                size="sm"
-                label={$currentLocale && t('research.deleteTitle')}
-                title={$currentLocale && t('research.deleteTitle')}
-                disabled={deleting}
-                onclick={() => {
-                  pendingDeleteId = job.id
-                }}
-              >
-                <ActionIcon name="delete" size={14} />
-              </IconButton>
+              <div class="research-job-card__discard">
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  label={$currentLocale && t('research.deleteTitle')}
+                  title={$currentLocale && t('research.deleteTitle')}
+                  disabled={deleting}
+                  onclick={() => {
+                    pendingDeleteId = job.id
+                  }}
+                >
+                  <ActionIcon name="delete" size={14} />
+                </IconButton>
+              </div>
             </div>
           {/each}
         </div>
@@ -524,15 +528,15 @@
             />
           </label>
           <label class="research-form__field">
-            <textarea
-              class="research-form__textarea"
-              rows="4"
+            <Textarea
+              rows={4}
               value={question}
               placeholder={$currentLocale && t('research.questionPlaceholder')}
               oninput={(event) => {
                 question = event.currentTarget.value
                 submitError = null
-              }}></textarea>
+              }}
+            />
           </label>
 
           <!-- El modelo del trabajo: el mismo campo y la misma lista de
@@ -569,15 +573,7 @@
                 bind:open={libraryMenuOpen}
               >
                 {#snippet trigger(props, { open })}
-                  <button
-                    type="button"
-                    class="research-form__library-trigger"
-                    class:research-form__library-trigger--open={open}
-                    {...props}
-                  >
-                    <span>{libraryTriggerLabel}</span>
-                    <ActionIcon name="chevron-down" size={12} />
-                  </button>
+                  <SelectTrigger {...props} size="sm" {open} label={libraryTriggerLabel} />
                 {/snippet}
               </ToolbarMenu>
             {/if}
@@ -591,8 +587,7 @@
           <!-- Las colecciones alimentan la pierna del corpus: solo se eligen
                cuando el alcance la incluye. -->
           {#if scopeIncludesCorpus}
-            <details class="research-form__advanced">
-              <summary>{$currentLocale && t('research.collectionsLabel')}</summary>
+            <Disclosure variant="card" summary={$currentLocale && t('research.collectionsLabel')}>
               <fieldset class="research-form__scope">
                 <div class="research-form__scope-header">
                   <span class="research-form__scope-count">{selectedCollectionCountLabel}</span>
@@ -621,7 +616,7 @@
                   <div class="research-form__scope-list">
                     {#each collections as collection (collection.id)}
                       <Checkbox
-                        class="research-form__scope-card"
+                        variant="card"
                         checked={selectedCollectionIds.includes(collection.id)}
                         onchange={(checked) => {
                           toggleCollection(collection.id, checked)
@@ -639,7 +634,7 @@
                   </div>
                 {/if}
               </fieldset>
-            </details>
+            </Disclosure>
           {/if}
 
           {#if handoff}
@@ -653,8 +648,7 @@
                   {/if}
                 </div>
                 {#if handoff.context && handoff.context.length > 0}
-                  <details class="research-handoff__details">
-                    <summary>{$currentLocale && t('research.handoffPreview')}</summary>
+                  <Disclosure summary={$currentLocale && t('research.handoffPreview')}>
                     <ul class="research-handoff__messages">
                       {#each handoff.context as message, index (`${message.role}-${index}`)}
                         <li class="research-handoff__message">
@@ -673,7 +667,7 @@
                         </li>
                       {/each}
                     </ul>
-                  </details>
+                  </Disclosure>
                 {/if}
               </div>
             </Card>
@@ -684,14 +678,16 @@
           {/if}
 
           <div class="research-form__actions">
-            <Button variant="primary" type="submit" loading={creating} disabled={!canSubmit}>
-              <ActionIcon name="message-circle-plus" size={16} />
-              <span
-                >{creating
-                  ? $currentLocale && t('research.starting')
-                  : $currentLocale && t('research.start')}</span
-              >
-            </Button>
+            <div class="research-form__submit">
+              <Button variant="primary" type="submit" loading={creating} disabled={!canSubmit}>
+                <ActionIcon name="message-circle-plus" size={16} />
+                <span
+                  >{creating
+                    ? $currentLocale && t('research.starting')
+                    : $currentLocale && t('research.start')}</span
+                >
+              </Button>
+            </div>
           </div>
         </form>
       </Card>
@@ -773,7 +769,8 @@
     min-width: 0;
   }
 
-  .research-job-row :global(.research-job-card__discard) {
+  .research-job-card__discard {
+    display: flex;
     position: absolute;
     top: var(--space-2);
     right: var(--space-2);
@@ -884,39 +881,6 @@
     text-transform: uppercase;
   }
 
-  .research-form__library-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base);
-  }
-
-  .research-form__library-trigger:hover,
-  .research-form__library-trigger--open {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
-  }
-
-  .research-form__library-trigger:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .research-form__library-trigger :global(svg) {
-    color: var(--color-text-muted);
-  }
-
   .research-form__scope-header {
     display: flex;
     align-items: center;
@@ -950,31 +914,8 @@
     overflow-y: auto;
     padding: var(--space-2);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-surface);
     background: var(--surface-input);
-  }
-
-  /* The card IS the Checkbox, exactly as in the Lotes picker. Its <label>
-     already makes the whole surface a click target, already toggles on Space,
-     and already draws one focus ring — so there is no wrapper handler to fire
-     twice. What is added is the lift off the sunken list, and a checked border
-     firmer than the resting one: the component's own checked rule lands on
-     --border-subtle, which is this card's RESTING border. */
-  .research-form__scope-list :global(.research-form__scope-card) {
-    gap: var(--space-2);
-    padding: var(--space-2);
-    min-width: 0;
-    background: var(--surface-panel);
-    border-color: var(--border-subtle);
-  }
-
-  .research-form__scope-list :global(.research-form__scope-card:hover) {
-    background: var(--surface-toolbar);
-  }
-
-  .research-form__scope-list :global(.research-form__scope-card:has(input:checked)) {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
   }
 
   .research-form__scope-row {
@@ -1000,34 +941,15 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .research-form__textarea {
-    width: 100%;
-    box-sizing: border-box;
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font: inherit;
-  }
-
-  .research-form__textarea {
-    resize: vertical;
-    min-height: 96px;
-  }
-
-  .research-form__textarea:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-  }
-
   .research-form__actions {
     display: flex;
     justify-content: end;
   }
 
-  .research-form__actions :global(.btn) {
+  /* A grid cell stretches the Button to the wrapper's width, so the floor
+     lives here instead of on the component. */
+  .research-form__submit {
+    display: grid;
     min-width: 180px;
   }
 
@@ -1050,16 +972,6 @@
     font-size: var(--font-size-xs);
   }
 
-  .research-handoff__details {
-    display: grid;
-    gap: var(--space-2);
-  }
-
-  .research-handoff__details summary {
-    cursor: pointer;
-    font-weight: var(--font-weight-medium);
-  }
-
   .research-handoff__messages {
     display: grid;
     gap: var(--space-2);
@@ -1071,7 +983,7 @@
     gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-surface);
     background: var(--surface-card);
   }
 
@@ -1079,7 +991,7 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
   }
 
   .research-handoff__body :global(p:last-child) {
@@ -1117,21 +1029,9 @@
       justify-content: stretch;
     }
 
-    .research-form__actions :global(.btn) {
+    .research-form__submit {
       width: 100%;
       min-width: 0;
     }
-  }
-
-  .research-form__advanced {
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    padding: var(--space-3);
-  }
-
-  .research-form__advanced summary {
-    cursor: pointer;
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-sm);
   }
 </style>
