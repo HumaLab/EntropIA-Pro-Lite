@@ -22,7 +22,15 @@
    * source is open.
    */
   import { onDestroy, onMount, untrack } from 'svelte'
-  import { ActionIcon, Button, ConfirmDialog, IconButton, SearchBar } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    ConfirmDialog,
+    IconButton,
+    SearchBar,
+    StatusBadge,
+    type StatusBadgeTone,
+  } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { navegadorStore } from '$lib/navegador-store'
   import NavegadorCopyDialog, { type CopiedTarget } from './NavegadorCopyDialog.svelte'
@@ -47,8 +55,17 @@
     navegadorZoteroList,
     navegadorZoteroRequest,
     navegadorZoteroRun,
+    type CopyTone,
     type ZoteroCopy,
   } from '$lib/navegador-zotero'
+
+  /** The badge colour of each copy state; `pending` reads as info. */
+  const COPY_TONE_BADGE: Record<CopyTone, StatusBadgeTone> = {
+    pending: 'info',
+    good: 'success',
+    bad: 'danger',
+    muted: 'neutral',
+  }
 
   /**
    * `onopen` loads an address in the browser's active tab (through the URL
@@ -408,7 +425,9 @@
               </span>
               <span class="sources__row-kinds">
                 {#each row.kinds as kind (kind)}
-                  <span class="sources__chip">{$currentLocale && kindLabel(kind)}</span>
+                  <StatusBadge variant="neutral" size="sm"
+                    >{$currentLocale && kindLabel(kind)}</StatusBadge
+                  >
                 {/each}
               </span>
               <span class="sources__row-meta">
@@ -482,11 +501,11 @@
           {#each zoteroRows as { copy, view } (copy.id)}
             <li class="sources__capture">
               <div class="sources__capture-head">
-                <span class="sources__chip sources__chip--{view.tone}">
+                <StatusBadge variant={COPY_TONE_BADGE[view.tone]} size="sm">
                   {$currentLocale && t(view.stateKey)}
-                </span>
+                </StatusBadge>
                 {#if copy.captureId}
-                  <span class="sources__chip">PDF</span>
+                  <StatusBadge variant="neutral" size="sm">PDF</StatusBadge>
                 {/if}
               </div>
               <span>
@@ -554,7 +573,9 @@
           {#each captures as capture (capture.id)}
             <li class="sources__capture">
               <div class="sources__capture-head">
-                <span class="sources__chip">{$currentLocale && kindLabel(capture.kind)}</span>
+                <StatusBadge variant="neutral" size="sm"
+                  >{$currentLocale && kindLabel(capture.kind)}</StatusBadge
+                >
                 <span class="sources__strong">{capture.accessedLocal}</span>
               </div>
               <span class="sources__muted">
@@ -740,10 +761,14 @@
     cursor: pointer;
   }
 
-  .sources__row:hover,
-  .sources__row:focus-visible {
+  .sources__row:hover {
     border-color: var(--color-accent);
+  }
+
+  .sources__row:focus-visible {
     outline: none;
+    border-color: var(--color-accent);
+    box-shadow: var(--focus-ring);
   }
 
   .sources__row-title {
@@ -765,30 +790,11 @@
     gap: var(--space-1);
   }
 
-  .sources__chip {
-    padding: 0 var(--space-2);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    white-space: nowrap;
-  }
-
   .sources__detail-title {
     margin: 0;
     overflow-wrap: anywhere;
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
-  }
-
-  .sources__chip--good {
-    color: var(--color-success);
-  }
-
-  .sources__chip--bad {
-    color: var(--color-danger);
-  }
-
-  .sources__chip--pending {
-    color: var(--color-accent);
   }
 
   .sources__subtitle {

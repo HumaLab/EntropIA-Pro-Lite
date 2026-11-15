@@ -1080,29 +1080,21 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 36px 5px 10px 6px;
-    scrollbar-color: color-mix(in srgb, var(--color-text-muted) 58%, transparent) transparent;
-    scrollbar-width: thin;
-  }
-
-  .explorer__scroll::-webkit-scrollbar {
-    width: 8px;
-  }
-
-  .explorer__scroll::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .explorer__scroll::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
-    border-radius: var(--radius-xs);
-    background: color-mix(in srgb, var(--color-text-muted) 52%, transparent);
-    background-clip: padding-box;
+    padding: calc(var(--space-8) + var(--space-1)) var(--space-1) var(--space-2) var(--space-1);
+    /* The tree keeps a firmer, squarer scrollbar than the app's default. It
+       redefines the global scrollbar variables (app.css) instead of the
+       pseudo-elements, so the shape and the states stay app.css's. */
+    --scrollbar-size: 8px;
+    --scrollbar-radius: var(--radius-xs);
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: color-mix(in srgb, var(--color-text-muted) 52%, transparent);
+    --scrollbar-thumb-hover: color-mix(in srgb, var(--color-text-muted) 58%, transparent);
+    --scrollbar-thumb-active: color-mix(in srgb, var(--color-text-muted) 72%, transparent);
   }
 
   .explorer__section-label {
-    margin-bottom: 5px;
-    padding-left: 5px;
+    margin-bottom: var(--space-1);
+    padding-left: var(--space-1);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-medium);
     color: var(--color-text-muted);
@@ -1131,7 +1123,7 @@
     display: grid;
     grid-template-columns: var(--tree-control-width) minmax(0, 1fr);
     align-items: center;
-    gap: 3px;
+    gap: var(--space-1);
     min-width: 0;
     min-height: 23px;
     padding-left: calc(var(--tree-level, 0) * var(--tree-indent-step));
@@ -1230,10 +1222,10 @@
     position: relative;
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-1);
     width: 100%;
     min-width: 0;
-    padding: 3px 6px 3px 7px;
+    padding: var(--space-0-5) var(--space-1) var(--space-0-5) var(--space-2);
     border: 1px solid transparent;
     border-radius: var(--radius-control);
     background: transparent;
@@ -1382,9 +1374,14 @@
     border-color: var(--color-border);
   }
 
+  .explorer__continuation-button:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
   .explorer__continuation-button:disabled {
     cursor: default;
-    opacity: 0.6;
+    opacity: var(--opacity-disabled);
   }
 
   .explorer__continuation-error {
@@ -1399,7 +1396,7 @@
   }
 
   .explorer__message--nested {
-    padding: var(--space-1) 0 5px
+    padding: var(--space-1) 0 var(--space-1)
       calc((var(--tree-level, 0) * var(--tree-indent-step)) + var(--space-5));
   }
 

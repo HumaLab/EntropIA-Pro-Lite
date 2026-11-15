@@ -40,7 +40,7 @@
   import { onDestroy, onMount, tick, untrack } from 'svelte'
   import { get } from 'svelte/store'
   import { open as openFolderDialog } from '@tauri-apps/plugin-dialog'
-  import { ActionIcon, Button, IconButton, tooltip } from '@entropia/ui'
+  import { ActionIcon, Button, IconButton, Input, StatusBadge, tooltip } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { zoomFactor } from '$lib/zoom'
   import {
@@ -84,7 +84,7 @@
   const REMEASURE_MS = 400
 
   let placeholder: HTMLDivElement | undefined = $state()
-  let addressInput: HTMLInputElement | undefined = $state()
+  let addressInput: HTMLInputElement | null | undefined = $state()
   let address = $state('')
   let addressFocused = $state(false)
   /** Whether the browser exists (its first tab was made); not whether a tab has a page. */
@@ -505,20 +505,20 @@
     >
       <ActionIcon name="list" size={16} />
     </IconButton>
-    <input
-      class="navegador-view__address"
-      type="text"
-      inputmode="url"
-      autocomplete="off"
-      autocapitalize="off"
-      spellcheck="false"
-      aria-label={$currentLocale && t('navegador.address')}
-      placeholder={$currentLocale && t('navegador.addressPlaceholder')}
-      bind:value={address}
-      bind:this={addressInput}
-      onfocus={() => (addressFocused = true)}
-      onblur={() => (addressFocused = false)}
-    />
+    <div class="navegador-view__address">
+      <Input
+        inputmode="url"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+        aria-label={$currentLocale && t('navegador.address')}
+        placeholder={$currentLocale && t('navegador.addressPlaceholder')}
+        bind:value={address}
+        bind:element={addressInput}
+        onfocus={() => (addressFocused = true)}
+        onblur={() => (addressFocused = false)}
+      />
+    </div>
   </form>
 
   <p class="navegador-view__status" role="status" aria-live="polite">
@@ -570,8 +570,8 @@
       {#if captureView}
         <header class="navegador-view__panel-head">
           <strong class="navegador-view__panel-title">{captureView.title}</strong>
-          <span class="navegador-view__chip"
-            >{$currentLocale && t(`navegador.capture.kind.${captureView.kind}`)}</span
+          <StatusBadge variant="neutral" size="sm"
+            >{$currentLocale && t(`navegador.capture.kind.${captureView.kind}`)}</StatusBadge
           >
           <IconButton
             size="sm"
@@ -654,8 +654,8 @@
               <strong class="navegador-view__download-text" use:tooltip={item.fileName}
                 >{item.fileName}</strong
               >
-              <span class="navegador-view__chip"
-                >{$currentLocale && t(`navegador.download.status.${item.status}`)}</span
+              <StatusBadge variant="neutral" size="sm"
+                >{$currentLocale && t(`navegador.download.status.${item.status}`)}</StatusBadge
               >
               {#if item.size}<span>{item.size}</span>{/if}
               {#if item.shortSha}<code>{item.shortSha}</code>{/if}
@@ -681,8 +681,8 @@
               {/if}
               {#if item.status === 'ready' && item.alreadySavedIn}
                 {@const sourceId = item.alreadySavedIn}
-                <span class="navegador-view__chip"
-                  >{$currentLocale && t('navegador.download.alreadySaved')}</span
+                <StatusBadge variant="neutral" size="sm"
+                  >{$currentLocale && t('navegador.download.alreadySaved')}</StatusBadge
                 >
                 <Button
                   size="sm"
@@ -810,24 +810,10 @@
     cursor: pointer;
   }
 
+  /* Only the share of the bar; the field itself is Input. */
   .navegador-view__address {
     flex: 1;
     min-width: 0;
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    box-sizing: border-box;
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    background: var(--color-surface-sunken);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-  }
-
-  .navegador-view__address:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: var(--color-surface);
   }
 
   .navegador-view__status {
@@ -900,13 +886,6 @@
 
   .navegador-view__row-end {
     margin-inline-start: auto;
-  }
-
-  .navegador-view__chip {
-    padding: 0 var(--space-2);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    white-space: nowrap;
   }
 
   .navegador-view__facts {

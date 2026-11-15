@@ -251,4 +251,20 @@ describe('NotificationBell', () => {
     await fireEvent.click(screen.getByRole('button'))
     expect(await screen.findByText('No tenés notificaciones.')).toBeInTheDocument()
   })
+
+  // Step 27 (H2, R4f, R8): the bell, its counter and the panel's text action
+  // are the design system's IconButton, count StatusBadge and link Button.
+  it('builds the bell, the counter and mark-all from the design-system components', async () => {
+    render(NotificationBell)
+    setSyncState(status({ state: 'idle' }))
+    setNotifState(notifState({ unread: 3 }))
+    const bell = await screen.findByRole('button')
+    expect(bell).toHaveClass('icon-button', 'icon-button--xs')
+    const badge = await screen.findByTestId('notif-badge')
+    expect(badge).toHaveClass('status-badge', 'status-badge--count')
+
+    await fireEvent.click(bell)
+    const markAll = await screen.findByRole('button', { name: 'Marcar todas como leídas' })
+    expect(markAll).toHaveClass('btn', 'btn--link')
+  })
 })

@@ -287,3 +287,14 @@ describe('copy to Zotero from the drawer', () => {
     expect(within(drawer()).getByText(/nunca se pisan/)).toBeInTheDocument()
   })
 })
+
+// Step 27 (R8): a copy's state chip is a StatusBadge whose tone follows the
+// state: waiting reads as info.
+describe('copy state chip', () => {
+  it('draws a waiting copy as an info StatusBadge', async () => {
+    copies = [copyRow()]
+    await openBeta()
+    const chip = await within(drawer()).findByText('Esperando a Zotero')
+    expect(chip).toHaveClass('status-badge', 'status-badge--info')
+  })
+})
