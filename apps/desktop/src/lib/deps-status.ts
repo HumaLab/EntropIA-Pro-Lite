@@ -31,16 +31,27 @@ export function dependencyStatusIcon(status: DependencyStatus): ActionIconName {
   }
 }
 
-/** Colour reinforces the glyph above; it never carries the meaning alone. */
-export function dependencyStatusColor(status: DependencyStatus): string {
+/**
+ * Modifier class for the status icon. Colour reinforces the glyph above; it
+ * never carries the meaning alone. The class, not an inline style, picks the
+ * token, so the stylesheet owns every colour: installed → success, missing →
+ * danger, failed → warning, anything else → muted.
+ */
+export type DependencyStatusIconClass =
+  | 'deps-row__icon--installed'
+  | 'deps-row__icon--missing'
+  | 'deps-row__icon--failed'
+  | 'deps-row__icon--neutral'
+
+export function dependencyStatusIconClass(status: DependencyStatus): DependencyStatusIconClass {
   switch (status.type) {
     case 'installed':
-      return 'var(--color-success)'
+      return 'deps-row__icon--installed'
     case 'missing':
-      return 'var(--color-danger)'
+      return 'deps-row__icon--missing'
     case 'failed':
-      return 'var(--color-warning)'
+      return 'deps-row__icon--failed'
     default:
-      return 'var(--color-text-muted)'
+      return 'deps-row__icon--neutral'
   }
 }

@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
   import { ActionIcon, Button, IconButton } from '@entropia/ui'
-  import { dependencyStatusIcon, dependencyStatusColor } from '$lib/deps-status'
+  import { dependencyStatusIcon, dependencyStatusIconClass } from '$lib/deps-status'
   import { registerListeners } from '$lib/register-listeners'
   import {
     checkAllDeps,
@@ -829,7 +829,7 @@
     {#each deps as dep (dep.id)}
       <div class="deps-row" class:deps-row--failed={dep.status.type === 'failed'}>
         <!-- Status icon -->
-        <span class="deps-row__icon" style="color: {dependencyStatusColor(dep.status)}">
+        <span class="deps-row__icon {dependencyStatusIconClass(dep.status)}">
           <ActionIcon name={dependencyStatusIcon(dep.status)} size={16} />
         </span>
 
@@ -983,9 +983,9 @@
     justify-content: space-between;
     gap: var(--space-4);
     padding: var(--space-3) var(--space-4);
-    border: 1px solid rgba(245, 158, 11, 0.35);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
     border-radius: var(--radius-md);
-    background: rgba(245, 158, 11, 0.08);
+    background: var(--color-warning-soft);
     color: var(--color-warning);
   }
 
@@ -994,9 +994,9 @@
     justify-content: space-between;
     gap: var(--space-4);
     padding: var(--space-4);
-    border: 1px solid rgba(99, 102, 241, 0.35);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
     border-radius: var(--radius-md);
-    background: rgba(99, 102, 241, 0.08);
+    background: var(--color-accent-soft);
   }
 
   .deps-prepare-panel__copy {
@@ -1037,7 +1037,7 @@
     margin-top: var(--space-2);
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
-    background: rgba(245, 158, 11, 0.12);
+    background: var(--color-warning-soft);
   }
 
   .deps-runtime-panel__blocked strong {
@@ -1064,19 +1064,19 @@
 
   .deps-banner--error {
     background: var(--color-danger-soft);
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
     color: var(--color-danger);
   }
 
   .deps-banner--success {
     background: var(--color-success-soft);
-    border: 1px solid rgba(34, 197, 94, 0.3);
+    border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
     color: var(--color-success);
   }
 
   .deps-banner--warning {
     background: var(--color-warning-soft);
-    border: 1px solid rgba(245, 158, 11, 0.3);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
     color: var(--color-warning);
   }
 
@@ -1175,8 +1175,8 @@
   }
 
   .deps-row--failed {
-    border-color: rgba(245, 158, 11, 0.4);
-    background: rgba(245, 158, 11, 0.04);
+    border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
+    background: var(--color-warning-soft);
   }
 
   /* Holds a 16px ActionIcon: font-size no longer aligns anything, so the box
@@ -1188,6 +1188,22 @@
     width: 16px;
     height: 24px;
     flex: 0 0 auto;
+  }
+
+  .deps-row__icon--installed {
+    color: var(--color-success);
+  }
+
+  .deps-row__icon--missing {
+    color: var(--color-danger);
+  }
+
+  .deps-row__icon--failed {
+    color: var(--color-warning);
+  }
+
+  .deps-row__icon--neutral {
+    color: var(--color-text-muted);
   }
 
   .deps-row__info {
@@ -1268,12 +1284,12 @@
   }
 
   .deps-badge--required {
-    background: rgba(99, 102, 241, 0.12);
+    background: var(--color-accent-soft);
     color: var(--color-accent);
   }
 
   .deps-badge--version {
-    background: rgba(34, 197, 94, 0.12);
+    background: var(--color-success-soft);
     color: var(--color-success);
     font-family: var(--font-mono);
   }
@@ -1301,9 +1317,9 @@
     align-items: center;
     gap: var(--space-4);
     padding: var(--space-3) var(--space-4);
-    border: 1px solid rgba(239, 68, 68, 0.2);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
     border-radius: var(--radius-md);
-    background: rgba(239, 68, 68, 0.04);
+    background: var(--color-danger-soft);
   }
 
   .deps-danger-zone__hint {
@@ -1318,9 +1334,9 @@
     flex-direction: column;
     gap: var(--space-3);
     padding: var(--space-4);
-    border: 1px solid rgba(239, 68, 68, 0.35);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
     border-radius: var(--radius-md);
-    background: rgba(127, 29, 29, 0.12);
+    background: var(--color-danger-soft);
   }
 
   .deps-reset-confirmation__copy {
@@ -1342,7 +1358,7 @@
   .deps-reset-confirmation__copy code {
     padding: 2px 6px;
     border-radius: var(--radius-sm);
-    background: rgba(239, 68, 68, 0.12);
+    background: var(--color-danger-soft);
     color: var(--color-danger);
     font-family: var(--font-mono);
   }
