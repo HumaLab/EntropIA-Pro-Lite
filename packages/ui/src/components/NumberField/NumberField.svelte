@@ -163,7 +163,7 @@
   }
 
   .number-field--disabled {
-    opacity: 0.56;
+    opacity: var(--opacity-disabled);
     background-color: var(--color-surface-raised);
   }
 
@@ -232,7 +232,7 @@
   .number-field__step[aria-disabled='true'] {
     cursor: default;
     color: var(--color-text-muted);
-    opacity: 0.5;
+    opacity: var(--opacity-disabled);
   }
 
   @media (prefers-reduced-motion: reduce) {

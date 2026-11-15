@@ -7,6 +7,7 @@ import {
   rulesBrokenBy,
   scanPackage,
   STYLE_RULES,
+  stylesOf,
   type TokenContext,
 } from './style-guards'
 
@@ -251,6 +252,66 @@ describe('design system visual contract', () => {
     expect(annotationToolbar).toContain(
       '--annotation-toolbar-icon-size: calc(16px * var(--annotation-toolbar-scale));'
     )
+  })
+})
+
+describe('base component states and motion', () => {
+  // docs/PLAN_HOMOGENEIZACION.md, step 9: the base components take their
+  // highlight, inset, disabled opacity and motion from tokens, so a theme can
+  // switch them off and a reduced-motion preference reaches every one.
+  const BASE_COMPONENTS = [
+    'Button/Button.svelte',
+    'IconButton/IconButton.svelte',
+    'Input/Input.svelte',
+    'Checkbox/Checkbox.svelte',
+    'NumberField/NumberField.svelte',
+    'ToolbarMenu/ToolbarMenuList.svelte',
+    'Panel/Panel.svelte',
+  ]
+  const DISABLED_SELECTOR = /:disabled|\[disabled\]|aria-disabled|--disabled\b/
+  const LITERAL_OPACITY = /(?<![\w-])opacity\s*:\s*[0-9.]+/
+  const LITERAL_DURATION =
+    /(?:transition|animation)(?:-duration)?\s*:[^;}]*?(?<![\w-])\d*\.?\d+m?s\b[^;}]*/
+  const REDUCED_MOTION =
+    /@media \(prefers-reduced-motion: reduce\)\s*\{[^{}]*\{[^{}]*transition: none;/
+
+  const stylesFor = (relativePath: string) => stylesOf(readSource(`../${relativePath}`))
+
+  it('writes no hand-made inset highlight or shadow', () => {
+    const offenders = BASE_COMPONENTS.filter((path) => /inset 0 1px 0 rgba/.test(stylesFor(path)))
+
+    expect(offenders).toEqual([])
+  })
+
+  it('dims disabled controls only through the disabled opacity tokens', () => {
+    const offenders = BASE_COMPONENTS.flatMap((path) =>
+      Array.from(stylesFor(path).matchAll(CSS_RULE))
+        .filter(
+          ([, selector = '', body = '']) =>
+            DISABLED_SELECTOR.test(selector) && LITERAL_OPACITY.test(body)
+        )
+        .map(([, selector = '']) => `${basename(path)}: ${selector.trim()}`)
+    )
+
+    expect(offenders).toEqual([])
+    expect(stylesFor('Button/Button.svelte')).toMatch(
+      /\.btn--primary:disabled\s*\{[^}]*opacity: var\(--opacity-disabled-primary\);/
+    )
+  })
+
+  it('times every transition and animation with motion tokens', () => {
+    const offenders = BASE_COMPONENTS.filter((path) => LITERAL_DURATION.test(stylesFor(path)))
+
+    expect(offenders).toEqual([])
+  })
+
+  it('drops transitions under a reduced-motion preference', () => {
+    const offenders = BASE_COMPONENTS.filter((path) => {
+      const styles = stylesFor(path)
+      return /transition\s*:/.test(styles) && !REDUCED_MOTION.test(styles)
+    })
+
+    expect(offenders).toEqual([])
   })
 })
 

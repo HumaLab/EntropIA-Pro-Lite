@@ -50,9 +50,7 @@
   }
 
   .panel--glass {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent 58%),
-      color-mix(in srgb, var(--surface-glass) 88%, transparent);
+    background: color-mix(in srgb, var(--surface-glass) 88%, transparent);
     border-color: var(--border-subtle);
     box-shadow: var(--shadow-surface);
     backdrop-filter: blur(10px);
@@ -61,7 +59,7 @@
   .panel--sunken {
     background: var(--surface-input);
     border-color: var(--border-subtle);
-    box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.18);
+    box-shadow: var(--shadow-inset);
   }
 
   .panel--hoverable:hover {
@@ -88,5 +86,11 @@
 
   .panel--padding-lg {
     padding: var(--space-6);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .panel {
+      transition: none;
+    }
   }
 </style>
