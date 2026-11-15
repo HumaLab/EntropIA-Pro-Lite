@@ -8,6 +8,8 @@
     indeterminate = false,
     onchange,
     label,
+    size = 'md',
+    variant = 'row',
     class: className = '',
   }: CheckboxProps = $props()
 
@@ -17,7 +19,10 @@
   }
 </script>
 
-<label class="checkbox {className}" class:checkbox--disabled={disabled}>
+<label
+  class="checkbox checkbox--{variant} checkbox--{size} {className}"
+  class:checkbox--disabled={disabled}
+>
   <input
     type="checkbox"
     {checked}
@@ -59,6 +64,29 @@
   /* The whole row draws the ring, so there is one visible focus, not two. */
   .checkbox:has(input:focus-visible) {
     box-shadow: var(--focus-ring);
+  }
+
+  .checkbox--sm {
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--font-size-xs);
+  }
+
+  /* A card lifts off a sunken list. Its resting border is --border-subtle,
+     the row's checked border, so its own checked state needs a firmer one;
+     these rules come after the row ones and win by order. */
+  .checkbox--card {
+    background: var(--surface-panel);
+    border-color: var(--border-subtle);
+  }
+
+  .checkbox--card:hover {
+    background: var(--surface-toolbar);
+  }
+
+  .checkbox--card:has(input:checked) {
+    background: var(--surface-toolbar);
+    border-color: var(--border-panel);
   }
 
   .checkbox--disabled {

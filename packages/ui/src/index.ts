@@ -23,7 +23,7 @@ export { NumberField } from './components/NumberField/index'
 export type { NumberFieldProps } from './components/NumberField/index'
 
 export { Checkbox } from './components/Checkbox/index'
-export type { CheckboxProps } from './components/Checkbox/index'
+export type { CheckboxProps, CheckboxSize, CheckboxVariant } from './components/Checkbox/index'
 
 export { Card } from './components/Card/index'
 export type { CardProps, CardPadding } from './components/Card/index'

@@ -1,2 +1,2 @@
 export { default as Checkbox } from './Checkbox.svelte'
-export type { CheckboxProps } from './Checkbox.types'
+export type { CheckboxProps, CheckboxSize, CheckboxVariant } from './Checkbox.types'
