@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import PdfMarkupLayer from '../PdfMarkupLayer.svelte'
-import { createMarkupViewport } from '../geometry'
+import { createMarkupViewport, selectionToPdfRects } from '../geometry'
 import { DEFAULT_MARKUP_LABELS, ZOTERO_COLORS, type MarkupTool, type PdfMarkup } from '../types'
 
 const viewport = createMarkupViewport([0, 0, 612, 792], 1, 0)
@@ -81,6 +81,50 @@ describe('PdfMarkupLayer', () => {
     expect(onCreate.mock.calls[0]?.[0].type).toBe('underline')
     expect(removeAllRanges).toHaveBeenCalled()
     expect(screen.queryByTestId('pdf-selection-popover')).not.toBeInTheDocument()
+  })
+
+  it('converts with the selection-time viewport when the page re-rendered before the click', async () => {
+    const resealed = createMarkupViewport([0, 0, 612, 792], 2, 0)
+    const onCreate = vi.fn()
+    const view = render(PdfMarkupLayer, { props: props({ onCreate }) })
+    const textLayer = screen.getByTestId('pdf-text-layer')
+    selectText(textLayer, 'Selected words')
+    await fireEvent.pointerUp(textLayer)
+    expect(screen.getByTestId('pdf-selection-popover')).toBeInTheDocument()
+    // A zoom or resize rebuilds the text layer and the DOM selection dies
+    // with it; the popover snapshot must still convert in the old viewport.
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: true,
+      toString: () => '',
+      removeAllRanges: vi.fn(),
+      getRangeAt: () => {
+        throw new Error('no live range')
+      },
+    } as unknown as Selection)
+    await view.rerender(props({ onCreate, viewport: resealed }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Highlight' }))
+    expect(onCreate).toHaveBeenCalledOnce()
+    const boxes = [
+      { x: 10, y: 100, width: 80, height: 12 },
+      { x: 10, y: 120, width: 40, height: 12 },
+    ]
+    const draft = onCreate.mock.calls[0]?.[0]
+    expect(draft.type).toBe('highlight')
+    expect(draft.rects).toEqual(selectionToPdfRects(viewport, boxes))
+    expect(draft.rects).not.toEqual(selectionToPdfRects(resealed, boxes))
+  })
+
+  it('prefers the live selection over the popover snapshot when confirming', async () => {
+    const onCreate = vi.fn()
+    render(PdfMarkupLayer, { props: props({ onCreate }) })
+    const textLayer = screen.getByTestId('pdf-text-layer')
+    selectText(textLayer, 'First words')
+    await fireEvent.pointerUp(textLayer)
+    // The selection grows through the keyboard: no pointerup, same popover.
+    selectText(textLayer, 'Second longer words')
+    await fireEvent.click(screen.getByRole('button', { name: 'Highlight' }))
+    expect(onCreate).toHaveBeenCalledOnce()
+    expect(onCreate.mock.calls[0]?.[0].text).toBe('Second longer words')
   })
 
   it('lets the overlay take the pointer only for note, area and text tools', () => {
