@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { fireEvent, render, screen } from '@testing-library/svelte'
 import { afterEach, describe, expect, it } from 'vitest'
 import FontPresetGrid from './FontPresetGrid.svelte'
@@ -92,4 +94,11 @@ describe('the cards', () => {
     expect(description?.textContent).toContain('Source Serif 4')
     expect(description?.textContent).toContain('JetBrains Mono')
   })
+})
+
+/** The cards are the design system's RadioCard; the grid keeps only its previews. */
+it('keeps no radio-card styles of its own', () => {
+  const source = readFileSync(resolve(import.meta.dirname, 'FontPresetGrid.svelte'), 'utf-8')
+  expect(source).toMatch(/<RadioCard\b/)
+  expect(source).not.toMatch(/font-preset-grid__(grid|card|radio|head|name|check|families)/)
 })

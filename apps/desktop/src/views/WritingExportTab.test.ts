@@ -106,30 +106,19 @@ describe('what the tab does not hold', () => {
 
 /**
  * jsdom performs no layout, so the reflow is a fact about the source. The
- * choices use the Agent tab's own grid: across the panel's 200–560 range the
- * 120px floor steps 1 / 2 / 3 columns, two at the default 280.
+ * choices are RadioCards in a RadioGroup grid (whose auto-fit columns and
+ * wrapped labels its own tests pin), with the Agent tab's 120px floor: across
+ * the panel's 200–560 range it steps 1 / 2 / 3 columns, two at the default 280.
  */
 describe('the choices reflow with the panel', () => {
-  const STYLES = readFileSync(
-    resolve(import.meta.dirname, 'WritingExportTab.svelte'),
-    'utf-8'
-  ).replace(/\/\*[\s\S]*?\*\//g, '')
+  const SOURCE = readFileSync(resolve(import.meta.dirname, 'WritingExportTab.svelte'), 'utf-8')
 
-  function ruleFor(selector: string): string {
-    const at = STYLES.indexOf(selector)
-    expect(at, `${selector} is no longer in the stylesheet`).toBeGreaterThan(-1)
-    const rule = STYLES.slice(at)
-    return rule.slice(0, rule.indexOf('}'))
-  }
-
-  it('lays them out in as many columns as fit, as the Agent tab does', () => {
-    expect(ruleFor('.export-tab__choices {')).toMatch(
-      /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(120px,\s*1fr\)\)/
-    )
+  it("lays them out with the Agent tab's column floor", () => {
+    expect(SOURCE).toMatch(/<RadioGroup[^>]*\scolumnMin="120px"/)
   })
 
-  it('wraps a long label instead of cutting it', () => {
-    expect(ruleFor('.export-tab__label {')).not.toMatch(/white-space:\s*nowrap/)
+  it('keeps no radio-card styles of its own', () => {
+    expect(SOURCE).not.toMatch(/export-tab__(choices|choice|radio|label|check)\b/)
   })
 })
 
