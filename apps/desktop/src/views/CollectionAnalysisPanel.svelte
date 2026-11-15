@@ -34,6 +34,7 @@
     IconButton,
     ActionIcon,
     NumberField,
+    Textarea,
   } from '@entropia/ui'
   import RelationGraph3D from '../components/RelationGraph3D.svelte'
   import GraphSettingsForm from './GraphSettingsForm.svelte'
@@ -301,273 +302,279 @@
   })
 </script>
 
-<Panel variant="default" padding="none" class="analysis-panel">
-  <header class="analysis-header">
-    <span class="analysis-header__eyebrow">{translate('collectionAnalysis.eyebrow')}</span>
-    <h2 class="analysis-header__title">{translate('collectionAnalysis.title')}</h2>
-    {#if status === 'ready' && frequencies.length > 0}
-      <p class="analysis-header__meta">
-        {translate('collectionAnalysis.meta', {
-          words: frequencies.length,
-          tokens: totalTokens,
-        })}
-      </p>
-    {/if}
-  </header>
+<Panel variant="default" padding="none">
+  <div class="analysis-panel">
+    <header class="analysis-header">
+      <span class="analysis-header__eyebrow">{translate('collectionAnalysis.eyebrow')}</span>
+      <h2 class="analysis-header__title">{translate('collectionAnalysis.title')}</h2>
+      {#if status === 'ready' && frequencies.length > 0}
+        <p class="analysis-header__meta">
+          {translate('collectionAnalysis.meta', {
+            words: frequencies.length,
+            tokens: totalTokens,
+          })}
+        </p>
+      {/if}
+    </header>
 
-  <TabList class="analysis-panel-tabs" aria-label={translate('collectionAnalysis.tabsAria')}>
-    <TabButton
-      active={activeTab === 'viz'}
-      class="analysis-panel-tab"
-      onclick={() => {
-        activeTab = 'viz'
-      }}
-    >
-      {translate('collectionAnalysis.vizTab')}
-    </TabButton>
-    <TabButton
-      active={activeTab === 'phrases'}
-      class="analysis-panel-tab"
-      onclick={() => {
-        activeTab = 'phrases'
-      }}
-    >
-      {translate('phraseAnalysis.tab')}
-    </TabButton>
-    <TabButton
-      active={activeTab === 'graph'}
-      class="analysis-panel-tab"
-      onclick={() => {
-        activeTab = 'graph'
-      }}
-    >
-      {translate('collectionAnalysis.graphTab')}
-    </TabButton>
-    <TabButton
-      active={activeTab === 'settings'}
-      class="analysis-panel-tab"
-      onclick={() => {
-        activeTab = 'settings'
-      }}
-    >
-      {translate('collectionAnalysis.settingsTab')}
-    </TabButton>
-  </TabList>
+    <div class="analysis-panel__tabs">
+      <TabList aria-label={translate('collectionAnalysis.tabsAria')}>
+        <TabButton
+          active={activeTab === 'viz'}
+          class="analysis-panel-tab"
+          onclick={() => {
+            activeTab = 'viz'
+          }}
+        >
+          {translate('collectionAnalysis.vizTab')}
+        </TabButton>
+        <TabButton
+          active={activeTab === 'phrases'}
+          class="analysis-panel-tab"
+          onclick={() => {
+            activeTab = 'phrases'
+          }}
+        >
+          {translate('phraseAnalysis.tab')}
+        </TabButton>
+        <TabButton
+          active={activeTab === 'graph'}
+          class="analysis-panel-tab"
+          onclick={() => {
+            activeTab = 'graph'
+          }}
+        >
+          {translate('collectionAnalysis.graphTab')}
+        </TabButton>
+        <TabButton
+          active={activeTab === 'settings'}
+          class="analysis-panel-tab"
+          onclick={() => {
+            activeTab = 'settings'
+          }}
+        >
+          {translate('collectionAnalysis.settingsTab')}
+        </TabButton>
+      </TabList>
+    </div>
 
-  <div class="analysis-content">
-    {#if activeTab === 'phrases'}
-      <div class="analysis-pane">
-        {#if corpus && status === 'ready'}
-          <PhraseAnalysis texts={corpus} customStopwords={settings.customStopwords} />
-        {:else if status === 'error'}
-          <p class="surface-message surface-message--error">
-            {translate('collectionAnalysis.error')}
-          </p>
-        {:else}
+    <div class="analysis-content">
+      {#if activeTab === 'phrases'}
+        <div class="analysis-pane">
+          {#if corpus && status === 'ready'}
+            <PhraseAnalysis texts={corpus} customStopwords={settings.customStopwords} />
+          {:else if status === 'error'}
+            <p class="surface-message surface-message--error">
+              {translate('collectionAnalysis.error')}
+            </p>
+          {:else}
+            <p class="surface-message surface-message--center">
+              {translate('collectionAnalysis.loading')}
+            </p>
+          {/if}
+        </div>
+      {/if}
+      <div class="analysis-pane" class:is-hidden={activeTab !== 'viz'}>
+        {#if status === 'loading'}
           <p class="surface-message surface-message--center">
             {translate('collectionAnalysis.loading')}
           </p>
+        {:else if status === 'error'}
+          <div class="analysis-error">
+            <p class="surface-message surface-message--error">
+              {translate('collectionAnalysis.error')}
+            </p>
+            <Button variant="secondary" size="sm" onclick={() => void loadCorpus()}>
+              {translate('collectionAnalysis.retry')}
+            </Button>
+          </div>
+        {:else if frequencies.length === 0}
+          <div class="surface-message surface-message--center">
+            <p>
+              {settings.customStopwords.length > 0 && (corpus?.length ?? 0) > 0
+                ? translate('collectionAnalysis.emptyFiltered')
+                : translate('collectionAnalysis.empty')}
+            </p>
+          </div>
+        {:else}
+          <section class="analysis-section">
+            <div class="analysis-section__header">
+              <h3 class="analysis-section__title">
+                {translate('collectionAnalysis.cloudTitle', { count: settings.cloudTermCount })}
+              </h3>
+              <IconButton
+                class="analysis-section__download"
+                size="sm"
+                variant="secondary"
+                label={translate('collectionAnalysis.downloadCloud')}
+                title={translate('collectionAnalysis.downloadCloud')}
+                onclick={() =>
+                  void downloadChartPng(wordCloudSvgEl, `entropia-word-cloud-${collectionId}.png`)}
+              >
+                <ActionIcon name="download" size={14} />
+              </IconButton>
+            </div>
+            <svg
+              bind:this={wordCloudSvgEl}
+              viewBox="0 0 {CLOUD_W} {CLOUD_H}"
+              preserveAspectRatio="xMidYMid meet"
+              class="word-cloud"
+              role="img"
+              aria-label={translate('collectionAnalysis.cloudTitle', {
+                count: settings.cloudTermCount,
+              })}
+            >
+              {#each placedWords as placedWord, rank (placedWord.word)}
+                <g>
+                  <title>{placedWord.word}: {placedWord.count}</title>
+                  <text
+                    class="word-cloud__word"
+                    x={placedWord.x}
+                    y={placedWord.y}
+                    font-size={placedWord.fontSize}
+                    font-family={CLOUD_FONT_STACK}
+                    font-weight={CLOUD_FONT_WEIGHT}
+                    fill={cloudColor(rank)}
+                    text-anchor="middle"
+                    dominant-baseline="middle"
+                    transform={placedWord.rotated
+                      ? `rotate(-90 ${placedWord.x} ${placedWord.y})`
+                      : undefined}>{placedWord.word}</text
+                  >
+                </g>
+              {/each}
+            </svg>
+          </section>
+
+          <section class="analysis-section">
+            <div class="analysis-section__header">
+              <h3 class="analysis-section__title">{translate('collectionAnalysis.barsTitle')}</h3>
+              <IconButton
+                class="analysis-section__download"
+                size="sm"
+                variant="secondary"
+                label={translate('collectionAnalysis.downloadBars')}
+                title={translate('collectionAnalysis.downloadBars')}
+                onclick={() =>
+                  void downloadChartPng(barChartSvgEl, `entropia-word-bars-${collectionId}.png`)}
+              >
+                <ActionIcon name="download" size={14} />
+              </IconButton>
+            </div>
+            <svg
+              bind:this={barChartSvgEl}
+              viewBox="0 0 {CHART_W} {CHART_H}"
+              preserveAspectRatio="xMidYMid meet"
+              class="bar-chart"
+              role="img"
+              aria-label={translate('collectionAnalysis.barsTitle')}
+            >
+              {#each ticks as tick (tick)}
+                <line
+                  class="bar-chart__gridline"
+                  x1={MARGIN.left}
+                  x2={CHART_W - MARGIN.right}
+                  y1={tickY(tick)}
+                  y2={tickY(tick)}
+                />
+                <text class="bar-chart__tick-label" x={MARGIN.left - 6} y={tickY(tick) + 3}>
+                  {tick}
+                </text>
+              {/each}
+              {#each top20 as { word, count }, i (word)}
+                {@const slotX = MARGIN.left + i * SLOT_W}
+                {@const labelX = slotX + SLOT_W / 2}
+                {@const labelY = MARGIN.top + INNER_H + 12}
+                <g>
+                  <title>{word}: {count}</title>
+                  <rect
+                    class="bar-chart__bar"
+                    x={slotX + (SLOT_W - BAR_W) / 2}
+                    y={MARGIN.top + INNER_H - barHeight(count)}
+                    width={BAR_W}
+                    height={barHeight(count)}
+                    rx="2"
+                  />
+                </g>
+                <text
+                  class="bar-chart__x-label"
+                  x={labelX}
+                  y={labelY}
+                  transform="rotate(-45 {labelX} {labelY})"
+                >
+                  {truncateLabel(word, 12)}
+                </text>
+              {/each}
+            </svg>
+          </section>
         {/if}
       </div>
-    {/if}
-    <div class="analysis-pane" class:is-hidden={activeTab !== 'viz'}>
-      {#if status === 'loading'}
-        <p class="surface-message surface-message--center">
-          {translate('collectionAnalysis.loading')}
-        </p>
-      {:else if status === 'error'}
-        <div class="analysis-error">
-          <p class="surface-message surface-message--error">
-            {translate('collectionAnalysis.error')}
-          </p>
-          <Button variant="secondary" size="sm" onclick={() => void loadCorpus()}>
-            {translate('collectionAnalysis.retry')}
-          </Button>
-        </div>
-      {:else if frequencies.length === 0}
-        <div class="surface-message surface-message--center">
-          <p>
-            {settings.customStopwords.length > 0 && (corpus?.length ?? 0) > 0
-              ? translate('collectionAnalysis.emptyFiltered')
-              : translate('collectionAnalysis.empty')}
-          </p>
-        </div>
-      {:else}
-        <section class="analysis-section">
-          <div class="analysis-section__header">
-            <h3 class="analysis-section__title">
-              {translate('collectionAnalysis.cloudTitle', { count: settings.cloudTermCount })}
-            </h3>
-            <IconButton
-              class="analysis-section__download"
-              size="sm"
-              variant="secondary"
-              label={translate('collectionAnalysis.downloadCloud')}
-              title={translate('collectionAnalysis.downloadCloud')}
-              onclick={() =>
-                void downloadChartPng(wordCloudSvgEl, `entropia-word-cloud-${collectionId}.png`)}
-            >
-              <ActionIcon name="download" size={14} />
-            </IconButton>
-          </div>
-          <svg
-            bind:this={wordCloudSvgEl}
-            viewBox="0 0 {CLOUD_W} {CLOUD_H}"
-            preserveAspectRatio="xMidYMid meet"
-            class="word-cloud"
-            role="img"
-            aria-label={translate('collectionAnalysis.cloudTitle', {
-              count: settings.cloudTermCount,
-            })}
-          >
-            {#each placedWords as placedWord, rank (placedWord.word)}
-              <g>
-                <title>{placedWord.word}: {placedWord.count}</title>
-                <text
-                  class="word-cloud__word"
-                  x={placedWord.x}
-                  y={placedWord.y}
-                  font-size={placedWord.fontSize}
-                  font-family={CLOUD_FONT_STACK}
-                  font-weight={CLOUD_FONT_WEIGHT}
-                  fill={cloudColor(rank)}
-                  text-anchor="middle"
-                  dominant-baseline="middle"
-                  transform={placedWord.rotated
-                    ? `rotate(-90 ${placedWord.x} ${placedWord.y})`
-                    : undefined}>{placedWord.word}</text
-                >
-              </g>
-            {/each}
-          </svg>
-        </section>
 
-        <section class="analysis-section">
-          <div class="analysis-section__header">
-            <h3 class="analysis-section__title">{translate('collectionAnalysis.barsTitle')}</h3>
-            <IconButton
-              class="analysis-section__download"
-              size="sm"
-              variant="secondary"
-              label={translate('collectionAnalysis.downloadBars')}
-              title={translate('collectionAnalysis.downloadBars')}
-              onclick={() =>
-                void downloadChartPng(barChartSvgEl, `entropia-word-bars-${collectionId}.png`)}
-            >
-              <ActionIcon name="download" size={14} />
-            </IconButton>
-          </div>
-          <svg
-            bind:this={barChartSvgEl}
-            viewBox="0 0 {CHART_W} {CHART_H}"
-            preserveAspectRatio="xMidYMid meet"
-            class="bar-chart"
-            role="img"
-            aria-label={translate('collectionAnalysis.barsTitle')}
-          >
-            {#each ticks as tick (tick)}
-              <line
-                class="bar-chart__gridline"
-                x1={MARGIN.left}
-                x2={CHART_W - MARGIN.right}
-                y1={tickY(tick)}
-                y2={tickY(tick)}
-              />
-              <text class="bar-chart__tick-label" x={MARGIN.left - 6} y={tickY(tick) + 3}>
-                {tick}
-              </text>
-            {/each}
-            {#each top20 as { word, count }, i (word)}
-              {@const slotX = MARGIN.left + i * SLOT_W}
-              {@const labelX = slotX + SLOT_W / 2}
-              {@const labelY = MARGIN.top + INNER_H + 12}
-              <g>
-                <title>{word}: {count}</title>
-                <rect
-                  class="bar-chart__bar"
-                  x={slotX + (SLOT_W - BAR_W) / 2}
-                  y={MARGIN.top + INNER_H - barHeight(count)}
-                  width={BAR_W}
-                  height={barHeight(count)}
-                  rx="2"
-                />
-              </g>
-              <text
-                class="bar-chart__x-label"
-                x={labelX}
-                y={labelY}
-                transform="rotate(-45 {labelX} {labelY})"
-              >
-                {truncateLabel(word, 12)}
-              </text>
-            {/each}
-          </svg>
-        </section>
-      {/if}
-    </div>
-
-    <div class="analysis-pane graph-pane" class:is-hidden={activeTab !== 'graph'}>
-      <RelationGraph3D
-        {collectionId}
-        {refreshToken}
-        active={activeTab === 'graph'}
-        settings={settings.graph}
-        snapshot={restore?.graph ?? null}
-      />
-    </div>
-
-    <div class="analysis-pane settings-pane" class:is-hidden={activeTab !== 'settings'}>
-      <h3 class="settings-section-title">
-        {translate('collectionAnalysis.textSettingsTitle')}
-      </h3>
-      <div class="settings-field">
-        <label class="settings-label number-field-label" for="analysis-term-count">
-          {translate('collectionAnalysis.termCountLabel')}
-        </label>
-        <NumberField
-          id="analysis-term-count"
-          min={MIN_CLOUD_TERMS}
-          max={MAX_CLOUD_TERMS}
-          value={settings.cloudTermCount}
-          onchange={onTermCountChange}
-          decrementLabel={translate('numberField.decrease')}
-          incrementLabel={translate('numberField.increase')}
+      <div class="analysis-pane graph-pane" class:is-hidden={activeTab !== 'graph'}>
+        <RelationGraph3D
+          {collectionId}
+          {refreshToken}
+          active={activeTab === 'graph'}
+          settings={settings.graph}
+          snapshot={restore?.graph ?? null}
         />
-        <p class="settings-hint">
-          {translate('collectionAnalysis.termCountHint', {
-            min: MIN_CLOUD_TERMS,
-            max: MAX_CLOUD_TERMS,
-          })}
-        </p>
       </div>
 
-      <div class="settings-field">
-        <label class="settings-label" for="analysis-stopwords">
-          {translate('collectionAnalysis.stopwordsLabel')}
-        </label>
-        <textarea
-          id="analysis-stopwords"
-          class="settings-textarea"
-          rows="6"
-          placeholder={translate('collectionAnalysis.stopwordsPlaceholder')}
-          value={stopwordsInput}
-          oninput={onStopwordsInput}></textarea>
-        <p class="settings-hint">{translate('collectionAnalysis.stopwordsHelp')}</p>
-      </div>
+      <div class="analysis-pane settings-pane" class:is-hidden={activeTab !== 'settings'}>
+        <h3 class="settings-section-title">
+          {translate('collectionAnalysis.textSettingsTitle')}
+        </h3>
+        <div class="settings-field">
+          <label class="settings-label number-field-label" for="analysis-term-count">
+            {translate('collectionAnalysis.termCountLabel')}
+          </label>
+          <NumberField
+            id="analysis-term-count"
+            min={MIN_CLOUD_TERMS}
+            max={MAX_CLOUD_TERMS}
+            value={settings.cloudTermCount}
+            onchange={onTermCountChange}
+            decrementLabel={translate('numberField.decrease')}
+            incrementLabel={translate('numberField.increase')}
+          />
+          <p class="settings-hint">
+            {translate('collectionAnalysis.termCountHint', {
+              min: MIN_CLOUD_TERMS,
+              max: MAX_CLOUD_TERMS,
+            })}
+          </p>
+        </div>
 
-      <GraphSettingsForm graph={settings.graph} onchange={onGraphSettingsChange} />
+        <div class="settings-field">
+          <!-- Textarea names its own id, so the label wraps the field. -->
+          <label class="settings-field">
+            <span class="settings-label">{translate('collectionAnalysis.stopwordsLabel')}</span>
+            <Textarea
+              rows={6}
+              placeholder={translate('collectionAnalysis.stopwordsPlaceholder')}
+              value={stopwordsInput}
+              oninput={onStopwordsInput}
+            />
+          </label>
+          <p class="settings-hint">{translate('collectionAnalysis.stopwordsHelp')}</p>
+        </div>
+
+        <GraphSettingsForm graph={settings.graph} onchange={onGraphSettingsChange} />
+      </div>
     </div>
   </div>
 </Panel>
 
 <style>
-  :global(.panel.analysis-panel) {
+  /* Panel is already a padding-free column; this body fills it and gives
+     the header, the tabs and the scrolling content their rhythm. */
+  .analysis-panel {
     display: flex;
     flex-direction: column;
+    flex: 1;
     gap: var(--space-3);
-    overflow: hidden;
-    padding: 0;
     min-height: 0;
+    overflow: hidden;
   }
 
   .analysis-header {
@@ -582,7 +589,7 @@
     font-family: var(--font-mono);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-normal);
-    letter-spacing: 0.15em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
@@ -599,13 +606,11 @@
     color: var(--color-text-muted);
   }
 
-  :global(.analysis-panel-tabs) {
-    display: flex;
-    flex-wrap: wrap;
-    align-self: stretch;
+  /* A grid cell stretches TabList across the panel; its surface, border and
+     wrapping are the component's own. */
+  .analysis-panel__tabs {
+    display: grid;
     margin: 0 var(--space-3);
-    background: var(--surface-input);
-    border-color: var(--border-subtle);
   }
 
   :global(.analysis-panel-tab) {
@@ -681,7 +686,7 @@
 
   .bar-chart__tick-label {
     fill: var(--color-text-muted);
-    font-size: 9px;
+    font-size: var(--font-size-2xs);
     text-anchor: end;
     font-variant-numeric: tabular-nums;
   }
@@ -692,7 +697,7 @@
 
   .bar-chart__x-label {
     fill: var(--color-text-secondary);
-    font-size: 9px;
+    font-size: var(--font-size-2xs);
     text-anchor: end;
   }
 
@@ -723,27 +728,6 @@
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-bold);
     color: var(--color-text-primary);
-  }
-
-  .settings-textarea {
-    padding: var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    font-family: inherit;
-  }
-
-  .settings-textarea {
-    resize: vertical;
-    min-height: 96px;
-  }
-
-  .settings-textarea:focus-visible {
-    outline: none;
-    border-color: var(--border-focus);
-    box-shadow: var(--focus-ring);
   }
 
   .settings-hint {
