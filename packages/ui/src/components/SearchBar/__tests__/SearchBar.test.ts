@@ -1,5 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import SearchBar from '../SearchBar.svelte'
 
 describe('SearchBar', () => {
@@ -148,5 +150,40 @@ describe('SearchBar', () => {
     render(SearchBar, { props: { value: 'abc', clearDisabled: true } })
     expect(screen.getByRole('searchbox')).not.toBeDisabled()
     expect(screen.getByTestId('search-clear')).toBeDisabled()
+  })
+})
+
+describe('SearchBar size and combobox wiring', () => {
+  const source = () => readFileSync(resolve(import.meta.dirname, '../SearchBar.svelte'), 'utf-8')
+
+  it('is md by default and caps the sm size at its token', () => {
+    const { container, unmount } = render(SearchBar, { props: { ariaLabel: 'A' } })
+    expect(container.querySelector('.search-bar')).toHaveClass('search-bar--md')
+    unmount()
+
+    const sm = render(SearchBar, { props: { ariaLabel: 'B', size: 'sm' } })
+    expect(sm.container.querySelector('.search-bar')).toHaveClass('search-bar--sm')
+    expect(source()).toMatch(
+      /\.search-bar--sm\s*\{[^}]*min-height:\s*var\(--control-height-sm\);[^}]*max-height:\s*var\(--control-height-sm\);/
+    )
+  })
+
+  it('carries combobox semantics onto the input', () => {
+    render(SearchBar, {
+      props: {
+        ariaLabel: 'Search documents',
+        role: 'combobox',
+        'aria-expanded': true,
+        'aria-controls': 'results',
+        'aria-autocomplete': 'list',
+        'aria-activedescendant': 'result-2',
+      },
+    })
+
+    const input = screen.getByRole('combobox', { name: 'Search documents' })
+    expect(input).toHaveAttribute('aria-expanded', 'true')
+    expect(input).toHaveAttribute('aria-controls', 'results')
+    expect(input).toHaveAttribute('aria-autocomplete', 'list')
+    expect(input).toHaveAttribute('aria-activedescendant', 'result-2')
   })
 })

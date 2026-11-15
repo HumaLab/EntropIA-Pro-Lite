@@ -36,7 +36,15 @@
   import { APP_VERSION, GITHUB_REPO_URL, PRODUCT_NAME_BADGE } from '$lib/product'
   import { watchSplitFit } from '$lib/resize-split-fit'
   import { clampSplitRatio } from '$lib/split-ratio'
-  import { tooltip, TooltipLayer, ActionIcon, Button, IconButton, StatusBadge } from '@entropia/ui'
+  import {
+    tooltip,
+    TooltipLayer,
+    ActionIcon,
+    Button,
+    IconButton,
+    SearchBar,
+    StatusBadge,
+  } from '@entropia/ui'
   import DocumentExplorer from './DocumentExplorer.svelte'
   import TopBar from './TopBar.svelte'
   import EntropicConstellation from './EntropicConstellation.svelte'
@@ -143,6 +151,7 @@
       newCollection: t('appshell.sidebarNewCollection'),
       filter: t('appshell.sidebarFilterCollections'),
       filterPlaceholder: t('appshell.sidebarFilterCollectionsPlaceholder'),
+      filterClear: t('collections.searchClear'),
       drawer: t('appshell.explorerDrawerAria'),
       closeDrawer: t('appshell.explorerDrawerClose'),
     }
@@ -706,22 +715,30 @@
 
       <!-- Search / filter -->
       {#if searchExpanded}
-        <input
-          bind:this={searchInputEl}
-          class="sidebar__search-input"
-          type="text"
-          placeholder={sidebarLabels.filterPlaceholder}
-          bind:value={searchFilter}
-          onblur={collapseSearch}
-          onkeydown={(e) => {
-            if (e.key === 'Escape') {
-              // Handled here: the drawer must not also close on this Escape.
-              e.preventDefault()
+        <div class="sidebar__search">
+          <SearchBar
+            size="sm"
+            value={searchFilter}
+            placeholder={sidebarLabels.filterPlaceholder}
+            clearAriaLabel={sidebarLabels.filterClear}
+            emitSearch={false}
+            inputRef={(element) => (searchInputEl = element)}
+            onvaluechange={(query) => (searchFilter = query)}
+            onclear={() => {
               searchFilter = ''
-              searchExpanded = false
-            }
-          }}
-        />
+              searchInputEl?.focus()
+            }}
+            onblur={collapseSearch}
+            onkeydown={(e) => {
+              if (e.key === 'Escape') {
+                // Handled here: the drawer must not also close on this Escape.
+                e.preventDefault()
+                searchFilter = ''
+                searchExpanded = false
+              }
+            }}
+          />
+        </div>
       {:else}
         <div class="sidebar__toolbar-spacer"></div>
         <IconButton
@@ -1011,27 +1028,10 @@
     flex: 1;
   }
 
-  .sidebar__search-input {
+  /* The filter takes the room the spacer leaves when it is closed. */
+  .sidebar__search {
     flex: 1;
     min-width: 0;
-    height: var(--control-height-xs);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-xs);
-    outline: none;
-    transition: border-color var(--transition-base);
-  }
-
-  .sidebar__search-input:focus {
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-  }
-
-  .sidebar__search-input::placeholder {
-    color: var(--color-text-muted);
   }
 
   .sidebar__body {

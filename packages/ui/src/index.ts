@@ -104,7 +104,7 @@ export * from './components/PdfMarkup/index'
 export { AudioPlayer } from './components/AudioPlayer/index'
 
 export { SearchBar } from './components/SearchBar/index'
-export type { SearchBarProps } from './components/SearchBar/index'
+export type { SearchBarProps, SearchBarSize } from './components/SearchBar/index'
 
 export { MetadataEditor } from './components/MetadataEditor/index'
 export type { MetadataEditorProps } from './components/MetadataEditor/index'
