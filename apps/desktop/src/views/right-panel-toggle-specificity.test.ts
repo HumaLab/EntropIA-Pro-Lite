@@ -79,17 +79,14 @@ describe('the right-panel-toggle opt-out beats IconButton on specificity determi
     }
   })
 
-  it('CollectionView scopes the toggle override under its own top-level class', () => {
+  it('CollectionView draws the toggle with the IconButton edge variant and restyles nothing', () => {
+    // Same strip as ItemView's: IconButton's own `edge` variant, with no
+    // :global rule over it (docs/AUDITORIA_ESTILOS.md R11).
     const selectors = ruleSelectors(COLLECTION_VIEW_SOURCE).filter((s) =>
       s.includes('right-panel-toggle')
     )
-    expect(selectors.length).toBeGreaterThan(0)
-    for (const selector of selectors) {
-      // An ancestor class segment outside :global() always gets Svelte's
-      // scope hash appended, so `.collection-shell` alone already carries
-      // two class selectors before the two more inside :global(...).
-      expect(selector).toMatch(/^\.collection-shell\s+:global\(\.icon-button\.right-panel-toggle/)
-    }
+    expect(selectors).toEqual([])
+    expect(COLLECTION_VIEW_SOURCE).toMatch(/<IconButton\s[^>]*variant="edge"[^>]*>/)
   })
 
   it('ItemView draws the toggle with the IconButton edge variant and restyles nothing', () => {

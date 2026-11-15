@@ -37,8 +37,11 @@ describe('the collection toolbar stretches at a narrow pane width, but its icon-
     // Button.svelte caps an icon-only button at its token on both axes
     // (packages/ui control-block-size.test.ts), so the view no longer carries
     // its own exception to the full-width rule.
+    // The search field stretches through its own wrapper, so no rule reaches
+    // into SearchBar or Button with :global().
     const block = blockFor('@container pane (max-width: 720px)')
-    expect(block).toMatch(/\.collection-toolbar\s*:global\(\.search-bar\)/)
+    expect(block).toMatch(/\.collection-toolbar__search\s*\{/)
+    expect(STYLES).not.toMatch(/:global\(\.(?:btn|search-bar)\b/)
     expect(STYLES).not.toMatch(/btn--icon-only/)
   })
 })

@@ -16,7 +16,14 @@
     type BibliographyWorkRow,
   } from '$lib/bibliography-library'
   import { workLine } from '$lib/rag-scope'
-  import { ActionIcon, Button, SearchBar, ToolbarMenu, type ToolbarMenuItem } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    SearchBar,
+    SelectTrigger,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
   import BibliographyReprocessDialog from '../components/BibliographyReprocessDialog.svelte'
 
   /**
@@ -278,45 +285,43 @@
           />
         {/key}
         {#if libraries.length > 1}
-          <ToolbarMenu
-            label={$currentLocale && t('biblioteca.libraryMenu')}
-            items={libraryItems}
-            bind:open={libraryMenuOpen}
-          >
-            {#snippet trigger(props, { open })}
-              <button
-                type="button"
-                class="biblioteca__library-trigger"
-                class:biblioteca__library-trigger--open={open}
-                aria-label={$currentLocale && t('biblioteca.libraryMenu')}
-                {...props}
-              >
-                <span class="biblioteca__library-trigger-label">{heading}</span>
-                <ActionIcon name="chevron-down" size={12} />
-              </button>
-            {/snippet}
-          </ToolbarMenu>
+          <div class="biblioteca__menu">
+            <ToolbarMenu
+              label={$currentLocale && t('biblioteca.libraryMenu')}
+              items={libraryItems}
+              bind:open={libraryMenuOpen}
+            >
+              {#snippet trigger(props, { open })}
+                <SelectTrigger
+                  {...props}
+                  {open}
+                  size="md"
+                  label={heading}
+                  aria-label={$currentLocale && t('biblioteca.libraryMenu')}
+                />
+              {/snippet}
+            </ToolbarMenu>
+          </div>
         {/if}
         <!-- The order menu wears the library menu's own trigger: the two
              menus of one toolbar stay visually one control family. -->
-        <ToolbarMenu
-          label={$currentLocale && t('biblioteca.sortMenu')}
-          items={sortItems}
-          bind:open={sortMenuOpen}
-        >
-          {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="biblioteca__library-trigger"
-              class:biblioteca__library-trigger--open={open}
-              aria-label={$currentLocale && t('biblioteca.sortMenu')}
-              {...props}
-            >
-              <span class="biblioteca__library-trigger-label">{sortLabel}</span>
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
-          {/snippet}
-        </ToolbarMenu>
+        <div class="biblioteca__menu">
+          <ToolbarMenu
+            label={$currentLocale && t('biblioteca.sortMenu')}
+            items={sortItems}
+            bind:open={sortMenuOpen}
+          >
+            {#snippet trigger(props, { open })}
+              <SelectTrigger
+                {...props}
+                {open}
+                size="md"
+                label={sortLabel}
+                aria-label={$currentLocale && t('biblioteca.sortMenu')}
+              />
+            {/snippet}
+          </ToolbarMenu>
+        </div>
         <Button variant="secondary" onclick={() => (reprocessOpen = true)}>
           <ActionIcon name="refresh" size={16} />
           {$currentLocale && t('bibliography.reprocess.action')}
@@ -405,35 +410,10 @@
     gap: var(--space-2);
   }
 
-  .biblioteca__library-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
+  /* Caps a long library name; the trigger ellipsizes inside it. */
+  .biblioteca__menu {
+    flex: none;
     max-width: 260px;
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-control);
-    background: var(--color-surface-glass);
-    color: var(--color-text-primary);
-    cursor: pointer;
-  }
-
-  .biblioteca__library-trigger:hover,
-  .biblioteca__library-trigger--open {
-    border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-hairline));
-  }
-
-  .biblioteca__library-trigger:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .biblioteca__library-trigger-label {
-    overflow: hidden;
-    font-size: var(--font-size-sm);
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   /* Rows carry the item-card surface (Colecciones' card language) as a

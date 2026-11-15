@@ -9,6 +9,7 @@
     SearchBar,
     Button,
     Input,
+    Textarea,
     Card,
     ConfirmDialog,
   } from '@entropia/ui'
@@ -317,18 +318,12 @@
                 placeholder={t('collections.descriptionPlaceholder')}
                 bind:value={editDescription}
               />
-              <label class="edit-form__label" for="collection-ai-context-{collection.id}">
-                {t('collections.aiContextLabel')}
-              </label>
-              <textarea
-                id="collection-ai-context-{collection.id}"
-                class="edit-form__textarea"
-                rows="3"
-                aria-describedby="collection-ai-context-hint-{collection.id}"
-                bind:value={editAiContext}></textarea>
-              <p class="edit-form__hint" id="collection-ai-context-hint-{collection.id}">
-                {t('collections.aiContextHint')}
-              </p>
+              <Textarea
+                label={t('collections.aiContextLabel')}
+                hint={t('collections.aiContextHint')}
+                rows={3}
+                bind:value={editAiContext}
+              />
               <div class="edit-form__actions">
                 <Button variant="primary" type="submit" disabled={!editName.trim()}
                   >{t('collections.save')}</Button
@@ -382,39 +377,6 @@
 </div>
 
 <style>
-  .edit-form__label {
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    color: var(--color-text-secondary);
-  }
-
-  .edit-form__textarea {
-    width: 100%;
-    min-height: 4.5rem;
-    padding: var(--space-2) var(--space-3);
-    box-sizing: border-box;
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    line-height: var(--line-height-base);
-    color: var(--color-text-primary);
-    background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    resize: vertical;
-    outline: none;
-  }
-
-  .edit-form__textarea:focus-visible {
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-  }
-
-  .edit-form__hint {
-    margin: 0;
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-  }
-
   .collections-view {
     min-height: 100%;
   }
@@ -457,7 +419,7 @@
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     white-space: nowrap;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 2%);
+    box-shadow: var(--shadow-highlight);
   }
 
   .collections-controls {
@@ -469,18 +431,11 @@
     padding: var(--space-3) 0;
   }
 
+  /* The search field fills this wrapper, which carries its width. */
   .collections-controls__search {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
     min-width: min(100%, 360px);
-    flex: 1 1 360px;
-  }
-
-  .collections-controls :global(.search-bar) {
-    min-width: min(100%, 320px);
     max-width: 360px;
-    flex: 1 1 260px;
+    flex: 1 1 360px;
   }
 
   .create-form {
@@ -551,17 +506,13 @@
 
     .collections-controls__search {
       min-width: 0;
-    }
-
-    .collections-controls :global(.search-bar) {
-      width: 100%;
-      min-width: 0;
       max-width: none;
     }
 
-    .create-form__actions :global(.btn),
-    .edit-form__actions :global(.btn) {
-      width: 100%;
+    /* One column: each button takes the full row. */
+    .create-form__actions,
+    .edit-form__actions {
+      display: grid;
     }
   }
 </style>
