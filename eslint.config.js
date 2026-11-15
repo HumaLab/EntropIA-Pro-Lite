@@ -3,6 +3,9 @@ import globals from 'globals'
 import tseslint from 'typescript-eslint'
 import svelte from 'eslint-plugin-svelte'
 
+const RESTRICTED_ELEMENTS_MESSAGE =
+  'This app owns every glyph and control. Hand-written <svg> drifts from the icon contract (stroke 2, 24 grid) — use <ActionIcon name="..." />. A native <select> is drawn by the operating system outside the app theme — use Select or SelectTrigger. A native <progress> keeps the browser track — use ProgressBar. A native <textarea> repeats the field look by hand — use Textarea. Data visualisations and viewer overlays are exempt — see the SVG allowlist in eslint.config.js.'
+
 export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
@@ -80,30 +83,21 @@ export default tseslint.config(
       'svelte/no-restricted-html-elements': [
         'error',
         {
-          elements: ['svg', 'select', 'progress'],
-          message:
-            'This app owns every glyph and control. Hand-written <svg> drifts from the icon contract (stroke 2, 24 grid) — use <ActionIcon name="..." />. A native <select> is drawn by the operating system outside the app theme — use the ToolbarMenu radio pattern (see WritingZoteroTab). A native <progress> keeps the browser track — use ProgressBar once it exists (docs/PLAN_HOMOGENEIZACION.md, step 14a). Data visualisations and viewer overlays are exempt — add the file to the allowlist in eslint.config.js.',
+          elements: ['svg', 'select', 'progress', 'textarea'],
+          message: RESTRICTED_ELEMENTS_MESSAGE,
         },
       ],
     },
   },
   {
-    // Native <progress> that predates the ban. Each file leaves this list in the
-    // plan step that migrates it to ProgressBar (docs/PLAN_HOMOGENEIZACION.md).
-    // Never add a file: the list only shrinks.
-    files: [
-      'apps/desktop/src/views/InternetArchiveDialog.svelte', // step 16 (N7)
-      'apps/desktop/src/views/ImportSourcesDialog.svelte', // step 17 (N6)
-      'apps/desktop/src/views/ItemTextPanel.svelte', // step 23 (N8)
-      'apps/desktop/src/views/CollectionView.svelte', // step 24 (N9)
-    ],
+    // Textarea is the one place a native <textarea> is drawn.
+    files: ['packages/ui/src/components/Textarea/Textarea.svelte'],
     rules: {
       'svelte/no-restricted-html-elements': [
         'error',
         {
-          elements: ['svg', 'select'],
-          message:
-            'This app owns every glyph and control. Hand-written <svg> drifts from the icon contract (stroke 2, 24 grid) — use <ActionIcon name="..." />. A native <select> is drawn by the operating system outside the app theme — use the ToolbarMenu radio pattern (see WritingZoteroTab).',
+          elements: ['svg', 'select', 'progress'],
+          message: RESTRICTED_ELEMENTS_MESSAGE,
         },
       ],
     },
