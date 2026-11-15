@@ -186,7 +186,7 @@ function open(props: Record<string, unknown> = {}) {
 }
 
 function discoveryTabs(): HTMLElement {
-  return screen.getByRole('group', { name: 'Descubrimiento' })
+  return screen.getByRole('tablist', { name: 'Descubrimiento' })
 }
 
 async function searchForResults(props: Record<string, unknown> = {}) {
@@ -206,7 +206,7 @@ async function searchForResults(props: Record<string, unknown> = {}) {
   open(props)
   await fireEvent.input(screen.getByLabelText('Título'), { target: { value: 'Chaplin' } })
   const tabs = discoveryTabs()
-  await fireEvent.click(within(tabs).getByRole('button', { name: 'Buscar' }))
+  await fireEvent.click(within(tabs).getByRole('tab', { name: 'Buscar' }))
   await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
   await screen.findByText('Some Title')
 }
@@ -304,7 +304,7 @@ describe('InternetArchiveDialog discovery', () => {
     })
     open()
     const tabs = discoveryTabs()
-    await fireEvent.click(within(tabs).getByRole('button', { name: 'Buscar' }))
+    await fireEvent.click(within(tabs).getByRole('tab', { name: 'Buscar' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
 
     expect(await screen.findByText('<script>alert(1)</script>')).toBeInTheDocument()
@@ -622,7 +622,7 @@ describe('InternetArchiveDialog discovery', () => {
   it('explores a collection by id through the Colección tab', async () => {
     iaRef.iaListCollection.mockResolvedValue({ numFound: 1, items: [searchItem()] })
     open()
-    await fireEvent.click(within(discoveryTabs()).getByRole('button', { name: 'Colección' }))
+    await fireEvent.click(within(discoveryTabs()).getByRole('tab', { name: 'Colección' }))
     await fireEvent.input(screen.getByLabelText('Identificador de la colección'), {
       target: { value: 'opensource' },
     })
@@ -636,7 +636,7 @@ describe('InternetArchiveDialog discovery', () => {
     iaRef.iaResolveIdentifier.mockResolvedValue('some-id')
     iaRef.iaGetItem.mockResolvedValue(itemDetails())
     open()
-    await fireEvent.click(within(discoveryTabs()).getByRole('button', { name: 'Enlace' }))
+    await fireEvent.click(within(discoveryTabs()).getByRole('tab', { name: 'Enlace' }))
     await fireEvent.input(screen.getByLabelText('Identificador o enlace'), {
       target: { value: 'https://archive.org/details/some-id' },
     })
@@ -757,6 +757,16 @@ describe('InternetArchiveDialog destination and preparation', () => {
         expect.objectContaining({ identifier: 'some-id', fileNames: ['doc_text.pdf'] }),
       ])
     )
+  })
+
+  it('chooses "new collection" when its name field gets focus', async () => {
+    await goToDestination()
+    const field = screen.getByLabelText('Nombre de la nueva colección')
+
+    expect(field).not.toBeDisabled()
+    await fireEvent.focusIn(field)
+
+    expect(screen.getByRole('radio', { name: /Nueva colección/ })).toBeChecked()
   })
 
   it('needs a name before preparing into a new collection', async () => {
@@ -901,6 +911,30 @@ describe('InternetArchiveDialog running and done', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Iniciar importación' }))
     await screen.findByText('Importando…')
   }
+
+  it('shows the running import as a progress bar with its value', async () => {
+    await startJob()
+    jobHandler?.('job-1')
+    await screen.findByText('0 de 1 archivos')
+
+    const bar = screen.getByRole('progressbar', { name: 'Progreso de la importación' })
+    expect(bar).toHaveAttribute('aria-valuenow', '0')
+    expect(bar).toHaveAttribute('aria-valuemax', '1')
+  })
+
+  it('marks the open discovery tab as selected', () => {
+    open()
+
+    const tabs = discoveryTabs()
+    expect(within(tabs).getByRole('tab', { name: 'Buscar' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(within(tabs).getByRole('tab', { name: 'Enlace' })).toHaveAttribute(
+      'aria-selected',
+      'false'
+    )
+  })
 
   it('starts the prepared job, refreshes status on job-updated and imports verified files', async () => {
     await startJob()
@@ -1438,7 +1472,7 @@ describe('InternetArchiveDialog resume (26b)', () => {
     open()
 
     await waitFor(() => expect(iaRef.iaListJobs).toHaveBeenCalled())
-    await screen.findByRole('group', { name: 'Descubrimiento' })
+    await screen.findByRole('tablist', { name: 'Descubrimiento' })
     expect(screen.queryByText('Importaciones en curso')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Retomar importación' })).toBeNull()
   })
@@ -1589,7 +1623,7 @@ describe('InternetArchiveDialog in English', () => {
     iaRef.iaSearch.mockResolvedValue({ numFound: 0, items: [] })
     open()
 
-    expect(screen.getByRole('group', { name: 'Discovery' })).toBeInTheDocument()
+    expect(screen.getByRole('tablist', { name: 'Discovery' })).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Search the archive' }))
     expect(await screen.findByText('No results for this search.')).toBeInTheDocument()
   })
