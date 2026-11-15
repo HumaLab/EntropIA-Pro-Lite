@@ -1,6 +1,13 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import {
+  allowlistProblems,
+  readAllowlists,
+  rulesBrokenBy,
+  scanPackage,
+  type TokenContext,
+} from './__tests__/style-guards'
 
 const TOKEN_DEFINITION = /(--[a-z0-9-]+)\s*:/g
 const TOKEN_USE_WITHOUT_FALLBACK = /var\((--[a-z0-9-]+)\s*\)/g
@@ -390,5 +397,82 @@ describe('desktop design tokens', () => {
       .map(([path, missing]) => `${basename(path)}: ${missing.join(', ')}`)
 
     expect(offenders).toEqual([])
+  })
+})
+
+describe('style debt guards', () => {
+  // docs/PLAN_HOMOGENEIZACION.md, step 3. Existing debt is listed, pair by pair,
+  // in the allowlist of the plan step that clears it. Never add an entry: a
+  // step removes its pairs when it clears them, so the lists only shrink.
+  const allowlistDir = resolve(import.meta.dirname, '__tests__/style-allowlists')
+  const sheets = [
+    resolve(import.meta.dirname, '../../../packages/ui/src/tokens/tokens.css'),
+    resolve(import.meta.dirname, 'app.css'),
+  ]
+
+  it('covers every style-debt pair with exactly one step allowlist, and lists only live debt', () => {
+    const { failing } = scanPackage(import.meta.dirname, sheets)
+
+    expect(allowlistProblems(readAllowlists(allowlistDir), failing)).toEqual([])
+  })
+
+  const ctx: TokenContext = {
+    published: new Set(['--color-accent', '--color-text-muted']),
+    defined: new Set(['--color-accent', '--color-text-muted', '--local-gap']),
+  }
+  const component = (css: string) => `<div class="x"></div>\n<style>\n${css}\n</style>\n`
+
+  it('flags hard-coded colours, including inside a fallback', () => {
+    expect(rulesBrokenBy(component('.x { color: #fff; }'), ctx)).toContain('color-literal')
+    expect(rulesBrokenBy(component('.x { color: rgba(0, 0, 0, 0.2); }'), ctx)).toContain(
+      'color-literal'
+    )
+    expect(rulesBrokenBy(component('.x { color: var(--color-accent); }'), ctx).size).toBe(0)
+  })
+
+  it('flags color-mix towards black or white, but not towards transparent', () => {
+    const mixed = '.x { color: color-mix(in srgb, var(--color-accent) 80%, white 20%); }'
+    const faded = '.x { color: color-mix(in srgb, var(--color-accent) 30%, transparent); }'
+
+    expect(rulesBrokenBy(component(mixed), ctx)).toContain('color-mix-black-white')
+    expect(rulesBrokenBy(component(faded), ctx).size).toBe(0)
+  })
+
+  it('flags a token nothing defines even when it carries a fallback', () => {
+    const invented = '.x { color: var(--color-text-tertiary, var(--color-text-muted)); }'
+
+    expect(rulesBrokenBy(component(invented), ctx)).toContain('unknown-token')
+    expect(rulesBrokenBy(component('.x { gap: var(--local-gap); }'), ctx).size).toBe(0)
+    // A property named after the component's own block is a hook for its parent.
+    expect(rulesBrokenBy(component('.x { width: var(--x-max-width, 100%); }'), ctx).size).toBe(0)
+  })
+
+  it('flags a fallback on a published token', () => {
+    expect(rulesBrokenBy(component('.x { color: var(--color-text-muted, grey); }'), ctx)).toContain(
+      'published-fallback'
+    )
+  })
+
+  it('flags a submit control filled with the accent', () => {
+    expect(
+      rulesBrokenBy(component('.x-submit { background: var(--color-accent); }'), ctx)
+    ).toContain('accent-fill')
+    expect(
+      rulesBrokenBy(component('.x-row--active { background: var(--color-accent); }'), ctx).size
+    ).toBe(0)
+  })
+
+  it('rejects a pair listed twice, a pair that no longer fails and debt nobody listed', () => {
+    const failing = new Set(['views/A.svelte::color-literal', 'views/B.svelte::color-literal'])
+    const lists = {
+      'paso-6.json': { 'color-literal': ['views/A.svelte', 'views/C.svelte'] },
+      'paso-18.json': { 'color-literal': ['views/A.svelte'] },
+    }
+
+    expect(allowlistProblems(lists, failing)).toEqual([
+      'views/C.svelte::color-literal: listed in paso-6.json but no longer fails',
+      'views/A.svelte::color-literal: listed in both paso-6.json and paso-18.json',
+      'views/B.svelte::color-literal: fails and no allowlist covers it',
+    ])
   })
 })

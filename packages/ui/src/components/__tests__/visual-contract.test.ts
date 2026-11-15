@@ -1,6 +1,14 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import {
+  allowlistProblems,
+  readAllowlists,
+  rulesBrokenBy,
+  scanPackage,
+  STYLE_RULES,
+  type TokenContext,
+} from './style-guards'
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(import.meta.dirname, relativePath), 'utf-8')
@@ -243,5 +251,31 @@ describe('design system visual contract', () => {
     expect(annotationToolbar).toContain(
       '--annotation-toolbar-icon-size: calc(16px * var(--annotation-toolbar-scale));'
     )
+  })
+})
+
+describe('style debt guards', () => {
+  // docs/PLAN_HOMOGENEIZACION.md, step 3. Existing debt is listed, pair by pair,
+  // in the allowlist of the plan step that clears it. Never add an entry: a
+  // step removes its pairs when it clears them, so the lists only shrink.
+  // The accent-fill rule stays with the targeted test above in this package.
+  const rules = STYLE_RULES.filter((rule) => rule !== 'accent-fill')
+  const allowlistDir = resolve(import.meta.dirname, 'style-allowlists')
+
+  it('covers every style-debt pair with exactly one step allowlist, and lists only live debt', () => {
+    const { failing } = scanPackage(
+      resolve(import.meta.dirname, '../..'),
+      [resolve(import.meta.dirname, '../../tokens/tokens.css')],
+      rules
+    )
+
+    expect(allowlistProblems(readAllowlists(allowlistDir), failing)).toEqual([])
+  })
+
+  it('flags a hard-coded colour in a component stylesheet', () => {
+    const ctx: TokenContext = { published: new Set(), defined: new Set() }
+    const component = '<div class="x"></div>\n<style>\n.x { background: #fff; }\n</style>\n'
+
+    expect(rulesBrokenBy(component, ctx)).toContain('color-literal')
   })
 })

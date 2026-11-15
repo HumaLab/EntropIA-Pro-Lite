@@ -1,0 +1,8 @@
+{
+  "color-literal": ["components/MapViewer/MapViewer.svelte"],
+  "published-fallback": [
+    "components/DocumentViewer/DocumentViewer.svelte",
+    "components/MapViewer/MapViewer.svelte",
+    "components/WritingEditor/WritingEditor.svelte"
+  ]
+}

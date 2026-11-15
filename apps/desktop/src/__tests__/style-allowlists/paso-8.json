@@ -1,0 +1,8 @@
+{
+  "color-literal": ["layout/NotificationBell.svelte"],
+  "unknown-token": [
+    "views/BibliographySearchTab.svelte",
+    "views/ItemSearchPanel.svelte",
+    "views/WritingHistoryPanel.svelte"
+  ]
+}

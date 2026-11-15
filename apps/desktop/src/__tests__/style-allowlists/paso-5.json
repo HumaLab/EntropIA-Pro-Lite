@@ -1,0 +1,31 @@
+{
+  "color-literal": [
+    "views/BatchFlowPicker.svelte",
+    "views/BatchSchemaPanel.svelte",
+    "views/HelpSettingsTab.svelte",
+    "views/WritingHistoryPanel.svelte",
+    "views/WritingSharePanel.svelte"
+  ],
+  "published-fallback": [
+    "App.svelte",
+    "layout/EntropicConstellation.svelte",
+    "layout/NotificationBell.svelte",
+    "views/AssistantsTab.svelte",
+    "views/BatchFlowPicker.svelte",
+    "views/BatchSchemaPanel.svelte",
+    "views/CollectionView.svelte",
+    "views/DependenciasTab.svelte",
+    "views/HelpSettingsTab.svelte",
+    "views/HelpView.svelte",
+    "views/InternetArchiveDialog.svelte",
+    "views/InvestigationView.svelte",
+    "views/ItemView.svelte",
+    "views/NavegadorCopyDialog.svelte",
+    "views/NavegadorPdfViewer.svelte",
+    "views/NavegadorSources.svelte",
+    "views/NavegadorView.svelte",
+    "views/RagChatView.svelte",
+    "views/WritingHistoryPanel.svelte",
+    "views/WritingSharePanel.svelte"
+  ]
+}

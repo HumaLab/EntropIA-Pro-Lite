@@ -1,0 +1,8 @@
+{
+  "color-literal": [
+    "views/ItemAnalysisPanel.svelte",
+    "views/ItemAssetPanel.svelte",
+    "views/ItemSearchPanel.svelte",
+    "views/ItemTextPanel.svelte"
+  ]
+}
