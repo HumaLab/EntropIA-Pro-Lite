@@ -5148,6 +5148,55 @@ describe('ItemView image annotations', () => {
     expect(screen.getByText('Mostrando 1 de 5 bloques.')).toBeInTheDocument()
   })
 
+  it('draws the right panel toggle as the IconButton edge strip', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-image-1',
+          itemId: 'item-1',
+          path: 'docs/photo-a.jpg',
+          type: 'image',
+          createdAt: 1,
+        },
+      ],
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+
+    const toggle = await screen.findByRole('button', { name: 'Ocultar panel derecho' })
+    expect(toggle).toHaveClass('icon-button', 'icon-button--edge')
+    await fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: 'Mostrar panel derecho' })).toHaveClass(
+      'icon-button--edge'
+    )
+  })
+
+  it('draws the layout counters and block badges with StatusBadge', async () => {
+    getLayoutByAssetMock.mockResolvedValue(layoutFixture)
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-image-1',
+          itemId: 'item-1',
+          path: 'docs/photo-a.jpg',
+          type: 'image',
+          createdAt: 1,
+        },
+      ],
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+
+    const firstBlock = await screen.findByTestId('layout-block-item-layout-block-0')
+    const counter = screen.getByTestId('layout-filter-count-all')
+    expect(counter).toHaveClass('status-badge', 'status-badge--count')
+    expect(counter).toHaveTextContent('5')
+    expect(firstBlock.querySelectorAll('.status-badge')).not.toHaveLength(0)
+
+    await fireEvent.click(firstBlock)
+    expect(screen.getByTestId('layout-inspector-overlay-source')).toHaveClass('status-badge')
+  })
+
   it('shows a rich inspector for the selected block and exposes quick copy actions', async () => {
     getLayoutByAssetMock.mockResolvedValue(layoutFixture)
     storeRef.current = createStore({
