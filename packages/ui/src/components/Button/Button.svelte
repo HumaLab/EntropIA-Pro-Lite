@@ -182,10 +182,43 @@
     font-size: var(--font-size-sm);
   }
 
+  /* ─── Link ─── */
+  /* Text that acts: the accent colours the label, never the surface, and the
+     underline shows on hover and keyboard focus. It sizes to its text and
+     takes the type of the line it sits in, so it is not capped at a control
+     height and a stretching parent cannot grow it. Declared after the sizes
+     so it wins over the `.btn--{size}` caps at equal specificity. */
+  .btn--link {
+    min-height: 0;
+    max-height: none;
+    flex: none;
+    align-self: baseline;
+    vertical-align: baseline;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-accent);
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    line-height: inherit;
+    text-decoration: none;
+    box-shadow: none;
+  }
+  .btn--link:hover:not(:disabled) {
+    color: var(--color-accent-hover);
+    text-decoration: underline;
+  }
+  .btn--link:focus-visible {
+    text-decoration: underline;
+  }
+
   /* ─── Spinner ─── */
   .btn__spinner {
-    width: 14px;
-    height: 14px;
+    --btn-spinner-size: 14px;
+    width: var(--btn-spinner-size);
+    height: var(--btn-spinner-size);
     border: 2px solid currentColor;
     border-right-color: transparent;
     border-radius: var(--radius-full);

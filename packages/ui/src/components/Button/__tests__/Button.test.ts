@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/svelte'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/svelte'
+import { describe, expect, it, vi } from 'vitest'
 import ButtonTestHost from './ButtonTestHost.svelte'
 
 describe('Button', () => {
@@ -40,5 +40,29 @@ describe('Button', () => {
     })
 
     expect(screen.getByRole('button', { name: 'Delete collection' }).className).toContain('btn--sm')
+  })
+})
+
+describe('Button variant="link"', () => {
+  it('renders a native button with the link variant class', () => {
+    render(ButtonTestHost, { props: { variant: 'link', label: 'Open settings' } })
+
+    const button = screen.getByRole('button', { name: 'Open settings' })
+    expect(button.tagName).toBe('BUTTON')
+    expect(button).toHaveAttribute('type', 'button')
+    expect(button.className).toContain('btn--link')
+    expect(button.className).not.toContain('btn--primary')
+  })
+
+  it('disables the link like any other button', async () => {
+    const onclick = vi.fn()
+    render(ButtonTestHost, {
+      props: { variant: 'link', disabled: true, label: 'Dismiss', onclick },
+    })
+
+    const button = screen.getByRole('button', { name: 'Dismiss' })
+    expect(button).toBeDisabled()
+    await fireEvent.click(button)
+    expect(onclick).not.toHaveBeenCalled()
   })
 })

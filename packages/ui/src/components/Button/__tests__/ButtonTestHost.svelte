@@ -1,14 +1,21 @@
 <script lang="ts">
   import Button from '../Button.svelte'
+  import type { ButtonVariant } from '../Button.types'
 
   let {
     iconOnly = false,
     size = 'md',
+    variant,
+    disabled,
+    onclick,
     label,
     class: className,
   }: {
     iconOnly?: boolean
     size?: 'sm' | 'md' | 'lg'
+    variant?: ButtonVariant
+    disabled?: boolean
+    onclick?: () => void
     label: string
     class?: string
   } = $props()
@@ -17,6 +24,9 @@
     iconOnly,
     size,
     'aria-label': label,
+    ...(variant === undefined ? {} : { variant }),
+    ...(disabled === undefined ? {} : { disabled }),
+    ...(onclick === undefined ? {} : { onclick }),
     ...(className === undefined ? {} : { class: className }),
   } as Record<string, unknown>)
 </script>
