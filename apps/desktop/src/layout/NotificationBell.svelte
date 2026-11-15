@@ -268,7 +268,7 @@
     min-width: 14px;
     height: 14px;
     padding: 0 3px;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: var(--color-danger);
     color: #fff;
     font-family: var(--font-ui);
@@ -289,7 +289,7 @@
     border: 1px solid var(--border-panel);
     border-radius: var(--radius-md);
     background: var(--surface-panel);
-    box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.32));
+    box-shadow: var(--shadow-lg);
     overflow: hidden;
   }
 
@@ -384,7 +384,7 @@
   }
 
   .notif__item--warning {
-    border-left-color: var(--color-warning, #d99a00);
+    border-left-color: var(--color-warning);
   }
 
   .notif__item--danger {
@@ -428,7 +428,7 @@
 
   .notif__item-time {
     font-family: var(--font-ui);
-    font-size: var(--font-size-2xs, 0.65rem);
+    font-size: var(--font-size-2xs);
     color: var(--color-text-muted);
   }
 </style>

@@ -308,7 +308,7 @@
 
   h3 {
     margin: 0 0 var(--space-2);
-    font-size: var(--font-size-md, 1rem);
+    font-size: var(--font-size-md);
   }
 
   ul {
@@ -325,7 +325,7 @@
     width: 100%;
     padding: var(--space-1) var(--space-2);
     border: 0;
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-sm);
     background: none;
     color: inherit;
     font: inherit;
@@ -343,7 +343,7 @@
     overflow-y: auto;
     margin-bottom: var(--space-2);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-sm);
   }
 
   .history-panel__hint {
@@ -352,6 +352,6 @@
   }
 
   .history-panel__error {
-    color: var(--color-danger, #c0392b);
+    color: var(--color-danger);
   }
 </style>

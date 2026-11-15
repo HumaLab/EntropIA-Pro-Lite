@@ -967,7 +967,7 @@
   }
 
   .navegador-view__problem {
-    color: var(--color-danger, var(--color-text-primary));
+    color: var(--color-danger);
   }
 
   /* The page area and the sources drawer share a row: the drawer is never over

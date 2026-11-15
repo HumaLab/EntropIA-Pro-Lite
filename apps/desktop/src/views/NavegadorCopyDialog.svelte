@@ -245,7 +245,7 @@
   .copy-dialog__problem {
     margin: 0;
     font-size: var(--font-size-sm);
-    color: var(--color-danger, var(--color-text-primary));
+    color: var(--color-danger);
   }
 
   .copy-dialog__destination {
@@ -261,7 +261,7 @@
     padding: 0;
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }

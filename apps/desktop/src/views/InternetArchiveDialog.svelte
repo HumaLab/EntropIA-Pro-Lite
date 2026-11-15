@@ -2231,7 +2231,7 @@
     padding: 0 var(--space-2);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
@@ -2365,7 +2365,7 @@
   .ia-field__label {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
@@ -2408,7 +2408,7 @@
   }
 
   .ia-submit--danger {
-    background-color: var(--color-danger, var(--color-accent));
+    background-color: var(--color-danger);
   }
 
   .ia-back {
@@ -2440,7 +2440,7 @@
     margin: var(--space-3) 0 var(--space-1);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
@@ -2506,12 +2506,12 @@
   .ia-badge {
     padding: 0 var(--space-2);
     border-radius: var(--radius-control);
-    background-color: var(--color-warning-soft, var(--color-accent-faint));
+    background-color: var(--color-warning-soft);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
-    color: var(--color-warning, var(--color-text-secondary));
+    color: var(--color-warning);
   }
 
   .ia-paging {
@@ -2579,7 +2579,7 @@
 
   .ia-files__reason {
     font-size: var(--font-size-xs);
-    color: var(--color-warning, var(--color-text-secondary));
+    color: var(--color-warning);
   }
 
   .ia-item__title {
@@ -2630,7 +2630,7 @@
     padding: 0;
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
@@ -2714,9 +2714,9 @@
     margin: 0 0 var(--space-2);
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
-    background-color: var(--color-warning-soft, var(--color-accent-faint));
+    background-color: var(--color-warning-soft);
     font-size: var(--font-size-sm);
-    color: var(--color-warning, var(--color-text-primary));
+    color: var(--color-warning);
     overflow-wrap: anywhere;
   }
 

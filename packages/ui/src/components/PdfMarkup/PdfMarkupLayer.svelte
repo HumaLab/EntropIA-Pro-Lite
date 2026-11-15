@@ -694,7 +694,7 @@
 
   .pdf-markup-popover__colors {
     display: flex;
-    gap: 4px;
+    gap: var(--space-1);
     padding-right: var(--space-1);
     border-right: 1px solid var(--color-border);
   }

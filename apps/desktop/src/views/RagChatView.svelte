@@ -1192,7 +1192,7 @@
     margin: 0;
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
@@ -1407,7 +1407,7 @@
     margin: 0;
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: var(--line-height-base, 1.5);
+    line-height: var(--line-height-base);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
@@ -1502,7 +1502,7 @@
     margin: 0;
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
@@ -1615,7 +1615,7 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 

@@ -166,7 +166,7 @@
     color: var(--color-text-primary);
     min-width: 0;
     line-height: var(--line-height-base);
-    padding-inline-end: calc(24px + var(--space-2));
+    padding-inline-end: calc(var(--space-6) + var(--space-2));
     box-sizing: border-box;
   }
 

@@ -825,7 +825,7 @@
   .home-view__section-label {
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
@@ -1259,7 +1259,7 @@
     cursor: default;
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }

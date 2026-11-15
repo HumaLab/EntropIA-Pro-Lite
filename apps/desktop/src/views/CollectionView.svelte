@@ -1542,7 +1542,7 @@
   }
 
   .resize-handle:hover::before {
-    background-color: var(--color-text-muted, var(--color-border));
+    background-color: var(--color-text-muted);
     width: 2px;
   }
 

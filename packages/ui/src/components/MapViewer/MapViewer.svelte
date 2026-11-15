@@ -402,7 +402,7 @@
     width: 100%;
     min-width: 0;
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-sm);
     overflow: hidden;
   }
 
@@ -424,36 +424,36 @@
 
   .map-viewer__empty p {
     color: var(--color-text-muted);
-    font-size: var(--font-size-sm, 0.875rem);
+    font-size: var(--font-size-sm);
   }
 
   .map-viewer__editor {
     position: absolute;
     z-index: 1000;
-    top: var(--space-2, 0.5rem);
-    right: var(--space-2, 0.5rem);
+    top: var(--space-2);
+    right: var(--space-2);
     display: grid;
-    gap: var(--space-2, 0.5rem);
+    gap: var(--space-2);
     width: min(19rem, calc(100% - 1rem));
     box-sizing: border-box;
-    padding: var(--space-3, 0.75rem);
+    padding: var(--space-3);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--color-surface) 94%, transparent);
-    box-shadow: var(--shadow-md, 0 8px 24px rgb(0 0 0 / 18%));
+    box-shadow: var(--shadow-md);
     backdrop-filter: blur(8px);
   }
 
   .map-viewer__actions {
     display: flex;
-    gap: var(--space-2, 0.5rem);
+    gap: var(--space-2);
     align-items: center;
   }
 
   .map-viewer__location-row {
     display: flex;
     flex-wrap: nowrap;
-    gap: var(--space-2, 0.5rem);
+    gap: var(--space-2);
     align-items: center;
     width: 100%;
     min-width: 0;
@@ -484,7 +484,7 @@
 
   .map-viewer__location-trigger:hover,
   .map-viewer__location-trigger--open {
-    border-color: var(--color-accent, #5b7cfa);
+    border-color: var(--color-accent);
   }
 
   .map-viewer__location-trigger-label {
@@ -494,7 +494,7 @@
     text-align: start;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: var(--font-size-xs, 0.75rem);
+    font-size: var(--font-size-xs);
   }
 
   .map-viewer__location-row strong {
@@ -506,7 +506,7 @@
   .map-viewer__editor output {
     margin: 0;
     color: var(--color-text-muted);
-    font-size: var(--font-size-xs, 0.75rem);
+    font-size: var(--font-size-xs);
   }
 
   .map-viewer__editor output {
@@ -522,11 +522,11 @@
     flex: 0 0 auto;
     padding: 0.35rem 0.65rem;
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-sm);
     background: var(--color-surface);
     color: var(--color-text-primary);
     font: inherit;
-    font-size: var(--font-size-xs, 0.75rem);
+    font-size: var(--font-size-xs);
     cursor: pointer;
   }
 
@@ -534,8 +534,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: var(--control-height-sm, 1.875rem);
-    height: var(--control-height-sm, 1.875rem);
+    width: var(--control-height-sm);
+    height: var(--control-height-sm);
     padding: 0;
   }
 
@@ -546,6 +546,6 @@
   }
 
   .map-viewer__error {
-    color: var(--color-danger, #b42318) !important;
+    color: var(--color-danger) !important;
   }
 </style>

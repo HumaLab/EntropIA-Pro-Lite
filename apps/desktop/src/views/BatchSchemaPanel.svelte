@@ -301,7 +301,7 @@
     display: grid;
     gap: var(--space-2);
     padding: var(--space-3);
-    border: 1px solid var(--color-border, rgba(127, 127, 127, 0.3));
+    border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
   }
 
@@ -325,7 +325,7 @@
   th,
   td {
     padding: var(--space-1) var(--space-2);
-    border-bottom: 1px solid var(--color-border, rgba(127, 127, 127, 0.3));
+    border-bottom: 1px solid var(--color-border);
     text-align: left;
     vertical-align: top;
   }
@@ -359,6 +359,6 @@
   }
 
   .schema-panel__error {
-    color: var(--color-danger, #c0392b);
+    color: var(--color-danger);
   }
 </style>

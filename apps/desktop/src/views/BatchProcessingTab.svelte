@@ -2064,7 +2064,7 @@
      line up down the column whether or not a row can be opened. */
   .batch-tasks__plain {
     display: block;
-    padding-inline-start: calc(12px + var(--space-1));
+    padding-inline-start: calc(var(--space-3) + var(--space-1));
     overflow: hidden;
     text-overflow: ellipsis;
   }

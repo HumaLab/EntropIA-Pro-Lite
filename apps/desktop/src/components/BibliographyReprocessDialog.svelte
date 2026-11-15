@@ -349,7 +349,7 @@
   .reprocess-dialog__summary dt {
     font-size: var(--font-size-2xs);
     text-transform: uppercase;
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     color: var(--color-text-muted);
   }
 

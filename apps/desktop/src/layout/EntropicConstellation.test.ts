@@ -55,7 +55,7 @@ describe('EntropicConstellation visual contract', () => {
   it('uses theme tokens for the canvas background instead of fixed dark colors', () => {
     const source = readSource()
 
-    expect(source).toContain('--constellation-bg-start: var(--surface-app, var(--color-bg))')
+    expect(source).toContain('--constellation-bg-start: var(--surface-app);')
     expect(source).toContain(
       "readThemeColor('--constellation-bg-start', '--surface-app', '--color-bg')"
     )

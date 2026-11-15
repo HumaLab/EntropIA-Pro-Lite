@@ -1688,7 +1688,7 @@
      Every reading face is taller than one em, so a bare line-height of 1 ran
      the lines of a paragraph into each other. */
   :global(.writing-editor__surface [data-line-height]) {
-    line-height: calc(var(--writing-line-height, 1) * var(--font-reading-single-line, 1.35));
+    line-height: calc(var(--writing-line-height, 1) * var(--font-reading-single-line));
   }
 
   /* A marker is rendered outside its item's content box by default. The
@@ -1838,7 +1838,7 @@
        meet the next line's highlight, which the browser paints after them.
        Blending keeps the ink on top: each theme picks the mode under which
        its ink is the pixel that wins (tokens.css). */
-    mix-blend-mode: var(--writing-blend-highlight, normal);
+    mix-blend-mode: var(--writing-blend-highlight);
     border-radius: 2px;
     color: var(--color-text-primary);
     box-decoration-break: clone;

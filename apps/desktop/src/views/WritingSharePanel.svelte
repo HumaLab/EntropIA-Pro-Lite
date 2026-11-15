@@ -230,7 +230,7 @@
   h3 {
     margin: 0 0 var(--space-2);
     padding-inline-end: calc(28px + var(--space-2));
-    font-size: var(--font-size-md, 1rem);
+    font-size: var(--font-size-md);
   }
 
   ul {
@@ -257,6 +257,6 @@
   }
 
   .share-panel__error {
-    color: var(--color-danger, #c0392b);
+    color: var(--color-danger);
   }
 </style>

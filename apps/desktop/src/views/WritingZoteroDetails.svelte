@@ -373,7 +373,7 @@
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
   }
 
   .details__chip {
@@ -399,7 +399,7 @@
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     line-height: var(--line-height-base);
   }
 
