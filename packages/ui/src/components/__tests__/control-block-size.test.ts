@@ -139,6 +139,11 @@ describe('control primitives keep their token height under any flex or grid pare
       '.search-bar',
       'var(--control-height-md)'
     )
+    expectCappedAt(
+      stylesOf('../SearchBar/SearchBar.svelte'),
+      '.search-bar--sm',
+      'var(--control-height-sm)'
+    )
   })
 
   it('wraps a tab list onto more rows instead of running out of a narrow pane', () => {

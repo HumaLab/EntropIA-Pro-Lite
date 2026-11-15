@@ -5,6 +5,7 @@
 
   let {
     value = '',
+    size = 'md',
     id,
     disabled = false,
     clearDisabled = false,
@@ -23,6 +24,7 @@
     onblur,
     onkeydown,
     inputRef,
+    ...combobox
   }: SearchBarProps = $props()
 
   let internalValue = $state('')
@@ -83,12 +85,13 @@
   let showClear = $derived(internalValue.length > 0)
 </script>
 
-<div class="search-bar">
+<div class="search-bar search-bar--{size}">
   <span class="search-bar__icon" data-testid="search-icon" aria-hidden="true">
-    <ActionIcon name="search" size={16} />
+    <ActionIcon name="search" size={size === 'sm' ? 14 : 16} />
   </span>
   <div class="search-bar__input-wrap">
     <input
+      {...combobox}
       bind:this={inputEl}
       class="search-bar__input"
       type="search"
@@ -122,7 +125,7 @@
     align-items: center;
     gap: var(--space-2);
     /* Capped at its token: a flex basis read as a height (a column parent) or
-       a stretched row never makes the field taller. */
+       a stretched row never makes the field taller. md here; sm below. */
     min-height: var(--control-height-md);
     max-height: var(--control-height-md);
     box-sizing: border-box;
@@ -134,6 +137,17 @@
       border-color var(--transition-smooth),
       box-shadow var(--transition-smooth),
       background-color var(--transition-smooth);
+  }
+
+  .search-bar--sm {
+    min-height: var(--control-height-sm);
+    max-height: var(--control-height-sm);
+    gap: var(--space-1);
+    padding: 0 var(--space-2);
+  }
+
+  .search-bar--sm .search-bar__input {
+    font-size: var(--font-size-xs);
   }
 
   .search-bar:focus-within {
