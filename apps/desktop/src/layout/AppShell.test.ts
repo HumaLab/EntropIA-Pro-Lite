@@ -363,6 +363,40 @@ describe('AppShell', () => {
     expect(screen.getByPlaceholderText('Filter collections...')).toBeInTheDocument()
   })
 
+  // Step 27 (R4e, C5): the banner's actions are Button, not a local amber
+  // button with literal rgba borders.
+  it.runIf(LOCAL_ML)('renders the dependency banner actions as design-system buttons', async () => {
+    let depsCompleteHandler: EventListenerCallback | undefined
+    listenMock.mockImplementation((eventName: string, callback: EventListenerCallback) => {
+      if (eventName === 'deps://complete') depsCompleteHandler = callback
+      return Promise.resolve(vi.fn())
+    })
+
+    render(AppShellHost)
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('deps_get_cached_statuses'))
+    depsCompleteHandler?.({
+      payload: {
+        results: [
+          { id: 'Python', status: { type: 'missing' } },
+          { id: 'Fastembed', status: { type: 'installed' } },
+          { id: 'PaddlePaddle', status: { type: 'missing' } },
+          { id: 'PaddleOcr', status: { type: 'installed' } },
+        ],
+      },
+    })
+
+    const action = await screen.findByRole('button', { name: 'Configurar dependencias' })
+    expect(action).toHaveClass('btn', 'btn--secondary', 'btn--sm')
+  })
+
+  // Step 27: the edition badge takes StatusBadge's own xs size instead of a
+  // :global() override that resized it from outside.
+  it('shows the edition badge at StatusBadge xs size', () => {
+    render(AppShellHost)
+    const badge = within(screen.getByRole('contentinfo')).getByText(PRODUCT_NAME_BADGE)
+    expect(badge).toHaveClass('status-badge', 'status-badge--xs')
+  })
+
   it.runIf(LOCAL_ML)(
     'boots without awaiting a fresh dependency probe and updates from completion events',
     async () => {
@@ -1228,16 +1262,30 @@ describe('AppShell', () => {
       expect(ruleFor('.content__pane {')).toMatch(/isolation:\s*isolate;/)
     })
 
-    it('paints the drawer above any in-pane sticky header (max known: --page-header at z-index 20)', () => {
+    // The drawer's layer is a --z-* token (step 27); its number lives in
+    // tokens.css, so resolve it there before comparing.
+    const tokens = readFileSync(
+      resolve(import.meta.dirname, '../../../../packages/ui/src/tokens/tokens.css'),
+      'utf-8'
+    )
+    function drawerZIndex(): number {
       const rule = ruleFor('.explorer-drawer {')
-      const zIndex = Number(/z-index:\s*(\d+);/.exec(rule)?.[1])
-      expect(zIndex).toBeGreaterThan(20)
+      const value = /z-index:\s*(\d+|var\(--z-[a-z-]+\));/.exec(rule)?.[1] ?? ''
+      const token = /^var\((--z-[a-z-]+)\)$/.exec(value)?.[1]
+      if (!token) return Number(value)
+      return Number(new RegExp(`${token}:\\s*(\\d+);`).exec(tokens)?.[1])
+    }
+
+    it('paints the drawer above any in-pane sticky header (max known: --page-header at z-index 20)', () => {
+      expect(drawerZIndex()).toBeGreaterThan(20)
     })
 
     it('stays below app-level overlays (ToolbarMenu 210, ConfirmDialog/dialogs 1000+, TooltipLayer 1300)', () => {
-      const rule = ruleFor('.explorer-drawer {')
-      const zIndex = Number(/z-index:\s*(\d+);/.exec(rule)?.[1])
-      expect(zIndex).toBeLessThan(100)
+      expect(drawerZIndex()).toBeLessThan(100)
+    })
+
+    it('takes its layer from the --z-* scale, not a literal', () => {
+      expect(ruleFor('.explorer-drawer {')).toMatch(/z-index:\s*var\(--z-drawer\);/)
     })
   })
 

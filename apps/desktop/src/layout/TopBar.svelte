@@ -540,11 +540,7 @@
 
   <div class="topbar__actions" data-tauri-drag-region>
     {#if LOCAL_ML && hasDepsWarning}
-      <StatusBadge
-        variant="warning"
-        size="sm"
-        class="topbar__deps-badge"
-        title="Dependencias de IA pendientes">IA</StatusBadge
+      <StatusBadge variant="warning" size="sm" title="Dependencias de IA pendientes">IA</StatusBadge
       >
     {/if}
 
@@ -791,16 +787,9 @@
     border-left: 1px solid var(--border-subtle);
   }
 
-  /* Size comes from IconButton's own `size="sm"` (--icon-button-size:
-     28px), not from here: this used to also set `width`/`height:
-     var(--control-height-sm)` (30px), but that never won against
-     IconButton's own scoped rule at equal specificity — dead code that
-     rendered nothing different from the size prop alone. */
-  :global(.topbar__window-btn) {
-    border-radius: var(--radius-sm);
-    color: var(--color-text-secondary);
-  }
-
+  /* Size, radius and colour come from IconButton (`size="sm"`, ghost). The
+     close button's danger hover is the one look IconButton has no variant
+     for (its `danger` variant is red at rest), so it stays here. */
   :global(.topbar__window-btn--close:hover:not(:disabled)) {
     border-color: color-mix(in srgb, var(--color-danger) 24%, transparent);
     background: var(--color-danger-soft);
@@ -827,34 +816,22 @@
 
   .topbar__window-glyph--maximize {
     border: 1.5px solid currentColor;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
   }
 
-  /* Size comes from IconButton's own `size="md"` (--icon-button-size:
-     32px), not from here: this used to also set `width`/`height:
-     var(--control-height-sm)` (30px), but that never won against
-     IconButton's own scoped rule at equal specificity — dead code that
-     rendered nothing different from the size prop alone. */
-  :global(.topbar__icon-btn) {
-    border-radius: var(--radius-control);
-  }
-
+  /* Size and radius come from IconButton's own `size="md"`. This only
+     anchors the pending-dependencies dot below; it changes no look. */
   :global(.topbar__icon-btn--settings) {
     position: relative;
   }
 
-  :global(.topbar__deps-badge) {
-    min-height: 24px;
-    font-size: var(--font-size-2xs);
-  }
-
   .topbar__badge {
     position: absolute;
-    top: 4px;
-    right: 4px;
+    top: var(--space-1);
+    right: var(--space-1);
     width: 7px;
     height: 7px;
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     background: var(--color-warning);
     border: 1.5px solid var(--surface-toolbar);
     pointer-events: none;
@@ -913,7 +890,7 @@
     box-shadow: var(--shadow-lg);
     max-height: 320px;
     overflow-y: auto;
-    z-index: 200;
+    z-index: var(--z-dropdown);
   }
 
   .global-search__status {

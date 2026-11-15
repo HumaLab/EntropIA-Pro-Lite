@@ -14,7 +14,7 @@
    * shell labels (it never builds or translates `title`/`body`).
    */
   import { onMount, onDestroy } from 'svelte'
-  import { tooltip, ActionIcon, IconButton } from '@entropia/ui'
+  import { ActionIcon, Button, IconButton, StatusBadge } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { describeSyncError, type NotificationItem } from '$lib/sync'
   import { syncStore } from '$lib/sync-store'
@@ -123,23 +123,24 @@
   <!-- Leading separator owned by the bell so a `disabled` state renders no orphan `·`. -->
   <span class="notif__sep" aria-hidden="true">·</span>
   <div class="notif" bind:this={rootEl}>
-    <button
-      type="button"
-      class="notif__bell"
-      class:notif__bell--active={open}
+    <IconButton
+      size="xs"
+      variant="ghost"
+      active={open}
+      label={bellLabel}
+      title={bellLabel}
       onclick={togglePanel}
-      aria-label={bellLabel}
       aria-haspopup="true"
       aria-expanded={open}
-      use:tooltip={bellLabel}
     >
-      <ActionIcon name="bell" size={16} />
-      {#if hasUnread}
-        <span class="notif__badge" data-testid="notif-badge">
-          {unread > 99 ? '99+' : unread}
-        </span>
-      {/if}
-    </button>
+      <ActionIcon name="bell" size={12} />
+    </IconButton>
+    {#if hasUnread}
+      <!-- Pinned over the bell's corner; the badge itself is StatusBadge. -->
+      <span class="notif__badge">
+        <StatusBadge variant="count" size="xs" count={unread} max={99} data-testid="notif-badge" />
+      </span>
+    {/if}
 
     {#if open}
       <div class="notif__panel" role="dialog" aria-label={t('sync.notif.panelTitle')}>
@@ -147,9 +148,9 @@
           <span class="notif__panel-title">{t('sync.notif.panelTitle')}</span>
           <div class="notif__panel-actions">
             {#if hasUnread}
-              <button type="button" class="notif__text-btn" onclick={markAllRead}>
+              <Button variant="link" onclick={markAllRead}>
                 {t('sync.notif.markAllRead')}
-              </button>
+              </Button>
             {/if}
             <IconButton
               size="xs"
@@ -229,59 +230,20 @@
     align-items: center;
   }
 
-  .notif__bell {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: none;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    transition:
-      color var(--transition-base),
-      background-color var(--transition-base);
-  }
-
-  .notif__bell:hover,
-  .notif__bell--active {
-    color: var(--color-accent);
-    background: var(--color-accent-faint);
-  }
-
-  .notif__bell:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
+  /* Over the bell's top-right corner, as before; clicks fall through to it. */
   .notif__badge {
     position: absolute;
-    top: -3px;
-    right: -3px;
+    top: calc(-1 * var(--space-1));
+    right: calc(-1 * var(--space-1));
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 14px;
-    height: 14px;
-    padding: 0 3px;
-    border-radius: var(--radius-full);
-    background: var(--color-danger);
-    color: var(--color-on-danger);
-    font-family: var(--font-ui);
-    font-size: 9px;
-    font-weight: var(--font-weight-semibold);
-    line-height: 1;
+    pointer-events: none;
   }
 
   .notif__panel {
     position: absolute;
-    bottom: calc(100% + 8px);
+    bottom: calc(100% + var(--space-2));
     right: 0;
-    z-index: 60;
+    z-index: var(--z-popover-raised);
     display: flex;
     flex-direction: column;
     width: 340px;
@@ -311,25 +273,14 @@
     letter-spacing: 0;
   }
 
+  /* The link button takes its type from here: the panel sits in the mono
+     status bar, so the UI face and size are set once for the actions. */
   .notif__panel-actions {
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-  }
-
-  .notif__text-btn {
-    padding: 2px var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: none;
-    color: var(--color-accent);
     font-family: var(--font-ui);
     font-size: var(--font-size-xs);
-    cursor: pointer;
-  }
-
-  .notif__text-btn:hover {
-    background: var(--color-accent-faint);
   }
 
   /* Layout, size and hover chrome come from IconButton size="xs" (24px).
@@ -398,7 +349,7 @@
   .notif__item-main {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     min-width: 0;
   }
 
@@ -422,7 +373,7 @@
     font-family: var(--font-ui);
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
-    line-height: 1.5;
+    line-height: var(--line-height-base);
     word-break: break-word;
   }
 

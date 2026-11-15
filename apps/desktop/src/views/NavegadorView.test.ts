@@ -842,3 +842,21 @@ describe('NavegadorView tabs', () => {
     expect(within(strip()).getByLabelText('Close tab An article')).toBeInTheDocument()
   })
 })
+
+// Step 27 (R1, R8): the address bar is the design system's Input and the
+// status chips are StatusBadge, not local look-alikes.
+describe('NavegadorView design-system controls', () => {
+  it('draws the address bar with Input', () => {
+    render(NavegadorView)
+    expect(screen.getByRole('textbox', { name: 'Dirección' })).toHaveClass('input-field__input')
+  })
+
+  it('draws the download status as a StatusBadge', async () => {
+    render(NavegadorView)
+    await waitFor(() => expect(handlers['navegador://download']).toBeDefined())
+    handlers['navegador://download']!({ payload: pdf })
+    const panel = await screen.findByLabelText(/Captura \(borrador/)
+    const chip = await within(panel).findByText('PDF verificado')
+    expect(chip).toHaveClass('status-badge', 'status-badge--neutral')
+  })
+})
