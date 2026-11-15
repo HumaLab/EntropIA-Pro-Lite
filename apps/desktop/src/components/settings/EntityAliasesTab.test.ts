@@ -143,6 +143,21 @@ describe('EntityAliasesTab', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
+  it('builds the row actions on IconButton and the edit actions on Button', async () => {
+    render(EntityAliasesTab)
+    await screen.findByTestId('entity-alias-row-a1')
+
+    expect(screen.getByTestId('entity-alias-edit-a1')).toHaveClass('icon-button', 'icon-button--sm')
+    expect(screen.getByTestId('entity-alias-delete-a1')).toHaveClass(
+      'icon-button',
+      'icon-button--sm'
+    )
+
+    await fireEvent.click(screen.getByTestId('entity-alias-edit-a1'))
+    expect(screen.getByRole('button', { name: 'Guardar' })).toHaveClass('btn', 'btn--sm')
+    expect(screen.getByRole('button', { name: 'Cancelar' })).toHaveClass('btn', 'btn--sm')
+  })
+
   it('explains aliases in one sentence when the list is empty', async () => {
     listMock.mockResolvedValue([])
     render(EntityAliasesTab)
@@ -230,6 +245,15 @@ describe('EntityAliasesTab suggestions (T5)', () => {
     expect(screen.getByText(/desde esa otra mención/)).toBeInTheDocument()
     expect(screen.queryByText(/normalize to the same value/)).toBeNull()
     expect(screen.getByTestId('entity-alias-suggestion-0')).toBeInTheDocument()
+  })
+
+  it('builds the accept and discard actions on IconButton', async () => {
+    render(EntityAliasesTab)
+    await screen.findByTestId('entity-alias-suggestion-0')
+
+    for (const id of ['entity-alias-suggestion-accept-0', 'entity-alias-suggestion-discard-0']) {
+      expect(screen.getByTestId(id)).toHaveClass('icon-button', 'icon-button--sm')
+    }
   })
 
   it('discard hides the suggestion for the session', async () => {

@@ -6,7 +6,15 @@
    * the native picker there, never typed here.
    */
   import { invoke } from '@tauri-apps/api/core'
-  import { ActionIcon, Button, Card, Input, ToolbarMenu, type ToolbarMenuItem } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    Card,
+    Input,
+    SelectTrigger,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { settingsGet, settingsSet } from '$lib/settings'
 
@@ -107,22 +115,23 @@
       </div>
     </div>
 
-    <div class="backup-tab__field">
+    <div class="backup-tab__field backup-tab__field--start">
       <span class="backup-tab__label" id="backup-frequency-label">
         {$currentLocale && t('settings.backup.frequencyLabel')}
       </span>
       <ToolbarMenu label={t('settings.backup.frequencyLabel')} items={frequencyItems}>
         {#snippet trigger(props, { open })}
-          <button
-            type="button"
-            class="backup-tab__select"
-            class:backup-tab__select--open={open}
-            aria-labelledby="backup-frequency-label backup-frequency-value"
+          <!-- Same quiet trigger as the Apariencia choices, named by its label
+               and then by itself: the current choice. -->
+          <SelectTrigger
             {...props}
-          >
-            <span id="backup-frequency-value">{$currentLocale && frequencyLabel(frequency)}</span>
-            <ActionIcon name="chevron-down" size={12} />
-          </button>
+            id="backup-frequency-trigger"
+            variant="quiet"
+            size="sm"
+            {open}
+            label={$currentLocale && frequencyLabel(frequency)}
+            aria-labelledby="backup-frequency-label backup-frequency-trigger"
+          />
         {/snippet}
       </ToolbarMenu>
     </div>
@@ -209,25 +218,8 @@
     font-size: var(--font-size-sm);
   }
 
-  /* Same trigger as the Apariencia choices. */
-  .backup-tab__select {
-    display: inline-flex;
-    align-self: flex-start;
-    align-items: center;
-    gap: var(--space-1);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    cursor: pointer;
-  }
-
-  .backup-tab__select:hover,
-  .backup-tab__select--open {
-    background: var(--surface-toolbar);
+  /* The frequency trigger keeps its own width instead of the column's. */
+  .backup-tab__field--start {
+    align-items: flex-start;
   }
 </style>
