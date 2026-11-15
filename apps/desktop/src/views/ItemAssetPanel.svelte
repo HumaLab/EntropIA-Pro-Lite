@@ -6,9 +6,11 @@
     IconButton,
     TabButton,
     TabList,
+    ToolbarMenu,
     type AnnotationTool,
     type DocumentViewerProps,
     type EditTool,
+    type ToolbarMenuItem,
     type ViewerAnnotation,
     type ViewerLayoutRegion,
     type ViewerType,
@@ -35,12 +37,10 @@
   let copyFeedback = $state<'idle' | 'success' | 'error'>('idle')
   let exportingFormat = $state<OcrExportFormat | null>(null)
   let exportError = $state(false)
-  let downloadContainerEl = $state<HTMLElement | null>(null)
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined
   let exportIdentityGeneration = 0
   let copyGeneration = 0
   let currentExportIdentity: string | null = null
-  const exportMenuId = 'left-panel-extracted-text-export-menu'
 
   let {
     selectedAsset,
@@ -354,26 +354,20 @@
     }
   }
 
-  function closeDownloadMenu(restoreFocus = false) {
-    downloadMenuOpen = false
-    if (restoreFocus) {
-      downloadContainerEl?.querySelector<HTMLButtonElement>('[data-export-trigger]')?.focus()
-    }
-  }
-
-  function handleWindowKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape' && downloadMenuOpen) {
-      event.preventDefault()
-      closeDownloadMenu(true)
-    }
-  }
-
-  function handleWindowPointerdown(event: PointerEvent) {
-    const target = event.target
-    if (downloadMenuOpen && target instanceof Node && !downloadContainerEl?.contains(target)) {
-      closeDownloadMenu()
-    }
-  }
+  const exportMenuItems = $derived<ToolbarMenuItem[]>(
+    (
+      [
+        ['markdown', 'item.exportExtractedTextMarkdown'],
+        ['pdf', 'item.exportExtractedTextPdf'],
+        ['docx', 'item.exportExtractedTextDocx'],
+      ] as const
+    ).map(([format, label]) => ({
+      id: format,
+      label: translate(label),
+      disabled: restoringOriginalOcr || exportingFormat !== null,
+      onselect: () => void handleExport(format),
+    }))
+  )
 
   function buildOcrExportFilename(path: string, format: OcrExportFormat): string {
     const stem = buildExportDefaultName(path)
@@ -390,7 +384,7 @@
 
     exportingFormat = format
     exportError = false
-    closeDownloadMenu()
+    downloadMenuOpen = false
 
     try {
       await exportOcrText(
@@ -416,8 +410,6 @@
   })
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} onpointerdown={handleWindowPointerdown} />
-
 {#if selectedAsset}
   <TabList class="left-panel-tabs" aria-label={translate('item.assetPanel')}>
     <TabButton
@@ -427,7 +419,7 @@
       aria-controls="left-panel-document"
       onclick={() => {
         leftPanelTab = 'document'
-        closeDownloadMenu()
+        downloadMenuOpen = false
       }}
     >
       {translate('item.documentTab')}
@@ -453,48 +445,50 @@
       class="left-panel-pane left-panel-pane--document"
       class:is-hidden={leftPanelTab !== 'document'}
     >
-      <DocumentViewer
-        path={selectedAsset.path}
-        assetUrl={viewerSrc}
-        type={viewerType}
-        {annotations}
-        {layoutRegions}
-        {showLayoutOverlay}
-        {hoveredLayoutRegionId}
-        {selectedLayoutRegionId}
-        {editableLayoutRegionId}
-        {layoutReferenceWidth}
-        {layoutReferenceHeight}
-        {selectedAnnotationId}
-        {annotationTool}
-        {annotationColor}
-        {editTool}
-        {canUndo}
-        {canRedo}
-        currentPage={viewerPage}
-        {onAnnotationsChange}
-        {onSelectedAnnotationIdChange}
-        {onAnnotationToolChange}
-        {onAnnotationColorChange}
-        {onLayoutRegionHoverChange}
-        {onLayoutRegionSelect}
-        {onLayoutRegionGeometryChange}
-        {onEditSelect}
-        {onEditToolChange}
-        {onRotateLeft}
-        {onRotateRight}
-        {onFineRotateCommit}
-        {onUndo}
-        {onRedo}
-        {onDuplicateAsset}
-        {duplicateAssetDisabled}
-        {onPageChange}
-        {onDimensionsChange}
-        audioFallbackBlobLoader={loadAudioFallbackBlob}
-        audioStartAtSeconds={citationSeconds}
-        labels={documentViewerLabels}
-        {annotationToolbarLabels}
-      />
+      <div class="left-panel-viewer">
+        <DocumentViewer
+          path={selectedAsset.path}
+          assetUrl={viewerSrc}
+          type={viewerType}
+          {annotations}
+          {layoutRegions}
+          {showLayoutOverlay}
+          {hoveredLayoutRegionId}
+          {selectedLayoutRegionId}
+          {editableLayoutRegionId}
+          {layoutReferenceWidth}
+          {layoutReferenceHeight}
+          {selectedAnnotationId}
+          {annotationTool}
+          {annotationColor}
+          {editTool}
+          {canUndo}
+          {canRedo}
+          currentPage={viewerPage}
+          {onAnnotationsChange}
+          {onSelectedAnnotationIdChange}
+          {onAnnotationToolChange}
+          {onAnnotationColorChange}
+          {onLayoutRegionHoverChange}
+          {onLayoutRegionSelect}
+          {onLayoutRegionGeometryChange}
+          {onEditSelect}
+          {onEditToolChange}
+          {onRotateLeft}
+          {onRotateRight}
+          {onFineRotateCommit}
+          {onUndo}
+          {onRedo}
+          {onDuplicateAsset}
+          {duplicateAssetDisabled}
+          {onPageChange}
+          {onDimensionsChange}
+          audioFallbackBlobLoader={loadAudioFallbackBlob}
+          audioStartAtSeconds={citationSeconds}
+          labels={documentViewerLabels}
+          {annotationToolbarLabels}
+        />
+      </div>
 
       {#if annotationSaveError}
         <p class="error">{annotationSaveError}</p>
@@ -533,11 +527,7 @@
                   </div>
                 {/if}
 
-                <div
-                  bind:this={downloadContainerEl}
-                  class="left-text-panel-actions"
-                  aria-live="polite"
-                >
+                <div class="left-text-panel-actions" aria-live="polite">
                   <IconButton
                     size="sm"
                     variant="ghost"
@@ -570,57 +560,26 @@
                       <ActionIcon name="copy" size={14} />
                     </IconButton>
 
-                    <IconButton
-                      data-export-trigger
-                      size="sm"
-                      variant="ghost"
-                      label={translate('item.downloadExtractedTextAria')}
-                      title={translate('item.downloadExtractedText')}
-                      active={downloadMenuOpen}
-                      disabled={restoringOriginalOcr || exportingFormat !== null}
-                      aria-haspopup="menu"
-                      aria-expanded={downloadMenuOpen ? 'true' : 'false'}
-                      aria-controls={downloadMenuOpen ? exportMenuId : undefined}
-                      onclick={() => {
-                        downloadMenuOpen = !downloadMenuOpen
-                      }}
+                    <ToolbarMenu
+                      label={translate('item.downloadExtractedTextMenu')}
+                      items={exportMenuItems}
+                      align="end"
+                      bind:open={downloadMenuOpen}
                     >
-                      <ActionIcon name="download" size={14} />
-                    </IconButton>
-
-                    {#if downloadMenuOpen}
-                      <div
-                        id={exportMenuId}
-                        class="left-text-panel-export-menu"
-                        role="menu"
-                        aria-label={translate('item.downloadExtractedTextMenu')}
-                      >
-                        <button
-                          type="button"
-                          role="menuitem"
+                      {#snippet trigger(props, { open })}
+                        <IconButton
+                          {...props}
+                          size="sm"
+                          variant="ghost"
+                          label={translate('item.downloadExtractedTextAria')}
+                          title={translate('item.downloadExtractedText')}
+                          active={open}
                           disabled={restoringOriginalOcr || exportingFormat !== null}
-                          onclick={() => void handleExport('markdown')}
                         >
-                          {translate('item.exportExtractedTextMarkdown')}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={restoringOriginalOcr || exportingFormat !== null}
-                          onclick={() => void handleExport('pdf')}
-                        >
-                          {translate('item.exportExtractedTextPdf')}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          disabled={restoringOriginalOcr || exportingFormat !== null}
-                          onclick={() => void handleExport('docx')}
-                        >
-                          {translate('item.exportExtractedTextDocx')}
-                        </button>
-                      </div>
-                    {/if}
+                          <ActionIcon name="download" size={14} />
+                        </IconButton>
+                      {/snippet}
+                    </ToolbarMenu>
 
                     {#if copyFeedback !== 'idle'}
                       <span class="sr-only" role="status">
@@ -711,8 +670,6 @@
     display: flex;
     width: 100%;
     flex-shrink: 0;
-    border-color: var(--border-subtle);
-    background: var(--surface-input);
   }
 
   :global(.left-panel-tab) {
@@ -739,8 +696,11 @@
     min-height: 0;
   }
 
-  .left-panel-pane--document :global(.document-viewer) {
+  /* The viewer fills its height (100%) on its own; this box gives it the
+     pane's free width and a stretched, definite height to fill. */
+  .left-panel-viewer {
     flex: 1;
+    min-width: 0;
     min-height: 0;
   }
 
@@ -776,7 +736,7 @@
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-surface);
     background: var(--surface-panel);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+    box-shadow: var(--shadow-highlight);
   }
 
   .left-text-panel-meta {
@@ -831,85 +791,23 @@
     border: 0;
   }
 
-  .left-text-panel-export-menu {
-    position: absolute;
-    z-index: 5;
-    top: calc(100% + var(--space-1));
-    right: 0;
-    display: grid;
-    min-width: 13rem;
-    gap: var(--space-1);
-    padding: var(--space-1);
-    border: 1px solid var(--border-panel);
-    border-radius: var(--radius-dialog);
-    background: color-mix(in srgb, var(--color-surface-elevated) 96%, var(--color-bg));
-    box-shadow: var(--shadow-lg);
-  }
-
-  .left-text-panel-export-menu button {
-    display: flex;
-    width: 100%;
-    align-items: center;
-    padding: var(--space-2) var(--space-3);
-    border: 0;
-    border-radius: var(--radius-xs);
-    background: transparent;
-    color: var(--color-text-secondary);
-    font: inherit;
-    text-align: start;
-    cursor: pointer;
-  }
-
-  .left-text-panel-export-menu button:hover:not(:disabled),
-  .left-text-panel-export-menu button:focus-visible {
-    background: var(--color-accent-faint);
-    color: var(--color-text-primary);
-  }
-
-  .left-text-panel-export-menu button:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .left-text-panel-export-menu button:disabled {
-    cursor: not-allowed;
-    opacity: 0.48;
-  }
-
   .left-text-panel-body {
     flex: 1 1 auto;
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
-    scrollbar-color: color-mix(in srgb, var(--color-text-muted) 58%, transparent) transparent;
-    scrollbar-width: thin;
     padding: var(--space-3);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     background: var(--surface-input);
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
     word-break: break-word;
   }
 
   .left-text-panel-body--plain {
     white-space: pre-wrap;
-  }
-
-  .left-text-panel-body::-webkit-scrollbar {
-    width: 8px;
-  }
-
-  .left-text-panel-body::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .left-text-panel-body::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
-    border-radius: var(--radius-xs);
-    background: color-mix(in srgb, var(--color-text-muted) 52%, transparent);
-    background-clip: padding-box;
   }
 
   .empty-viewer {
