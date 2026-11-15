@@ -176,3 +176,31 @@ describe('Select', () => {
     expect(menu()).toBeNull()
   })
 })
+
+describe('SelectTrigger block and value id', () => {
+  it('stays inline by default and spans its container with block', () => {
+    const { unmount } = render(SelectTrigger, { props: { 'aria-label': 'A' } })
+    expect(screen.getByRole('button', { name: 'A' })).not.toHaveClass('select-trigger--block')
+    unmount()
+
+    render(SelectTrigger, { props: { block: true, 'aria-label': 'B' } })
+    expect(screen.getByRole('button', { name: 'B' })).toHaveClass('select-trigger--block')
+    expect(triggerSource).toMatch(/\.select-trigger--block\s*\{[^}]*width:\s*100%/)
+  })
+
+  it('gives the shown value an id, so a visible label plus the value can name it', () => {
+    const { container } = render(SelectTrigger, {
+      props: {
+        label: 'documents',
+        valueId: 'table-value',
+        'aria-labelledby': 'table-label table-value',
+      },
+    })
+    const caption = document.createElement('span')
+    caption.id = 'table-label'
+    caption.textContent = 'Tabla'
+    container.prepend(caption)
+
+    expect(screen.getByRole('button', { name: 'Tabla documents' })).toBeInTheDocument()
+  })
+})

@@ -12,6 +12,8 @@
     placeholder,
     size = 'md',
     variant = 'field',
+    block = false,
+    valueId,
     open = false,
     disabled = false,
     element = $bindable(),
@@ -28,11 +30,12 @@
   type="button"
   class={['select-trigger', `select-trigger--${size}`, `select-trigger--${variant}`, className]}
   class:select-trigger--open={open}
+  class:select-trigger--block={block}
   aria-haspopup="menu"
   aria-expanded={open ? 'true' : 'false'}
   {disabled}
 >
-  <span class="select-trigger__value" class:select-trigger__value--placeholder={empty}>
+  <span id={valueId} class="select-trigger__value" class:select-trigger__value--placeholder={empty}>
     {empty ? (placeholder ?? '') : label}
   </span>
   <ActionIcon name="chevron-down" size={size === 'sm' ? 12 : 14} />
@@ -58,6 +61,17 @@
       border-color var(--transition-base),
       background-color var(--transition-base),
       box-shadow var(--transition-base);
+  }
+
+  /* Fills a form column; the value takes the room and the chevron stays at the end. */
+  .select-trigger--block {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .select-trigger--block .select-trigger__value {
+    flex: 1 1 auto;
+    text-align: start;
   }
 
   /* Capped at its token: a flex or grid parent never makes it taller. */

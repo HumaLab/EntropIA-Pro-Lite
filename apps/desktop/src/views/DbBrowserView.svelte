@@ -7,6 +7,7 @@
     Dialog,
     IconButton,
     SearchBar,
+    SelectTrigger,
     ToolbarMenu,
     type ToolbarMenuItem,
   } from '@entropia/ui'
@@ -557,7 +558,7 @@
     </div>
 
     <div class="page-toolbar db-browser-toolbar">
-      <div class="db-browser-toolbar__field">
+      <div class="db-browser-toolbar__field db-browser-toolbar__field--table">
         <span class="db-browser-toolbar__label" id="db-browser-table-label"
           >{$currentLocale && translate('dbBrowser.tableLabel')}</span
         >
@@ -570,19 +571,15 @@
           bind:open={tableMenuOpen}
         >
           {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="db-browser-menu-trigger"
-              class:db-browser-menu-trigger--open={open}
+            <SelectTrigger
+              block
+              label={selectedTable}
+              valueId="db-browser-table-value"
               aria-labelledby="db-browser-table-label db-browser-table-value"
               disabled={loadingTables || tables.length === 0}
               {...props}
-            >
-              <span class="db-browser-menu-trigger-label" id="db-browser-table-value"
-                >{selectedTable}</span
-              >
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
+              {open}
+            />
           {/snippet}
         </ToolbarMenu>
       </div>
@@ -687,19 +684,14 @@
             bind:open={pageSizeMenuOpen}
           >
             {#snippet trigger(props, { open })}
-              <button
-                type="button"
-                class="db-browser-menu-trigger db-browser-page-size__trigger"
-                class:db-browser-menu-trigger--open={open}
+              <SelectTrigger
+                label={String(pageSize)}
+                valueId="db-browser-page-size-value"
                 aria-labelledby="db-browser-page-size-label db-browser-page-size-value"
                 disabled={loadingRows}
                 {...props}
-              >
-                <span class="db-browser-menu-trigger-label" id="db-browser-page-size-value"
-                  >{pageSize}</span
-                >
-                <ActionIcon name="chevron-down" size={12} />
-              </button>
+                {open}
+              />
             {/snippet}
           </ToolbarMenu>
         </div>
@@ -932,6 +924,12 @@
     min-width: min(100%, 220px);
   }
 
+  /* The table picker fills its field up to the width it had as a hand-built
+     button; a long table name ellipsizes instead of widening the toolbar. */
+  .db-browser-toolbar__field--table {
+    max-width: 260px;
+  }
+
   .db-browser-toolbar__field label,
   .db-browser-toolbar__label {
     font-size: var(--font-size-xs);
@@ -939,50 +937,6 @@
     letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-secondary);
-  }
-
-  /* The trigger of a choice menu. It replaces the native select this screen
-     used to render, so it wears the control look of BibliotecaView's library
-     picker (the other page-toolbar that opens radio menus): label, name,
-     chevron. */
-  .db-browser-menu-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    max-width: 260px;
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-control);
-    background: var(--color-surface-glass);
-    color: var(--color-text-primary);
-    cursor: pointer;
-  }
-
-  .db-browser-menu-trigger:hover,
-  .db-browser-menu-trigger--open {
-    border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-hairline));
-  }
-
-  .db-browser-menu-trigger:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .db-browser-menu-trigger:disabled {
-    cursor: not-allowed;
-    opacity: var(--opacity-disabled);
-  }
-
-  .db-browser-menu-trigger-label {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    font-size: var(--font-size-sm);
-    text-align: start;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .db-browser-card {
@@ -1038,12 +992,6 @@
     letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-secondary);
-  }
-
-  .db-browser-page-size__trigger {
-    width: auto;
-    min-width: 92px;
-    justify-content: space-between;
   }
 
   .db-browser-table-wrap {

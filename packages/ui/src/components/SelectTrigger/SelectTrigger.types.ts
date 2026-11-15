@@ -16,6 +16,13 @@ export interface SelectTriggerProps extends Omit<
   placeholder?: string
   size?: SelectTriggerSize
   variant?: SelectTriggerVariant
+  /** Spans its container's width, like an Input in a form column. */
+  block?: boolean
+  /**
+   * Id of the element showing the chosen value, so `aria-labelledby` can name
+   * the button by its visible label followed by the value.
+   */
+  valueId?: string
   /** Whether the menu it controls is open; drives `aria-expanded`. */
   open?: boolean
   /** The rendered button, for callers that need to focus it. */
