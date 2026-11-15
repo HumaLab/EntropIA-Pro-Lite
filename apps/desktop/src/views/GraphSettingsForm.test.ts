@@ -66,6 +66,13 @@ describe('GraphSettingsForm', () => {
     expect(onchange.mock.lastCall?.[0].structure.includeIsolated).toBe(false)
   })
 
+  it('opens the layout menu from SelectTrigger, named by its label and its value', () => {
+    // docs/AUDITORIA_ESTILOS.md R3: one select trigger for every menu of choices.
+    setup()
+    const trigger = screen.getByRole('button', { name: 'Algoritmo de disposición Fuerzas' })
+    expect(trigger).toHaveClass('select-trigger')
+  })
+
   it('chooses the layout algorithm and explains the chosen one', async () => {
     const onchange = setup()
     const trigger = screen.getByRole('button', { name: /Algoritmo de disposición/ })
