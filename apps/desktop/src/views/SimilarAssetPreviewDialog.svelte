@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { portal, tooltip } from '@entropia/ui'
+  import { IconButton, portal } from '@entropia/ui'
   import {
     ActionIcon,
     DocumentViewer,
@@ -152,16 +152,16 @@
         <span class="asset-preview__score">
           {translate('item.similarAssetPreview.similarity', { value: similarityPercent })}
         </span>
-        <button
-          type="button"
-          class="asset-preview__close"
-          aria-label={translate('item.similarAssetPreview.close')}
-          use:tooltip={translate('item.similarAssetPreview.close')}
+        <IconButton
+          variant="secondary"
+          size="lg"
+          label={translate('item.similarAssetPreview.close')}
+          title={translate('item.similarAssetPreview.close')}
           data-autofocus
           onclick={requestClose}
         >
           <ActionIcon name="close" size={20} />
-        </button>
+        </IconButton>
       </div>
     </header>
 
@@ -220,7 +220,7 @@
   .asset-preview__overlay {
     position: fixed;
     inset: 0;
-    z-index: 1100;
+    z-index: var(--z-dialog-nested);
     display: grid;
     place-items: center;
     padding: var(--space-4);
@@ -268,7 +268,7 @@
     font-family: var(--font-mono);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.12em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 
@@ -283,7 +283,7 @@
     overflow: hidden;
     color: var(--color-text-primary);
     font-size: var(--font-size-lg);
-    line-height: 1.25;
+    line-height: var(--line-height-tight);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -311,30 +311,6 @@
     background: var(--surface-input);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-  }
-
-  .asset-preview__close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-input);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-  }
-
-  .asset-preview__close:hover {
-    border-color: var(--color-accent);
-    color: var(--color-text-primary);
-  }
-
-  .asset-preview__close:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
   }
 
   .asset-preview__body {
@@ -370,7 +346,7 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 
@@ -408,12 +384,6 @@
 
     .asset-preview__context {
       padding: var(--space-3);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .asset-preview__close {
-      transition: none;
     }
   }
 </style>
