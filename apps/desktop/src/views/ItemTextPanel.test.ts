@@ -11,10 +11,12 @@ beforeEach(() => {
   locale.set('es')
 })
 
-function setup(edited = false, pendingEdit = false) {
+type Props = ComponentProps<typeof ItemTextPanel>
+
+function setup(edited = false, pendingEdit = false, overrides: Partial<Props> = {}) {
   vi.mocked(invoke).mockResolvedValue(edited)
   const onTranscribeAudio = vi.fn()
-  const props: ComponentProps<typeof ItemTextPanel> = {
+  const props: Props = {
     selectedAsset: {
       id: 'audio-1',
       type: 'audio',
@@ -51,9 +53,24 @@ function setup(edited = false, pendingEdit = false) {
     onTranscribeAudio,
     onOcrTextInput: vi.fn(),
     onTranscriptionTextInput: vi.fn(),
+    ...overrides,
   }
   render(ItemTextPanel, props)
   return onTranscribeAudio
+}
+
+const imageAsset: Props['selectedAsset'] = {
+  id: 'image-1',
+  type: 'image',
+  path: '/page.png',
+  itemId: 'item-1',
+  createdAt: 0,
+  sortIndex: 0,
+  size: null,
+}
+
+function ocrState(status: 'running' | 'done' | 'error', progress = 100): Props['ocrState'] {
+  return { status, progress, method: 'tesseract', ...(status === 'error' ? { error: 'boom' } : {}) }
 }
 
 it('asks before replacing edited text and cancel does not transcribe', async () => {
@@ -88,4 +105,62 @@ it('preserves direct transcription when not edited', async () => {
   await fireEvent.click(screen.getByRole('button', { name: 'STT' }))
   await waitFor(() => expect(transcribe).toHaveBeenCalledTimes(1))
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+})
+
+it('shows OCR progress as a progressbar carrying its value', () => {
+  setup(false, false, { selectedAsset: imageAsset, ocrState: ocrState('running', 40) })
+  const bar = screen.getByRole('progressbar', { name: 'Extracción de texto' })
+  expect(bar).toHaveAttribute('aria-valuenow', '40')
+  expect(document.querySelector('progress')).toBeNull()
+})
+
+it('shows transcription progress as a progressbar carrying its value', () => {
+  setup(false, false, {
+    transcriptionState: { status: 'running', progress: 25, text: '', editedByHand: false },
+  })
+  const bar = screen.getByRole('progressbar', { name: 'Transcripción de audio' })
+  expect(bar).toHaveAttribute('aria-valuenow', '25')
+})
+
+it('keeps the extracted text collapsed behind a disclosure and reports edits', async () => {
+  const onOcrTextInput = vi.fn()
+  setup(false, false, {
+    selectedAsset: imageAsset,
+    ocrState: ocrState('done'),
+    ocrEditedText: 'texto',
+    onOcrTextInput,
+  })
+  const header = screen.getByRole('button', { name: /Texto extraído/ })
+  expect(header).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.queryByRole('textbox')).toBeNull()
+  await fireEvent.click(header)
+  expect(header).toHaveAttribute('aria-expanded', 'true')
+  const field = screen.getByRole('textbox')
+  expect(field).toHaveValue('texto')
+  await fireEvent.input(field, { target: { value: 'texto corregido' } })
+  expect(onOcrTextInput).toHaveBeenCalledWith('image-1', 'texto corregido')
+})
+
+it('opens the recovered text of a failed OCR run and honours the editing lock', () => {
+  setup(false, false, {
+    selectedAsset: imageAsset,
+    ocrState: ocrState('error'),
+    ocrEditedText: 'parcial',
+    ocrEditingDisabled: true,
+  })
+  expect(screen.getByRole('button', { name: /Texto extraído/ })).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  )
+  expect(screen.getByRole('textbox')).toBeDisabled()
+})
+
+it('reports transcription edits from the disclosed field', async () => {
+  const onTranscriptionTextInput = vi.fn()
+  setup(false, false, { onTranscriptionTextInput })
+  await fireEvent.click(screen.getByRole('button', { name: /Transcripción/ }))
+  const field = screen.getByRole('textbox')
+  expect(field).toHaveValue('original')
+  await fireEvent.input(field, { target: { value: 'corregido' } })
+  expect(onTranscriptionTextInput).toHaveBeenCalledWith('audio-1', 'corregido')
 })
