@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
+  import { Button, Input } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { testOpenrouterConnection, type ModelInfo } from '$lib/settings'
   import { requestSettingsTab } from '$lib/settings-tab-request'
@@ -257,15 +258,13 @@
   {#if noKey}
     <p class="model-picker__nokey">
       {$currentLocale && t('settings.modelList.noKey')}
-      <button type="button" class="model-picker__link" onclick={openApiSettings}>
+      <Button variant="link" onclick={openApiSettings}>
         {$currentLocale && t('settings.modelList.openSettings')}
-      </button>
+      </Button>
     </p>
   {:else}
     <div class="model-picker__field">
-      <input
-        class="model-picker__input"
-        type="text"
+      <Input
         role="combobox"
         aria-labelledby="{uid}-label"
         aria-expanded={listOpen}
@@ -274,7 +273,7 @@
         aria-activedescendant={listOpen && highlight >= 0
           ? `${uid}-option-${highlight}`
           : undefined}
-        bind:this={inputEl}
+        bind:element={inputEl}
         placeholder={emptyLabel}
         value={query}
         autocomplete="off"
@@ -345,56 +344,11 @@
     color: var(--color-text-secondary);
   }
 
-  .model-picker__link {
-    border: none;
-    background: transparent;
-    padding: 0;
-    font: inherit;
-    color: var(--color-accent);
-    text-decoration: underline;
-    cursor: pointer;
-  }
-
+  /* The field is Input, never a native <select>, whose popup the operating
+     system paints. */
   .model-picker__field {
     position: relative;
     min-width: 0;
-  }
-
-  /* The app's own field, never a native <select>, whose popup the operating
-     system paints. Same box as Input.svelte's. */
-  .model-picker__input {
-    width: 100%;
-    min-height: var(--control-height-md);
-    max-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-    background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    outline: none;
-    transition:
-      border-color var(--transition-smooth),
-      box-shadow var(--transition-smooth),
-      background-color var(--transition-smooth);
-    box-sizing: border-box;
-    line-height: var(--line-height-base);
-  }
-
-  .model-picker__input::placeholder {
-    color: var(--color-text-muted);
-  }
-
-  .model-picker__input::selection {
-    background: var(--color-accent-soft);
-  }
-
-  .model-picker__input:focus,
-  .model-picker__input:focus-visible {
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background-color: color-mix(in srgb, var(--color-surface) 92%, transparent);
   }
 
   /* The list floats over the form below it: the column is narrow and the rows
@@ -404,7 +358,7 @@
     top: calc(100% + var(--space-1));
     left: 0;
     right: 0;
-    z-index: 30;
+    z-index: var(--z-popover);
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
@@ -425,10 +379,10 @@
   .model-picker__option {
     display: block;
     width: 100%;
-    min-height: 28px;
+    min-height: var(--control-height-xs);
     padding: var(--space-1) var(--space-2);
     border: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: transparent;
     color: var(--color-text-secondary);
     font-family: var(--font-ui);

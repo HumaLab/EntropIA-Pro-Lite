@@ -10,7 +10,7 @@
   import { onMount } from 'svelte'
   import type { EntityAlias } from '@entropia/store'
   import { normalizeEntityAliasKey } from '@entropia/store'
-  import { ActionIcon, Card, ConfirmDialog, Input, tooltip } from '@entropia/ui'
+  import { ActionIcon, Button, Card, ConfirmDialog, IconButton, Input } from '@entropia/ui'
   import { getStore } from '$lib/db'
   import { describeEntityAliasError, refreshEntityAliases } from '$lib/entity-aliases'
   import { suggestEntityAliases, type EntityAliasSuggestion } from '$lib/entity-alias-suggestions'
@@ -200,22 +200,17 @@
                   bind:value={editingCanonical}
                 />
                 <div class="entity-aliases__edit-actions">
-                  <button
-                    type="button"
-                    class="entity-aliases__action entity-aliases__action--primary"
+                  <Button
+                    variant="primary"
+                    size="sm"
                     disabled={saving}
                     onclick={() => void saveEditing(row)}
                   >
                     {t('entityAliases.save')}
-                  </button>
-                  <button
-                    type="button"
-                    class="entity-aliases__action"
-                    disabled={saving}
-                    onclick={cancelEditing}
-                  >
+                  </Button>
+                  <Button variant="secondary" size="sm" disabled={saving} onclick={cancelEditing}>
                     {t('entityAliases.cancel')}
-                  </button>
+                  </Button>
                 </div>
               </div>
             {:else}
@@ -225,26 +220,24 @@
                 <span class="entity-aliases__canonical">{row.canonical}</span>
               </span>
               <span class="entity-aliases__row-actions">
-                <button
-                  type="button"
-                  class="entity-aliases__icon-action"
-                  aria-label={t('entityAliases.editAria', { alias: row.alias })}
-                  use:tooltip={t('entityAliases.editAria', { alias: row.alias })}
+                <IconButton
+                  size="sm"
+                  label={t('entityAliases.editAria', { alias: row.alias })}
+                  title={t('entityAliases.editAria', { alias: row.alias })}
                   data-testid={`entity-alias-edit-${row.id}`}
                   onclick={() => startEditing(row)}
                 >
                   <ActionIcon name="edit" size={14} />
-                </button>
-                <button
-                  type="button"
-                  class="entity-aliases__icon-action entity-aliases__icon-action--delete"
-                  aria-label={t('entityAliases.deleteAria', { alias: row.alias })}
-                  use:tooltip={t('entityAliases.deleteAria', { alias: row.alias })}
+                </IconButton>
+                <IconButton
+                  size="sm"
+                  label={t('entityAliases.deleteAria', { alias: row.alias })}
+                  title={t('entityAliases.deleteAria', { alias: row.alias })}
                   data-testid={`entity-alias-delete-${row.id}`}
                   onclick={() => requestDelete(row)}
                 >
                   <ActionIcon name="delete" size={14} />
-                </button>
+                </IconButton>
               </span>
             {/if}
           </li>
@@ -283,13 +276,12 @@
               {t('entityAliases.suggestions.mentions', { count: suggestion.totalMentions })}
             </span>
             <span class="entity-aliases__row-actions">
-              <button
-                type="button"
-                class="entity-aliases__icon-action entity-aliases__icon-action--primary"
-                aria-label={t('entityAliases.suggestions.acceptAria', {
+              <IconButton
+                size="sm"
+                label={t('entityAliases.suggestions.acceptAria', {
                   canonical: suggestion.canonical,
                 })}
-                use:tooltip={t('entityAliases.suggestions.acceptAria', {
+                title={t('entityAliases.suggestions.acceptAria', {
                   canonical: suggestion.canonical,
                 })}
                 data-testid={`entity-alias-suggestion-accept-${index}`}
@@ -297,14 +289,13 @@
                 onclick={() => void acceptSuggestion(suggestion)}
               >
                 <ActionIcon name="check" size={14} />
-              </button>
-              <button
-                type="button"
-                class="entity-aliases__icon-action"
-                aria-label={t('entityAliases.suggestions.discardAria', {
+              </IconButton>
+              <IconButton
+                size="sm"
+                label={t('entityAliases.suggestions.discardAria', {
                   canonical: suggestion.canonical,
                 })}
-                use:tooltip={t('entityAliases.suggestions.discardAria', {
+                title={t('entityAliases.suggestions.discardAria', {
                   canonical: suggestion.canonical,
                 })}
                 data-testid={`entity-alias-suggestion-discard-${index}`}
@@ -312,7 +303,7 @@
                 onclick={() => dismissSuggestion(suggestion)}
               >
                 <ActionIcon name="close" size={14} />
-              </button>
+              </IconButton>
             </span>
             {#if acceptingKey === suggestionKey}
               <span class="entity-aliases__note" role="status">
@@ -394,7 +385,7 @@
     gap: var(--space-2);
     padding: var(--space-1) var(--space-2);
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: var(--color-surface-raised);
   }
 
@@ -432,39 +423,6 @@
     margin-left: auto;
   }
 
-  .entity-aliases__icon-action {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 28px;
-    height: 28px;
-    padding: 0 var(--space-1);
-    border: 1px solid transparent;
-    border-radius: var(--radius-control);
-    background: transparent;
-    color: var(--color-text-muted);
-    cursor: pointer;
-  }
-
-  .entity-aliases__icon-action:hover {
-    border-color: var(--color-hairline);
-    color: var(--color-text-primary);
-  }
-
-  .entity-aliases__icon-action--primary {
-    color: var(--color-accent-hover);
-  }
-
-  .entity-aliases__icon-action--primary:hover {
-    border-color: var(--color-accent);
-    color: var(--color-accent-hover);
-  }
-
-  .entity-aliases__icon-action--delete:hover {
-    border-color: var(--color-danger);
-    color: var(--color-danger);
-  }
-
   .entity-aliases__edit {
     display: flex;
     align-items: center;
@@ -476,26 +434,5 @@
     display: inline-flex;
     gap: var(--space-1);
     flex: none;
-  }
-
-  .entity-aliases__action {
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-control);
-    background: transparent;
-    color: var(--color-text-secondary);
-    font: inherit;
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-  }
-
-  .entity-aliases__action--primary {
-    border-color: var(--color-accent);
-    color: var(--color-accent-hover);
-  }
-
-  .entity-aliases__action:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
   }
 </style>
