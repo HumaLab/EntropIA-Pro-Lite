@@ -36,9 +36,11 @@ function selectText(textLayer: HTMLElement, text: string) {
   const removeAllRanges = vi.fn()
   vi.spyOn(window, 'getSelection').mockReturnValue({
     isCollapsed: false,
+    rangeCount: 1,
     toString: () => text,
     removeAllRanges,
     getRangeAt: () => ({
+      toString: () => text,
       commonAncestorContainer: node,
       getClientRects: () => [
         { left: 10, top: 100, width: 80, height: 12 },
@@ -125,6 +127,47 @@ describe('PdfMarkupLayer', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Highlight' }))
     expect(onCreate).toHaveBeenCalledOnce()
     expect(onCreate.mock.calls[0]?.[0].text).toBe('Second longer words')
+  })
+
+  it('covers every range of the selection, not just the first', async () => {
+    const onCreate = vi.fn()
+    render(PdfMarkupLayer, { props: props({ onCreate }) })
+    const textLayer = screen.getByTestId('pdf-text-layer')
+    const first = document.createTextNode('Left part ')
+    const second = document.createTextNode('right part')
+    textLayer.append(first, second)
+    // A multi-range selection (block select, programmatic ranges): toString
+    // spans both, so the boxes must too — reading getRangeAt(0) alone would
+    // save the text without the second line's rects.
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 2,
+      toString: () => 'Left part right part',
+      removeAllRanges: vi.fn(),
+      getRangeAt: (index: number) =>
+        index === 0
+          ? {
+              commonAncestorContainer: first,
+              toString: () => 'Left part ',
+              getClientRects: () => [{ left: 10, top: 100, width: 80, height: 12 }],
+            }
+          : {
+              commonAncestorContainer: second,
+              toString: () => 'right part',
+              getClientRects: () => [{ left: 10, top: 120, width: 40, height: 12 }],
+            },
+    } as unknown as Selection)
+    await fireEvent.pointerUp(textLayer)
+    await fireEvent.click(screen.getByRole('button', { name: 'Highlight' }))
+    expect(onCreate).toHaveBeenCalledOnce()
+    const draft = onCreate.mock.calls[0]?.[0]
+    expect(draft.text).toBe('Left part right part')
+    expect(draft.rects).toEqual(
+      selectionToPdfRects(viewport, [
+        { x: 10, y: 100, width: 80, height: 12 },
+        { x: 10, y: 120, width: 40, height: 12 },
+      ])
+    )
   })
 
   it('lets the overlay take the pointer only for note, area and text tools', () => {

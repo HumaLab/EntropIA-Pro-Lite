@@ -260,16 +260,26 @@
   function readSelection() {
     const selection = typeof window !== 'undefined' ? window.getSelection() : null
     if (!selection || selection.isCollapsed || !textLayerEl || !rootEl) return null
-    const range = selection.getRangeAt(0)
-    if (!textLayerEl.contains(range.commonAncestorContainer)) return null
+    // Every range, not just the first: `selection.toString()` concatenates
+    // them all, so reading boxes from `getRangeAt(0)` alone saves rects that
+    // do not cover the saved text whenever the selection holds more ranges.
     const bounds = rootEl.getBoundingClientRect()
-    const boxes = Array.from(range.getClientRects()).map((rect) => ({
-      x: rect.left - bounds.left,
-      y: rect.top - bounds.top,
-      width: rect.width,
-      height: rect.height,
-    }))
-    const text = selection.toString().replace(/\s+/g, ' ').trim()
+    const texts: string[] = []
+    const boxes: ViewportBox[] = []
+    for (let index = 0; index < selection.rangeCount; index++) {
+      const range = selection.getRangeAt(index)
+      if (!textLayerEl.contains(range.commonAncestorContainer)) continue
+      texts.push(range.toString())
+      for (const rect of Array.from(range.getClientRects())) {
+        boxes.push({
+          x: rect.left - bounds.left,
+          y: rect.top - bounds.top,
+          width: rect.width,
+          height: rect.height,
+        })
+      }
+    }
+    const text = texts.join('').replace(/\s+/g, ' ').trim()
     if (!text || boxes.length === 0) return null
     return { text, boxes }
   }
