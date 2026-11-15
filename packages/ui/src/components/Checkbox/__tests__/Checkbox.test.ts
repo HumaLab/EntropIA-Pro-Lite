@@ -52,3 +52,53 @@ describe('Checkbox', () => {
     expect(source).toContain('outline: none;')
   })
 })
+
+const styles = source.split(/<style[^>]*>/)[1]!.replace(/\/\*[\s\S]*?\*\//g, '')
+
+function rule(selector: string): string {
+  const at = styles.indexOf(`${selector} {`)
+  expect(at, `${selector} is not in the stylesheet`).toBeGreaterThan(-1)
+  return styles.slice(at, styles.indexOf('}', at))
+}
+
+/**
+ * Two looks views used to get by restyling the row with `:global`: a compact
+ * row (size sm) and a bordered card that lifts off a sunken list (variant
+ * card). The component owns both; the defaults stay the plain md row.
+ */
+describe('Checkbox size and variant', () => {
+  it('defaults to the md row', () => {
+    render(Checkbox, { props: { label: 'Plain' } })
+    const row = screen.getByRole('checkbox', { name: 'Plain' }).closest('label')!
+    expect(row).toHaveClass('checkbox', 'checkbox--row', 'checkbox--md')
+  })
+
+  it('carries the size and variant classes it is given', () => {
+    render(Checkbox, { props: { label: 'Card', size: 'sm', variant: 'card' } })
+    const row = screen.getByRole('checkbox', { name: 'Card' }).closest('label')!
+    expect(row).toHaveClass('checkbox--card', 'checkbox--sm')
+  })
+
+  it('size sm is the compact row: tighter padding, gap and type', () => {
+    const sm = rule('.checkbox--sm')
+    expect(sm).toMatch(/gap:\s*var\(--space-2\)/)
+    expect(sm).toMatch(/padding:\s*var\(--space-1\) var\(--space-2\)/)
+    expect(sm).toMatch(/font-size:\s*var\(--font-size-xs\)/)
+  })
+
+  it('variant card is a bordered surface whose checked border is firmer than its resting one', () => {
+    const card = rule('.checkbox--card')
+    expect(card).toMatch(/background:\s*var\(--surface-panel\)/)
+    expect(card).toMatch(/border-color:\s*var\(--border-subtle\)/)
+    expect(rule('.checkbox--card:hover')).toMatch(/background:\s*var\(--surface-toolbar\)/)
+    const checked = rule('.checkbox--card:has(input:checked)')
+    expect(checked).toMatch(/background:\s*var\(--surface-toolbar\)/)
+    expect(checked).toMatch(/border-color:\s*var\(--border-panel\)/)
+  })
+
+  it('states the card rules after the row rules, so they win by order', () => {
+    expect(styles.indexOf('.checkbox--card {')).toBeGreaterThan(
+      styles.indexOf('.checkbox:has(input:checked) {')
+    )
+  })
+})
