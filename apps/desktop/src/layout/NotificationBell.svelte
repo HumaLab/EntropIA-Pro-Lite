@@ -270,7 +270,7 @@
     padding: 0 3px;
     border-radius: var(--radius-full);
     background: var(--color-danger);
-    color: #fff;
+    color: var(--color-on-danger);
     font-family: var(--font-ui);
     font-size: 9px;
     font-weight: var(--font-weight-semibold);
