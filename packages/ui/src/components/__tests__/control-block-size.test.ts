@@ -61,6 +61,21 @@ describe('control primitives keep their token height under any flex or grid pare
     expectCappedAt(button, '.btn--lg', 'var(--control-height-lg)')
   })
 
+  it('sizes a link Button to its text, neither capped at a control height nor stretched', () => {
+    // A link sits inside a sentence or a panel header: the control-height cap
+    // would make it taller than the line around it, and a stretching parent
+    // must not grow it either.
+    const link = declarations(stylesOf('../Button/Button.svelte'), '.btn--link')
+
+    expect(link).toMatchObject({
+      'min-height': '0',
+      'max-height': 'none',
+      flex: 'none',
+      'align-self': 'baseline',
+      padding: '0',
+    })
+  })
+
   it('makes an icon-only Button a fixed square that never flexes', () => {
     const button = stylesOf('../Button/Button.svelte')
 
