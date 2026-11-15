@@ -643,7 +643,7 @@ describe('DependenciasTab', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Resetear entorno' }))
 
-    const dialog = screen.getByRole('alertdialog')
+    const dialog = screen.getByRole('dialog')
     expect(dialog).toBeInTheDocument()
     expect(dialog).toHaveAttribute('aria-modal', 'true')
     expect(dialog).toHaveAccessibleName('Confirmar reseteo del entorno')
@@ -676,14 +676,14 @@ describe('DependenciasTab', () => {
     resetButton.focus()
     await fireEvent.click(resetButton)
 
-    const dialog = screen.getByRole('alertdialog', { name: 'Confirmar reseteo del entorno' })
+    const dialog = screen.getByRole('dialog', { name: 'Confirmar reseteo del entorno' })
     await waitFor(() => {
       expect(screen.getByLabelText('Confirmación requerida')).toHaveFocus()
     })
 
     await fireEvent.keyDown(dialog, { key: 'Escape' })
 
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(resetButton).toHaveFocus()
   })
 
@@ -962,5 +962,56 @@ describe('DependenciasTab', () => {
         screen.queryByText(/35% · Descargando runtime remoto confiable/i)
       ).not.toBeInTheDocument()
     })
+  })
+
+  it('shows per-dependency install progress as a labelled progress bar', async () => {
+    depsMocks.checkAllDeps.mockResolvedValueOnce([
+      { id: 'Spacy', status: { type: 'installing', percent: 40 }, version: null },
+    ])
+
+    render(DependenciasTab)
+
+    const bar = await screen.findByRole('progressbar', { name: 'Instalando spaCy (NER)' })
+    expect(bar).toHaveAttribute('aria-valuenow', '40')
+    expect(screen.getByText('40%')).toBeInTheDocument()
+  })
+
+  it('shows overall install progress as a progress bar named by its visible label', async () => {
+    depsMocks.checkAllDeps.mockResolvedValue([
+      { id: 'Python', status: { type: 'installed', version: '3.11.9' }, version: '3.11.9' },
+      { id: 'Spacy', status: { type: 'missing' }, version: null },
+    ])
+    depsMocks.installAllDeps.mockReturnValue(new Promise(() => undefined))
+
+    render(DependenciasTab)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Instalar todo' }))
+
+    const bar = await screen.findByRole('progressbar', { name: '50% instalado' })
+    expect(bar).toHaveAttribute('aria-valuenow', '50')
+  })
+
+  it('renders the required and version labels as status badges', async () => {
+    render(DependenciasTab)
+
+    const required = await screen.findByText('Requerido')
+    expect(required.closest('.status-badge')).not.toBeNull()
+    expect(screen.getByText('3.11.9').closest('.status-badge')).not.toBeNull()
+  })
+
+  it('confirms the reset in a portalled dialog that keeps the typed phrase off a stray backdrop click', async () => {
+    render(DependenciasTab)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Resetear entorno' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Confirmar reseteo del entorno' })
+    await fireEvent.input(screen.getByLabelText('Confirmación requerida'), {
+      target: { value: 'resetear' },
+    })
+    const overlay = dialog.parentElement as HTMLElement
+    await fireEvent.click(overlay)
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByLabelText('Confirmación requerida')).toHaveValue('resetear')
   })
 })
