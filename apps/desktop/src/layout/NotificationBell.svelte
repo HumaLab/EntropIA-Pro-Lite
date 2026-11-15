@@ -191,7 +191,7 @@
                     {#if item.read_at === null}
                       <IconButton
                         size="xs"
-                        class="notif__icon-btn--read"
+                        hoverTone="success"
                         label={t('sync.notif.markRead')}
                         title={t('sync.notif.markRead')}
                         onclick={() => markRead(item)}
@@ -201,7 +201,7 @@
                     {/if}
                     <IconButton
                       size="xs"
-                      class="notif__icon-btn--delete"
+                      hoverTone="danger"
                       label={t('sync.notif.delete')}
                       title={t('sync.notif.delete')}
                       onclick={() => deleteNotification(item)}
@@ -281,16 +281,6 @@
     gap: var(--space-2);
     font-family: var(--font-ui);
     font-size: var(--font-size-xs);
-  }
-
-  /* Layout, size and hover chrome come from IconButton size="xs" (24px).
-     Only the per-action hover colour stays local — it is semantics, not shape. */
-  :global(.notif__icon-btn--read):hover:not(:disabled) {
-    color: var(--color-success);
-  }
-
-  :global(.notif__icon-btn--delete):hover:not(:disabled) {
-    color: var(--color-danger);
   }
 
   .notif__panel-body {
