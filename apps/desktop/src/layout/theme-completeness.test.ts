@@ -91,6 +91,104 @@ describe('every theme in the cycle is complete', () => {
   })
 })
 
+/** The body of one rule, by its exact selector. */
+function ruleBody(css: string, selector: string): string {
+  const at = css.indexOf(`${selector} {`)
+  expect(at, `no rule for ${selector}`).toBeGreaterThan(-1)
+  return css.slice(at, css.indexOf('}', at))
+}
+
+/** The themes painted on a light page: no shadows, dark scrollbars. */
+const LIGHT_THEMES = ['light', 'lite', 'paper']
+
+/**
+ * The tokens step 4 of PLAN_HOMOGENEIZACION.md publishes, with the value each
+ * one starts at. Later steps migrate literals onto them, so a value that
+ * drifts here moves every screen that already uses it.
+ */
+const SHARED_TOKENS: Record<string, string> = {
+  '--color-on-danger': 'var(--color-bg)',
+  '--opacity-disabled': '0.48',
+  '--opacity-disabled-primary': '0.72',
+  '--space-0-5': '2px',
+  '--control-height-xs': '28px',
+  '--line-height-reading': '1.6',
+  '--letter-spacing-caps': '0.075em',
+  '--font-size-2xl': '26px',
+  '--font-size-3xl': '30px',
+  '--duration-fast': '0.08s',
+  '--duration-base': '0.14s',
+  '--duration-smooth': '0.18s',
+  '--duration-slow': '0.3s',
+  '--transition-base': 'var(--duration-base) ease',
+  '--transition-smooth': 'var(--duration-smooth) cubic-bezier(0.2, 0.8, 0.2, 1)',
+  '--shadow-highlight': '0 1px 0 rgba(255, 255, 255, 0.025) inset',
+  '--z-sticky': '20',
+  '--z-drawer': '25',
+  '--z-popover': '30',
+  '--z-popover-raised': '60',
+  '--z-floating': '100',
+  '--z-dropdown': '200',
+  '--z-menu': '210',
+  '--z-assistant': '600',
+  '--z-dialog': '1000',
+  '--z-dialog-nested': '1100',
+  '--z-dialog-top': '1200',
+  '--z-tooltip': '1300',
+  '--z-blocking': '2000',
+}
+
+describe('the shared scale tokens', () => {
+  it('publishes every step-4 token on the default theme', () => {
+    const root = ruleBody(TOKENS, ':root')
+    const wrong = Object.entries(SHARED_TOKENS)
+      .filter(([name, value]) => !root.includes(`${name}: ${value};`))
+      .map(([name, value]) => `${name}: ${value}`)
+
+    expect(wrong, 'tokens missing or off their agreed value').toEqual([])
+  })
+
+  it('declares an inset shadow on the default theme', () => {
+    expect(ruleBody(TOKENS, ':root')).toMatch(/--shadow-inset: [^;]*inset;/)
+  })
+
+  it('switches the highlight and inset shadows off on every light page', () => {
+    const missing = LIGHT_THEMES.flatMap((theme) => {
+      const body = ruleBody(TOKENS, `:root[data-theme='${theme}']`)
+      return ['--shadow-highlight', '--shadow-inset']
+        .filter((name) => !body.includes(`${name}: none;`))
+        .map((name) => `${theme} ${name}`)
+    })
+
+    expect(missing).toEqual([])
+  })
+
+  /**
+   * C14: the default scrollbar track is a white wash meant for dark pages. A
+   * light theme that does not replace it paints a track nobody can see.
+   */
+  it('gives every light page its own scrollbar track', () => {
+    const appCss = readFileSync(resolve(import.meta.dirname, '../app.css'), 'utf-8').replace(
+      /\/\*[\s\S]*?\*\//g,
+      ''
+    )
+    const rules = [...appCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selectors, body]) => ({
+      selectors: selectors!.split(',').map((selector) => selector.trim()),
+      body: body!,
+    }))
+    const missing = LIGHT_THEMES.filter(
+      (theme) =>
+        !rules.some(
+          ({ selectors, body }) =>
+            selectors.includes(`:root[data-theme='${theme}']`) &&
+            /--scrollbar-track:\s*rgba\(0, 0, 0,/.test(body)
+        )
+    )
+
+    expect(missing).toEqual([])
+  })
+})
+
 describe('the stored theme', () => {
   /**
    * The case that was actually broken. A second list of admissible values goes

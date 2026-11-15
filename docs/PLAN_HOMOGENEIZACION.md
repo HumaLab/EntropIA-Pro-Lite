@@ -115,6 +115,24 @@ Estos pasos tocan solo CSS y tokens. Tienen el mayor impacto visible al menor ri
   - **`--duration-*`** (propuesto en `GUIA_DISENO.md`): se agregan acá junto a `--transition-base` y `--transition-smooth`, o se quitan de la guía. Si no se decide, el paso 31 no tiene qué pasar a vigente.
 
   Sumar el override de scrollbars de `lite` y `paper` en `apps/desktop/src/app.css` (C14) y sumar todos los tokens nuevos a `contrast-floor.test.ts` y `theme-completeness.test.ts`. Actualizar `CONTROL_SCALE_PX` en `D/design-tokens.test.ts` si cambia la escala de alturas.
+
+  **Decidido (2026-11-14):**
+  - **`--control-height-xs: 28px`.** Coincide con los 15 usos de `28px` (pestañas, ítems de menú, badges), así que esos controles no se mueven. Un botón cuadrado de solo ícono no usa esta escala: sigue la de `IconButton` (24/28/32/40). `CONTROL_SCALE_PX` ya contiene 28, así que no cambia. Tabla “literal → token” para la etapa D:
+
+    | Literal | Caso | Destino | Diferencia |
+    | --- | --- | --- | --- |
+    | `28px` | control de texto denso | `--control-height-xs` | 0px |
+    | `28px` | cuadrado de solo ícono | `IconButton` `sm` | 0px |
+    | `26px` | `.sidebar__tool` (`D/layout/AppShell.svelte:1022`) | `--control-height-xs` | +2px |
+    | `24px` | cuadrado de solo ícono (`.triple-action`, `D/views/ItemAnalysisPanel.svelte:832`) | `IconButton` `xs` | 0px |
+    | `24px` | control con texto | `--control-height-xs` | +4px |
+    | `22px` | `.notif__bell` (`D/layout/NotificationBell.svelte:231`) | `IconButton` `xs` | +2px |
+    | `20px` | no es altura de control: la acción del chip de `EntityViewer` ya es excepción (`OFF_SCALE_BY_DESIGN`) y la pista del interruptor es medida propia del `Switch` | sin token | 0px |
+
+  - **Portada (F4): se agregan `--font-size-2xl: 26px` y `--font-size-3xl: 30px`**, iguales a los dos tamaños mayores de hoy, así que no cambian. En el paso 25, `22px` pasa a `--font-size-xl` (0px), `17px` a `--font-size-lg` (+1px) y `15px` a `--font-size-md` (+1px).
+  - **Se agregan los `--duration-*`:** `fast` 0.08s, `base` 0.14s, `smooth` 0.18s y `slow` 0.3s. `--transition-base` y `--transition-smooth` pasan a escribirse sobre ellos y conservan su valor computado. Destinos para la migración: `0.08s` → `fast`; `0.1s`, `120ms` y `0.15s` → `base`; `0.2s` → `smooth`; `0.3s` → `slow`.
+  - **`--color-on-danger: var(--color-bg)`**, declarado una vez: el fondo de cada tema supera 4.5:1 sobre su `--color-danger` y su `--color-danger-hover` (mínimo 5.47:1, en `light`). El blanco fijo no sirve: da 3.08:1 sobre el rojo de los temas oscuros y 2.49:1 en `vivid`.
+  - **Capa del asistente de ayuda:** `--z-assistant: 600`. `HelpBubble` (`D/components/HelpBubble.svelte:357` y `:399`) usa 600, que no estaba en la escala: queda sobre los menús (210) y debajo de todo diálogo (1000).
 - **Hecho cuando:** los tests de contraste y de completitud de temas pasan con los tokens nuevos, `pnpm style:metrics` da los mismos números que la línea de base (todavía nadie usa los tokens) y las tres decisiones quedan escritas en este documento.
 
 ### Paso 5 · Codemod de fallbacks y literales sin ambigüedad
