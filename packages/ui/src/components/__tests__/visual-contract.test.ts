@@ -10,6 +10,7 @@ import {
   stylesOf,
   type TokenContext,
 } from './style-guards'
+import { componentContractProblems } from './component-contract'
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(import.meta.dirname, relativePath), 'utf-8')
@@ -339,4 +340,20 @@ describe('style debt guards', () => {
 
     expect(rulesBrokenBy(component, ctx)).toContain('color-literal')
   })
+})
+
+/**
+ * Stage C of PLAN_HOMOGENEIZACION.md: every component added or widened there
+ * holds the contract in component-contract.ts. A component joins this list in
+ * the commit that builds it.
+ */
+const STAGE_C_COMPONENTS: string[] = ['Input']
+
+describe('stage C component contract', () => {
+  it.each(STAGE_C_COMPONENTS)(
+    '%s has no colour literal or fallback, sizes by token, resolves in every theme and is exported',
+    (name) => {
+      expect(componentContractProblems(name)).toEqual([])
+    }
+  )
 })

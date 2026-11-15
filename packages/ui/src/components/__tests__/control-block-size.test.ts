@@ -115,6 +115,11 @@ describe('control primitives keep their token height under any flex or grid pare
       'var(--control-height-md)'
     )
     expectCappedAt(
+      stylesOf('../Input/Input.svelte'),
+      '.input-field--sm .input-field__input',
+      'var(--control-height-sm)'
+    )
+    expectCappedAt(
       stylesOf('../SearchBar/SearchBar.svelte'),
       '.search-bar',
       'var(--control-height-md)'
