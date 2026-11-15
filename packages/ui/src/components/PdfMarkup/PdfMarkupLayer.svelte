@@ -248,6 +248,13 @@
     placement: 'below' | 'above'
     text: string
     boxes: ViewportBox[]
+    /**
+     * The viewport the boxes were measured in. A re-render (zoom, resize,
+     * panel toggle) between pointerup and the popover click replaces the
+     * live `viewport` prop while the measured boxes stay valid, so creation
+     * converts with this snapshot instead of the current prop.
+     */
+    viewport: MarkupViewport
   } | null>(null)
 
   function readSelection() {
@@ -273,11 +280,31 @@
     picked = popover
   ) {
     if (!picked) return
-    const rects = selectionToPdfRects(viewport, picked.boxes)
+    const rects = selectionToPdfRects(picked.viewport ?? viewport, picked.boxes)
     popover = null
     window.getSelection()?.removeAllRanges()
     if (rects.length === 0) return
     onCreate({ type, color: chosenColor, pageIndex, rects, text: picked.text })
+  }
+
+  /**
+   * The popover button click: prefer the live selection (it may have grown
+   * through the keyboard since pointerup) and fall back to the popover
+   * snapshot, whose boxes a re-render may already have orphaned from the DOM.
+   */
+  function confirmFromPopover(type: 'highlight' | 'underline') {
+    const live = readSelection()
+    if (live) {
+      createFromSelection(type, activePopoverColor, {
+        x: 0,
+        y: 0,
+        placement: 'below',
+        ...live,
+        viewport,
+      })
+    } else {
+      createFromSelection(type, activePopoverColor)
+    }
   }
 
   function handleTextPointerUp() {
@@ -287,12 +314,12 @@
       return
     }
     if (tool === 'highlight' || tool === 'underline') {
-      createFromSelection(tool, color, { x: 0, y: 0, placement: 'below', ...picked })
+      createFromSelection(tool, color, { x: 0, y: 0, placement: 'below', ...picked, viewport })
       return
     }
     const anchor = popoverAnchor(picked.boxes, viewport.height)
     if (!anchor) return
-    popover = { ...anchor, ...picked }
+    popover = { ...anchor, ...picked, viewport }
   }
 
   let popoverColor = $state<string | null>(null)
@@ -483,7 +510,7 @@
         iconOnly
         aria-label={labels.popoverHighlight}
         title={labels.popoverHighlight}
-        onclick={() => createFromSelection('highlight', activePopoverColor)}
+        onclick={() => confirmFromPopover('highlight')}
       >
         <ActionIcon name="highlight" size={20} />
       </Button>
@@ -493,7 +520,7 @@
         iconOnly
         aria-label={labels.popoverUnderline}
         title={labels.popoverUnderline}
-        onclick={() => createFromSelection('underline', activePopoverColor)}
+        onclick={() => confirmFromPopover('underline')}
       >
         <ActionIcon name="underline" size={20} />
       </Button>
