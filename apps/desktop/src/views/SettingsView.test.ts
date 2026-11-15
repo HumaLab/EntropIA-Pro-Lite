@@ -2306,6 +2306,23 @@ function containerBlock(styles: string, query: string): string {
 }
 
 /**
+ * Settings used to repaint the shared Card, Input and Button for the whole
+ * view, so its controls never looked like the rest of the app (audit G1).
+ */
+describe('the settings stylesheet leaves the design-system components alone', () => {
+  it('restyles no Card, Input or Button through :global', () => {
+    const styles = stylesOf(settingsViewSource)
+    expect(styles).not.toMatch(/:global\(\.(card|input-field|btn)/)
+  })
+
+  it('writes no colour literal and no hand-made highlight', () => {
+    const styles = stylesOf(settingsViewSource)
+    expect(styles).not.toMatch(/rgba?\(/)
+    expect(styles).not.toMatch(/inset 0 1px 0/)
+  })
+})
+
+/**
  * The prompt/params/param-card grids collapse at the pane's own width, not
  * the window's — a split pane is rarely the window's width, so a plain
  * `@media` query never fired there and these grids kept their two-column

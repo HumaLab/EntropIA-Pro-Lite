@@ -2505,14 +2505,16 @@
                     <ActionIcon name="delete" size={14} />
                   </IconButton>
                 {/if}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onclick={handleTestConnection}
-                  disabled={testing || !hasOpenRouterCredential}
-                >
-                  {testing ? t('settings.testingConnection') : t('settings.testConnection')}
-                </Button>
+                <div class="settings__key-action">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onclick={handleTestConnection}
+                    disabled={testing || !hasOpenRouterCredential}
+                  >
+                    {testing ? t('settings.testingConnection') : t('settings.testConnection')}
+                  </Button>
+                </div>
               </div>
 
               {#if openRouterKeyStatus}
@@ -2755,16 +2757,18 @@
                     <ActionIcon name="delete" size={14} />
                   </IconButton>
                 {/if}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onclick={handleTestAssemblyAiConnection}
-                  disabled={testingAssemblyAi || !hasAssemblyAiCredential}
-                >
-                  {testingAssemblyAi
-                    ? t('settings.testingConnection')
-                    : t('settings.testConnection')}
-                </Button>
+                <div class="settings__key-action">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onclick={handleTestAssemblyAiConnection}
+                    disabled={testingAssemblyAi || !hasAssemblyAiCredential}
+                  >
+                    {testingAssemblyAi
+                      ? t('settings.testingConnection')
+                      : t('settings.testConnection')}
+                  </Button>
+                </div>
               </div>
 
               {#if assemblyAiKeyStatus}
@@ -3093,14 +3097,16 @@
                     <ActionIcon name="delete" size={14} />
                   </IconButton>
                 {/if}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onclick={handleTestGlmOcrConnection}
-                  disabled={testingGlmOcr || !hasGlmOcrCredential}
-                >
-                  {testingGlmOcr ? t('settings.testingConnection') : t('settings.testConnection')}
-                </Button>
+                <div class="settings__key-action">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onclick={handleTestGlmOcrConnection}
+                    disabled={testingGlmOcr || !hasGlmOcrCredential}
+                  >
+                    {testingGlmOcr ? t('settings.testingConnection') : t('settings.testConnection')}
+                  </Button>
+                </div>
               </div>
 
               {#if glmOcrKeyStatus}
@@ -3184,14 +3190,16 @@
                     <ActionIcon name="delete" size={14} />
                   </IconButton>
                 {/if}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onclick={handleVerifyZoteroKey}
-                  disabled={verifyingZotero || !hasZoteroCredential}
-                >
-                  {verifyingZotero ? t('settings.zotero.verifying') : t('settings.zotero.verify')}
-                </Button>
+                <div class="settings__key-action">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onclick={handleVerifyZoteroKey}
+                    disabled={verifyingZotero || !hasZoteroCredential}
+                  >
+                    {verifyingZotero ? t('settings.zotero.verifying') : t('settings.zotero.verify')}
+                  </Button>
+                </div>
               </div>
 
               {#if zoteroKeyStatus}
@@ -3729,7 +3737,7 @@
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     white-space: nowrap;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 2%);
+    box-shadow: var(--shadow-highlight);
   }
 
   .settings-provider-summary__dot {
@@ -3745,7 +3753,7 @@
     display: inline-block;
     width: 6px;
     height: 6px;
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     background: var(--color-warning);
     margin-left: var(--space-1);
     vertical-align: middle;
@@ -3760,23 +3768,6 @@
     50% {
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 25%, transparent);
     }
-  }
-
-  .settings-view :global(.card) {
-    border-color: var(--color-hairline);
-    background: color-mix(in srgb, var(--color-surface-glass) 86%, transparent);
-    box-shadow: var(--shadow-surface);
-    backdrop-filter: none;
-  }
-
-  .settings-view :global(.card__header),
-  .settings-view :global(.card__footer) {
-    background-color: color-mix(in srgb, var(--color-surface) 88%, transparent);
-    border-color: var(--color-hairline);
-  }
-
-  .settings-view :global(.card__body) {
-    background: transparent;
   }
 
   .settings-card-section {
@@ -3880,14 +3871,13 @@
     margin: 0;
     font-size: var(--font-size-base);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: -0.01em;
   }
 
   .settings-card-section__copy p,
   .settings__hint {
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
     margin: 0;
   }
 
@@ -3959,7 +3949,7 @@
   .settings__radio-desc {
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
-    line-height: 1.5;
+    line-height: var(--line-height-base);
   }
 
   .settings__field {
@@ -4001,7 +3991,7 @@
     margin-bottom: 0;
     padding: var(--space-4);
     border: 1px solid color-mix(in srgb, var(--color-hairline) 72%, transparent);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-surface);
     background: color-mix(in srgb, var(--color-surface-glass) 70%, transparent);
   }
 
@@ -4017,7 +4007,7 @@
     margin: 0;
     color: var(--color-success);
     font-size: var(--font-size-sm);
-    line-height: 1.5;
+    line-height: var(--line-height-base);
   }
 
   .settings__validation--error {
@@ -4029,7 +4019,7 @@
     margin-bottom: 0;
     padding: var(--space-4);
     border: 1px solid color-mix(in srgb, var(--color-hairline) 72%, transparent);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-surface);
     background: color-mix(in srgb, var(--color-surface-glass) 70%, transparent);
   }
 
@@ -4092,32 +4082,13 @@
     flex: 1 1 8rem;
   }
 
-  .settings-view :global(.input-field__input) {
-    border-color: color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    background-color: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-  }
-
-  .settings-view :global(.input-field__input:focus),
-  .settings-view :global(.input-field__input:focus-visible) {
-    background-color: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
-  }
-
-  .settings-view :global(.btn--secondary) {
-    border-color: color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 55%),
-      color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    box-shadow: none;
-  }
-
-  .settings-view :global(.btn--secondary:hover:not(:disabled)) {
-    border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-hairline));
-    background-color: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
+  .settings__key-action {
+    display: grid;
   }
 
   .settings__feedback {
     margin: 0;
-    line-height: 1.55;
+    line-height: var(--line-height-base);
   }
 
   .settings__load-error {
@@ -4219,13 +4190,13 @@
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
     margin: 0;
-    line-height: 1.5;
+    line-height: var(--line-height-base);
   }
 
   .settings__local-model-guide code {
     font-family: var(--font-mono);
     background: var(--color-surface-sunken);
-    padding: 2px 6px;
+    padding: var(--space-0-5) var(--space-1);
     border-radius: var(--radius-sm);
     font-size: var(--font-size-xs);
   }
@@ -4252,9 +4223,10 @@
       width: 100%;
     }
 
-    .settings-view__toolbar :global(.btn),
-    .settings__input-row :global(.btn) {
-      width: 100%;
+    /* A grid item stretches, so the connection test takes the whole row;
+       the save button is a fixed square and stays one. */
+    .settings__key-action {
+      flex: 1 1 100%;
     }
   }
 </style>
