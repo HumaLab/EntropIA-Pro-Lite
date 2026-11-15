@@ -240,3 +240,6 @@ export type {
   ProgressBarSize,
   ProgressBarTone,
 } from './components/ProgressBar/index'
+
+export { Dialog } from './components/Dialog/index'
+export type { DialogProps, DialogSize } from './components/Dialog/index'

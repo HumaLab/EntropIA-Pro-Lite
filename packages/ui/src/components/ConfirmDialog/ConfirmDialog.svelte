@@ -1,11 +1,8 @@
 <script lang="ts">
   import { tooltip } from '../Tooltip/tooltip'
-  import { portal } from '../Portal/portal'
+  import { Dialog } from '../Dialog'
   import { ActionIcon, Button } from '../Button'
   import type { ConfirmDialogProps } from './ConfirmDialog.types'
-
-  const FOCUSABLE_SELECTOR =
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
   let dialogId = `confirm-dialog-title-${Math.random().toString(36).slice(2)}`
 
@@ -34,81 +31,16 @@
 
   const isDestructive = $derived(variant === 'destructive')
   const isConfirmDisabled = $derived(confirmDisabled || confirming)
-
-  let dialogEl: HTMLDivElement | undefined = $state()
-
-  function getFocusableElements(): HTMLElement[] {
-    if (!dialogEl) return []
-
-    return Array.from(dialogEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-      (element) => !element.hasAttribute('disabled') && !element.hasAttribute('hidden')
-    )
-  }
-
-  function handleOverlayClick() {
-    if (!dismissOnOverlay) return
-    oncancel()
-  }
-
-  function handleWindowKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      event.stopPropagation()
-      oncancel()
-      return
-    }
-
-    if (event.key !== 'Tab') return
-
-    const focusableElements = getFocusableElements()
-    if (focusableElements.length === 0) {
-      event.preventDefault()
-      dialogEl?.focus()
-      return
-    }
-
-    const currentElement =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const currentIndex = currentElement ? focusableElements.indexOf(currentElement) : -1
-    let nextElement: HTMLElement | undefined
-    if (event.shiftKey) {
-      nextElement =
-        currentIndex <= 0
-          ? focusableElements[focusableElements.length - 1]
-          : focusableElements[currentIndex - 1]
-    } else {
-      nextElement =
-        currentIndex === -1 || currentIndex === focusableElements.length - 1
-          ? focusableElements[0]
-          : focusableElements[currentIndex + 1]
-    }
-
-    const target = nextElement ?? dialogEl
-    event.preventDefault()
-    target?.focus()
-  }
-
-  $effect(() => {
-    const previouslyFocused =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const cancelButton = dialogEl?.querySelector<HTMLElement>(
-      '.confirm-dialog__actions .btn--secondary:not([disabled])'
-    )
-    const initialFocusTarget = cancelButton ?? getFocusableElements()[0] ?? dialogEl
-    initialFocusTarget?.focus()
-    window.addEventListener('keydown', handleWindowKeydown, true)
-
-    return () => {
-      window.removeEventListener('keydown', handleWindowKeydown, true)
-      if (previouslyFocused?.isConnected) {
-        previouslyFocused.focus()
-      }
-    }
-  })
+  const hasBody = $derived(Boolean(children || error || errorContent))
 </script>
 
 {#snippet cancelAction()}
-  <Button variant="secondary" onclick={oncancel} disabled={cancelDisabled}>
+  <Button
+    variant="secondary"
+    onclick={oncancel}
+    disabled={cancelDisabled}
+    data-dialog-initial-focus
+  >
     {cancelLabel}
   </Button>
 {/snippet}
@@ -140,124 +72,64 @@
   {/if}
 {/snippet}
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- Portalled out of the work pane; see Portal/portal.ts. -->
-<div
-  class="confirm-dialog__overlay"
-  {@attach portal}
-  onclick={handleOverlayClick}
-  role="presentation"
->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div
-    bind:this={dialogEl}
-    class="confirm-dialog"
-    class:confirm-dialog--destructive={isDestructive}
-    class:confirm-dialog--wide={size === 'wide'}
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby={titleId}
-    tabindex="-1"
-    onclick={(event) => event.stopPropagation()}
-  >
-    <div class="confirm-dialog__content">
-      <h3 id={titleId} class="confirm-dialog__title">{title}</h3>
-
-      {#if message}
-        <p class="confirm-dialog__message">{message}</p>
-      {/if}
-
-      {#if children}
-        <div class="confirm-dialog__body">
-          {@render children()}
-        </div>
-      {/if}
-
-      {#if error || errorContent}
-        <div class="confirm-dialog__error" role="alert">
-          {#if errorContent}
-            {@render errorContent()}
-          {:else}
-            {error}
-          {/if}
-        </div>
-      {/if}
+{#snippet body()}
+  {#if children}
+    <div class="confirm-dialog__body">
+      {@render children()}
     </div>
+  {/if}
 
-    <div class="confirm-dialog__actions">
-      {#if confirmFirst}
-        {@render confirmAction()}
-        {@render cancelAction()}
+  {#if error || errorContent}
+    <div class="confirm-dialog__error" role="alert">
+      {#if errorContent}
+        {@render errorContent()}
       {:else}
-        {@render cancelAction()}
-        {@render confirmAction()}
+        {error}
       {/if}
     </div>
-  </div>
-</div>
+  {/if}
+{/snippet}
+
+{#snippet actions()}
+  {#if confirmFirst}
+    {@render confirmAction()}
+    {@render cancelAction()}
+  {:else}
+    {@render cancelAction()}
+    {@render confirmAction()}
+  {/if}
+{/snippet}
+
+<!--
+  The dialog stays open until the caller unmounts it: the binding reports a
+  dismissal (Escape, overlay) as a cancel and always reads back open.
+-->
+<Dialog
+  bind:open={() => true, (next) => !next && oncancel()}
+  {title}
+  {titleId}
+  description={message || undefined}
+  size={size === 'wide' ? 'lg' : 'sm'}
+  dismissOnBackdrop={dismissOnOverlay}
+  class={[
+    'confirm-dialog',
+    isDestructive && 'confirm-dialog--destructive',
+    size === 'wide' && 'confirm-dialog--wide',
+  ]}
+  overlayClass="confirm-dialog__overlay"
+  children={hasBody ? body : undefined}
+  footer={actions}
+/>
 
 <style>
-  .confirm-dialog__overlay {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-4);
-    background-color: var(--color-overlay);
-    z-index: 1000;
-  }
-
-  .confirm-dialog {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-    width: min(100%, 440px);
-    padding: var(--space-6);
-    background: var(--color-surface-glass);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-dialog);
-    box-shadow: var(--shadow-lg);
-    font-family: var(--font-ui);
-    color: var(--color-text-primary);
-  }
-
-  .confirm-dialog--wide {
-    width: min(100%, 1120px);
-    max-height: 100%;
-    padding: var(--space-5);
-  }
-
-  .confirm-dialog--wide .confirm-dialog__content {
-    flex: 1 1 auto;
-    min-height: 0;
-  }
-
-  .confirm-dialog--wide .confirm-dialog__body {
+  /* The shell (overlay, panel, layout, focus) is Dialog's; these are the body
+     and the actions this dialog puts in it. */
+  :global(.confirm-dialog--wide) .confirm-dialog__body {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
   }
 
-  .confirm-dialog:focus-visible {
-    outline: none;
-    box-shadow: var(--shadow-lg), var(--focus-ring);
-  }
-
-  .confirm-dialog__content {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-
-  .confirm-dialog__title {
-    margin: 0;
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-bold);
-    color: var(--color-text-primary);
-  }
-
-  .confirm-dialog__message,
   .confirm-dialog__body {
     margin: 0;
     font-size: var(--font-size-sm);
@@ -272,13 +144,6 @@
     color: var(--color-danger);
     font-size: var(--font-size-sm);
     line-height: 1.5;
-  }
-
-  .confirm-dialog__actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-3);
-    justify-content: flex-end;
   }
 
   .confirm-dialog__confirm-icon {
@@ -325,16 +190,11 @@
   }
 
   .confirm-dialog__confirm-icon:disabled {
-    opacity: 0.48;
+    opacity: var(--opacity-disabled);
     cursor: not-allowed;
   }
 
   @media (max-width: 720px) {
-    .confirm-dialog__actions {
-      flex-direction: column-reverse;
-    }
-
-    .confirm-dialog__actions :global(.btn),
     .confirm-dialog__confirm-icon {
       width: 100%;
     }
