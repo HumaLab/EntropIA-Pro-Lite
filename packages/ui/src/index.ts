@@ -225,3 +225,10 @@ export type {
   RadioGroupProps,
   RadioGroupVariant,
 } from './components/RadioGroup/index'
+export { Select, SelectTrigger } from './components/SelectTrigger/index'
+export type {
+  SelectOption,
+  SelectProps,
+  SelectTriggerProps,
+  SelectTriggerSize,
+  SelectTriggerVariant,
