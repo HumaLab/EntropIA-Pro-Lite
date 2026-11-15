@@ -36,3 +36,18 @@ describe('the outline section controls', () => {
     expect(ruleFor('.writing__outline-actions {')).toMatch(/background:\s*var\(--/)
   })
 })
+
+describe('the outline rename field', () => {
+  const MARKUP = SOURCE.slice(SOURCE.indexOf('</script>'), SOURCE.indexOf('<style>'))
+
+  it('is the design-system Input, not a hand-dressed native field', () => {
+    const rename = MARKUP.slice(MARKUP.indexOf("aria-label={t('writing.sectionRename')}") - 200)
+    expect(rename).toMatch(/<Input\s[^>]*size="sm"/)
+    expect(STYLES).not.toContain('.writing__outline-rename')
+  })
+
+  it('leaves the document title as the only raw input, the inline-title exception', () => {
+    expect(MARKUP.match(/<input\b/g) ?? []).toHaveLength(1)
+    expect(MARKUP).toMatch(/<input\s+class="writing__doc-title"/)
+  })
+})

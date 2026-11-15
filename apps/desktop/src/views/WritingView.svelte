@@ -6,6 +6,7 @@
     Button,
     ConfirmDialog,
     IconButton,
+    Input,
     Panel,
     StatusBadge,
     WritingEditor,
@@ -1399,9 +1400,8 @@
               {#each outline as entry (entry.index)}
                 <li class="writing__outline-row">
                   {#if renamingSection === entry.childIndex}
-                    <input
-                      class="writing__outline-rename"
-                      type="text"
+                    <Input
+                      size="sm"
                       value={entry.text}
                       aria-label={t('writing.sectionRename')}
                       onkeydown={(event) => onSectionNameKeydown(event, entry.childIndex)}
@@ -1708,7 +1708,7 @@
     margin: 0;
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 
@@ -1867,7 +1867,7 @@
     inset-inline-end: 0;
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: var(--space-0-5);
     /* Opaque: it covers the end of a long title while it is showing, and a
        half-legible word under a row of icons is worse than a clean cut. */
     padding-inline-start: var(--space-3);
@@ -1883,28 +1883,11 @@
     pointer-events: auto;
   }
 
-  .writing__outline-rename {
-    width: 100%;
-    min-height: 28px;
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-focus);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: var(--font-size-xs);
-  }
-
-  .writing__outline-rename:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
   .writing__outline-title {
     margin: 0 0 0 var(--space-2);
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 
@@ -1917,7 +1900,7 @@
   .writing__outline-list {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     margin: 0;
     padding: 0;
     list-style: none;
@@ -1928,7 +1911,7 @@
     min-width: 0;
     display: block;
     width: 100%;
-    min-height: 28px;
+    min-height: var(--control-height-xs);
     padding: var(--space-1) var(--space-2);
     border: 1px solid transparent;
     border-radius: var(--radius-control);

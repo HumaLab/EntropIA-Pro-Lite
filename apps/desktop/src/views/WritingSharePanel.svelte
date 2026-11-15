@@ -253,7 +253,7 @@
 
   .share-panel__hint {
     color: var(--color-text-secondary);
-    font-size: 0.9em;
+    font-size: var(--font-size-xs);
   }
 
   .share-panel__error {
