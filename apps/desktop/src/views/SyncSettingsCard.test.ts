@@ -198,6 +198,16 @@ describe('SyncSettingsCard — plan change request', () => {
     await fireEvent.click(trigger)
   }
 
+  it('builds the plan form on SelectTrigger and Textarea', async () => {
+    render(SyncSettingsCard)
+    await fireEvent.click(await screen.findByText('Solicitar cambio de plan'))
+
+    const trigger = await screen.findByRole('button', { name: /^Plan al que querés cambiar/ })
+    expect(trigger).toHaveClass('select-trigger')
+    const note = screen.getByLabelText('¿Para qué lo necesitás? (opcional)')
+    expect(note.closest('.textarea-field')).not.toBeNull()
+  })
+
   it('opens the plan modal and renders the target-plan menu (current excluded)', async () => {
     render(SyncSettingsCard)
     // Wait for the upgrade button to appear (usage resolved → plan action block).
@@ -370,6 +380,13 @@ describe('SyncSettingsCard — device list deduping', () => {
     mockInvoke.mockReset()
   })
 
+  it('tags the current device with a StatusBadge', async () => {
+    routeInvoke({ sync_list_devices: () => [device({ id: 'current', current: true })] })
+    render(SyncSettingsCard)
+
+    expect(await screen.findByText('Este dispositivo')).toHaveClass('status-badge')
+  })
+
   it('collapses repeated sessions for the same physical device to the current row', async () => {
     routeInvoke({
       sync_list_devices: () => [
@@ -488,6 +505,16 @@ describe('SyncSettingsCard — fixed cloud endpoint', () => {
   afterEach(() => {
     mockInvoke.mockReset()
     setSyncState(status())
+  })
+
+  it('puts the password reveal inside the Input as an IconButton', async () => {
+    render(SyncSettingsCard)
+
+    const reveal = await screen.findByRole('button', { name: 'Mostrar API key' })
+    expect(reveal).toHaveClass('icon-button')
+    expect(reveal.closest('.input-field')).toBe(
+      screen.getByLabelText('Contraseña').closest('.input-field')
+    )
   })
 
   it('hides the server URL field and logs in against the default cloud endpoint', async () => {
