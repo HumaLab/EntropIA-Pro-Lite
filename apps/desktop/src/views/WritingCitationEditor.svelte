@@ -31,6 +31,7 @@
     Checkbox,
     IconButton,
     Input,
+    SelectTrigger,
     ToolbarMenu,
     tooltip,
     type ToolbarMenuItem,
@@ -229,18 +230,15 @@
               bind:open={locatorKindMenuOpen[index]}
             >
               {#snippet trigger(props, { open })}
-                <button
-                  type="button"
-                  class="cite__menu-trigger"
-                  class:cite__menu-trigger--open={open}
+                <SelectTrigger
+                  size="sm"
+                  block
+                  label={locatorKindLabel(work.locatorType)}
+                  valueId="cite-locator-kind-value-{index}"
                   aria-labelledby="cite-locator-kind-label-{index} cite-locator-kind-value-{index}"
                   {...props}
-                >
-                  <span class="cite__menu-trigger-label" id="cite-locator-kind-value-{index}"
-                    >{locatorKindLabel(work.locatorType)}</span
-                  >
-                  <ActionIcon name="chevron-down" size={12} />
-                </button>
+                  {open}
+                />
               {/snippet}
             </ToolbarMenu>
           </div>
@@ -387,47 +385,6 @@
     margin: 0;
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
-  }
-
-  /* The locator-kind trigger stays hand-built: it spans its grid column like
-     the Input beside it, and SelectTrigger has no full-width form yet. Same
-     height as that Input (sm). */
-  .cite__menu-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    width: 100%;
-    min-width: 0;
-    max-width: 100%;
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-  }
-
-  .cite__menu-trigger:hover,
-  .cite__menu-trigger--open {
-    border-color: color-mix(in srgb, var(--border-focus) 40%, var(--border-subtle));
-  }
-
-  .cite__menu-trigger:focus-visible {
-    outline: none;
-    border-color: var(--border-focus);
-    box-shadow: var(--focus-ring);
-  }
-
-  .cite__menu-trigger-label {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-align: start;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .cite__preview-block {
