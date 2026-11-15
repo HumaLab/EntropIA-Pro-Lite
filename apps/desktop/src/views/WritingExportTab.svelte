@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ActionIcon, Checkbox } from '@entropia/ui'
+  import { Checkbox, RadioCard, RadioGroup } from '@entropia/ui'
   import { locale, t, type I18nKey } from '$lib/i18n'
   import { CITATION_CHOICES, type ExportPreferences } from '$lib/export-preferences'
   import type { CitationRepresentation } from '$lib/export-fidelity'
@@ -64,31 +64,21 @@
 </script>
 
 <div class="export-tab">
-  <div class="export-tab__group" role="radiogroup" aria-labelledby="{uid}-citations">
-    <p class="export-tab__legend" id="{uid}-citations">{t('writing.exportCitations')}</p>
-    <!-- Native radios: arrow keys move the choice and the group is announced as
-         one. The cells are the typography menu's cards, compacted. -->
-    <div class="export-tab__choices">
+  <div class="export-tab__group">
+    <!-- The typography cards, compacted: native radios, so arrow keys move the
+         choice and the group is announced as one. The 120px floor is the Agent
+         tab's grid (WritingAgentTab.svelte): across the panel's 200–560 range it
+         steps 1 / 2 / 3 columns, two at the default 280. -->
+    <RadioGroup
+      label={t('writing.exportCitations')}
+      value={preferences.citations}
+      columnMin="120px"
+      onchange={(id) => chooseCitations(id as CitationRepresentation)}
+    >
       {#each CITATION_CHOICES as choice (choice.id)}
-        {@const selected = preferences.citations === choice.id}
-        <label class="export-tab__choice" class:export-tab__choice--selected={selected}>
-          <input
-            class="export-tab__radio"
-            type="radio"
-            name="{uid}-citations"
-            value={choice.id}
-            checked={selected}
-            onchange={() => chooseCitations(choice.id)}
-          />
-          <span class="export-tab__label">{t(choice.label)}</span>
-          <!-- Selection is marked by a glyph as well as by contrast, so it never
-             rests on colour alone. -->
-          <span class="export-tab__check" aria-hidden="true">
-            {#if selected}<ActionIcon name="check" size={14} />{/if}
-          </span>
-        </label>
+        <RadioCard value={choice.id} label={t(choice.label)} />
       {/each}
-    </div>
+    </RadioGroup>
     {#if preferences.citations === 'comment'}
       <p class="export-tab__note">{t('writing.exportCiteMarkdownComment')}</p>
     {/if}
@@ -131,85 +121,8 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
-  }
-
-  /* The Agent tab's grid (WritingAgentTab.svelte): across the panel's
-     200–560 range the 120px floor steps 1 / 2 / 3 columns, two at the default
-     280. auto-fit, so four choices fill the row rather than leave phantom
-     columns beside it. */
-  .export-tab__choices {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: var(--space-2);
-  }
-
-  /* A cell of its own, bordered like the Agent actions, so the grid reads as
-     four choices and not as loose words. */
-  .export-tab__choice {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-height: 32px;
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    cursor: pointer;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base),
-      color var(--transition-base);
-  }
-
-  .export-tab__choice:hover {
-    background: var(--surface-toolbar);
-    color: var(--color-text-primary);
-  }
-
-  /* Selected reads as contrast, never as saturation — as in the typography
-     cards and Checkbox. */
-  .export-tab__choice--selected,
-  .export-tab__choice--selected:hover {
-    border-color: var(--color-border-strong);
-    background: var(--surface-toolbar);
-    color: var(--color-text-primary);
-  }
-
-  /* The row draws the ring, so there is one visible focus, not two. */
-  .export-tab__choice:has(.export-tab__radio:focus-visible) {
-    box-shadow: var(--focus-ring);
-  }
-
-  .export-tab__radio {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  /* Wrapped, not cut: at 128px `Texto citado y nota` takes two lines, as the
-     longest Agent label does. */
-  .export-tab__label {
-    flex: 1;
-    min-width: 0;
-    line-height: var(--line-height-tight);
-    overflow-wrap: anywhere;
-  }
-
-  .export-tab__check {
-    display: inline-flex;
-    flex-shrink: 0;
-    width: 14px;
   }
 
   .export-tab__note {

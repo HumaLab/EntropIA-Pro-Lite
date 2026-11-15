@@ -219,3 +219,9 @@ export type {
 } from './components/WritingEditor/index'
 export { Textarea } from './components/Textarea/index'
 export type { TextareaFont, TextareaProps } from './components/Textarea/index'
+export { RadioCard, RadioGroup } from './components/RadioGroup/index'
+export type {
+  RadioCardProps,
+  RadioGroupProps,
+  RadioGroupVariant,
+} from './components/RadioGroup/index'
