@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { IconButton, portal } from '@entropia/ui'
   import {
     ActionIcon,
+    Dialog,
     DocumentViewer,
+    IconButton,
     type DocumentViewerProps,
     type ViewerType,
   } from '@entropia/ui'
@@ -12,9 +13,6 @@
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { OcrSourceType } from '$lib/ocr-rich-text'
   import type { SimilarAsset } from '$lib/nlp'
-
-  const FOCUSABLE_SELECTOR =
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
   let {
     asset,
@@ -29,10 +27,6 @@
     loadFullText: (assetId: string) => Promise<string | null>
     onclose: () => void
   } = $props()
-
-  let titleId = `similar-asset-preview-title-${Math.random().toString(36).slice(2)}`
-  let dialogEl: HTMLDivElement | undefined = $state()
-  let previouslyFocused: HTMLElement | null = null
 
   let assetTitle = $derived(asset.title || getAssetPathLabel(asset.assetPath) || asset.itemId)
   let viewerType = $derived<ViewerType>(
@@ -52,256 +46,91 @@
     return fullText?.trim() || asset.textPreview?.trim() || ''
   }
 
-  function getFocusableElements(): HTMLElement[] {
-    if (!dialogEl) return []
-    return Array.from(dialogEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-      (element) => !element.hasAttribute('disabled') && !element.hasAttribute('hidden')
-    )
-  }
-
-  function handleWindowKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      event.stopPropagation()
-      requestClose()
-      return
-    }
-
-    if (event.key !== 'Tab') return
-
-    const focusableElements = getFocusableElements()
-    if (focusableElements.length === 0) {
-      event.preventDefault()
-      dialogEl?.focus()
-      return
-    }
-
-    const currentElement =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const currentIndex = currentElement ? focusableElements.indexOf(currentElement) : -1
-    const nextElement = event.shiftKey
-      ? currentIndex <= 0
-        ? focusableElements[focusableElements.length - 1]
-        : focusableElements[currentIndex - 1]
-      : currentIndex === -1 || currentIndex === focusableElements.length - 1
-        ? focusableElements[0]
-        : focusableElements[currentIndex + 1]
-
-    event.preventDefault()
-    ;(nextElement ?? dialogEl)?.focus()
-  }
-
-  function handleOverlayClick(event: MouseEvent) {
-    if (event.target === event.currentTarget) requestClose()
-  }
-
-  function requestClose() {
-    const returnFocusTarget = previouslyFocused
-    onclose()
-    queueMicrotask(() => {
-      if (returnFocusTarget?.isConnected) returnFocusTarget.focus()
-    })
-  }
-
   async function loadAudioFallbackBlob(nativePath: string): Promise<Blob> {
     return loadAudioPreviewBlob(nativePath)
   }
-
-  $effect(() => {
-    if (!dialogEl) return
-    previouslyFocused =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const initialFocusTarget =
-      dialogEl?.querySelector<HTMLElement>('[data-autofocus]') ??
-      getFocusableElements()[0] ??
-      dialogEl
-
-    initialFocusTarget?.focus()
-    window.addEventListener('keydown', handleWindowKeydown, true)
-
-    return () => {
-      window.removeEventListener('keydown', handleWindowKeydown, true)
-    }
-  })
 </script>
 
-<!-- Portalled out of the work pane, which is a size container and would clip
-     this full-window overlay; see portal in @entropia/ui. -->
-<div
-  class="asset-preview__overlay"
-  {@attach portal}
-  role="presentation"
-  onclick={handleOverlayClick}
+<!-- Dialog portals itself out of the work pane, which is a size container
+     and would clip this full-window overlay. -->
+<Dialog
+  size="viewer"
+  nested
+  eyebrow={translate('item.similarAssetPreview.eyebrow')}
+  title={assetTitle}
+  description="{getAssetTypeLabel(asset.assetType)} · {getAssetPathLabel(asset.assetPath)}"
+  {onclose}
 >
-  <div
-    bind:this={dialogEl}
-    class="asset-preview"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby={titleId}
-    tabindex="-1"
-  >
-    <header class="asset-preview__header">
-      <div class="asset-preview__heading">
-        <span class="asset-preview__eyebrow">{translate('item.similarAssetPreview.eyebrow')}</span>
-        <h2 id={titleId}>{assetTitle}</h2>
-        <p>{getAssetTypeLabel(asset.assetType)} · {getAssetPathLabel(asset.assetPath)}</p>
-      </div>
+  {#snippet headerActions()}
+    <span class="asset-preview__score">
+      {translate('item.similarAssetPreview.similarity', { value: similarityPercent })}
+    </span>
+    <IconButton
+      variant="secondary"
+      size="lg"
+      label={translate('item.similarAssetPreview.close')}
+      title={translate('item.similarAssetPreview.close')}
+      data-dialog-initial-focus
+      onclick={onclose}
+    >
+      <ActionIcon name="close" size={20} />
+    </IconButton>
+  {/snippet}
 
-      <div class="asset-preview__header-actions">
-        <span class="asset-preview__score">
-          {translate('item.similarAssetPreview.similarity', { value: similarityPercent })}
-        </span>
-        <IconButton
-          variant="secondary"
-          size="lg"
-          label={translate('item.similarAssetPreview.close')}
-          title={translate('item.similarAssetPreview.close')}
-          data-autofocus
-          onclick={requestClose}
-        >
-          <ActionIcon name="close" size={20} />
-        </IconButton>
-      </div>
-    </header>
-
-    <div class="asset-preview__body">
-      <div class="asset-preview__viewer" data-testid="similar-asset-preview-viewer">
-        <DocumentViewer
-          path={asset.assetPath}
-          assetUrl={getAssetUrl(asset.assetPath)}
-          type={viewerType}
-          readOnly
-          audioFallbackBlobLoader={loadAudioFallbackBlob}
-          labels={{ ...documentViewerLabels, imageAlt: assetTitle }}
-          annotationToolbarLabels={{
-            toolbarAriaLabel: translate('item.similarAssetPreview.viewerTools'),
-          }}
-        />
-      </div>
-
-      <aside class="asset-preview__context">
-        <h3>{translate('item.similarAssetPreview.relatedText')}</h3>
-        {#await fullTextPromise}
-          <p class="asset-preview__empty">{translate('item.similarAssetPreview.loadingText')}</p>
-        {:then fullText}
-          {@const displayText = getDisplayText(fullText)}
-          {#if displayText}
-            <OcrRichText
-              text={displayText}
-              assetUrl={getAssetUrl(asset.assetPath)}
-              sourceType={ocrSourceType}
-              referenceWidth={0}
-              referenceHeight={0}
-            />
-          {:else}
-            <p class="asset-preview__empty">{translate('item.similarAssetsNoPreview')}</p>
-          {/if}
-        {:catch}
-          {@const fallbackText = getDisplayText(null)}
-          {#if fallbackText}
-            <OcrRichText
-              text={fallbackText}
-              assetUrl={getAssetUrl(asset.assetPath)}
-              sourceType={ocrSourceType}
-              referenceWidth={0}
-              referenceHeight={0}
-            />
-          {:else}
-            <p class="asset-preview__empty">{translate('item.similarAssetsNoPreview')}</p>
-          {/if}
-        {/await}
-      </aside>
+  <div class="asset-preview__body">
+    <div class="asset-preview__viewer" data-testid="similar-asset-preview-viewer">
+      <DocumentViewer
+        path={asset.assetPath}
+        assetUrl={getAssetUrl(asset.assetPath)}
+        type={viewerType}
+        readOnly
+        audioFallbackBlobLoader={loadAudioFallbackBlob}
+        labels={{ ...documentViewerLabels, imageAlt: assetTitle }}
+        annotationToolbarLabels={{
+          toolbarAriaLabel: translate('item.similarAssetPreview.viewerTools'),
+        }}
+      />
     </div>
+
+    <aside class="asset-preview__context">
+      <h3>{translate('item.similarAssetPreview.relatedText')}</h3>
+      {#await fullTextPromise}
+        <p class="asset-preview__empty">{translate('item.similarAssetPreview.loadingText')}</p>
+      {:then fullText}
+        {@const displayText = getDisplayText(fullText)}
+        {#if displayText}
+          <OcrRichText
+            text={displayText}
+            assetUrl={getAssetUrl(asset.assetPath)}
+            sourceType={ocrSourceType}
+            referenceWidth={0}
+            referenceHeight={0}
+          />
+        {:else}
+          <p class="asset-preview__empty">{translate('item.similarAssetsNoPreview')}</p>
+        {/if}
+      {:catch}
+        {@const fallbackText = getDisplayText(null)}
+        {#if fallbackText}
+          <OcrRichText
+            text={fallbackText}
+            assetUrl={getAssetUrl(asset.assetPath)}
+            sourceType={ocrSourceType}
+            referenceWidth={0}
+            referenceHeight={0}
+          />
+        {:else}
+          <p class="asset-preview__empty">{translate('item.similarAssetsNoPreview')}</p>
+        {/if}
+      {/await}
+    </aside>
   </div>
-</div>
+</Dialog>
 
 <style>
-  .asset-preview__overlay {
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-dialog-nested);
-    display: grid;
-    place-items: center;
-    padding: var(--space-4);
-    background: color-mix(in srgb, var(--color-overlay) 88%, transparent);
-    backdrop-filter: blur(8px);
-  }
-
-  .asset-preview {
-    display: flex;
-    flex-direction: column;
-    width: min(1120px, 100%);
-    height: min(820px, calc(100vh - var(--space-8)));
-    min-height: 0;
-    overflow: hidden;
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-dialog);
-    background: var(--color-surface-glass);
-    box-shadow: var(--shadow-lg);
-    color: var(--color-text-primary);
-  }
-
-  .asset-preview:focus-visible {
-    outline: none;
-    box-shadow: var(--shadow-lg), var(--focus-ring);
-  }
-
-  .asset-preview__header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--space-4);
-    padding: var(--space-4) var(--space-5);
-    border-bottom: 1px solid var(--color-hairline);
-    background: color-mix(in srgb, var(--surface-panel) 88%, transparent);
-  }
-
-  .asset-preview__heading {
-    min-width: 0;
-  }
-
-  .asset-preview__eyebrow {
-    display: block;
-    margin-bottom: var(--space-1);
-    color: var(--color-accent);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-2xs);
-    font-weight: var(--font-weight-semibold);
-    letter-spacing: var(--letter-spacing-caps);
-    text-transform: uppercase;
-  }
-
-  .asset-preview__heading h2,
-  .asset-preview__heading p,
   .asset-preview__context h3,
   .asset-preview__context p {
     margin: 0;
-  }
-
-  .asset-preview__heading h2 {
-    overflow: hidden;
-    color: var(--color-text-primary);
-    font-size: var(--font-size-lg);
-    line-height: var(--line-height-tight);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .asset-preview__heading p {
-    margin-top: var(--space-1);
-    overflow: hidden;
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .asset-preview__header-actions {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: var(--space-2);
   }
 
   .asset-preview__score {
@@ -356,18 +185,6 @@
   }
 
   @media (max-width: 760px) {
-    .asset-preview__overlay {
-      padding: var(--space-2);
-    }
-
-    .asset-preview {
-      height: calc(100vh - var(--space-4));
-    }
-
-    .asset-preview__header {
-      padding: var(--space-3);
-    }
-
     .asset-preview__score {
       display: none;
     }

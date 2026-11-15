@@ -4,9 +4,11 @@ import type { ClassValue } from 'svelte/elements'
 /**
  * Panel width: `sm` is the 440 px confirmation box, `md` a 640 px form, `lg`
  * a 1120 px browser of lists. `lg` also caps the panel to the viewport so its
- * body scrolls instead of the page.
+ * body scrolls instead of the page. `viewer` is as wide as `lg` with a fixed
+ * height: the header sits on its own band and the body reaches the panel's
+ * edges, for a document viewer and its side panel.
  */
-export type DialogSize = 'sm' | 'md' | 'lg'
+export type DialogSize = 'sm' | 'md' | 'lg' | 'viewer'
 
 export type DialogProps = {
   /** Whether the dialog is shown. Escape and backdrop clicks set it to false. */
@@ -17,6 +19,8 @@ export type DialogProps = {
   titleId?: string
   /** Short text under the heading; describes the dialog through `aria-describedby`. */
   description?: string
+  /** Small label above the heading, such as the kind of thing being shown. */
+  eyebrow?: string
   size?: DialogSize
   /**
    * Whether Escape and backdrop clicks close the dialog. Defaults to true. A
@@ -42,6 +46,11 @@ export type DialogProps = {
   /** Called after Escape or a backdrop click closed the dialog. */
   onclose?: () => void
   children?: Snippet
+  /**
+   * Controls beside the heading, such as a close button or a score. They can
+   * take initial focus with `data-dialog-initial-focus`.
+   */
+  headerActions?: Snippet
   /**
    * Actions row. The element carrying `data-dialog-initial-focus` gets focus
    * when the dialog opens; without one, the first focusable element does.

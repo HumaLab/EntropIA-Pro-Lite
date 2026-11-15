@@ -53,7 +53,7 @@ describe('SimilarAssetPreviewDialog', () => {
     })
 
     await screen.findByRole('dialog', { name: 'Carta manuscrita' })
-    const overlay = document.querySelector('.asset-preview__overlay')
+    const overlay = document.querySelector('.dialog__overlay')
     expect(overlay).not.toBeNull()
     expect(pane.contains(overlay)).toBe(false)
     expect(overlay?.parentElement).toBe(document.body)

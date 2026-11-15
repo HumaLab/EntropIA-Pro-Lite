@@ -459,13 +459,13 @@ describe('DbBrowserView', () => {
     await renderDbBrowserView(pane)
     await fireEvent.click(screen.getByRole('button', { name: 'Expandir valor de embedding' }))
 
-    const overlay = document.querySelector('.modal-overlay')
+    const overlay = document.querySelector('.dialog__overlay')
     expect(overlay).not.toBeNull()
     expect(pane.contains(overlay)).toBe(false)
     expect(overlay?.parentElement).toBe(document.body)
 
     await fireEvent.click(screen.getByRole('button', { name: 'Cerrar' }))
-    expect(document.querySelector('.modal-overlay')).toBeNull()
+    expect(document.querySelector('.dialog__overlay')).toBeNull()
     pane.remove()
   })
 
@@ -519,6 +519,31 @@ describe('DbBrowserView', () => {
 
     await fireEvent.click(closeButton)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('copies the full expanded value with Ctrl+C and closes on Escape', async () => {
+    const body = 'Texto largo '.repeat(20).trim()
+    queryRowsMock.mockResolvedValue({
+      table: 'documents',
+      page: 1,
+      pageSize: 25,
+      total: 1,
+      rows: [{ body }],
+    })
+
+    await renderDbBrowserView()
+    await fireEvent.click(screen.getByRole('button', { name: 'Expandir valor de body' }))
+    const dialog = await screen.findByRole('dialog')
+
+    await fireEvent.keyDown(document.activeElement ?? dialog, { key: 'c', ctrlKey: true })
+    await waitFor(() => {
+      expect(clipboardWriteTextMock).toHaveBeenCalledWith(body)
+    })
+
+    await fireEvent.keyDown(document.activeElement ?? dialog, { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
   })
 
   it('keeps both export actions visible when the table is empty', async () => {

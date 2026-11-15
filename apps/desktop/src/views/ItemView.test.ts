@@ -438,6 +438,8 @@ vi.mock('@entropia/ui', async () => {
   const ActualConfirmDialog = (
     await import('../../../../packages/ui/src/components/ConfirmDialog/ConfirmDialog.svelte')
   ).default
+  const ActualDialog = (await import('../../../../packages/ui/src/components/Dialog/Dialog.svelte'))
+    .default
   const ActualIconButton = (
     await import('../../../../packages/ui/src/components/IconButton/IconButton.svelte')
   ).default
@@ -496,6 +498,7 @@ vi.mock('@entropia/ui', async () => {
     Card: MockCard,
     EntityViewer: MockEntityViewer,
     Disclosure: ActualDisclosure,
+    Dialog: ActualDialog,
     IconButton: ActualIconButton,
     Input: ActualInput,
     MapViewer: MockMapViewer,

@@ -225,3 +225,59 @@ describe('Dialog', () => {
     expect(outerClose).toHaveBeenCalledOnce()
   })
 })
+
+describe('Dialog header and viewer size', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('shows an eyebrow above the title, outside the accessible name', () => {
+    render(Dialog, { props: { open: true, title: 'Carta', eyebrow: 'Original passage' } })
+
+    const eyebrow = screen.getByText('Original passage')
+    expect(eyebrow).toHaveClass('dialog__eyebrow')
+    expect(screen.getByRole('dialog', { name: 'Carta' })).toBeInTheDocument()
+    const title = screen.getByRole('heading', { name: 'Carta' })
+    expect(eyebrow.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders no eyebrow when none is given', () => {
+    render(Dialog, { props: { open: true, title: 'Carta' } })
+
+    expect(document.querySelector('.dialog__eyebrow')).toBeNull()
+  })
+
+  it('places header actions in the header, beside the heading, not in the footer', () => {
+    render(Dialog, {
+      props: {
+        open: true,
+        title: 'Carta',
+        headerActions: snippet('<button type="button">Close</button>'),
+      },
+    })
+
+    const action = screen.getByRole('button', { name: 'Close' })
+    expect(action.closest('.dialog__header-actions')?.closest('.dialog__header')).not.toBeNull()
+    expect(action.closest('.dialog__footer')).toBeNull()
+  })
+
+  it('applies the viewer size', () => {
+    render(Dialog, { props: { open: true, title: 'Carta', size: 'viewer' } })
+
+    expect(screen.getByRole('dialog')).toHaveClass('dialog--viewer')
+  })
+
+  it('lets a header action take initial focus', async () => {
+    render(Dialog, {
+      props: {
+        open: true,
+        title: 'Carta',
+        children: snippet('<button type="button">Inside</button>'),
+        headerActions: snippet('<button type="button" data-dialog-initial-focus>Close</button>'),
+      },
+    })
+    await tick()
+
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close' }))
+  })
+})

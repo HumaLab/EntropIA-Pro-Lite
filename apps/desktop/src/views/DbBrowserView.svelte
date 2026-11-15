@@ -4,8 +4,8 @@
     tooltip,
     ActionIcon,
     Button,
+    Dialog,
     IconButton,
-    portal,
     SearchBar,
     ToolbarMenu,
     type ToolbarMenuItem,
@@ -35,7 +35,6 @@
   } from '$lib/document-explorer'
   import { exportCollectionToCsv, exportCollectionToJson } from '$lib/export'
   import { locale, t } from '$lib/i18n'
-  import { getFocusableElements, getNextFocusTrapTarget } from '$lib/modal-focus'
 
   const DEFAULT_PAGE_SIZE = 25
   const PAGE_SIZE_OPTIONS = [25, 50, 100] as const
@@ -90,7 +89,6 @@
   let pageSizeMenuOpen = $state(false)
 
   let copyFeedbackTimeout: ReturnType<typeof setTimeout> | null = null
-  let expandedModalElement = $state<HTMLDivElement | null>(null)
   let expandedCellTrigger: HTMLElement | null = null
 
   // Not $state: purely internal scheduling/guard bookkeeping, never read by
@@ -421,16 +419,6 @@
     }
   }
 
-  function getExpandedModalFocusables(): HTMLElement[] {
-    return getFocusableElements(expandedModalElement)
-  }
-
-  async function focusExpandedModal() {
-    await tick()
-    const initialFocusTarget = getExpandedModalFocusables()[0] ?? expandedModalElement
-    initialFocusTarget?.focus()
-  }
-
   function restoreExpandedCellFocus() {
     const trigger = expandedCellTrigger
     expandedCellTrigger = null
@@ -440,37 +428,13 @@
     }
   }
 
+  // Dialog owns Escape and Tab; the copy shortcut is the one key this dialog
+  // adds. Focus never leaves the open dialog, so the window sees every key.
   function handleExpandedCellKeydown(event: KeyboardEvent) {
     if (expandedCell && shouldCopyExpandedCellFromShortcut(event)) {
       event.preventDefault()
       void copyCellValue(expandedCell.text)
-      return
     }
-
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      closeExpandedCell()
-      return
-    }
-
-    if (event.key !== 'Tab') return
-
-    const focusableElements = getExpandedModalFocusables()
-    if (focusableElements.length === 0) {
-      event.preventDefault()
-      expandedModalElement?.focus()
-      return
-    }
-
-    const currentElement =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    event.preventDefault()
-    getNextFocusTrapTarget(
-      focusableElements,
-      currentElement,
-      event.shiftKey,
-      expandedModalElement
-    )?.focus()
   }
 
   function openExpandedCell(
@@ -489,8 +453,6 @@
       isJson,
       embedding,
     }
-
-    void focusExpandedModal()
   }
 
   function closeExpandedCell() {
@@ -577,6 +539,8 @@
     }
   }
 </script>
+
+<svelte:window onkeydown={handleExpandedCellKeydown} />
 
 <div class="db-browser-view page-shell">
   <section class="page-header db-browser-view__header">
@@ -892,66 +856,47 @@
       column: activeExpandedCell.columnName,
     })}
     {@const closeExpandedLabel = translate('dbBrowser.expandDialogClose')}
-    <!-- Portalled out of the work pane, which is a size container and would clip
-         this full-window overlay; see portal in @entropia/ui. -->
-    <div class="modal-overlay" {@attach portal} onclick={closeExpandedCell} role="presentation">
-      <div
-        class="modal db-browser-modal"
-        tabindex="-1"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="db-browser-modal-title"
-        aria-describedby="db-browser-modal-description"
-        bind:this={expandedModalElement}
-        onclick={(event) => event.stopPropagation()}
-        onkeydown={handleExpandedCellKeydown}
-      >
-        <div class="db-browser-modal__header">
-          <div>
-            <h3 id="db-browser-modal-title" class="modal-title">
-              {translate('dbBrowser.expandDialogTitle', { column: activeExpandedCell.columnName })}
-            </h3>
-            <p id="db-browser-modal-description" class="db-browser-modal__subtitle">
-              {#if activeExpandedCell.embedding && activeExpandedCell.embedding.dimensions != null}
-                {translate('dbBrowser.expandDialogEmbeddingDimensions', {
-                  dimensions: activeExpandedCell.embedding.dimensions,
-                })}
-              {:else if activeExpandedCell.embedding}
-                {translate('dbBrowser.expandDialogEmbedding')}
-              {:else if activeExpandedCell.isJson}
-                {translate('dbBrowser.expandDialogJson')}
-              {:else}
-                {translate('dbBrowser.expandDialogText')}
-              {/if}
-            </p>
-          </div>
-          <div class="db-browser-modal__actions">
-            <IconButton
-              size="sm"
-              variant="secondary"
-              class="db-browser-table__cell-action db-browser-modal__icon-action"
-              label={copyExpandedLabel}
-              title={copyExpandedLabel}
-              onclick={() => copyCellValue(activeExpandedCell.text)}
-            >
-              <ActionIcon name="copy" size={14} />
-            </IconButton>
-            <IconButton
-              size="sm"
-              variant="secondary"
-              class="db-browser-table__cell-action db-browser-modal__icon-action"
-              label={closeExpandedLabel}
-              title={closeExpandedLabel}
-              onclick={closeExpandedCell}
-            >
-              <ActionIcon name="close" size={14} />
-            </IconButton>
-          </div>
-        </div>
+    {@const expandedDescription =
+      activeExpandedCell.embedding && activeExpandedCell.embedding.dimensions != null
+        ? translate('dbBrowser.expandDialogEmbeddingDimensions', {
+            dimensions: activeExpandedCell.embedding.dimensions,
+          })
+        : activeExpandedCell.embedding
+          ? translate('dbBrowser.expandDialogEmbedding')
+          : activeExpandedCell.isJson
+            ? translate('dbBrowser.expandDialogJson')
+            : translate('dbBrowser.expandDialogText')}
+    <Dialog
+      size="lg"
+      title={translate('dbBrowser.expandDialogTitle', { column: activeExpandedCell.columnName })}
+      description={expandedDescription}
+      onclose={closeExpandedCell}
+    >
+      {#snippet headerActions()}
+        <IconButton
+          size="sm"
+          variant="secondary"
+          class="db-browser-table__cell-action db-browser-modal__icon-action"
+          label={copyExpandedLabel}
+          title={copyExpandedLabel}
+          onclick={() => copyCellValue(activeExpandedCell.text)}
+        >
+          <ActionIcon name="copy" size={14} />
+        </IconButton>
+        <IconButton
+          size="sm"
+          variant="secondary"
+          class="db-browser-table__cell-action db-browser-modal__icon-action"
+          label={closeExpandedLabel}
+          title={closeExpandedLabel}
+          onclick={closeExpandedCell}
+        >
+          <ActionIcon name="close" size={14} />
+        </IconButton>
+      {/snippet}
 
-        <pre class="db-browser-modal__content"><code>{activeExpandedCell.text}</code></pre>
-      </div>
-    </div>
+      <pre class="db-browser-modal__content"><code>{activeExpandedCell.text}</code></pre>
+    </Dialog>
   {/if}
 </div>
 
@@ -1181,50 +1126,6 @@
     gap: var(--space-1);
   }
 
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-4);
-    background-color: var(--color-overlay);
-    z-index: var(--z-dialog);
-  }
-
-  .modal-title {
-    margin: 0;
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-bold);
-    color: var(--color-text-primary);
-  }
-
-  .db-browser-modal {
-    width: min(900px, calc(100vw - 2rem));
-    max-height: min(80vh, 720px);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-    padding: var(--space-6);
-    background: var(--color-surface-glass);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-dialog);
-    box-shadow: var(--shadow-lg);
-  }
-
-  .db-browser-modal__header {
-    display: flex;
-    gap: var(--space-3);
-    align-items: flex-start;
-    justify-content: space-between;
-  }
-
-  .db-browser-modal__subtitle {
-    margin: var(--space-1) 0 0;
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-sm);
-  }
-
   .db-browser-modal__content {
     margin: 0;
     padding: var(--space-4);
@@ -1273,8 +1174,7 @@
       justify-content: space-between;
     }
 
-    .db-browser-table__cell-wrap,
-    .db-browser-modal__header {
+    .db-browser-table__cell-wrap {
       flex-direction: column;
     }
   }
