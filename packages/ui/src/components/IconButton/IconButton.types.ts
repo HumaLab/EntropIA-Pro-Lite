@@ -10,7 +10,8 @@ import type { HTMLButtonAttributes } from 'svelte/elements'
  * a one-off class.
  */
 export type IconButtonSize = 'xs' | 'sm' | 'md' | 'lg'
-export type IconButtonVariant = 'ghost' | 'secondary' | 'primary' | 'danger'
+/** `edge` is the strip that opens and closes a side panel: 20px wide, as tall as its parent. */
+export type IconButtonVariant = 'ghost' | 'secondary' | 'primary' | 'danger' | 'edge'
 
 export interface IconButtonProps extends HTMLButtonAttributes {
   variant?: IconButtonVariant

@@ -133,6 +133,26 @@
     color: var(--color-danger);
   }
 
+  /* The strip that opens and closes a side panel: 20px wide and as tall as
+     the panel edge. It is the one IconButton that is not a square. It comes
+     after the size rules, so it wins over them by order inside this
+     stylesheet, whatever `size` the caller passes. */
+  .icon-button--edge {
+    --icon-button-size: 20px;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    border-radius: var(--radius-dialog);
+    background: var(--surface-input);
+    border-color: var(--border-subtle);
+    color: var(--color-text-muted);
+  }
+
+  .icon-button--edge:hover:not(:disabled) {
+    color: var(--color-accent);
+    background: var(--color-accent-soft);
+  }
+
   .icon-button :global(svg) {
     flex-shrink: 0;
     pointer-events: none;
