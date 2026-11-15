@@ -1256,37 +1256,37 @@
             <span class="batch-field__legend" id="batch-collections-label"
               >{t('batch.collections')}</span
             >
-            <Checkbox
-              class="batch-field__select-all"
-              checked={allSelected}
-              onchange={toggleSelectAll}
-            >
-              {t('batch.selectAll')} · {t('batch.selectedCount', { count: selectedCount })}
+            <Checkbox size="sm" checked={allSelected} onchange={toggleSelectAll}>
+              <span class="batch-field__select-all"
+                >{t('batch.selectAll')} · {t('batch.selectedCount', { count: selectedCount })}</span
+              >
             </Checkbox>
           </div>
           <div class="batch-field__scope-list">
             {#each collections as collection (collection.id)}
-              <Checkbox
-                class="batch-field__scope"
-                checked={Boolean(selected[collection.id])}
-                onchange={() => toggleCollection(collection.id)}
-              >
-                <span class="batch-field__scope-row">
-                  <span class="batch-field__scope-name" use:tooltip={collection.name}
-                    >{collection.name}</span
-                  >
-                  <span class="batch-field__count">{collection.items}</span>
-                </span>
-              </Checkbox>
+              <div class="batch-field__scope">
+                <Checkbox
+                  variant="card"
+                  checked={Boolean(selected[collection.id])}
+                  onchange={() => toggleCollection(collection.id)}
+                >
+                  <span class="batch-field__scope-row">
+                    <span class="batch-field__scope-name" use:tooltip={collection.name}
+                      >{collection.name}</span
+                    >
+                    <span class="batch-field__count">{collection.items}</span>
+                  </span>
+                </Checkbox>
+              </div>
             {/each}
           </div>
         </div>
         <BatchFlowPicker steps={flowSteps} onapply={applyFlow} />
         <div class="batch-ops" role="group" aria-labelledby="batch-ops-label">
           <span class="batch-field__legend" id="batch-ops-label">{t('batch.operations')}</span>
-          <Checkbox class="batch-ops__toggle" bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
+          <Checkbox variant="card" size="sm" bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrIncludeNativeHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={ocrIncludeNative} disabled={!runOcr}
+            <Checkbox variant="card" size="sm" bind:checked={ocrIncludeNative} disabled={!runOcr}
               >{t('batch.opOcrIncludeNative')}</Checkbox
             >
           </span>
@@ -1295,25 +1295,25 @@
                action also wires `aria-describedby`, so the sentence still
                reaches a screen reader off the checkbox it explains. -->
           <span class="batch-ops__hinted" use:tooltip={t('batch.opEmbeddingsHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={runEmbeddings}
+            <Checkbox variant="card" size="sm" bind:checked={runEmbeddings}
               >{t('batch.opEmbeddings')}</Checkbox
             >
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opNerHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={runNer}>{t('batch.opNer')}</Checkbox>
+            <Checkbox variant="card" size="sm" bind:checked={runNer}>{t('batch.opNer')}</Checkbox>
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opTriplesHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={runTriples}
+            <Checkbox variant="card" size="sm" bind:checked={runTriples}
               >{t('batch.opTriples')}</Checkbox
             >
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrCorrectionHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={runOcrCorrection}
+            <Checkbox variant="card" size="sm" bind:checked={runOcrCorrection}
               >{t('batch.opOcrCorrection')}</Checkbox
             >
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opSummaryHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={runSummary}
+            <Checkbox variant="card" size="sm" bind:checked={runSummary}
               >{t('batch.opSummary')}</Checkbox
             >
           </span>
@@ -1654,9 +1654,7 @@
     font-weight: var(--font-weight-medium);
   }
 
-  .batch-field__head :global(.batch-field__select-all) {
-    padding: var(--space-1) var(--space-2);
-    font-size: var(--font-size-xs);
+  .batch-field__select-all {
     color: var(--color-text-secondary);
   }
 
@@ -1685,18 +1683,6 @@
     min-width: 0;
   }
 
-  .batch-ops :global(.batch-ops__toggle) {
-    gap: var(--space-2);
-    padding: var(--space-1) var(--space-2);
-    border-color: var(--border-subtle);
-    background: var(--surface-input);
-  }
-
-  .batch-ops :global(.batch-ops__toggle:has(input:checked)) {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
-  }
-
   /* The collection picker is the Colecciones grid in miniature: the same 260px
      track floor that page uses, and the card inside it is what gets tighter,
      since the only job here is ticking boxes.
@@ -1721,30 +1707,13 @@
     background: var(--surface-input);
   }
 
-  /* The card IS the Checkbox, not a div wrapped around one. Its <label> already
-     makes the whole surface a click target, already toggles on Space, and
-     already draws exactly one focus ring — so there is no wrapper handler to
-     fire twice and no second ring to hide.
-
-     What is left to state is the lift off the sunken list, and a checked border
-     firmer than the resting one: the component's own checked rule lands on
-     --border-subtle, which is this card's RESTING border, so without this the
-     selected state would announce itself with nothing but the tick. */
-  .batch-field__scope-list :global(.batch-field__scope) {
-    gap: var(--space-2);
-    padding: var(--space-2);
+  /* The card is Checkbox variant="card": its <label> is the click target,
+     toggles on Space and draws the one focus ring, and the variant owns the
+     lift off this sunken list and the firmer checked border. The div around
+     it is only a grid item the view owns, so a long collection name shrinks
+     into its ellipsis instead of widening the track. */
+  .batch-field__scope {
     min-width: 0;
-    background: var(--surface-panel);
-    border-color: var(--border-subtle);
-  }
-
-  .batch-field__scope-list :global(.batch-field__scope:hover) {
-    background: var(--surface-toolbar);
-  }
-
-  .batch-field__scope-list :global(.batch-field__scope:has(input:checked)) {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
   }
 
   .batch-field__scope-row {
