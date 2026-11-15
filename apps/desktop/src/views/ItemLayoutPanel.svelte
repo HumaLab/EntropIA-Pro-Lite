@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button } from '@entropia/ui'
+  import { Button, StatusBadge } from '@entropia/ui'
   import {
     LAYOUT_BLOCK_FILTERS,
     type AssetLayout,
@@ -229,7 +229,12 @@
                 onclick={() => onPageChange(page)}
               >
                 <span>{translate('item.pageShort', { page })}</span>
-                <span class="layout-page-chip__count">{layoutBlockCountsByPage[page] ?? 0}</span>
+                <StatusBadge
+                  variant="count"
+                  tone="neutral"
+                  size="xs"
+                  count={layoutBlockCountsByPage[page] ?? 0}
+                />
               </button>
             {/each}
           </div>
@@ -253,12 +258,13 @@
               onclick={() => onFilterChange(filter.id)}
             >
               <span>{layoutFilterLabels[filter.id]}</span>
-              <span
-                class="layout-filter-chip__count"
-                data-testid={`layout-filter-count-${filter.id}`}
-              >
+              <StatusBadge
+                variant="count"
+                tone="neutral"
+                size="xs"
                 {count}
-              </span>
+                data-testid={`layout-filter-count-${filter.id}`}
+              />
             </button>
           {/each}
         </div>
@@ -297,15 +303,15 @@
               <span class="layout-block-content">
                 <span class="layout-block-heading">
                   <span class="layout-block-label">{block.label}</span>
-                  <span
-                    class:layout-block-source-badge--fallback={block.overlaySource === 'block'}
-                    class="layout-block-source-badge"
+                  <StatusBadge
+                    variant={block.overlaySource === 'block' ? 'warning' : 'info'}
+                    size="xs"
                   >
                     {overlayMeta.shortLabel}
-                  </span>
+                  </StatusBadge>
                   {#if viewerType === 'pdf'}
-                    <span class="layout-block-page-chip"
-                      >{translate('item.pageShort', { page: block.page })}</span
+                    <StatusBadge size="xs"
+                      >{translate('item.pageShort', { page: block.page })}</StatusBadge
                     >
                   {/if}
                 </span>
@@ -405,14 +411,13 @@
               </div>
               <div class="layout-inspector__field layout-inspector__field--wide">
                 <span class="layout-inspector__label">{translate('item.layoutOverlaySource')}</span>
-                <strong
-                  class:layout-inspector__source--fallback={selectedLayoutBlock.overlaySource ===
-                    'block'}
-                  class="layout-inspector__source"
+                <StatusBadge
+                  variant={selectedLayoutBlock.overlaySource === 'block' ? 'warning' : 'info'}
+                  size="md"
                   data-testid="layout-inspector-overlay-source"
                 >
                   {overlayMeta.label}
-                </strong>
+                </StatusBadge>
                 <p>{overlayMeta.description}</p>
               </div>
             </div>
@@ -608,17 +613,6 @@
     box-shadow: var(--focus-ring);
   }
 
-  .layout-page-chip__count {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 22px;
-    padding: 2px var(--space-2);
-    border-radius: var(--radius-control);
-    background: var(--surface-card);
-    font-variant-numeric: tabular-nums;
-  }
-
   .layout-filter-toolbar {
     display: flex;
     flex-direction: column;
@@ -665,17 +659,6 @@
     outline: none;
     border-color: var(--border-focus);
     box-shadow: var(--focus-ring);
-  }
-
-  .layout-filter-chip__count {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 22px;
-    padding: 2px var(--space-2);
-    border-radius: var(--radius-control);
-    background: var(--surface-card);
-    font-variant-numeric: tabular-nums;
   }
 
   .layout-filter-summary {
@@ -752,7 +735,7 @@
   .layout-block-content {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     min-width: 0;
   }
 
@@ -760,38 +743,20 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-1);
   }
 
   .layout-block-label {
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: var(--letter-spacing-caps);
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
-  }
-
-  .layout-block-source-badge,
-  .layout-block-page-chip {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px var(--space-2);
-    border-radius: var(--radius-control);
-    font-size: var(--font-size-2xs);
-    line-height: var(--line-height-tight);
-    border: 1px solid color-mix(in srgb, var(--color-accent) 35%, var(--border-subtle));
-    background: color-mix(in srgb, var(--color-accent) 10%, var(--surface-card));
-    color: var(--color-text-secondary);
-  }
-
-  .layout-block-source-badge--fallback {
-    border-color: color-mix(in srgb, var(--color-warning) 45%, var(--border-subtle));
-    background: color-mix(in srgb, var(--color-warning) 12%, var(--surface-card));
   }
 
   .layout-block-preview {
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: 1.4;
+    line-height: var(--line-height-base);
     word-break: break-word;
   }
 
@@ -867,22 +832,7 @@
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
-    line-height: 1.4;
-  }
-
-  .layout-inspector__source {
-    display: inline-flex;
-    align-items: center;
-    width: fit-content;
-    padding: var(--space-1) 10px;
-    border-radius: var(--radius-control);
-    background: color-mix(in srgb, var(--color-accent) 12%, var(--surface-card));
-    border: 1px solid color-mix(in srgb, var(--color-accent) 35%, var(--border-subtle));
-  }
-
-  .layout-inspector__source--fallback {
-    background: color-mix(in srgb, var(--color-warning) 14%, var(--surface-card));
-    border-color: color-mix(in srgb, var(--color-warning) 45%, var(--border-subtle));
+    line-height: var(--line-height-base);
   }
 
   .layout-inspector__content {
@@ -902,7 +852,7 @@
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
-    line-height: 1.4;
+    line-height: var(--line-height-base);
   }
 
   .layout-box-edit__actions {
@@ -947,7 +897,7 @@
     color: var(--color-text-primary);
     font-family: var(--font-ui);
     font-size: var(--font-size-sm);
-    line-height: 1.5;
+    line-height: var(--line-height-base);
   }
 
   .layout-inspector__message,

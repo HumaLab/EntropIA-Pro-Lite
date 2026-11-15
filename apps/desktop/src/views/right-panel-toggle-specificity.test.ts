@@ -92,13 +92,13 @@ describe('the right-panel-toggle opt-out beats IconButton on specificity determi
     }
   })
 
-  it('ItemView scopes the toggle override under its own top-level class', () => {
+  it('ItemView draws the toggle with the IconButton edge variant and restyles nothing', () => {
+    // The strip is IconButton's own `edge` variant now, so the view keeps no
+    // :global rule over it (docs/AUDITORIA_ESTILOS.md R11).
     const selectors = ruleSelectors(ITEM_VIEW_SOURCE).filter((s) =>
       s.includes('right-panel-toggle')
     )
-    expect(selectors.length).toBeGreaterThan(0)
-    for (const selector of selectors) {
-      expect(selector).toMatch(/^\.item-view\s+:global\(\.icon-button\.right-panel-toggle/)
-    }
+    expect(selectors).toEqual([])
+    expect(ITEM_VIEW_SOURCE).toMatch(/<IconButton\s[^>]*variant="edge"[^>]*>/)
   })
 })
