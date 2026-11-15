@@ -1765,9 +1765,12 @@ describe('InvestigationView reintentos de lote del archivo', () => {
     )
     expect(screen.queryByText(/Degradación del pipeline/)).not.toBeInTheDocument()
 
-    const detalle = lineas[1]!.querySelector('details')!
-    expect(detalle).not.toHaveAttribute('open')
-    expect(detalle.querySelector('summary')).toHaveTextContent('Detalle técnico')
-    expect(detalle.querySelector('code')).toHaveTextContent(error)
+    const detalle = within(lineas[1]! as HTMLElement).getByRole('button', {
+      name: 'Detalle técnico',
+    })
+    expect(detalle).toHaveAttribute('aria-expanded', 'false')
+    const region = lineas[1]!.querySelector(`#${detalle.getAttribute('aria-controls')}`)!
+    expect(region).toHaveAttribute('hidden')
+    expect(region.querySelector('code')).toHaveTextContent(error)
   })
 })
