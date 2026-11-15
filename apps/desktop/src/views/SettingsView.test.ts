@@ -1910,6 +1910,34 @@ describe('SettingsView', () => {
     })
   })
 
+  describe('the prompt and parameter tabs draw their fields with the design system', () => {
+    it('renders each prompt as a Textarea named by its label', async () => {
+      render(SettingsView)
+
+      await fireEvent.click(await screen.findByRole('tab', { name: 'Prompts' }))
+      for (const name of [
+        'OCR correction prompt',
+        'Summary prompt',
+        'NER prompt',
+        'Triplets prompt',
+      ]) {
+        expect(screen.getByLabelText(name).closest('.textarea-field')).not.toBeNull()
+      }
+    })
+
+    it('renders each flow’s stop sequences as a Textarea with its hint', async () => {
+      render(SettingsView)
+
+      await fireEvent.click(await screen.findByRole('tab', { name: 'Model Params' }))
+      const fields = screen.getAllByLabelText('stopSequences')
+      expect(fields.length).toBeGreaterThan(0)
+      for (const field of fields) {
+        expect(field.closest('.textarea-field')).not.toBeNull()
+        expect(field).toHaveAttribute('aria-describedby')
+      }
+    })
+  })
+
   describe('the remote APIs tab draws its controls with the design system', () => {
     it('gives each key field its reveal and clear actions as IconButtons', async () => {
       render(SettingsView)

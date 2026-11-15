@@ -152,6 +152,7 @@
     ProgressBar,
     SelectTrigger,
     StatusBadge,
+    Textarea,
     TabButton,
     TabList,
     ToolbarMenu,
@@ -3256,14 +3257,12 @@
 
           <div class="settings__prompt-grid">
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="ocr-correction-prompt-{paneId}"
-                >OCR correction prompt</label
-              >
-              <textarea
-                id="ocr-correction-prompt-{paneId}"
-                class="settings__textarea"
-                rows="12"
-                bind:value={ocrCorrectionPrompt}></textarea>
+              <Textarea
+                label="OCR correction prompt"
+                font="mono"
+                rows={14}
+                bind:value={ocrCorrectionPrompt}
+              />
               {#if promptValidationFeedback.ocrCorrectionPrompt}
                 <p
                   class="settings__validation"
@@ -3289,12 +3288,7 @@
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="summary-prompt-{paneId}">Summary prompt</label>
-              <textarea
-                id="summary-prompt-{paneId}"
-                class="settings__textarea"
-                rows="10"
-                bind:value={summaryPrompt}></textarea>
+              <Textarea label="Summary prompt" font="mono" rows={14} bind:value={summaryPrompt} />
               {#if promptValidationFeedback.summaryPrompt}
                 <p
                   class="settings__validation"
@@ -3317,12 +3311,7 @@
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="ner-prompt-{paneId}">NER prompt</label>
-              <textarea
-                id="ner-prompt-{paneId}"
-                class="settings__textarea"
-                rows="8"
-                bind:value={nerPrompt}></textarea>
+              <Textarea label="NER prompt" font="mono" rows={14} bind:value={nerPrompt} />
               {#if promptValidationFeedback.nerPrompt}
                 <p
                   class="settings__validation"
@@ -3342,12 +3331,7 @@
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="triplets-prompt-{paneId}">Triplets prompt</label>
-              <textarea
-                id="triplets-prompt-{paneId}"
-                class="settings__textarea"
-                rows="10"
-                bind:value={tripletsPrompt}></textarea>
+              <Textarea label="Triplets prompt" font="mono" rows={14} bind:value={tripletsPrompt} />
               {#if promptValidationFeedback.tripletsPrompt}
                 <p
                   class="settings__validation"
@@ -3446,22 +3430,22 @@
                     type="text"
                     bind:value={modelParamsByFlow[flow.id].frequencyPenalty}
                   />
-                  <div class="settings__field settings__field--stacked settings__field--wide">
-                    <label class="settings__label" for={`${flow.id}-stop-sequences`}
-                      >stopSequences</label
-                    >
-                    <textarea
-                      id={`${flow.id}-stop-sequences`}
-                      class="settings__textarea"
-                      rows="3"
+                  <div class="settings__field--wide">
+                    <Textarea
+                      label="stopSequences"
+                      hint={t('settings.modelParams.hint.stopSequences')}
+                      font="mono"
+                      rows={3}
                       bind:value={modelParamsByFlow[flow.id].stopSequences}
-                      placeholder={t('settings.modelParams.stopSequencesPlaceholder')}></textarea>
-                    <p class="settings__hint">{t('settings.modelParams.hint.stopSequences')}</p>
+                      placeholder={t('settings.modelParams.stopSequencesPlaceholder')}
+                    />
                   </div>
                 </div>
-                <Button variant="secondary" size="sm" onclick={() => resetModelParams(flow.id)}
-                  >{t('settings.modelParams.restoreDefaults')}</Button
-                >
+                <div class="settings__card-actions">
+                  <Button variant="secondary" size="sm" onclick={() => resetModelParams(flow.id)}
+                    >{t('settings.modelParams.restoreDefaults')}</Button
+                  >
+                </div>
               </div>
             {/each}
           </div>
@@ -3591,9 +3575,11 @@
                   bind:value={ragParams.maxTokens}
                 />
               </div>
-              <Button variant="secondary" size="sm" onclick={resetRagParams}
-                >{t('settings.ragParams.restoreDefaults')}</Button
-              >
+              <div class="settings__card-actions">
+                <Button variant="secondary" size="sm" onclick={resetRagParams}
+                  >{t('settings.ragParams.restoreDefaults')}</Button
+                >
+              </div>
             </div>
           </div>
         </section>
@@ -4019,21 +4005,12 @@
     background: color-mix(in srgb, var(--color-surface-glass) 70%, transparent);
   }
 
-  .settings__prompt-card .settings__textarea {
-    flex: 1;
-    min-height: 300px;
-  }
-
   .settings__button-row {
     display: flex;
     flex-wrap: wrap;
+    align-items: flex-start;
     gap: var(--space-2);
     margin-top: auto;
-  }
-
-  .settings__prompt-card .settings__button-row :global(.btn) {
-    align-self: flex-start;
-    margin-top: 0;
   }
 
   .settings__validation {
@@ -4068,30 +4045,9 @@
     gap: var(--space-3);
   }
 
-  .settings__param-card :global(.btn) {
-    align-self: flex-start;
+  /* The reset action sits at the foot of the card, at its own width. */
+  .settings__card-actions {
     margin-top: auto;
-  }
-
-  .settings__textarea {
-    width: 100%;
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-input);
-    background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    color: var(--color-text-primary);
-    padding: var(--space-3);
-    font: inherit;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-    line-height: 1.5;
-    resize: vertical;
-  }
-
-  .settings__textarea:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
   }
 
   /* Keyed to this pane's own width (the `pane` container WorkPane.svelte

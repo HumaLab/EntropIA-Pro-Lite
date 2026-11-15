@@ -28,11 +28,17 @@ const FOR_ID_PAIRS = [
   'local-embedding-model-dir',
   'assemblyai-api-key',
   'glm-ocr-api-key',
-  'ocr-correction-prompt',
-  'summary-prompt',
-  'ner-prompt',
-  'triplets-prompt',
 ]
+
+// The prompt and stop-sequence fields are Textareas with their own label:
+// the component derives the id per instance, so it is unique per pane by
+// construction and the view writes none.
+it('leaves the prompt fields to the Textarea’s own ids', () => {
+  for (const name of ['ocr-correction-prompt', 'summary-prompt', 'ner-prompt', 'triplets-prompt']) {
+    expect(SOURCE).not.toMatch(new RegExp(`id="${name}`))
+  }
+  expect(SOURCE).not.toMatch(/-stop-sequences/)
+})
 
 describe('pane-scoped ids in the settings view', () => {
   it('imports getPaneId from pane-context alongside getNavigation', () => {
