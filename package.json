@@ -19,6 +19,7 @@
     "typecheck": "turbo typecheck",
     "format": "prettier --write apps/desktop/src packages/ui/src packages/store/src packages/store/scripts",
     "format:check": "prettier --check apps/desktop/src packages/ui/src packages/store/src packages/store/scripts",
+    "style:metrics": "node scripts/style-metrics.mjs",
     "test": "turbo test",
     "test:run": "turbo test -- --run",
     "test:ui": "vitest --ui",
