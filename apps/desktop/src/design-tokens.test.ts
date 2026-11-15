@@ -1,13 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import {
-  allowlistProblems,
-  readAllowlists,
-  rulesBrokenBy,
-  scanPackage,
-  type TokenContext,
-} from './__tests__/style-guards'
+import { rulesBrokenBy, scanPackage, type TokenContext } from './__tests__/style-guards'
 
 const TOKEN_DEFINITION = /(--[a-z0-9-]+)\s*:/g
 const TOKEN_USE_WITHOUT_FALLBACK = /var\((--[a-z0-9-]+)\s*\)/g
@@ -390,19 +384,17 @@ describe('desktop design tokens', () => {
 })
 
 describe('style debt guards', () => {
-  // docs/PLAN_HOMOGENEIZACION.md, step 3. Existing debt is listed, pair by pair,
-  // in the allowlist of the plan step that clears it. Never add an entry: a
-  // step removes its pairs when it clears them, so the lists only shrink.
-  const allowlistDir = resolve(import.meta.dirname, '__tests__/style-allowlists')
+  // docs/PLAN_HOMOGENEIZACION.md, steps 3 and 30: the debt is paid, so every
+  // component passes every rule. The permanent exceptions are in GUIA_DISENO.md.
   const sheets = [
     resolve(import.meta.dirname, '../../../packages/ui/src/tokens/tokens.css'),
     resolve(import.meta.dirname, 'app.css'),
   ]
 
-  it('covers every style-debt pair with exactly one step allowlist, and lists only live debt', () => {
+  it('finds no style debt in any component', () => {
     const { failing } = scanPackage(import.meta.dirname, sheets)
 
-    expect(allowlistProblems(readAllowlists(allowlistDir), failing)).toEqual([])
+    expect([...failing]).toEqual([])
   })
 
   const ctx: TokenContext = {
@@ -449,19 +441,5 @@ describe('style debt guards', () => {
     expect(
       rulesBrokenBy(component('.x-row--active { background: var(--color-accent); }'), ctx).size
     ).toBe(0)
-  })
-
-  it('rejects a pair listed twice, a pair that no longer fails and debt nobody listed', () => {
-    const failing = new Set(['views/A.svelte::color-literal', 'views/B.svelte::color-literal'])
-    const lists = {
-      'paso-6.json': { 'color-literal': ['views/A.svelte', 'views/C.svelte'] },
-      'paso-18.json': { 'color-literal': ['views/A.svelte'] },
-    }
-
-    expect(allowlistProblems(lists, failing)).toEqual([
-      'views/C.svelte::color-literal: listed in paso-6.json but no longer fails',
-      'views/A.svelte::color-literal: listed in both paso-6.json and paso-18.json',
-      'views/B.svelte::color-literal: fails and no allowlist covers it',
-    ])
   })
 })

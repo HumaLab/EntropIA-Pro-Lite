@@ -3,10 +3,11 @@ import { relative, resolve, sep } from 'node:path'
 
 /**
  * Style guards for the homogenization plan (docs/PLAN_HOMOGENEIZACION.md,
- * step 3). Each rule names one kind of style debt. A file that breaks a rule
- * fails the guard unless the pair (file, rule) is listed in the allowlist JSON
- * of the plan step that clears it, under ./style-allowlists. Those lists only
- * shrink: a step that clears a pair removes it in the same change.
+ * steps 3 and 30). Each rule names one kind of style debt, and no component may
+ * break any of them: the step allowlists that held the old debt are gone. The
+ * permanent exceptions in docs/GUIA_DISENO.md (print colours, the Zotero
+ * annotation palette, viewer overlays) live in script data, which these rules
+ * do not read, so none of them needs an entry here.
  *
  * packages/ui keeps a twin of this module for its own components; the two
  * packages never scan each other's files.
@@ -26,9 +27,6 @@ export const STYLE_RULES = [
 ] as const
 
 export type StyleRule = (typeof STYLE_RULES)[number]
-
-/** One allowlist file: rule → files (relative to the package's src). */
-export type Allowlist = Partial<Record<StyleRule, string[]>>
 
 const TOKEN_DEFINITION = /(--[a-zA-Z0-9_-]+)\s*:/g
 const VAR_CALL = /var\(\s*(--[a-zA-Z0-9_-]+)\s*(,)?/g
@@ -140,49 +138,4 @@ export function scanPackage(
     }
   }
   return { failing, ctx }
-}
-
-const ALLOWLIST_FILE = /^(paso-\d+|resto)\.json$/
-
-/** Every allowlist JSON in a directory, by file name. */
-export function readAllowlists(dir: string): Record<string, Allowlist> {
-  const lists: Record<string, Allowlist> = {}
-  for (const name of readdirSync(dir).filter((file) => file.endsWith('.json'))) {
-    lists[name] = JSON.parse(readFileSync(resolve(dir, name), 'utf-8')) as Allowlist
-  }
-  return lists
-}
-
-/**
- * Problems with a set of allowlists against today's failures: a badly named
- * file, an unknown rule, a pair listed twice, a pair that no longer fails
- * (stale), or a failure no list covers.
- */
-export function allowlistProblems(
-  lists: Record<string, Allowlist>,
-  failing: Set<string>
-): string[] {
-  const problems: string[] = []
-  const seen = new Map<string, string>()
-
-  for (const [fileName, list] of Object.entries(lists)) {
-    if (!ALLOWLIST_FILE.test(fileName)) problems.push(`${fileName}: not paso-N.json or resto.json`)
-    for (const [rule, files] of Object.entries(list)) {
-      if (!(STYLE_RULES as readonly string[]).includes(rule)) {
-        problems.push(`${fileName}: unknown rule ${rule}`)
-        continue
-      }
-      for (const file of files ?? []) {
-        const pair = `${file}::${rule}`
-        const owner = seen.get(pair)
-        if (owner) problems.push(`${pair}: listed in both ${owner} and ${fileName}`)
-        else seen.set(pair, fileName)
-        if (!failing.has(pair)) problems.push(`${pair}: listed in ${fileName} but no longer fails`)
-      }
-    }
-  }
-  for (const pair of failing) {
-    if (!seen.has(pair)) problems.push(`${pair}: fails and no allowlist covers it`)
-  }
-  return problems
 }

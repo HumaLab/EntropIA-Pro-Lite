@@ -2,8 +2,6 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  allowlistProblems,
-  readAllowlists,
   rulesBrokenBy,
   scanPackage,
   STYLE_RULES,
@@ -317,21 +315,19 @@ describe('base component states and motion', () => {
 })
 
 describe('style debt guards', () => {
-  // docs/PLAN_HOMOGENEIZACION.md, step 3. Existing debt is listed, pair by pair,
-  // in the allowlist of the plan step that clears it. Never add an entry: a
-  // step removes its pairs when it clears them, so the lists only shrink.
+  // docs/PLAN_HOMOGENEIZACION.md, steps 3 and 30: the debt is paid, so every
+  // component passes every rule. The permanent exceptions are in GUIA_DISENO.md.
   // The accent-fill rule stays with the targeted test above in this package.
   const rules = STYLE_RULES.filter((rule) => rule !== 'accent-fill')
-  const allowlistDir = resolve(import.meta.dirname, 'style-allowlists')
 
-  it('covers every style-debt pair with exactly one step allowlist, and lists only live debt', () => {
+  it('finds no style debt in any component', () => {
     const { failing } = scanPackage(
       resolve(import.meta.dirname, '../..'),
       [resolve(import.meta.dirname, '../../tokens/tokens.css')],
       rules
     )
 
-    expect(allowlistProblems(readAllowlists(allowlistDir), failing)).toEqual([])
+    expect([...failing]).toEqual([])
   })
 
   it('flags a hard-coded colour in a component stylesheet', () => {

@@ -33,7 +33,7 @@
     type HelpStep,
     type HelpTurn,
   } from '$lib/help'
-  import { ActionIcon, Button, Checkbox, ConfirmDialog, tooltip } from '@entropia/ui'
+  import { ActionIcon, Button, Checkbox, ConfirmDialog, Textarea, tooltip } from '@entropia/ui'
   import HelpApprovalDialog from '../components/HelpApprovalDialog.svelte'
 
   const navigation = getNavigation()
@@ -809,14 +809,16 @@
         </div>
       </div>
       <div class="help-view__input-row">
-        <textarea
-          class="help-view__input"
-          rows="2"
-          bind:value={draft}
-          placeholder={$currentLocale && t('help.placeholder')}
-          aria-label={$currentLocale && t('help.placeholder')}
-          onkeydown={handleComposerKeydown}
-          disabled={sending}></textarea>
+        <div class="help-view__input">
+          <Textarea
+            rows={2}
+            bind:value={draft}
+            placeholder={$currentLocale && t('help.placeholder')}
+            aria-label={$currentLocale && t('help.placeholder')}
+            onkeydown={handleComposerKeydown}
+            disabled={sending}
+          />
+        </div>
         {#if sending}
           <Button
             variant="primary"
@@ -1405,20 +1407,5 @@
   .help-view__input {
     flex: 1;
     min-width: 0;
-    min-height: var(--control-height-md);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: var(--font-size-sm);
-    resize: vertical;
-  }
-
-  .help-view__input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
   }
 </style>
