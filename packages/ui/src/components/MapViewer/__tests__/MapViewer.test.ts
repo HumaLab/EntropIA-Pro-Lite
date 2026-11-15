@@ -109,9 +109,46 @@ describe('MapViewer location editing', () => {
   it('constrains the location selector inside narrow editor panels', () => {
     expect(mapViewerSource).toContain('box-sizing: border-box;')
     expect(mapViewerSource).not.toContain('<select')
+    // The trigger is the package's SelectTrigger spanning its column, which
+    // the picker cell lets shrink inside the narrow editor row.
     expect(mapViewerSource).toMatch(
-      /\.map-viewer__location-trigger\s*\{[^}]*width: 100%;[^}]*max-width: 100%;/s
+      /\.map-viewer__location-picker\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\);[^}]*min-width: 0;/s
     )
+  })
+
+  it('draws its controls with the package Button, IconButton and SelectTrigger', async () => {
+    render(MapViewer, {
+      props: {
+        markers: [{ ...buenosAires, hasManualLocation: true }],
+        locationOptions: [
+          { entityId: buenosAires.entityId, label: buenosAires.label },
+          { entityId: 'place-2', label: 'Mar del Plata' },
+        ],
+        onlocationchange: vi.fn(),
+        onresetlocation: vi.fn(),
+      },
+    })
+
+    expect(await screen.findByRole('button', { name: 'Location' })).toHaveClass(
+      'select-trigger',
+      'select-trigger--block'
+    )
+    expect(screen.getByRole('button', { name: 'Reset automatic location' })).toHaveClass('btn')
+    const editLocation = screen.getByRole('button', { name: 'Edit location' })
+    expect(editLocation).toHaveClass('icon-button')
+
+    await fireEvent.click(editLocation)
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveClass('btn', 'btn--primary')
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('btn')
+  })
+
+  it('styles no bare button and takes its layer and radii from tokens', () => {
+    const styles = mapViewerSource.slice(mapViewerSource.indexOf('<style>'))
+    expect(styles).not.toMatch(/\bbutton\b/)
+    expect(styles).not.toMatch(/z-index:\s*\d/)
+    expect(styles).not.toMatch(/opacity:\s*0?\.\d/)
+    expect(styles).not.toContain('--radius-sm')
+    expect(styles).not.toContain('!important')
   })
 
   it('keeps markers locked until Edit location is activated', async () => {

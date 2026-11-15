@@ -124,4 +124,19 @@ describe('CollectionCard', () => {
       /\.collection-card__description\s*\{[^}]*overflow:\s*hidden;[^}]*white-space:\s*nowrap;[^}]*text-overflow:\s*ellipsis;/s
     )
   })
+
+  it('draws the count with StatusBadge and the actions with IconButton', () => {
+    render(CollectionCard, { props: { ...baseProps, onedit: vi.fn(), ondelete: vi.fn() } })
+    expect(screen.getByText('5 documents')).toHaveClass('status-badge')
+    expect(screen.getByTestId('edit-button')).toHaveClass('icon-button')
+    expect(screen.getByTestId('delete-button')).toHaveClass('icon-button')
+  })
+
+  it('restyles no design-system component and focuses with the shared ring', () => {
+    const source = readCollectionCardSource()
+    const styles = source.slice(source.indexOf('<style>'))
+    expect(styles).not.toContain(':global')
+    expect(styles).toMatch(/\.collection-card:focus-visible\s*\{[^}]*var\(--focus-ring\)/s)
+    expect(styles).not.toMatch(/outline:\s*2px/)
+  })
 })

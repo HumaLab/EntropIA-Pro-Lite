@@ -1,6 +1,8 @@
 <script lang="ts">
   import { tooltip } from '../Tooltip/tooltip'
-  import { ActionIcon, Button } from '../Button'
+  import ActionIcon from '../Button/ActionIcon.svelte'
+  import Button from '../Button/Button.svelte'
+  import Input from '../Input/Input.svelte'
   import type { MetadataEditorProps } from './MetadataEditor.types'
 
   type MetadataEditorResolvedLabels = NonNullable<MetadataEditorProps['labels']> & {
@@ -112,16 +114,12 @@
 
     {#each rows as row, index (index)}
       <div class="metadata-editor__row">
-        <input
-          class="metadata-editor__input metadata-editor__key"
-          type="text"
+        <Input
           placeholder={labels.keyPlaceholder}
           value={row.key}
           oninput={(e: Event) => handleKeyInput(index, e)}
         />
-        <input
-          class="metadata-editor__input metadata-editor__value"
-          type="text"
+        <Input
           placeholder={labels.valuePlaceholder}
           value={row.value}
           oninput={(e: Event) => handleValueInput(index, e)}
@@ -189,42 +187,14 @@
   .metadata-editor__header-label {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.02em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
 
+  /* As wide as the row's delete button (Button sm, icon only). */
   .metadata-editor__header-spacer {
-    width: 32px;
-  }
-
-  .metadata-editor__input {
-    width: 100%;
-    min-width: 0;
-    padding: var(--space-2) var(--space-3);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-    background-color: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-input);
-    outline: none;
-    transition:
-      border-color var(--transition-smooth),
-      box-shadow var(--transition-smooth);
-  }
-
-  .metadata-editor__input::placeholder {
-    color: var(--color-text-muted);
-  }
-
-  .metadata-editor__input:focus {
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-  }
-
-  .metadata-editor__key {
-    font-weight: var(--font-weight-medium);
+    width: var(--control-height-sm);
   }
 
   .metadata-editor__empty {
@@ -248,8 +218,8 @@
     font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     transition:
-      border-color 0.15s ease,
-      color 0.15s ease;
+      border-color var(--transition-base),
+      color var(--transition-base);
   }
 
   .metadata-editor__add:hover {

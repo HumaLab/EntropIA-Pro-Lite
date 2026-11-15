@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import { describe, it, expect, vi } from 'vitest'
 import ItemCard from '../ItemCard.svelte'
+import itemCardSource from '../ItemCard.svelte?raw'
 
 describe('ItemCard', () => {
   const baseProps = {
@@ -182,5 +183,43 @@ describe('ItemCard note', () => {
     render(ItemCard, { props: baseProps })
 
     expect(screen.queryByTestId('item-card-note')).not.toBeInTheDocument()
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// Style contract (docs/PLAN_HOMOGENEIZACION.md, step 28)
+// ───────────────────────────────────────────────────────────────────────────
+
+const itemCardStyles = (
+  itemCardSource.match(/<style\b[^>]*>([\s\S]*?)<\/style>/)?.[1] ?? ''
+).replace(/\/\*[\s\S]*?\*\//g, '')
+
+describe('ItemCard style contract', () => {
+  it('draws keyboard focus with the shared ring, never with an outline', () => {
+    expect(itemCardStyles).not.toMatch(/outline:\s*\d+px\s+solid/)
+    expect(itemCardStyles).toMatch(
+      /\.item-card:has\(\.item-card__main:focus-visible\)\s*\{[^}]*box-shadow:[^;]*var\(--focus-ring\)/
+    )
+  })
+
+  it('leaves the delete Button its own look: only placement and the reveal', () => {
+    // Button's scoped rules outrank a bare :global() class, so colour, border,
+    // shadow, outline and transition overrides here never applied anyway.
+    for (const [, body] of itemCardStyles.matchAll(
+      /:global\(\.item-card__delete[^)]*\)[^{]*\{([^}]*)\}/g
+    )) {
+      expect(body).not.toMatch(/\b(background|border|box-shadow|outline|transition)/)
+    }
+  })
+
+  it('takes transitions and spacing from tokens', () => {
+    for (const [, value] of itemCardStyles.matchAll(/transition:\s*([^;]+);/g)) {
+      expect(value).not.toMatch(/\d(?:\.\d+)?m?s\b/)
+    }
+    for (const [, value] of itemCardStyles.matchAll(
+      /(?:^|[\s;{])(?:padding|margin|gap)(?:-[a-z-]+)?:\s*([^;]+);/g
+    )) {
+      expect(value).not.toMatch(/\b[1-9]\d*px\b/)
+    }
   })
 })

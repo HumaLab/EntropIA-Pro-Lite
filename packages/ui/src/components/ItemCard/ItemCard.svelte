@@ -105,9 +105,10 @@
     box-shadow: var(--shadow-surface);
   }
 
-  .item-card:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
+  /* The card's own shadow carries the ring: the card clips its content, so a
+     ring on the inner button would be cut by the rounded corners. */
+  .item-card:has(.item-card__main:focus-visible) {
+    box-shadow: var(--focus-ring), var(--shadow-surface);
   }
 
   .item-card__main {
@@ -168,7 +169,7 @@
   .item-card__play-icon {
     color: var(--color-text-muted);
     opacity: 0.7;
-    transition: opacity 0.15s ease;
+    transition: opacity var(--transition-base);
   }
 
   .item-card:hover .item-card__play-icon,
@@ -211,7 +212,7 @@
   .item-card__chip {
     display: inline-block;
     width: fit-content;
-    padding: 2px var(--space-2);
+    padding: var(--space-0-5) var(--space-2);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     color: var(--color-accent-hover);
@@ -249,16 +250,11 @@
     z-index: 1;
   }
 
+  /* Only the reveal lives here. Colour, border, focus ring and the opacity
+     transition are the ghost Button's own: its scoped rules outrank a bare
+     :global() class, so overrides written here never applied. */
   :global(.item-card__delete) {
-    background-color: transparent;
-    border-color: transparent;
-    box-shadow: none;
     opacity: 0;
-    transition:
-      opacity 0.15s ease,
-      color 0.15s ease,
-      background-color 0.15s ease,
-      border-color 0.15s ease;
   }
 
   .item-card:hover :global(.item-card__delete),
@@ -267,13 +263,10 @@
     opacity: 1;
   }
 
-  :global(.item-card__delete:hover) {
-    background-color: transparent;
-    border-color: transparent;
-  }
-
-  :global(.item-card__delete:focus-visible) {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
+  @media (prefers-reduced-motion: reduce) {
+    .item-card,
+    .item-card__play-icon {
+      transition: none;
+    }
   }
 </style>

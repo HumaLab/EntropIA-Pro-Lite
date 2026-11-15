@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ActionIcon, Button } from '../Button'
+  import { ActionIcon } from '../Button'
+  import IconButton from '../IconButton/IconButton.svelte'
+  import StatusBadge from '../StatusBadge/StatusBadge.svelte'
   import type { CollectionCardProps } from './CollectionCard.types'
   import { formatRelativeDate } from './formatRelativeDate'
 
@@ -49,40 +51,37 @@
     </span>
 
     <div class="collection-card__controls">
-      <span class="collection-card__badge">{chipLabel}</span>
+      <StatusBadge variant="neutral" size="sm">{chipLabel}</StatusBadge>
       {#if onedit || ondelete}
         <div class="collection-card__actions">
           {#if onedit}
-            <Button
-              class="collection-card__edit-action"
+            <IconButton
               variant="ghost"
-              size="sm"
-              iconOnly
-              aria-label={editAriaLabel}
+              size="md"
+              label={editAriaLabel}
               data-testid="edit-button"
               onclick={(e: MouseEvent) => {
                 e.stopPropagation()
                 onedit()
               }}
             >
-              <ActionIcon name="edit" />
-            </Button>
+              <ActionIcon name="edit" size={16} />
+            </IconButton>
           {/if}
           {#if ondelete}
-            <Button
-              class="collection-card__delete-action"
+            <IconButton
               variant="ghost"
-              size="sm"
-              iconOnly
-              aria-label={deleteAriaLabel}
+              size="md"
+              hoverTone="danger"
+              label={deleteAriaLabel}
               data-testid="delete-button"
               onclick={(e: MouseEvent) => {
                 e.stopPropagation()
                 ondelete()
               }}
             >
-              <ActionIcon name="delete" />
-            </Button>
+              <ActionIcon name="delete" size={16} />
+            </IconButton>
           {/if}
         </div>
       {/if}
@@ -115,8 +114,8 @@
   }
 
   .collection-card:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   .collection-card__name {
@@ -150,19 +149,6 @@
     flex: 0 0 auto;
   }
 
-  .collection-card__badge {
-    flex: 0 0 auto;
-    flex-shrink: 0;
-    white-space: nowrap;
-    padding: var(--space-1) var(--space-2);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    color: var(--color-accent-hover);
-    background-color: var(--color-accent-faint);
-    border: 1px solid color-mix(in srgb, var(--color-accent) 22%, transparent);
-    border-radius: var(--radius-control);
-  }
-
   .collection-card__description {
     margin: 0;
     font-size: var(--font-size-sm);
@@ -178,40 +164,6 @@
     gap: var(--space-1);
     flex: 0 0 auto;
     flex-shrink: 0;
-  }
-
-  :global(.collection-card__edit-action) {
-    background-color: transparent;
-    border-color: transparent;
-    box-shadow: none;
-    color: var(--color-text-primary);
-    opacity: 0.88;
-  }
-
-  :global(.collection-card__delete-action) {
-    background-color: transparent;
-    border-color: transparent;
-    box-shadow: none;
-    opacity: 0.88;
-  }
-
-  :global(.collection-card__edit-action:hover:not(:disabled)),
-  :global(.collection-card__edit-action:focus-visible),
-  :global(.collection-card__edit-action:active),
-  :global(.collection-card__delete-action:hover:not(:disabled)),
-  :global(.collection-card__delete-action:focus-visible),
-  :global(.collection-card__delete-action:active) {
-    background-color: transparent;
-    border-color: transparent;
-    box-shadow: none;
-    opacity: 1;
-    transform: none;
-  }
-
-  :global(.collection-card__edit-action:hover:not(:disabled)),
-  :global(.collection-card__edit-action:focus-visible),
-  :global(.collection-card__edit-action:active) {
-    color: var(--color-text-primary);
   }
 
   /* Yields first: a long relative date shrinks instead of pushing the controls
