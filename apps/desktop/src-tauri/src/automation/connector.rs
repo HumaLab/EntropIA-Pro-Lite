@@ -23,7 +23,15 @@ pub const CONNECTOR_STEM: &str = if cfg!(feature = "local-ml") {
 
 /// The execution alias the MSIX declares (D15), and the only name that resolves
 /// to the packaged connector from outside the package.
-pub const CONNECTOR_ALIAS: &str = "entropia-agent-connector.exe";
+///
+/// It is the packaged file's own name, so each variant has its own: aliases are
+/// per user, and Lite and Pro Store packages installed together would otherwise
+/// claim the same one, leaving one of them pointing at the other's connector.
+pub const CONNECTOR_ALIAS: &str = if cfg!(feature = "local-ml") {
+    "entropia-pro-agent-connector.exe"
+} else {
+    "entropia-agent-connector.exe"
+};
 
 /// How the connector is reachable on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -157,6 +165,19 @@ mod tests {
             connector_file_name(),
             format!("{expected}{}", std::env::consts::EXE_SUFFIX)
         );
+    }
+
+    #[test]
+    fn each_variant_declares_its_own_execution_alias() {
+        // The Lite and Pro Store packages must not claim the same alias, and the
+        // alias names the packaged file (store-msix-payload.ps1 packs it so).
+        let expected = if cfg!(feature = "local-ml") {
+            "entropia-pro-agent-connector.exe"
+        } else {
+            "entropia-agent-connector.exe"
+        };
+        assert_eq!(CONNECTOR_ALIAS, expected);
+        assert_eq!(CONNECTOR_ALIAS, format!("{CONNECTOR_STEM}.exe"));
     }
 
     #[test]
