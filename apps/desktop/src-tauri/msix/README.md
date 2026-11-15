@@ -121,3 +121,57 @@ Shape changes are **not** CI-automatable: stock GitHub-hosted Windows runners
 have no nested virtualization / Hyper-V. Run the capture locally with the
 `run-hyperv-msix-*.ps1` orchestration in the EntropIA-Lite repo
 (`.tmp/msix-vm/`), then hand the new base back into this path.
+
+## EntropIA Pro: generated MSIX (no base)
+
+Pro has no captured base: `scripts/build-pro-store-msix.ps1` (entry point,
+helpers in `scripts/store-msix-pro.ps1`) builds the Pro Store MSIX from scratch,
+locally only — no CI leg builds it and the Release workflow is unchanged.
+
+The script takes the Pro MSI layout instead of a capture: it runs `msiexec /a`
+(administrative extraction — files only, no custom actions), copies the layout
+of the directory holding `entropia-pro-desktop.exe`, and drops every `.lnk`.
+It renders `Assets/` (`StoreLogo` 50, `Square44x44`, `Square71x71`,
+`Square150x150`, `Square310x310`, `Wide310x150`) from `../icons/icon.png`, and
+writes the AppxManifest from scratch: x64, `runFullTrust` only, no
+PackageDependency, `TargetDeviceFamily Windows.Desktop 10.0.17763.0`, `en-us`
+resource, Application Id `EntropIAPro`.
+
+The manifest declares the execution alias `entropia-pro-agent-connector.exe` —
+its own name so it does not collide with Lite's
+`entropia-agent-connector.exe`. `automation/connector.rs` (`CONNECTOR_ALIAS`)
+is variant-specific and names that same alias when packaged. The script asserts
+the registration and the alias before `makeappx pack`, then asserts icons,
+shortcut hygiene, and Pdfium/connector bytes afterwards. It outputs
+`EntropIAPro-Store-<StoreVersion>.msix` and prints the PackageFamilyName,
+AUMID, and SHA256.
+
+The Store identity has no default: `-IdentityName`, `-IdentityPublisher`
+(`CN=...`), and `-PublisherDisplayName` are mandatory, taken from Partner
+Center > Product management > Product identity (1.8.0.0 is the first Pro
+submission). `-StoreVersion` defaults to `1.8.0.0` and is kept in sync by
+`pnpm version:bump` (`apps/desktop/scripts/version.mjs`).
+
+The prerequisite MSI comes from a Pro release build, run from `apps/desktop`
+after building the connector:
+
+```powershell
+node apps/desktop/scripts/build-agent-connector.mjs --target x86_64-pc-windows-msvc --variant pro
+pnpm exec tauri build --features local-ml --bundles msi --config src-tauri/tauri.connector.pro.conf.json
+```
+
+with the three `ENTROPIA_RUNTIME_BOOTSTRAP_*` variables set as in
+`.github/workflows/release.yml` (MNN compiles from source on the first build,
+~30 min). Then:
+
+```powershell
+./apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1 -MsiPath "apps/desktop/src-tauri/target/release/bundle/msi/EntropIA Pro_1.8.0_x64_en-US.msi" -IdentityName <Name> -IdentityPublisher "CN=<...>" -PublisherDisplayName <Display> -OutDir .tmp/pro-msix
+```
+
+WebView2: the MSIX cannot run the installer's bootstrapper, so it relies on
+the system Evergreen WebView2 runtime (preinstalled on Windows 11 and current
+Windows 10).
+
+Tests live in `scripts/tests/store-msix-pro.Tests.ps1` (Pester, in the CI
+Pester suite list; the real-pack test skips without the Windows SDK). The
+in-app Store update notice (`src/store_updates.rs`) stays Lite-only for now.

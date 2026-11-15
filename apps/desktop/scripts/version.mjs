@@ -86,6 +86,14 @@ export const DECLARATIONS = [
     ],
   },
   {
+    path: 'apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1',
+    form: 'store',
+    patterns: [
+      /(Defaults to )(?<value>\d+\.\d+\.\d+\.0)(\.)/,
+      /(\[string\]\$StoreVersion\s*=\s*")(?<value>\d+\.\d+\.\d+\.0)(")/,
+    ],
+  },
+  {
     path: 'apps/desktop/src-tauri/msix/README.md',
     form: 'store',
     patterns: [/(\(default `)(?<value>\d+\.\d+\.\d+\.0)(`)/],
