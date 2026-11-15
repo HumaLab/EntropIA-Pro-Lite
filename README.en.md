@@ -17,7 +17,7 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 | Native ML runtime   | yes (downloads itself at startup)                        | no                                                                                                |
 | Installer           | Windows: NSIS + MSI · MSIX (Store, local script) · Linux: DEB (GitHub) | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: universal DMG (GitHub) · Linux: DEB (GitHub) |
 | Tauri identifier    | `com.entropia.pro.desktop`                               | `com.entropia.lite`                                                                               |
-| Store MSIX identity | pending (Partner Center)                               | `CONICET.EntropIALite`                                                                            |
+| Store MSIX identity | `CONICET.EntropIAPro`                                  | `CONICET.EntropIALite`                                                                            |
 | Built with          | `--features local-ml` + `VITE_LOCAL_ML=1`                | lean default features + `VITE_LOCAL_ML=0`                                                         |
 
 **Pro** runs AI on the machine by default (offline-first) and lets users select remote providers in settings; `auto` modes apply fallback where implemented. **Lite** is 100% remote (OpenRouter / AssemblyAI / GLM-OCR, with Vercel AI Gateway as an optional OpenRouter fallback): no native models or runtime, small installer, Microsoft Store distribution.

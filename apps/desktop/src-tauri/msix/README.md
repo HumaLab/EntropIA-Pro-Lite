@@ -149,7 +149,18 @@ AUMID, and SHA256.
 The Store identity has no default: `-IdentityName`, `-IdentityPublisher`
 (`CN=...`), and `-PublisherDisplayName` are mandatory, taken from Partner
 Center > Product management > Product identity (1.8.0.0 is the first Pro
-submission). `-StoreVersion` defaults to `1.8.0.0` and is kept in sync by
+submission). The Partner Center values are:
+
+```text
+Name                 = CONICET.EntropIAPro
+Publisher            = CN=89DF40E5-581A-4120-9A24-F701205485D6   (same publisher account as Lite)
+PublisherDisplayName = HLab
+PackageFamilyName    = CONICET.EntropIAPro_b16na7gwepwme
+AUMID                = CONICET.EntropIAPro_b16na7gwepwme!EntropIAPro
+```
+
+They stay parameters, not literals in the script, but `store-msix-pro.Tests.ps1`
+pins the package family name they produce. `-StoreVersion` defaults to `1.8.0.0` and is kept in sync by
 `pnpm version:bump` (`apps/desktop/scripts/version.mjs`).
 
 The prerequisite MSI comes from a Pro release build, run from `apps/desktop`
@@ -165,7 +176,7 @@ with the three `ENTROPIA_RUNTIME_BOOTSTRAP_*` variables set as in
 ~30 min). Then:
 
 ```powershell
-./apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1 -MsiPath "apps/desktop/src-tauri/target/release/bundle/msi/EntropIA Pro_1.8.0_x64_en-US.msi" -IdentityName <Name> -IdentityPublisher "CN=<...>" -PublisherDisplayName <Display> -OutDir .tmp/pro-msix
+./apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1 -MsiPath "apps/desktop/src-tauri/target/release/bundle/msi/EntropIA Pro_1.8.0_x64_en-US.msi" -IdentityName CONICET.EntropIAPro -IdentityPublisher "CN=89DF40E5-581A-4120-9A24-F701205485D6" -PublisherDisplayName HLab -OutDir .tmp/pro-msix
 ```
 
 WebView2: the MSIX cannot run the installer's bootstrapper, so it relies on

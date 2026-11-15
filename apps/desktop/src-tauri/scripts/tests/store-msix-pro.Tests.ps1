@@ -55,6 +55,14 @@ Describe "Pro Store MSIX" {
       @($manifest.SelectNodes("//*[@Category='windows.shortcut']")).Count | Should -Be 0
     }
 
+    It "maps the Partner Center identity to the CONICET.EntropIAPro package family" {
+      $manifest = New-ProStoreMsixManifest -IdentityName "CONICET.EntropIAPro" -IdentityPublisher "CN=89DF40E5-581A-4120-9A24-F701205485D6" -PublisherDisplayName "HLab" -StoreVersion "1.8.0.0"
+      $identity = $manifest.SelectSingleNode("//*[local-name()='Identity']")
+
+      Get-StoreMsixPackageFamilyName -IdentityName $identity.GetAttribute("Name") -Publisher $identity.GetAttribute("Publisher") |
+        Should -BeExactly "CONICET.EntropIAPro_b16na7gwepwme"
+    }
+
     It "escapes XML-significant characters in the publisher display name" {
       $values = $script:Identity.Clone()
       $values.PublisherDisplayName = "H&Lab <Pro>"
