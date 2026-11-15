@@ -241,5 +241,8 @@ export type {
   ProgressBarTone,
 } from './components/ProgressBar/index'
 
+export { Switch } from './components/Switch/index'
+export type { SwitchProps, SwitchSize } from './components/Switch/index'
+
 export { Dialog } from './components/Dialog/index'
 export type { DialogProps, DialogSize } from './components/Dialog/index'

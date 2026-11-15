@@ -354,6 +354,7 @@ const STAGE_C_COMPONENTS: string[] = [
   'SelectTrigger',
   'ProgressBar',
   'StatusBadge',
+  'Switch',
   'Dialog',
   'ConfirmDialog',
 ]
