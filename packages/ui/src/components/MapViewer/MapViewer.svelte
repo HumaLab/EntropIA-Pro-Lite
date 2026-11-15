@@ -408,6 +408,7 @@
 <style>
   .map-viewer {
     position: relative;
+    box-sizing: border-box;
     width: 100%;
     min-width: 0;
     border: 1px solid var(--color-border);

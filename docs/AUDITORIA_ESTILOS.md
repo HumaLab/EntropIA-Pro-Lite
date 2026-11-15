@@ -393,3 +393,34 @@ Criterio de hecho por área: sin `<input>`/`<textarea>`/`<button>` crudos salvo 
 | 5 Escalas | Media | F1–F9, S1–S3, B1–B4, E1–E7 | Bajo |
 | 6 Capas/movimiento | Baja | §2.10, E8, §2.11, §2.12, §2.14 | Bajo |
 | 7 Cierre | Baja | H4, S3, tokens sin uso | Bajo |
+
+---
+
+## 4. Resultado: antes / después
+
+Medido con `pnpm style:metrics` al cerrar el plan (paso 31), contra la línea de base `scripts/style-metrics.baseline.json` tomada en el paso 1. Cada valor que no llega a 0 es una excepción permanente de [`GUIA_DISENO.md`](./GUIA_DISENO.md) (sección «Excepciones aceptadas»).
+
+| Categoría | Antes | Después | Lo que queda |
+| --- | ---: | ---: | --- |
+| Archivos con hallazgos | 97 | 14 | Solo excepciones permanentes. |
+| Hex en `<style>` | 33 | 0 | — |
+| `rgb()`/`rgba()` en `<style>` | 42 | 0 | — |
+| `color-mix()` contra negro o blanco | 9 | 0 | — |
+| `var()` a tokens que no existen | 6 | 0 | — |
+| `var()` con fallback (cualquier variable) | 158 | 15 | Ganchos propios de un componente, con su valor por defecto (guía, excepciones). |
+| `var()` con fallback sobre un token publicado | 137 | 0 | — |
+| `font-size` literal | 22 | 0 | — |
+| `font-weight` numérico | 9 | 0 | — |
+| `line-height` literal | 48 | 1 | `line-height: 0` del contenedor de imagen de `WritingEditor`. |
+| `letter-spacing` literal | 66 | 0 | — |
+| Opacidad literal en `:disabled` | 36 | 0 | — |
+| `z-index` literal | 36 | 11 | Todos locales (0–4) dentro del contexto de apilamiento de su componente; ninguno de tres cifras. |
+| Transición o animación con duración literal | 26 | 0 | — |
+| `:global()` sobre componentes del sistema (fuera de `packages/ui`) | 36 | 0 | — |
+| `<input>` en markup (fuera de `packages/ui`) | 63 | 1 | Edición inline del título del documento en `WritingView`. |
+| `<textarea>` en markup | 24 | 1 | El de `Textarea`. |
+| `<progress>` en markup | 5 | 0 | — |
+| `<details>` en markup | 8 | 0 | — |
+| `<input type="radio">` en markup | 27 | 1 | El radio oculto de `RadioCard`. |
+
+Las guardas que sostienen estos números: `visual-contract.test.ts` y `design-tokens.test.ts` (ningún componente rompe ninguna regla de estilo), `scale-literals.test.ts` (capas, `line-height`, `letter-spacing`, duraciones, tamaños relativos y `--font-weight-bold`) y `eslint.config.js` (`<select>`, `<progress>`, `<textarea>` y `<svg>` a mano).

@@ -6,6 +6,7 @@
     variant = 'primary',
     size = 'md',
     iconOnly = false,
+    wrap = false,
     disabled = false,
     loading = false,
     type = 'button',
@@ -21,6 +22,7 @@
 <button
   class="btn btn--{variant} btn--{size} {className}"
   class:btn--icon-only={iconOnly}
+  class:btn--wrap={wrap}
   class:btn--loading={loading}
   {type}
   disabled={isDisabled}
@@ -180,6 +182,16 @@
     max-height: var(--control-height-lg);
     padding: 0 var(--space-5);
     font-size: var(--font-size-sm);
+  }
+
+  /* A label that may take more than one line. Declared after the sizes so it
+     wins over their caps at equal specificity; each size keeps its floor. */
+  .btn--wrap {
+    max-height: none;
+    padding-block: var(--space-2);
+    justify-content: flex-start;
+    text-align: start;
+    white-space: normal;
   }
 
   /* ─── Link ─── */

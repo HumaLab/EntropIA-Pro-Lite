@@ -1695,9 +1695,7 @@
                 {#if editDraft}
                   {@const ebox = toEditBox(editDraft)}
                   {@const isCrop = editTool === 'crop'}
-                  {@const editColor = isCrop
-                    ? 'var(--color-success, #16a34a)'
-                    : 'var(--color-danger, #dc2626)'}
+                  {@const editColor = isCrop ? 'var(--color-success)' : 'var(--color-danger)'}
                   {@const editLabel = isCrop
                     ? labels.cropRegionAriaLabel
                     : labels.eraseRegionAriaLabel}
@@ -2014,9 +2012,7 @@
 
         {#if hasRenderableBounds && editTool !== 'none'}
           {@const isCrop = editTool === 'crop'}
-          {@const editColor = isCrop
-            ? 'var(--color-success, #16a34a)'
-            : 'var(--color-danger, #dc2626)'}
+          {@const editColor = isCrop ? 'var(--color-success)' : 'var(--color-danger)'}
           <svg
             class="document-viewer__overlay document-viewer__pdf-edit-overlay"
             data-testid="pdf-edit-overlay"

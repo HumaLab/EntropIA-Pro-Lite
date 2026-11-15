@@ -223,7 +223,6 @@
               <p class="note-date note-date--inline">{formatNoteDate(note.createdAt)}</p>
               <div class="note-actions">
                 <IconButton
-                  class="note-action-button note-action-button--edit"
                   variant="ghost"
                   size="sm"
                   label={translate('item.editNote')}
@@ -235,8 +234,8 @@
                   <ActionIcon name="edit" />
                 </IconButton>
                 <IconButton
-                  class="note-action-button note-action-button--delete"
                   variant="ghost"
+                  hoverTone="danger"
                   size="sm"
                   label={translate('item.deleteNote')}
                   onclick={(event) => {
@@ -437,42 +436,6 @@
     margin-top: 0;
     align-items: center;
     justify-self: end;
-  }
-
-  :global(.icon-button.note-action-button) {
-    --icon-button-size: 1.75rem;
-    border-radius: var(--radius-control);
-    background: transparent;
-    box-shadow: none;
-    color: var(--color-text-muted);
-    transition:
-      color var(--transition-base),
-      opacity var(--transition-base);
-  }
-
-  :global(.note-action-button:hover) {
-    background: transparent;
-    box-shadow: none;
-    transform: none;
-  }
-
-  :global(.note-action-button--edit) {
-    color: var(--color-text-secondary);
-  }
-
-  :global(.note-action-button--edit:hover) {
-    color: var(--color-text-primary);
-    opacity: 1;
-  }
-
-  :global(.note-action-button--delete) {
-    color: var(--color-text-muted);
-    opacity: 0.9;
-  }
-
-  :global(.note-action-button--delete:hover) {
-    color: var(--color-danger);
-    opacity: 1;
   }
 
   .note-edit {
