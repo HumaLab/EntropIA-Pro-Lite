@@ -80,9 +80,30 @@ export default tseslint.config(
       'svelte/no-restricted-html-elements': [
         'error',
         {
+          elements: ['svg', 'select', 'progress'],
+          message:
+            'This app owns every glyph and control. Hand-written <svg> drifts from the icon contract (stroke 2, 24 grid) — use <ActionIcon name="..." />. A native <select> is drawn by the operating system outside the app theme — use the ToolbarMenu radio pattern (see WritingZoteroTab). A native <progress> keeps the browser track — use ProgressBar once it exists (docs/PLAN_HOMOGENEIZACION.md, step 14a). Data visualisations and viewer overlays are exempt — add the file to the allowlist in eslint.config.js.',
+        },
+      ],
+    },
+  },
+  {
+    // Native <progress> that predates the ban. Each file leaves this list in the
+    // plan step that migrates it to ProgressBar (docs/PLAN_HOMOGENEIZACION.md).
+    // Never add a file: the list only shrinks.
+    files: [
+      'apps/desktop/src/views/InternetArchiveDialog.svelte', // step 16 (N7)
+      'apps/desktop/src/views/ImportSourcesDialog.svelte', // step 17 (N6)
+      'apps/desktop/src/views/ItemTextPanel.svelte', // step 23 (N8)
+      'apps/desktop/src/views/CollectionView.svelte', // step 24 (N9)
+    ],
+    rules: {
+      'svelte/no-restricted-html-elements': [
+        'error',
+        {
           elements: ['svg', 'select'],
           message:
-            'This app owns every glyph and control. Hand-written <svg> drifts from the icon contract (stroke 2, 24 grid) — use <ActionIcon name="..." />. A native <select> is drawn by the operating system outside the app theme — use the ToolbarMenu radio pattern (see WritingZoteroTab). Data visualisations and viewer overlays are exempt — add the file to the allowlist in eslint.config.js.',
+            'This app owns every glyph and control. Hand-written <svg> drifts from the icon contract (stroke 2, 24 grid) — use <ActionIcon name="..." />. A native <select> is drawn by the operating system outside the app theme — use the ToolbarMenu radio pattern (see WritingZoteroTab).',
         },
       ],
     },
