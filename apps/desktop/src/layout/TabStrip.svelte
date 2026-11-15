@@ -100,7 +100,7 @@
     min-width: 96px;
     max-width: 200px;
     flex: 1 1 auto;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
   }
 
   .tab-strip__tab--active {

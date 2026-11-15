@@ -408,7 +408,7 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
   }
 
   .agent__context {

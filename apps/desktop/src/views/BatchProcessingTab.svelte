@@ -1810,7 +1810,7 @@
   }
 
   .batch-tab__batch-row:hover {
-    background: var(--surface-toolbar);
+    background: var(--state-hover-row);
   }
 
   .batch-tab__batch-row:focus-visible {

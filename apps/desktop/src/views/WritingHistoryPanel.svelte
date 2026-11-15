@@ -314,7 +314,7 @@
 
   .history-panel__item:hover,
   .history-panel__item--selected {
-    background: var(--color-accent-faint);
+    background: var(--state-hover-row);
   }
 
   .history-panel__doc {

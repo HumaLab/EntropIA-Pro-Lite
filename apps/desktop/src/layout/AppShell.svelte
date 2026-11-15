@@ -1280,7 +1280,6 @@
     font-size: var(--font-size-sm);
     color: var(--color-text-muted);
     flex-shrink: 0;
-    letter-spacing: 0.02em;
   }
 
   .statusbar__left,

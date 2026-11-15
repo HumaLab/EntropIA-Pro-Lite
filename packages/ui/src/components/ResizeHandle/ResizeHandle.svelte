@@ -153,7 +153,7 @@
 
   @media (prefers-reduced-motion: no-preference) {
     .resize {
-      transition: background 120ms ease;
+      transition: background var(--transition-base);
     }
   }
 </style>

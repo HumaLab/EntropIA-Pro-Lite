@@ -189,11 +189,11 @@
     min-height: 18px;
     padding: 0 var(--space-2);
     font-size: calc(0.58rem + 3px);
-    letter-spacing: 0.04em;
+    letter-spacing: var(--letter-spacing-tag);
   }
 
   .batch-indicator--running :global(.batch-indicator__badge) {
-    animation: batch-indicator-pulse 1.6s ease-in-out infinite;
+    animation: batch-indicator-pulse var(--duration-pulse) ease-in-out infinite;
   }
 
   @keyframes batch-indicator-pulse {

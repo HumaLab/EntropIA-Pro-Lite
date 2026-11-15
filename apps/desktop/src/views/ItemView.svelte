@@ -4166,7 +4166,7 @@
   .item-title {
     font-family: var(--font-ui);
     font-size: var(--font-size-md);
-    font-weight: var(--font-weight-bold);
+    font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
     min-width: 0;
     overflow: hidden;

@@ -765,8 +765,8 @@
     color: var(--color-text-secondary);
     font-family: var(--font-ui);
     font-size: var(--font-size-2xs);
-    font-weight: var(--font-weight-bold);
-    letter-spacing: 0.04em;
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--letter-spacing-tag);
     cursor: pointer;
   }
 
@@ -872,8 +872,7 @@
 
   .entity-viewer__delete-label {
     font-size: var(--font-size-2xs);
-    font-weight: var(--font-weight-bold);
-    letter-spacing: 0.01em;
+    font-weight: var(--font-weight-semibold);
     line-height: var(--line-height-tight);
     white-space: nowrap;
   }
@@ -942,8 +941,8 @@
 
   .entity-viewer__tag {
     font-size: var(--font-size-2xs);
-    font-weight: var(--font-weight-bold);
-    letter-spacing: 0.04em;
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--letter-spacing-tag);
     opacity: 0.9;
   }
 

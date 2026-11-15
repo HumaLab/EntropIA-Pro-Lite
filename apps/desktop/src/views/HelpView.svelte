@@ -1073,7 +1073,7 @@
     border-radius: var(--radius-sm);
     background: var(--surface-toolbar);
     font-family: var(--font-mono);
-    font-size: 0.9em;
+    font-size: var(--font-size-code-inline);
   }
 
   .help-view__markdown :global(a) {
@@ -1140,7 +1140,7 @@
 
   .help-view__meta-toggle:focus-visible {
     outline: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     box-shadow: var(--focus-ring);
   }
 
@@ -1302,7 +1302,7 @@
 
   .help-view__preview-toggle:focus-visible {
     outline: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     box-shadow: var(--focus-ring);
   }
 

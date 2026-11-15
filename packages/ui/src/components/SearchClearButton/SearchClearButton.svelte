@@ -21,7 +21,7 @@
 <style>
   :global(.icon-button.icon-button--sm.search-clear-button) {
     --icon-button-size: 24px;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
   }
 
   :global(.icon-button.search-clear-button--overlay) {

@@ -600,17 +600,6 @@
     margin-left: auto;
     max-width: 100%;
   }
-  @media (max-width: 420px) {
-    .ocr-btn-group {
-      flex: 1 1 100%;
-      justify-content: flex-start;
-    }
-    .ocr-btn-group :global(.ocr-btn) {
-      flex: 1 1 auto;
-      min-width: 64px;
-    }
-  }
-
   @container ocr-item (max-width: 420px) {
     .ocr-btn-group {
       flex: 1 1 100%;

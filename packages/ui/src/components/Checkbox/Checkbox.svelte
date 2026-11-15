@@ -44,7 +44,7 @@
     align-items: center;
     padding: var(--space-2) var(--space-3);
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     cursor: pointer;
     transition:
       background-color var(--transition-base),

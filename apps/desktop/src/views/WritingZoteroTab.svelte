@@ -835,7 +835,7 @@
   }
 
   .zotero__row:hover {
-    background: var(--color-accent-faint);
+    background: var(--state-hover-row);
   }
 
   .zotero__row-actions {

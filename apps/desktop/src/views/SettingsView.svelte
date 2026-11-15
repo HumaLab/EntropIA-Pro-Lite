@@ -3711,7 +3711,7 @@
     background: var(--color-warning);
     margin-left: var(--space-1);
     vertical-align: middle;
-    animation: tab-badge-pulse 2s ease-in-out 3;
+    animation: tab-badge-pulse var(--duration-pulse) ease-in-out 3;
   }
 
   @keyframes tab-badge-pulse {

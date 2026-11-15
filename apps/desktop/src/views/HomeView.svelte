@@ -867,7 +867,7 @@
   }
 
   .home-view__continuar-row:hover {
-    background: var(--color-accent-faint);
+    background: var(--state-hover-row);
   }
 
   /* Focus draws the shared ring instead of repeating the hover background
@@ -1263,7 +1263,7 @@
   }
 
   .home-view__recent-row:hover {
-    background: var(--color-accent-faint);
+    background: var(--state-hover-row);
   }
 
   /* Same inset ring as the Continuar rows (E3): the table's rows run edge to

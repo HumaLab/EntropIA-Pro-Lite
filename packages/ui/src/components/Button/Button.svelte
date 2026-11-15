@@ -196,7 +196,7 @@
     vertical-align: baseline;
     padding: 0;
     border: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: transparent;
     color: var(--color-accent);
     font-family: inherit;

@@ -129,7 +129,7 @@
   .metadata-list dt {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.02em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
     overflow-wrap: anywhere;

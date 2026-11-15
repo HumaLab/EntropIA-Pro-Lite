@@ -307,14 +307,14 @@
   .dialog__title {
     margin: 0;
     font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-bold);
+    font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
   }
 
   .dialog__description {
     margin: var(--space-3) 0 0;
     font-size: var(--font-size-sm);
-    line-height: 1.5;
+    line-height: var(--line-height-base);
     color: var(--color-text-secondary);
   }
 

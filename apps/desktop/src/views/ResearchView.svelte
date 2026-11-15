@@ -1019,7 +1019,7 @@
     }
   }
 
-  @media (max-width: 640px) {
+  @container pane (max-width: 640px) {
     .research-form__scope-header {
       flex-direction: column;
       align-items: start;

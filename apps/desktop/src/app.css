@@ -79,7 +79,7 @@ body {
   border-radius: var(--scrollbar-radius);
   background: var(--scrollbar-thumb);
   background-clip: padding-box;
-  transition: background-color 0.18s ease;
+  transition: background-color var(--duration-smooth) ease;
 }
 
 *:hover::-webkit-scrollbar-thumb {
@@ -123,7 +123,7 @@ h2,
 h3 {
   font-family: var(--font-ui);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.025em;
+  letter-spacing: var(--letter-spacing-heading);
 }
 
 h1 {
@@ -168,7 +168,7 @@ p {
 .settings-view__sticky-header {
   position: sticky;
   top: 0;
-  z-index: 20;
+  z-index: var(--z-sticky);
   padding: var(--space-5) var(--space-4) var(--space-4);
   margin-block-end: var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
@@ -187,7 +187,7 @@ p {
 .page-header__eyebrow {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
-  letter-spacing: 0.075em;
+  letter-spacing: var(--letter-spacing-caps);
   text-transform: uppercase;
   color: var(--color-text-muted);
 }

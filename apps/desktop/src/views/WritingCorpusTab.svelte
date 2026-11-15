@@ -356,7 +356,7 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
   }
 
   .corpus__file {
@@ -404,7 +404,7 @@
   }
 
   .corpus__row:hover {
-    background: var(--color-accent-faint);
+    background: var(--state-hover-row);
     color: var(--color-text-primary);
   }
 

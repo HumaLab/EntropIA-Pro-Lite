@@ -1166,7 +1166,7 @@
     gap: var(--space-4);
   }
 
-  @media (max-width: 860px) {
+  @container pane (max-width: 860px) {
     .sync-card__grid {
       grid-template-columns: 1fr;
     }

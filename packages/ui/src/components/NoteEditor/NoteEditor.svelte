@@ -676,7 +676,7 @@
 
   .note-editor__tool:disabled {
     cursor: not-allowed;
-    opacity: 0.48;
+    opacity: var(--opacity-disabled);
   }
 
   .note-editor__tool:focus-visible {
@@ -750,7 +750,7 @@
     outline: none;
     font-family: var(--font-reading);
     font-size: var(--font-size-md);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -787,7 +787,7 @@
     background: color-mix(in srgb, var(--color-border) 65%, transparent);
     border-radius: var(--radius-sm);
     padding: 0.1rem 0.3rem;
-    font-size: 0.95em;
+    font-size: var(--font-size-code-inline);
   }
 
   .note-editor__surface :global(.ProseMirror pre) {

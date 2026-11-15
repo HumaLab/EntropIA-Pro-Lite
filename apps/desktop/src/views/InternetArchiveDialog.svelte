@@ -2237,7 +2237,7 @@
   }
 
   .ia-row:hover {
-    background: var(--color-accent-faint);
+    background: var(--state-hover-row);
   }
 
   .ia-row--active {

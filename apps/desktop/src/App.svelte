@@ -182,7 +182,7 @@
     position: fixed;
     inset: 0;
     /* Above every dialog and editor overlay (the highest is 1200). */
-    z-index: 2000;
+    z-index: var(--z-blocking);
   }
 
   .startup {
