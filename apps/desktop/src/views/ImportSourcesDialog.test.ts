@@ -124,7 +124,7 @@ describe('ImportSourcesDialog', () => {
     render(ImportSourcesDialog, { props: { onClose } })
 
     await screen.findByText('Voces')
-    expect(screen.getByRole('group', { name: 'Destino' })).toBeInTheDocument()
+    expect(screen.getByRole('radiogroup', { name: 'Destino' })).toBeInTheDocument()
   })
 
   it('keeps "Elegir archivos" disabled until a destination is chosen', async () => {
@@ -135,6 +135,30 @@ describe('ImportSourcesDialog', () => {
 
     await fireEvent.click(screen.getByRole('radio', { name: /Voces/ }))
     expect(screen.getByRole('button', { name: 'Elegir archivos' })).not.toBeDisabled()
+  })
+
+  it('chooses "new collection" when its name field gets focus', async () => {
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    const field = screen.getByPlaceholderText('Nombre de la colección')
+
+    expect(field).not.toBeDisabled()
+    await fireEvent.focusIn(field)
+
+    expect(
+      (screen.getByRole('radio', { name: /Nueva colección/ }) as HTMLInputElement).checked
+    ).toBe(true)
+  })
+
+  it('describes each collection option with its document count', async () => {
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+
+    expect(screen.getByRole('radio', { name: 'Voces' })).toHaveAccessibleDescription(
+      /19 documentos/i
+    )
   })
 
   it('keeps "Elegir archivos" disabled when "new collection" is chosen without a name', async () => {
@@ -348,6 +372,9 @@ describe('ImportSourcesDialog progress and result handling (T4b)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Elegir archivos' }))
 
     expect(await screen.findByText('1 de 3 archivos procesados.')).toBeInTheDocument()
+    const bar = screen.getByRole('progressbar', { name: 'Progreso de la importación' })
+    expect(bar).toHaveAttribute('aria-valuenow', '1')
+    expect(bar).toHaveAttribute('aria-valuemax', '3')
     expect(screen.getByRole('button', { name: 'Cancelar' })).toBeDisabled()
 
     await fireEvent.keyDown(window, { key: 'Escape' })

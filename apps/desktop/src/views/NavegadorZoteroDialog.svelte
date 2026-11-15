@@ -18,7 +18,7 @@
    * the result. Rust finds the file and builds the item from its own rows.
    */
   import { onMount } from 'svelte'
-  import { ConfirmDialog } from '@entropia/ui'
+  import { ConfirmDialog, RadioCard, RadioGroup } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { libraryLabel, loadLibraries } from '$lib/writing-zotero-libraries'
   import {
@@ -283,28 +283,22 @@
     <p class="zotero-dialog__intro">
       {$currentLocale && t('navegador.zotero.intro', { title: source.title })}
     </p>
-    <fieldset class="zotero-dialog__destination">
-      <legend class="zotero-dialog__legend">
-        {$currentLocale && t('navegador.zotero.destination')}
-      </legend>
-      {#if loading}
-        <p class="zotero-dialog__status">{$currentLocale && t('navegador.zotero.loading')}</p>
-      {:else}
-        <div class="zotero-dialog__options">
+    {#if loading}
+      <p class="zotero-dialog__status">{$currentLocale && t('navegador.zotero.loading')}</p>
+    {:else}
+      <div class="zotero-dialog__options">
+        <RadioGroup
+          variant="list"
+          name="zotero-destination"
+          label={$currentLocale && t('navegador.zotero.destination')}
+          bind:value={choice}
+        >
           {#each libraries as option (keyOf(option))}
-            <label class="zotero-dialog__option">
-              <input
-                type="radio"
-                name="zotero-destination"
-                value={keyOf(option)}
-                bind:group={choice}
-              />
-              <span class="zotero-dialog__option-name">{$currentLocale && label(option)}</span>
-            </label>
+            <RadioCard value={keyOf(option)} label={$currentLocale && label(option)} />
           {/each}
-        </div>
-      {/if}
-    </fieldset>
+        </RadioGroup>
+      </div>
+    {/if}
     {#if fromKnown && !loading}
       <p class="zotero-dialog__note" role="status">
         {$currentLocale && t('navegador.zotero.fallback')}
@@ -371,52 +365,12 @@
     color: var(--color-text-muted);
   }
 
-  .zotero-dialog__destination {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    margin: 0 0 var(--space-2);
-    padding: 0;
-    border: none;
-  }
-
-  .zotero-dialog__legend {
-    padding: 0;
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    letter-spacing: var(--letter-spacing-caps);
-    text-transform: uppercase;
-    color: var(--color-text-muted);
-  }
-
+  /* A long list scrolls inside the dialog; the padding keeps the options'
+     focus ring clear of the scroll box's edge. */
   .zotero-dialog__options {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
     max-height: 240px;
+    margin: 0 0 var(--space-2);
+    padding: var(--space-0-5);
     overflow-y: auto;
-  }
-
-  .zotero-dialog__option {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2);
-    border-radius: var(--radius-control);
-    cursor: pointer;
-  }
-
-  .zotero-dialog__option:hover {
-    background: var(--color-accent-faint);
-  }
-
-  .zotero-dialog__option-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
   }
 </style>
