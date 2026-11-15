@@ -504,7 +504,7 @@ describe('TopBar', () => {
       expect(rule).toMatch(/user-select:\s*none;/)
       expect(rule).toMatch(/-webkit-user-drag:\s*none;/)
       // The search field stays editable and selectable.
-      expect(source).toMatch(/\.global-search__input\s*\{[^}]*user-select:\s*text;/)
+      expect(source).toMatch(/\.global-search\s*\{[^}]*user-select:\s*text;/)
     })
   })
 
@@ -550,7 +550,9 @@ describe('TopBar', () => {
     const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
     await fireEvent.input(input, { target: { value: 'acta' } })
 
-    expect(input).toHaveAttribute('type', 'text')
+    // SearchBar's input: type="search", whose native "x" app.css hides, so the
+    // shared clear button below is the only one drawn.
+    expect(input).toHaveAttribute('type', 'search')
     const clearButton = screen.getByRole('button', { name: 'Limpiar búsqueda' })
     expect(clearButton).not.toHaveTextContent('×')
     expect(clearButton).toHaveAttribute('data-tooltip', 'Limpiar búsqueda')

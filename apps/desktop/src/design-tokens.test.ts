@@ -360,19 +360,6 @@ describe('desktop design tokens', () => {
     expect(offenders).toEqual([])
   })
 
-  it('pairs the positioned magnifier with the inset it needs', () => {
-    // SearchBar lays its icon out in the flow because it owns the whole row.
-    // A field retrofitted into existing markup positions the icon over the
-    // input instead, and then owes it padding — or the icon lands on the text.
-    const offenders = everyComponent()
-      .map((path) => [path, readFileSync(path, 'utf-8')] as const)
-      .filter(([, source]) => source.includes('search-field__icon'))
-      .filter(([, source]) => !source.includes('var(--search-field-inset)'))
-      .map(([path]) => basename(path))
-
-    expect(offenders).toEqual([])
-  })
-
   it('settles every placeholder on one grey', () => {
     // Without a baseline the browser derives its own from `color`, which reads
     // lighter than the token and made two search boxes on one screen disagree.

@@ -10,7 +10,7 @@
   // Black on transparent, the 'e' only: hlab-mark.png is a white disc behind
   // the 'e', so as a mask it paints a full circle.
   import appMark from '../assets/entropia-mark.png'
-  import { ActionIcon, IconButton, SearchClearButton, StatusBadge } from '@entropia/ui'
+  import { ActionIcon, IconButton, SearchBar, StatusBadge } from '@entropia/ui'
   import type { Collection, Item } from '@entropia/store'
   import { bibliographySearchWorks, type BibliographySearchHit } from '$lib/bibliography-search'
   import type { LibraryEntry } from '$lib/writing-zotero'
@@ -421,37 +421,23 @@
   </div>
 
   <div class="global-search" bind:this={searchContainerEl} onfocusout={handleFocusOut}>
-    <div class="global-search__input-wrap">
-      <span class="search-field__icon" aria-hidden="true">
-        <ActionIcon name="search" size={16} />
-      </span>
-      <input
-        class="global-search__input"
-        type="text"
-        role="combobox"
-        aria-expanded={showResults}
-        aria-controls={searchListboxId}
-        aria-autocomplete="list"
-        aria-activedescendant={activeOptionId}
-        bind:value={searchQuery}
-        bind:this={searchInputEl}
-        placeholder={$currentLocale && translate('topbar.searchPlaceholder')}
-        aria-label={$currentLocale && translate('topbar.searchAria')}
-        oninput={(event: Event) =>
-          handleSearchValueChange((event.currentTarget as HTMLInputElement).value, event)}
-        onkeydown={handleKeydown}
-        onfocus={handleFocus}
-      />
-
-      {#if searchQuery}
-        <SearchClearButton
-          class="search-clear-button--overlay"
-          label={$currentLocale ? translate('topbar.searchClear') : 'Limpiar búsqueda'}
-          title={$currentLocale ? translate('topbar.searchClear') : 'Limpiar búsqueda'}
-          onclick={handleClear}
-        />
-      {/if}
-    </div>
+    <SearchBar
+      value={searchQuery}
+      role="combobox"
+      aria-expanded={showResults}
+      aria-controls={searchListboxId}
+      aria-autocomplete="list"
+      aria-activedescendant={activeOptionId}
+      placeholder={$currentLocale && translate('topbar.searchPlaceholder')}
+      ariaLabel={$currentLocale && translate('topbar.searchAria')}
+      clearAriaLabel={$currentLocale ? translate('topbar.searchClear') : 'Limpiar búsqueda'}
+      emitSearch={false}
+      inputRef={(element) => (searchInputEl = element)}
+      onvaluechange={handleSearchValueChange}
+      onclear={handleClear}
+      onkeydown={handleKeydown}
+      onfocus={handleFocus}
+    />
 
     {#if showResults}
       <div
@@ -838,39 +824,14 @@
     animation: none;
   }
 
+  /* The bar is not selectable; the search inside it is. */
   .global-search {
     grid-area: search;
     justify-self: end;
     position: relative;
     width: min(100%, 320px);
     min-width: 0;
-  }
-
-  .global-search__input-wrap {
-    position: relative;
-  }
-
-  .global-search__input {
-    width: 100%;
     user-select: text;
-    min-height: var(--control-height-md);
-    padding: 0 calc(var(--space-4) + 18px) 0 var(--search-field-inset);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    transition:
-      border-color var(--transition-smooth),
-      box-shadow var(--transition-smooth),
-      background-color var(--transition-smooth);
-  }
-
-  .global-search__input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: var(--surface-panel);
   }
 
   .global-search__result:focus-visible {

@@ -265,29 +265,8 @@ p {
 }
 
 /* ── Search fields ────────────────────────────────────────────────────────
-   One treatment for every field that searches, taken from the SearchBar
-   component: a magnifier on the leading edge, sized 16 and drawn in the
-   secondary text colour.
-
-   The icon is positioned rather than added to the flow, so a field keeps
-   whatever markup it already has — each of these wraps is already relative
-   for its trailing clear button. `--search-field-inset` is the padding the
-   input owes the icon; it is one value so the gap never drifts per screen. */
-:root {
-  --search-field-icon-size: 16px;
-  --search-field-inset: calc(var(--space-3) + var(--search-field-icon-size) + var(--space-2));
-}
-
-.search-field__icon {
-  position: absolute;
-  inset-inline-start: var(--space-3);
-  top: 50%;
-  transform: translateY(-50%);
-  display: inline-flex;
-  color: var(--color-text-secondary);
-  opacity: 0.9;
-  pointer-events: none;
-}
+   Every field that searches is a SearchBar, which draws its own magnifier
+   and clear button. */
 
 /* Safety net: WebView2 draws a blue native "x" in every `type="search"` input.
    Search fields go through SearchBar, which draws the shared clear button; this
