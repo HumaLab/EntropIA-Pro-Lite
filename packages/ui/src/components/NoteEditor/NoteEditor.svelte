@@ -1,6 +1,9 @@
 <script lang="ts">
   import { tooltip } from '../Tooltip/tooltip'
-  import { portal } from '../Portal/portal'
+  import { Dialog } from '../Dialog'
+  import { Input } from '../Input'
+  import { Button } from '../Button'
+  import { IconButton } from '../IconButton'
   import { onDestroy, onMount, tick } from 'svelte'
   import { Editor } from '@tiptap/core'
   import ActionIcon from '../Button/ActionIcon.svelte'
@@ -127,8 +130,7 @@
   })
 
   const linkModalTitleId = 'note-editor-link-modal-title'
-  const linkModalDescriptionId = 'note-editor-link-modal-description'
-  const linkModalErrorId = 'note-editor-link-modal-error'
+  const linkFormId = 'note-editor-link-form'
 
   type ToolbarButton = {
     label: string
@@ -377,13 +379,6 @@
     bumpEditorRevision()
   }
 
-  function handleLinkModalKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      closeLinkModal()
-    }
-  }
-
   function removeLink() {
     if (!editor) return
 
@@ -542,120 +537,74 @@
 
   <div class="note-editor__actions">
     {#if showCancel}
-      <button
-        class="note-editor__btn note-editor__btn--ghost"
-        type="button"
-        data-testid="note-cancel"
-        onclick={() => oncancel?.()}
-      >
+      <Button variant="ghost" size="sm" data-testid="note-cancel" onclick={() => oncancel?.()}>
         {cancelLabel}
-      </button>
+      </Button>
     {/if}
 
-    <button
-      class="note-editor__btn note-editor__btn--save note-editor__btn--icon-only"
-      type="button"
+    <IconButton
+      variant="primary"
+      size="md"
       data-testid="note-save"
       disabled={isSaveDisabled}
       aria-disabled={isSaveDisabled}
-      aria-label={saveLabel}
-      use:tooltip={saveLabel}
+      label={saveLabel}
+      title={saveLabel}
       onclick={handleSave}
     >
       <ActionIcon name="save" size={16} />
-    </button>
+    </IconButton>
   </div>
 
   {#if isLinkModalOpen}
-    <!-- Portalled out of the work pane; see Portal/portal.ts. -->
-    <div
-      class="note-editor__modal-backdrop"
-      {@attach portal}
-      role="presentation"
-      onclick={(event) => {
-        if (event.currentTarget === event.target) {
-          closeLinkModal()
-        }
-      }}
+    <!-- Dialog portals itself out of the work pane; see Portal/portal.ts. -->
+    <Dialog
+      title={labels.linkModalTitle}
+      titleId={linkModalTitleId}
+      description={labels.linkModalDescription}
+      overlayClass="note-editor__modal-backdrop"
+      onclose={closeLinkModal}
     >
-      <div
-        class="note-editor__modal"
-        role="dialog"
-        tabindex="-1"
-        aria-modal="true"
-        aria-labelledby={linkModalTitleId}
-        aria-describedby={linkModalError ? linkModalErrorId : linkModalDescriptionId}
-        onkeydown={handleLinkModalKeydown}
+      <form
+        id={linkFormId}
+        novalidate
+        onsubmit={(event) => {
+          event.preventDefault()
+          submitLink()
+        }}
       >
-        <div class="note-editor__modal-header">
-          <div class="note-editor__modal-icon">
-            <ActionIcon name="link" size={16} />
-          </div>
-          <div class="note-editor__modal-copy">
-            <h3 id={linkModalTitleId}>{labels.linkModalTitle}</h3>
-            <p id={linkModalDescriptionId}>{labels.linkModalDescription}</p>
-          </div>
-        </div>
+        <Input
+          id="note-editor-link-input"
+          bind:element={linkInputElement}
+          bind:value={linkDraftHref}
+          label={labels.linkUrlLabel}
+          type="text"
+          inputmode="url"
+          autocapitalize="off"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck="false"
+          placeholder={labels.linkPlaceholder}
+          error={linkModalError ?? undefined}
+          data-testid="note-editor-link-input"
+          oninput={handleLinkInput}
+        />
+      </form>
 
-        <form
-          class="note-editor__modal-form"
-          novalidate
-          onsubmit={(event) => {
-            event.preventDefault()
-            submitLink()
-          }}
+      {#snippet footer()}
+        <Button variant="secondary" data-testid="note-editor-link-cancel" onclick={closeLinkModal}>
+          {labels.linkCancel}
+        </Button>
+        <Button
+          type="submit"
+          variant="primary"
+          form={linkFormId}
+          data-testid="note-editor-link-submit"
         >
-          <label class="note-editor__modal-label" for="note-editor-link-input"
-            >{labels.linkUrlLabel}</label
-          >
-          <input
-            id="note-editor-link-input"
-            bind:this={linkInputElement}
-            class="note-editor__modal-input"
-            type="text"
-            inputmode="url"
-            autocapitalize="off"
-            autocomplete="off"
-            autocorrect="off"
-            spellcheck="false"
-            placeholder={labels.linkPlaceholder}
-            bind:value={linkDraftHref}
-            aria-invalid={linkModalError ? 'true' : 'false'}
-            aria-describedby={linkModalError ? linkModalErrorId : linkModalDescriptionId}
-            data-testid="note-editor-link-input"
-            oninput={handleLinkInput}
-          />
-
-          {#if linkModalError}
-            <p
-              id={linkModalErrorId}
-              class="note-editor__modal-error"
-              data-testid="note-editor-link-error"
-            >
-              {linkModalError}
-            </p>
-          {/if}
-
-          <div class="note-editor__modal-actions">
-            <button
-              type="button"
-              class="note-editor__btn note-editor__btn--ghost"
-              data-testid="note-editor-link-cancel"
-              onclick={closeLinkModal}
-            >
-              {labels.linkCancel}
-            </button>
-            <button
-              type="submit"
-              class="note-editor__btn note-editor__btn--save"
-              data-testid="note-editor-link-submit"
-            >
-              {labels.linkSubmit}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+          {labels.linkSubmit}
+        </Button>
+      {/snippet}
+    </Dialog>
   {/if}
 </div>
 
@@ -697,36 +646,6 @@
     margin-left: auto;
   }
 
-  .note-editor__btn {
-    padding: var(--space-2) var(--space-3);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    border-radius: var(--radius-control);
-    cursor: pointer;
-    border: 1px solid var(--color-border);
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base),
-      color var(--transition-base),
-      box-shadow var(--transition-base);
-  }
-
-  .note-editor__btn--icon-only {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--control-height-sm);
-    height: var(--control-height-sm);
-    padding: 0;
-  }
-
-  .note-editor__btn:hover:not(:disabled) {
-    border-color: var(--color-border-strong);
-    color: var(--color-text-primary);
-    background: color-mix(in srgb, var(--color-surface) 72%, black 28%);
-  }
-
   .note-editor__tool {
     display: inline-flex;
     align-items: center;
@@ -760,8 +679,7 @@
     opacity: 0.48;
   }
 
-  .note-editor__tool:focus-visible,
-  .note-editor__btn:focus-visible {
+  .note-editor__tool:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
   }
@@ -897,159 +815,5 @@
     display: flex;
     justify-content: flex-end;
     gap: var(--space-2);
-  }
-
-  .note-editor__modal-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 1200;
-    display: grid;
-    place-items: center;
-    padding: var(--space-4);
-    background: var(--color-overlay);
-    backdrop-filter: blur(10px);
-  }
-
-  .note-editor__modal {
-    width: min(100%, 28rem);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-    padding: var(--space-4);
-    border: 1px solid color-mix(in srgb, var(--color-border) 88%, transparent);
-    border-radius: var(--radius-dialog);
-    background: color-mix(in srgb, var(--color-surface) 92%, black 8%);
-    box-shadow: var(--shadow-lg);
-  }
-
-  .note-editor__modal-header {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-3);
-  }
-
-  .note-editor__modal-icon {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.5rem;
-    height: 2.5rem;
-    border-radius: var(--radius-surface);
-    border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-    background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface));
-    color: var(--color-accent-hover);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  }
-
-  /* Size and paint come from ActionIcon (stroke 2, fill none); the icon inherits
-     `color` from the tile above. The old rule forced `fill: currentColor`, which
-     would flood a stroke-based glyph into a solid blob. */
-
-  .note-editor__modal-copy {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .note-editor__modal-copy h3 {
-    margin: 0;
-    font-size: var(--font-size-md);
-    color: var(--color-text-primary);
-  }
-
-  .note-editor__modal-copy p {
-    margin: 0;
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-  }
-
-  .note-editor__modal-form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-
-  .note-editor__modal-label {
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    letter-spacing: 0.02em;
-    color: var(--color-text-secondary);
-  }
-
-  .note-editor__modal-input {
-    width: 100%;
-    padding: var(--space-3) var(--space-4);
-    border: 1px solid color-mix(in srgb, var(--color-border) 90%, transparent);
-    border-radius: var(--radius-input);
-    background: color-mix(in srgb, var(--color-surface) 82%, black 18%);
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    transition:
-      border-color var(--transition-smooth),
-      box-shadow var(--transition-smooth),
-      background-color var(--transition-smooth);
-  }
-
-  .note-editor__modal-input::placeholder {
-    color: var(--color-text-muted);
-  }
-
-  .note-editor__modal-input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: color-mix(in srgb, var(--color-surface) 88%, black 12%);
-  }
-
-  .note-editor__modal-input[aria-invalid='true'] {
-    border-color: var(--color-danger);
-    box-shadow: var(--focus-ring-danger);
-  }
-
-  .note-editor__modal-error {
-    margin: 0;
-    font-size: var(--font-size-xs);
-    color: var(--color-danger);
-  }
-
-  .note-editor__modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--space-2);
-  }
-
-  .note-editor__btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.48;
-  }
-
-  .note-editor__btn--ghost {
-    background: transparent;
-    color: var(--color-text-secondary);
-  }
-
-  .note-editor__btn--save {
-    background-color: var(--control-primary-bg);
-    color: var(--control-primary-text);
-    border-color: var(--control-primary-border);
-    font-weight: var(--font-weight-semibold);
-  }
-
-  .note-editor__btn--save:disabled {
-    opacity: 1;
-    background-color: var(--color-surface-elevated);
-    color: var(--color-text-secondary);
-    border-color: var(--color-border-strong);
-  }
-
-  .note-editor__btn--save:hover:not(:disabled) {
-    background-color: var(--control-primary-bg-hover);
-    border-color: var(--control-primary-border);
-  }
-
-  .note-editor__btn--save:active:not(:disabled) {
-    background-color: var(--control-primary-bg-active);
   }
 </style>

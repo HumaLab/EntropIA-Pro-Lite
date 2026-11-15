@@ -365,6 +365,17 @@ describe('AgentApprovalDialog', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
+  it('dismisses the error notice with Cerrar', async () => {
+    respond([[START], []], new Error('approval_expired: request apr_1 expired'))
+    render(AgentApprovalDialog)
+    await fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Aprobar' })
+    )
+    const notice = await screen.findByRole('alert')
+    await fireEvent.click(within(notice).getByRole('button', { name: 'Cerrar' }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('names the in-app help as Ayuda, never as an external assistant', async () => {
     // T22/D12: a request from client «Ayuda» (in-app-help) goes through the
     // existing dialog, but the copy must not say it comes from outside.

@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import SimilarAssetPreviewDialog from './SimilarAssetPreviewDialog.svelte'
 
@@ -57,5 +57,32 @@ describe('SimilarAssetPreviewDialog', () => {
     expect(overlay).not.toBeNull()
     expect(pane.contains(overlay)).toBe(false)
     expect(overlay?.parentElement).toBe(document.body)
+  })
+
+  it('starts on the close button and closes from it', async () => {
+    const onclose = vi.fn()
+    render(SimilarAssetPreviewDialog, {
+      props: {
+        asset: {
+          assetId: 'asset-1',
+          itemId: 'item-1',
+          title: 'Carta manuscrita',
+          collectionId: 'col-1',
+          assetPath: 'archivo/carta.jpg',
+          assetType: 'image',
+          textPreview: 'Preview',
+          similarity: 0.9,
+        },
+        translate: (key: string) => key,
+        documentViewerLabels: {},
+        loadFullText: async () => null,
+        onclose,
+      },
+    })
+
+    const close = await screen.findByRole('button', { name: 'item.similarAssetPreview.close' })
+    expect(document.activeElement).toBe(close)
+    await fireEvent.click(close)
+    expect(onclose).toHaveBeenCalledOnce()
   })
 })

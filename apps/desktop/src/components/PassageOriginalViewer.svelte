@@ -149,7 +149,7 @@
   .passage-original__overlay {
     position: fixed;
     inset: 0;
-    z-index: 1100;
+    z-index: var(--z-dialog-nested);
     display: grid;
     place-items: center;
     padding: var(--space-4);
@@ -197,7 +197,7 @@
     font-family: var(--font-mono);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.12em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 
@@ -210,7 +210,7 @@
   .passage-original__heading h2 {
     overflow: hidden;
     font-size: var(--font-size-lg);
-    line-height: 1.25;
+    line-height: var(--line-height-tight);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -256,7 +256,7 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 
