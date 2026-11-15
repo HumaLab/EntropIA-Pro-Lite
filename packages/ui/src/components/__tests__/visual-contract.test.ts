@@ -354,6 +354,8 @@ const STAGE_C_COMPONENTS: string[] = [
   'SelectTrigger',
   'ProgressBar',
   'StatusBadge',
+  'Dialog',
+  'ConfirmDialog',
 ]
 
 describe('stage C component contract', () => {
