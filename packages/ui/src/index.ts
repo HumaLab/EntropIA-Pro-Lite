@@ -232,3 +232,10 @@ export type {
   SelectTriggerProps,
   SelectTriggerSize,
   SelectTriggerVariant,
+} from './components/SelectTrigger/index'
+export { ProgressBar } from './components/ProgressBar/index'
+export type {
+  ProgressBarProps,
+  ProgressBarSize,
+  ProgressBarTone,
+} from './components/ProgressBar/index'

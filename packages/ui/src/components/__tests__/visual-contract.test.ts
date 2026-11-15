@@ -347,7 +347,13 @@ describe('style debt guards', () => {
  * holds the contract in component-contract.ts. A component joins this list in
  * the commit that builds it.
  */
-const STAGE_C_COMPONENTS: string[] = ['Input', 'Textarea', 'RadioGroup', 'SelectTrigger']
+const STAGE_C_COMPONENTS: string[] = [
+  'Input',
+  'Textarea',
+  'RadioGroup',
+  'SelectTrigger',
+  'ProgressBar',
+]
 
 describe('stage C component contract', () => {
   it.each(STAGE_C_COMPONENTS)(
