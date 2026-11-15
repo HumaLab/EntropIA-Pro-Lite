@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { ActionIcon } from '../Button'
+  import ActionIcon from '../Button/ActionIcon.svelte'
+  import Button from '../Button/Button.svelte'
 
   interface AudioPlayerLabels {
     skipBack: string
@@ -324,20 +325,21 @@
 
   <!-- Transport controls -->
   <div class="audio-player__transport">
-    <button
-      type="button"
-      class="audio-player__btn audio-player__btn--skip"
+    <Button
+      variant="secondary"
       data-testid="audio-skip-back"
       aria-label={labels.skipBack}
       onclick={() => skip(-5)}
     >
       <ActionIcon name="skip-back" size={16} />
       <span>5s</span>
-    </button>
+    </Button>
 
+    <!-- Hand-built on purpose: the player's one hero target, 56px, off the
+         IconButton scale (OFF_SCALE_BY_DESIGN in the desktop design-tokens test). -->
     <button
       type="button"
-      class="audio-player__btn audio-player__btn--play"
+      class="audio-player__btn--play"
       data-testid="audio-play-pause"
       aria-label={playing ? labels.pause : labels.play}
       onclick={togglePlay}
@@ -345,16 +347,15 @@
       <ActionIcon name={playing ? 'pause' : 'play'} size={24} />
     </button>
 
-    <button
-      type="button"
-      class="audio-player__btn audio-player__btn--skip"
+    <Button
+      variant="secondary"
       data-testid="audio-skip-forward"
       aria-label={labels.skipForward}
       onclick={() => skip(5)}
     >
       <span>5s</span>
       <ActionIcon name="skip-forward" size={16} />
-    </button>
+    </Button>
   </div>
 
   <!-- Progress bar -->
@@ -404,6 +405,7 @@
       value={volume}
       oninput={(e) => setVolume(parseFloat((e.target as HTMLInputElement).value))}
       class="audio-player__volume-slider"
+      style:--audio-volume-fill={`${volume * 100}%`}
       data-testid="audio-volume-slider"
       aria-label={labels.volume}
     />
@@ -411,6 +413,38 @@
 </div>
 
 <style>
+  .audio-player__btn--play {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 56px;
+    height: 56px;
+    padding: 0;
+    border: 1px solid var(--control-primary-border);
+    border-radius: var(--radius-surface);
+    background-color: var(--control-primary-bg);
+    color: var(--control-primary-text);
+    cursor: pointer;
+    transition:
+      background-color var(--transition-base),
+      border-color var(--transition-base);
+  }
+
+  .audio-player__btn--play:hover {
+    background-color: var(--control-primary-bg-hover);
+  }
+
+  .audio-player__btn--play:active {
+    background-color: var(--control-primary-bg-active);
+  }
+
+  .audio-player__btn--play:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
   .audio-player {
     display: flex;
     flex-direction: column;
@@ -428,72 +462,31 @@
     gap: var(--space-2);
   }
 
-  .audio-player__btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-1);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-control);
-    background-color: var(--color-surface);
-    color: var(--color-text-primary);
-    cursor: pointer;
-    font-size: var(--font-size-sm);
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base);
-  }
-
-  .audio-player__btn:hover {
-    background-color: var(--color-surface-raised);
-    border-color: var(--color-text-muted);
-  }
-
-  .audio-player__btn:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .audio-player__btn--play {
-    width: 56px;
-    height: 56px;
-    border-radius: var(--radius-surface);
-    font-size: var(--font-size-xl);
-    border-color: var(--control-primary-border);
-    background-color: var(--control-primary-bg);
-    color: var(--control-primary-text);
-  }
-
-  .audio-player__btn--play:hover {
-    background-color: var(--control-primary-bg-hover);
-    border-color: var(--control-primary-border);
-  }
-
-  .audio-player__btn--play:active {
-    background-color: var(--control-primary-bg-active);
-  }
-
   .audio-player__progress {
     width: 100%;
     max-width: 480px;
-    height: 6px;
+    height: var(--space-1);
     background-color: var(--color-border);
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-full);
     cursor: pointer;
     position: relative;
     overflow: hidden;
   }
 
   .audio-player__progress:hover {
-    height: 8px;
+    height: var(--space-2);
+  }
+
+  .audio-player__progress:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   .audio-player__progress-fill {
     height: 100%;
     background-color: var(--color-accent);
-    border-radius: var(--radius-xs);
-    transition: width 0.1s linear;
+    border-radius: var(--radius-full);
+    transition: width var(--duration-fast) linear;
   }
 
   .audio-player__time {
@@ -519,19 +512,101 @@
     cursor: default;
   }
 
+  /* The only slider in the app: a native range input whose track and thumb
+     are drawn here, never by the OS. The filled part of the WebKit track
+     follows --audio-volume-fill, set from the current volume. */
   .audio-player__volume-slider {
+    --audio-volume-fill: 100%;
+    appearance: none;
     width: 80px;
-    accent-color: var(--color-accent);
+    height: var(--space-4);
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .audio-player__volume-slider:focus-visible {
+    outline: none;
+  }
+
+  .audio-player__volume-slider::-webkit-slider-runnable-track {
+    height: var(--space-1);
+    border-radius: var(--radius-full);
+    background: linear-gradient(
+      to right,
+      var(--color-accent) var(--audio-volume-fill),
+      var(--color-border) var(--audio-volume-fill)
+    );
+  }
+
+  .audio-player__volume-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: var(--space-3);
+    height: var(--space-3);
+    margin-top: calc((var(--space-1) - var(--space-3)) / 2);
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--color-accent);
+    transition: box-shadow var(--transition-base);
+  }
+
+  .audio-player__volume-slider:focus-visible::-webkit-slider-thumb {
+    box-shadow: var(--focus-ring);
+  }
+
+  .audio-player__volume-slider::-moz-range-track {
+    height: var(--space-1);
+    border-radius: var(--radius-full);
+    background: var(--color-border);
+  }
+
+  .audio-player__volume-slider::-moz-range-progress {
+    height: var(--space-1);
+    border-radius: var(--radius-full);
+    background: var(--color-accent);
+  }
+
+  .audio-player__volume-slider::-moz-range-thumb {
+    width: var(--space-3);
+    height: var(--space-3);
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--color-accent);
+    transition: box-shadow var(--transition-base);
+  }
+
+  .audio-player__volume-slider:focus-visible::-moz-range-thumb {
+    box-shadow: var(--focus-ring);
   }
 
   .audio-player__error {
     margin: 0;
     padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-surface);
     background: var(--color-danger-soft);
     color: var(--color-danger);
     font-size: var(--font-size-sm);
     text-align: center;
     max-width: 480px;
+  }
+
+  /* One rule per engine pseudo-element: a selector list with a pseudo the
+     engine does not know drops the whole rule. */
+  @media (prefers-reduced-motion: reduce) {
+    .audio-player__btn--play {
+      transition: none;
+    }
+
+    .audio-player__progress-fill {
+      transition: none;
+    }
+
+    .audio-player__volume-slider::-webkit-slider-thumb {
+      transition: none;
+    }
+
+    .audio-player__volume-slider::-moz-range-thumb {
+      transition: none;
+    }
   }
 </style>
