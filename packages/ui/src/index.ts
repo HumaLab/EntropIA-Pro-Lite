@@ -66,6 +66,7 @@ export { StatusBadge } from './components/StatusBadge/index'
 export type {
   StatusBadgeProps,
   StatusBadgeSize,
+  StatusBadgeTone,
   StatusBadgeVariant,
 } from './components/StatusBadge/index'
 
