@@ -9,12 +9,6 @@ import { describe, expect, it } from 'vitest'
  * id — see WritingView.pane-scope.test.ts, the first view this pattern was
  * proven on.
  *
- * `id="api-key"` legitimately appears twice (an if/else pair of text and
- * password inputs sharing one visible `<label for>`, never both mounted at
- * once) — both get the identical `-{paneId}` suffix, so this file checks
- * for at least the expected count rather than exactly one. That pre-existing
- * within-view duplicate is explicitly out of scope to resolve here.
- *
  * `assemblyai-speaker-labels-label`/`-value` are two distinct ids joined in
  * one space-separated `aria-labelledby`; each half gets its own suffix.
  */
@@ -58,9 +52,10 @@ describe('pane-scoped ids in the settings view', () => {
     expect(SOURCE).not.toMatch(new RegExp(`id="${escaped}"`))
   })
 
-  it('suffixes both api-key input ids and their shared label `for` reference', () => {
+  // One field whose type toggles, so the id appears once.
+  it('suffixes the api-key input id and its label `for` reference', () => {
     expect(SOURCE).toMatch(/for="api-key-\{paneId\}"/)
-    expect(occurrences(SOURCE, /id="api-key-\{paneId\}"/g)).toBe(2)
+    expect(occurrences(SOURCE, /id="api-key-\{paneId\}"/g)).toBe(1)
     expect(SOURCE).not.toMatch(/for="api-key"/)
     expect(SOURCE).not.toMatch(/id="api-key"/)
   })

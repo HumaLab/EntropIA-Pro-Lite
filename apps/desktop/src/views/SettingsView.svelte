@@ -142,13 +142,16 @@
   import { PRODUCT_NAME } from '$lib/product'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
   import {
-    tooltip,
     ActionIcon,
     Button,
     Card,
     Checkbox,
     ConfirmDialog,
+    IconButton,
     Input,
+    ProgressBar,
+    SelectTrigger,
+    StatusBadge,
     TabButton,
     TabList,
     ToolbarMenu,
@@ -2102,16 +2105,16 @@
                     <span class="settings__radio-desc">
                       {t('settings.llmMode.local.description')}
                       {#if localModel?.exists}
-                        <span class="settings__badge settings__badge--ok"
-                          >{t('settings.badge.available')}</span
+                        <StatusBadge variant="success" size="xs"
+                          >{t('settings.badge.available')}</StatusBadge
                         >
                       {:else if localModel?.can_auto_download || localAvailable}
-                        <span class="settings__badge settings__badge--warn"
-                          >{t('settings.badge.downloadable')}</span
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.badge.downloadable')}</StatusBadge
                         >
                       {:else}
-                        <span class="settings__badge settings__badge--warn"
-                          >{t('settings.badge.notFound')}</span
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.badge.notFound')}</StatusBadge
                         >
                       {/if}
                     </span>
@@ -2155,19 +2158,19 @@
                   <div class="settings__local-model-row">
                     <span class="settings__label">{t('settings.localModel.status')}</span>
                     {#if localModel.exists}
-                      <span class="settings__badge settings__badge--ok"
-                        >{t('settings.localModel.found')}</span
+                      <StatusBadge variant="success" size="xs"
+                        >{t('settings.localModel.found')}</StatusBadge
                       >
                       <span class="settings__local-model-size"
                         >{formatBytes(localModel.size_bytes)}</span
                       >
                     {:else if localModel.can_auto_download}
-                      <span class="settings__badge settings__badge--warn"
-                        >{t('settings.localModel.downloadable')}</span
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.localModel.downloadable')}</StatusBadge
                       >
                     {:else}
-                      <span class="settings__badge settings__badge--warn"
-                        >{t('settings.localModel.missing')}</span
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.localModel.missing')}</StatusBadge
                       >
                     {/if}
                   </div>
@@ -2187,10 +2190,9 @@
                       <label class="settings__label" for="local-model-filename-{paneId}"
                         >{t('settings.localModel.filename')}</label
                       >
-                      <input
+                      <Input
                         id="local-model-filename-{paneId}"
-                        type="text"
-                        class="settings__input"
+                        size="sm"
                         bind:value={localModelFilename}
                         placeholder={localModel?.filename ?? ''}
                       />
@@ -2200,10 +2202,9 @@
                       <label class="settings__label" for="local-model-source-{paneId}"
                         >{t('settings.localModel.sourceUrl')}</label
                       >
-                      <input
+                      <Input
                         id="local-model-source-{paneId}"
-                        type="text"
-                        class="settings__input"
+                        size="sm"
                         bind:value={localModelSourceUrl}
                         placeholder="https://…"
                       />
@@ -2211,8 +2212,10 @@
 
                     {#if downloading}
                       <div class="settings__download-progress">
-                        <span class="settings__download-progress-bar" style="width: {downloadPct}%"
-                        ></span>
+                        <ProgressBar
+                          value={downloadPct}
+                          label={t('settings.localModel.downloading')}
+                        />
                         <span class="settings__download-progress-text"
                           >{downloadPct}% — {t('settings.localModel.downloading')}</span
                         >
@@ -2289,10 +2292,9 @@
                   <label class="settings__label" for="local-embedding-model-dir-{paneId}">
                     {t('settings.embeddingProvider.localPath')}
                   </label>
-                  <input
+                  <Input
                     id="local-embedding-model-dir-{paneId}"
-                    type="text"
-                    class="settings__input"
+                    size="sm"
                     bind:value={localEmbeddingModelDir}
                     placeholder={t('settings.embeddingProvider.localPathPlaceholder')}
                   />
@@ -2308,12 +2310,12 @@
                         >{t('settings.embeddingProvider.localStatus')}</span
                       >
                       {#if localEmbeddingModel.available}
-                        <span class="settings__badge settings__badge--ok"
-                          >{t('settings.embeddingProvider.localComplete')}</span
+                        <StatusBadge variant="success" size="xs"
+                          >{t('settings.embeddingProvider.localComplete')}</StatusBadge
                         >
                       {:else}
-                        <span class="settings__badge settings__badge--warn"
-                          >{t('settings.embeddingProvider.localIncomplete')}</span
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.embeddingProvider.localIncomplete')}</StatusBadge
                         >
                       {/if}
                     </div>
@@ -2347,10 +2349,10 @@
 
                     {#if embeddingDownloading}
                       <div class="settings__download-progress">
-                        <span
-                          class="settings__download-progress-bar"
-                          style="width: {embeddingDownloadPct}%"
-                        ></span>
+                        <ProgressBar
+                          value={embeddingDownloadPct}
+                          label={t('settings.embeddingProvider.downloading')}
+                        />
                         <span class="settings__download-progress-text">
                           {embeddingDownloadPct}% — {embeddingDownloadFile ||
                             t('settings.embeddingProvider.downloading')}
@@ -2393,12 +2395,12 @@
                   <div class="settings__local-model-row">
                     <span class="settings__label">{t('settings.reranker.title')}</span>
                     {#if localRerankerModel.available}
-                      <span class="settings__badge settings__badge--ok"
-                        >{t('settings.reranker.ready')}</span
+                      <StatusBadge variant="success" size="xs"
+                        >{t('settings.reranker.ready')}</StatusBadge
                       >
                     {:else}
-                      <span class="settings__badge settings__badge--warn"
-                        >{t('settings.reranker.missing')}</span
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.reranker.missing')}</StatusBadge
                       >
                     {/if}
                   </div>
@@ -2414,10 +2416,10 @@
 
                   {#if rerankerDownloading}
                     <div class="settings__download-progress">
-                      <span
-                        class="settings__download-progress-bar"
-                        style="width: {rerankerDownloadPct}%"
-                      ></span>
+                      <ProgressBar
+                        value={rerankerDownloadPct}
+                        label={t('settings.reranker.downloading')}
+                      />
                       <span class="settings__download-progress-text">
                         {rerankerDownloadPct}% — {rerankerDownloadFile ||
                           t('settings.reranker.downloading')}
@@ -2473,42 +2475,34 @@
             <div class="settings__field settings__field--stacked">
               <label class="settings__label" for="api-key-{paneId}">{t('settings.apiKey')}</label>
               <div class="settings__input-row">
-                {#if showApiKey}
-                  <input
+                <div class="settings__key-field">
+                  <Input
                     id="api-key-{paneId}"
-                    type="text"
-                    class="settings__input"
+                    type={showApiKey ? 'text' : 'password'}
+                    size="sm"
                     bind:value={apiKey}
                     placeholder={t('settings.apiKeyPlaceholder')}
                   />
-                {:else}
-                  <input
-                    id="api-key-{paneId}"
-                    type="password"
-                    class="settings__input"
-                    bind:value={apiKey}
-                    placeholder={t('settings.apiKeyPlaceholder')}
-                  />
-                {/if}
-                <button
-                  class="settings__icon-btn"
-                  type="button"
+                </div>
+                <IconButton
+                  variant="secondary"
+                  size="sm"
                   onclick={() => (showApiKey = !showApiKey)}
-                  use:tooltip={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-                  aria-label={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                  title={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                  label={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 >
                   <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={14} />
-                </button>
+                </IconButton>
                 {#if maskedApiKey}
-                  <button
-                    class="settings__icon-btn"
-                    type="button"
+                  <IconButton
+                    variant="secondary"
+                    size="sm"
                     onclick={() => requestClearKey('openrouter')}
-                    use:tooltip={t('settings.clearKey', { service: 'OpenRouter' })}
-                    aria-label={t('settings.clearKey', { service: 'OpenRouter' })}
+                    title={t('settings.clearKey', { service: 'OpenRouter' })}
+                    label={t('settings.clearKey', { service: 'OpenRouter' })}
                   >
                     <ActionIcon name="delete" size={14} />
-                  </button>
+                  </IconButton>
                 {/if}
                 <Button
                   variant="secondary"
@@ -2550,10 +2544,9 @@
               <label class="settings__label" for="openai-base-url-{paneId}"
                 >{t('settings.openaiCompatibleBaseUrl.label')}</label
               >
-              <input
+              <Input
                 id="openai-base-url-{paneId}"
-                type="text"
-                class="settings__input"
+                size="sm"
                 bind:value={openaiCompatibleBaseUrl}
                 placeholder="http://127.0.0.1:11434"
               />
@@ -2567,12 +2560,14 @@
                 <Input
                   label={t('settings.model')}
                   type="text"
+                  size="sm"
                   bind:value={model}
                   placeholder={t('settings.modelPlaceholder')}
                 />
                 <Input
                   label={t('settings.embeddingProvider.model')}
                   type="text"
+                  size="sm"
                   bind:value={embeddingModel}
                   placeholder={DEFAULT_OPENROUTER_EMBEDDING_MODEL}
                 />
@@ -2730,36 +2725,34 @@
                 >{t('settings.apiKey')}</label
               >
               <div class="settings__input-row">
-                <input
-                  id="assemblyai-api-key-{paneId}"
-                  type={showAssemblyAiApiKey ? 'text' : 'password'}
-                  class="settings__input"
-                  bind:value={assemblyAiApiKey}
-                  placeholder={t('settings.assemblyAiApiKeyPlaceholder')}
-                />
-                <button
-                  class="settings__icon-btn"
-                  type="button"
+                <div class="settings__key-field">
+                  <Input
+                    id="assemblyai-api-key-{paneId}"
+                    type={showAssemblyAiApiKey ? 'text' : 'password'}
+                    size="sm"
+                    bind:value={assemblyAiApiKey}
+                    placeholder={t('settings.assemblyAiApiKeyPlaceholder')}
+                  />
+                </div>
+                <IconButton
+                  variant="secondary"
+                  size="sm"
                   onclick={() => (showAssemblyAiApiKey = !showAssemblyAiApiKey)}
-                  use:tooltip={showAssemblyAiApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
-                  aria-label={showAssemblyAiApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
+                  title={showAssemblyAiApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                  label={showAssemblyAiApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 >
                   <ActionIcon name={showAssemblyAiApiKey ? 'eye-off' : 'eye'} size={14} />
-                </button>
+                </IconButton>
                 {#if maskedAssemblyAiApiKey}
-                  <button
-                    class="settings__icon-btn"
-                    type="button"
+                  <IconButton
+                    variant="secondary"
+                    size="sm"
                     onclick={() => requestClearKey('assemblyai')}
-                    use:tooltip={t('settings.clearKey', { service: 'AssemblyAI' })}
-                    aria-label={t('settings.clearKey', { service: 'AssemblyAI' })}
+                    title={t('settings.clearKey', { service: 'AssemblyAI' })}
+                    label={t('settings.clearKey', { service: 'AssemblyAI' })}
                   >
                     <ActionIcon name="delete" size={14} />
-                  </button>
+                  </IconButton>
                 {/if}
                 <Button
                   variant="secondary"
@@ -2811,16 +2804,16 @@
                   items={speakerLabelItems}
                 >
                   {#snippet trigger(props, { open })}
-                    <button
-                      type="button"
-                      class="settings__select"
-                      class:settings__select--open={open}
-                      aria-labelledby="assemblyai-speaker-labels-label-{paneId} assemblyai-speaker-labels-value-{paneId}"
+                    <!-- Named by the visible label and its own value, read
+                         together: the trigger lists itself in aria-labelledby. -->
+                    <SelectTrigger
                       {...props}
-                    >
-                      <span id="assemblyai-speaker-labels-value-{paneId}">{speakerLabelValue}</span>
-                      <ActionIcon name="chevron-down" size={12} />
-                    </button>
+                      id="assemblyai-speaker-labels-value-{paneId}"
+                      size="sm"
+                      {open}
+                      label={speakerLabelValue}
+                      aria-labelledby="assemblyai-speaker-labels-label-{paneId} assemblyai-speaker-labels-value-{paneId}"
+                    />
                   {/snippet}
                 </ToolbarMenu>
               </div>
@@ -2930,16 +2923,23 @@
                   <div class="settings__local-model">
                     <div class="settings__local-model-row">
                       {#if glmOcrLocal.model_present && glmOcrLocal.mmproj_present}
-                        <span class="settings__badge settings__badge--ok"
-                          >{t('settings.glmOcrLocal.modelsReady')}</span
+                        <StatusBadge variant="success" size="xs"
+                          >{t('settings.glmOcrLocal.modelsReady')}</StatusBadge
                         >
                       {:else}
-                        <span class="settings__badge settings__badge--warn">
-                          {t('settings.glmOcrLocal.modelsMissing')}
-                          {!glmOcrLocal.model_present
-                            ? ' GLM-OCR-Q8_0.gguf'
-                            : ''}{!glmOcrLocal.mmproj_present ? ' mmproj-GLM-OCR-Q8_0.gguf' : ''}
-                        </span>
+                        <!-- The badge holds the state; the file names, long enough to
+                             overflow a one-line pill, sit beside it. -->
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.glmOcrLocal.modelsMissing')}</StatusBadge
+                        >
+                        <code class="settings__local-model-path"
+                          >{[
+                            !glmOcrLocal.model_present && 'GLM-OCR-Q8_0.gguf',
+                            !glmOcrLocal.mmproj_present && 'mmproj-GLM-OCR-Q8_0.gguf',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}</code
+                        >
                       {/if}
                     </div>
 
@@ -2949,10 +2949,10 @@
 
                     {#if glmOcrDownloading}
                       <div class="settings__download-progress">
-                        <span
-                          class="settings__download-progress-bar"
-                          style="width: {glmOcrDownloadPct}%"
-                        ></span>
+                        <ProgressBar
+                          value={glmOcrDownloadPct}
+                          label={t('settings.glmOcrLocal.downloading')}
+                        />
                         <span class="settings__download-progress-text">
                           {glmOcrDownloadPct}% — {t('settings.glmOcrLocal.downloading')}
                         </span>
@@ -2979,18 +2979,21 @@
                     <div class="settings__local-model-row">
                       <span class="settings__label">{t('settings.qwenCorrectLocal.title')}</span>
                       {#if qwenLocal.model_present && qwenLocal.mmproj_present}
-                        <span class="settings__badge settings__badge--ok"
-                          >{t('settings.qwenCorrectLocal.modelsReady')}</span
+                        <StatusBadge variant="success" size="xs"
+                          >{t('settings.qwenCorrectLocal.modelsReady')}</StatusBadge
                         >
                       {:else}
-                        <span class="settings__badge settings__badge--warn">
-                          {t('settings.qwenCorrectLocal.modelsMissing')}
-                          {!qwenLocal.model_present
-                            ? ' Qwen3VL-4B-Instruct-Q4_K_M.gguf'
-                            : ''}{!qwenLocal.mmproj_present
-                            ? ' mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf'
-                            : ''}
-                        </span>
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.qwenCorrectLocal.modelsMissing')}</StatusBadge
+                        >
+                        <code class="settings__local-model-path"
+                          >{[
+                            !qwenLocal.model_present && 'Qwen3VL-4B-Instruct-Q4_K_M.gguf',
+                            !qwenLocal.mmproj_present && 'mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}</code
+                        >
                       {/if}
                     </div>
                     <p class="settings__hint">{t('settings.qwenCorrectLocal.description')}</p>
@@ -3001,10 +3004,10 @@
 
                     {#if qwenDownloading}
                       <div class="settings__download-progress">
-                        <span
-                          class="settings__download-progress-bar"
-                          style="width: {qwenDownloadPct}%"
-                        ></span>
+                        <ProgressBar
+                          value={qwenDownloadPct}
+                          label={t('settings.qwenCorrectLocal.downloading')}
+                        />
                         <span class="settings__download-progress-text">
                           {qwenDownloadPct}% — {t('settings.qwenCorrectLocal.downloading')}
                         </span>
@@ -3060,36 +3063,34 @@
                 >{t('settings.apiKey')}</label
               >
               <div class="settings__input-row">
-                <input
-                  id="glm-ocr-api-key-{paneId}"
-                  type={showGlmOcrApiKey ? 'text' : 'password'}
-                  class="settings__input"
-                  bind:value={glmOcrApiKey}
-                  placeholder={t('settings.glmOcrApiKeyPlaceholder')}
-                />
-                <button
-                  class="settings__icon-btn"
-                  type="button"
+                <div class="settings__key-field">
+                  <Input
+                    id="glm-ocr-api-key-{paneId}"
+                    type={showGlmOcrApiKey ? 'text' : 'password'}
+                    size="sm"
+                    bind:value={glmOcrApiKey}
+                    placeholder={t('settings.glmOcrApiKeyPlaceholder')}
+                  />
+                </div>
+                <IconButton
+                  variant="secondary"
+                  size="sm"
                   onclick={() => (showGlmOcrApiKey = !showGlmOcrApiKey)}
-                  use:tooltip={showGlmOcrApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
-                  aria-label={showGlmOcrApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
+                  title={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                  label={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 >
                   <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={14} />
-                </button>
+                </IconButton>
                 {#if maskedGlmOcrApiKey}
-                  <button
-                    class="settings__icon-btn"
-                    type="button"
+                  <IconButton
+                    variant="secondary"
+                    size="sm"
                     onclick={() => requestClearKey('glmOcr')}
-                    use:tooltip={t('settings.clearKey', { service: 'GLM-OCR' })}
-                    aria-label={t('settings.clearKey', { service: 'GLM-OCR' })}
+                    title={t('settings.clearKey', { service: 'GLM-OCR' })}
+                    label={t('settings.clearKey', { service: 'GLM-OCR' })}
                   >
                     <ActionIcon name="delete" size={14} />
-                  </button>
+                  </IconButton>
                 {/if}
                 <Button
                   variant="secondary"
@@ -3152,37 +3153,35 @@
                 >{t('settings.zotero.keyLabel')}</label
               >
               <div class="settings__input-row">
-                <input
-                  id="zotero-api-key-{paneId}"
-                  type={showZoteroApiKey ? 'text' : 'password'}
-                  class="settings__input"
-                  bind:value={zoteroApiKey}
-                  placeholder={t('settings.zotero.keyPlaceholder')}
-                  autocomplete="off"
-                />
-                <button
-                  class="settings__icon-btn"
-                  type="button"
+                <div class="settings__key-field">
+                  <Input
+                    id="zotero-api-key-{paneId}"
+                    type={showZoteroApiKey ? 'text' : 'password'}
+                    size="sm"
+                    bind:value={zoteroApiKey}
+                    placeholder={t('settings.zotero.keyPlaceholder')}
+                    autocomplete="off"
+                  />
+                </div>
+                <IconButton
+                  variant="secondary"
+                  size="sm"
                   onclick={() => (showZoteroApiKey = !showZoteroApiKey)}
-                  use:tooltip={showZoteroApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
-                  aria-label={showZoteroApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
+                  title={showZoteroApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                  label={showZoteroApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 >
                   <ActionIcon name={showZoteroApiKey ? 'eye-off' : 'eye'} size={14} />
-                </button>
+                </IconButton>
                 {#if maskedZoteroApiKey}
-                  <button
-                    class="settings__icon-btn"
-                    type="button"
+                  <IconButton
+                    variant="secondary"
+                    size="sm"
                     onclick={() => requestClearKey('zotero')}
-                    use:tooltip={t('settings.clearKey', { service: 'Zotero' })}
-                    aria-label={t('settings.clearKey', { service: 'Zotero' })}
+                    title={t('settings.clearKey', { service: 'Zotero' })}
+                    label={t('settings.clearKey', { service: 'Zotero' })}
                   >
                     <ActionIcon name="delete" size={14} />
-                  </button>
+                  </IconButton>
                 {/if}
                 <Button
                   variant="secondary"
@@ -3881,41 +3880,6 @@
     color: var(--color-text-primary);
   }
 
-  /* The trigger of the speaker-label choice. It replaces a native <select>,
-     so it states every surface the operating system used to decide. */
-  .settings__select {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-control);
-    background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    cursor: pointer;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base);
-  }
-
-  .settings__select:hover,
-  .settings__select--open {
-    background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
-    border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-hairline));
-  }
-
-  .settings__select:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .settings__select :global(svg) {
-    color: var(--color-text-muted);
-  }
-
   .settings-card-section--vertical {
     align-items: stretch;
   }
@@ -4010,24 +3974,6 @@
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
     line-height: 1.5;
-  }
-
-  .settings__badge {
-    display: inline-block;
-    margin-left: var(--space-2);
-    padding: 2px var(--space-2);
-    border-radius: var(--radius-full);
-    font-size: 10px;
-    font-weight: var(--font-weight-medium);
-    vertical-align: middle;
-  }
-  .settings__badge--ok {
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-  .settings__badge--warn {
-    background: var(--color-warning-soft);
-    color: var(--color-warning);
   }
 
   .settings__field {
@@ -4182,75 +4128,12 @@
     align-items: center;
   }
 
-  /* The input gives up its content width so a long key ends in an ellipsis
-     rather than pushing the eye and the test button onto their own line. */
-  .settings__provider-grid .settings__input-row .settings__input {
+  /* The key field gives up its content width so a long key ends in an
+     ellipsis rather than pushing the eye and the test button onto their own
+     line. */
+  .settings__key-field {
     min-width: 0;
     flex: 1 1 8rem;
-  }
-
-  .settings__provider-grid .settings__input,
-  .settings__provider-grid .settings__icon-btn,
-  .settings__provider-grid :global(.input-field__input) {
-    min-height: var(--control-height-sm);
-    height: auto;
-  }
-
-  .settings__provider-grid .settings__icon-btn {
-    width: var(--control-height-sm);
-  }
-
-  .settings__input {
-    flex: 1;
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-input);
-    background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    color: var(--color-text-primary);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-  }
-
-  .settings__input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
-  }
-
-  .settings__input--select {
-    max-width: 240px;
-    font-family: var(--font-ui);
-  }
-
-  .settings__icon-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--control-height-md);
-    height: var(--control-height-md);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-control);
-    background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    font-size: var(--font-size-sm);
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base),
-      color var(--transition-base),
-      box-shadow var(--transition-base);
-  }
-
-  .settings__icon-btn:hover {
-    border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-hairline));
-    background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
-  }
-
-  .settings__icon-btn:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
   }
 
   .settings-view :global(.input-field__input) {
@@ -4392,33 +4275,15 @@
   }
 
   .settings__download-progress {
-    position: relative;
-    height: 24px;
-    background: var(--color-surface-sunken);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-  }
-
-  .settings__download-progress-bar {
-    position: absolute;
-    top: 0;
-    left: 0;
-    height: 100%;
-    background: var(--color-accent);
-    opacity: 0.25;
-    transition: width 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
   }
 
   .settings__download-progress-text {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    color: var(--color-text-primary);
-    z-index: 1;
+    color: var(--color-text-secondary);
   }
 
   /* Keyed to this pane's own width (the `pane` container WorkPane.svelte
@@ -4434,10 +4299,6 @@
     .settings-view__toolbar :global(.btn),
     .settings__input-row :global(.btn) {
       width: 100%;
-    }
-
-    .settings__icon-btn {
-      flex: 0 0 auto;
     }
   }
 </style>
