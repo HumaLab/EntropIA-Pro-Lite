@@ -434,7 +434,7 @@
     border-radius: var(--radius-sm);
     background: var(--surface-card);
     overflow: hidden;
-    color: var(--color-text-tertiary, var(--color-text-secondary));
+    color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
     letter-spacing: 0.04em;
@@ -480,13 +480,13 @@
   }
 
   .similar-preview--empty {
-    color: var(--color-text-tertiary, var(--color-text-secondary));
+    color: var(--color-text-muted);
     font-style: italic;
   }
 
   .similar-technical-meta {
     margin: 0 var(--space-3) var(--space-2) calc(72px + var(--space-3) + var(--space-3));
-    color: var(--color-text-tertiary, var(--color-text-secondary));
+    color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
   }
 

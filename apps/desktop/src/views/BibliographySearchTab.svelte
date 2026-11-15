@@ -298,7 +298,7 @@
   }
 
   .bib-search__error {
-    color: var(--color-text-danger, inherit);
+    color: var(--color-danger);
   }
 
   .bib-search__notice {
