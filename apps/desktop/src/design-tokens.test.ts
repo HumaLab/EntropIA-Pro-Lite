@@ -285,19 +285,21 @@ describe('desktop design tokens', () => {
     expect(offenders).toEqual([])
   })
 
-  it('leaves the native checkbox to exactly one component', () => {
+  it('leaves the native checkbox to the Checkbox and Switch components', () => {
     // A hand-rolled `input type="checkbox"` renders with the platform accent,
     // blue on every desktop this app ships to, which in a monochrome dark theme
     // reads as a control borrowed from somewhere else. Three screens had grown
-    // their own before the shared component existed. Asserting the exact set,
-    // rather than excluding a name, also catches the component disappearing.
+    // their own before the shared component existed. Switch is the second owner
+    // on purpose: a native checkbox with `role="switch"` keeps the form value
+    // and the keyboard behaviour native. Asserting the exact set, rather than
+    // excluding a name, also catches either component disappearing.
     const owners = everyComponent()
       .map((path) => [path, readFileSync(path, 'utf-8')] as const)
       .filter(([, source]) => source.includes('type="checkbox"'))
       .map(([path]) => basename(path))
       .sort()
 
-    expect(owners).toEqual(['Checkbox.svelte'])
+    expect(owners).toEqual(['Checkbox.svelte', 'Switch.svelte'])
   })
 
   it('leaves the search field to exactly one component', () => {
