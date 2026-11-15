@@ -769,3 +769,39 @@ describe('ItemAnalysisPanel entity aliases dialog (T3)', () => {
     expect(await screen.findByTestId('mock-entity-original-e1')).toHaveTextContent('Mdme. Cuevas')
   })
 })
+
+describe('ItemAnalysisPanel triple controls come from the design system', () => {
+  it('edits each triple field in an Input, never a hand-styled input', async () => {
+    render(
+      ItemAnalysisPanel,
+      makeProps(vi.fn(), { triples: [triple('t-1', 'la actividad', 'quedó', 'reiniciada')] })
+    )
+
+    await fireEvent.click(screen.getByTestId('triple-edit-t-1'))
+    for (const name of [
+      'item.tripleSubjectAria',
+      'item.triplePredicateAria',
+      'item.tripleObjectAria',
+    ]) {
+      expect(screen.getByRole('textbox', { name })).toHaveClass('input-field__input')
+    }
+    expect(itemAnalysisPanelSource).not.toMatch(/<input\b/)
+  })
+
+  it('sizes the row and draft actions on the IconButton scale', async () => {
+    render(
+      ItemAnalysisPanel,
+      makeProps(vi.fn(), { triples: [triple('t-1', 'la actividad', 'quedó', 'reiniciada')] })
+    )
+
+    expect(screen.getByTestId('triple-edit-t-1')).toHaveClass('icon-button', 'icon-button--xs')
+    await fireEvent.click(screen.getByTestId('triple-edit-t-1'))
+    expect(screen.getByTestId('triple-save-t-1')).toHaveClass('icon-button--xs')
+    expect(screen.getByTestId('triple-cancel-t-1')).toHaveClass('icon-button--xs')
+
+    await fireEvent.click(screen.getByTestId('triple-cancel-t-1'))
+    await fireEvent.click(screen.getByTestId('triple-add'))
+    expect(screen.getByTestId('triple-new-save')).toHaveClass('icon-button--xs')
+    expect(screen.getByTestId('triple-new-cancel')).toHaveClass('icon-button--xs')
+  })
+})

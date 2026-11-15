@@ -447,6 +447,8 @@ vi.mock('@entropia/ui', async () => {
   const ActualProgressBar = (
     await import('../../../../packages/ui/src/components/ProgressBar/ProgressBar.svelte')
   ).default
+  const ActualInput = (await import('../../../../packages/ui/src/components/Input/Input.svelte'))
+    .default
   const ActualTextarea = (
     await import('../../../../packages/ui/src/components/Textarea/Textarea.svelte')
   ).default
@@ -492,6 +494,7 @@ vi.mock('@entropia/ui', async () => {
     EntityViewer: MockEntityViewer,
     Disclosure: ActualDisclosure,
     IconButton: ActualIconButton,
+    Input: ActualInput,
     MapViewer: MockMapViewer,
     ProgressBar: ActualProgressBar,
     Textarea: ActualTextarea,

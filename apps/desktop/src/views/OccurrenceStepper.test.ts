@@ -72,4 +72,17 @@ describe('OccurrenceStepper', () => {
       'Inferido por el modelo a partir del contexto, sin palabras que lo expresen en el documento: vínculo.'
     )
   })
+  it('steps with the design-system Button, not a hand-styled one', () => {
+    render(OccurrenceStepper, {
+      index: 1,
+      total: 3,
+      kind: 'entity' as const,
+      status: 'exact' as const,
+      translate: t,
+      onchange: vi.fn(),
+    })
+    for (const name of ['Anterior', 'Siguiente']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('btn', 'btn--secondary', 'btn--sm')
+    }
+  })
 })
