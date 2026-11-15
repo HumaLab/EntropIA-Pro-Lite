@@ -23,6 +23,7 @@
     title,
     titleId = `dialog-title-${uid}`,
     description,
+    eyebrow,
     size = 'sm',
     dismissible = true,
     dismissOnBackdrop = true,
@@ -31,6 +32,7 @@
     overlayClass,
     onclose,
     children,
+    headerActions,
     footer,
   }: DialogProps = $props()
 
@@ -126,11 +128,24 @@
       bind:this={panelEl}
     >
       <div class="dialog__content">
-        <h3 id={titleId} class="dialog__title">{title}</h3>
+        <div class="dialog__header">
+          <div class="dialog__heading">
+            {#if eyebrow}
+              <span class="dialog__eyebrow">{eyebrow}</span>
+            {/if}
+            <h3 id={titleId} class="dialog__title">{title}</h3>
 
-        {#if description}
-          <p id={descriptionId} class="dialog__description">{description}</p>
-        {/if}
+            {#if description}
+              <p id={descriptionId} class="dialog__description">{description}</p>
+            {/if}
+          </div>
+
+          {#if headerActions}
+            <div class="dialog__header-actions">
+              {@render headerActions()}
+            </div>
+          {/if}
+        </div>
 
         {#if children}
           <div class="dialog__body">
@@ -202,6 +217,51 @@
     overflow-y: auto;
   }
 
+  /* A document viewer: fixed height, the header on its own band and the body
+     reaching the panel's edges, so the viewer and its side panel fill it. */
+  .dialog--viewer {
+    width: min(100%, var(--dialog-width-lg));
+    height: min(820px, calc(100vh - var(--space-8)));
+    min-height: 0;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .dialog--viewer .dialog__content {
+    flex: 1 1 auto;
+    min-height: 0;
+    gap: 0;
+  }
+
+  .dialog--viewer .dialog__header {
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--color-hairline);
+    background: color-mix(in srgb, var(--surface-panel) 88%, transparent);
+  }
+
+  .dialog--viewer .dialog__title {
+    overflow: hidden;
+    line-height: var(--line-height-tight);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dialog--viewer .dialog__description {
+    margin-top: var(--space-1);
+    overflow: hidden;
+    font-size: var(--font-size-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dialog--viewer .dialog__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    gap: 0;
+    overflow: hidden;
+  }
+
   .dialog:focus-visible {
     outline: none;
     box-shadow: var(--shadow-lg), var(--focus-ring);
@@ -214,6 +274,36 @@
     gap: var(--space-3);
   }
 
+  .dialog__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .dialog__heading {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .dialog__header-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .dialog__eyebrow {
+    display: block;
+    margin-bottom: var(--space-1);
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-2xs);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--letter-spacing-caps);
+    text-transform: uppercase;
+  }
+
   .dialog__title {
     margin: 0;
     font-size: var(--font-size-lg);
@@ -222,7 +312,7 @@
   }
 
   .dialog__description {
-    margin: 0;
+    margin: var(--space-3) 0 0;
     font-size: var(--font-size-sm);
     line-height: 1.5;
     color: var(--color-text-secondary);
@@ -233,6 +323,16 @@
     flex-wrap: wrap;
     gap: var(--space-3);
     justify-content: flex-end;
+  }
+
+  @media (max-width: 760px) {
+    .dialog--viewer {
+      height: calc(100vh - var(--space-8));
+    }
+
+    .dialog--viewer .dialog__header {
+      padding: var(--space-3);
+    }
   }
 
   @media (max-width: 720px) {
