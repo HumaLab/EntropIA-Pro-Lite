@@ -138,9 +138,28 @@ jobs:
       # not in tauri.linux.conf.json, which merges into every Linux build
       # (cargo test included) and fails on a missing resource. Windows Pro
       # still pending (needs CUDA toolkit in CI + overlay entry).
+      #
+      # The default build is CUDA (GGML_CUDA=ON) and needs nvcc, which the
+      # hosted runner lacks: install only the compiler and the cuBLAS/cudart
+      # development files from NVIDIA's Ubuntu 22.04 repository. The runner has
+      # no GPU, which compiling does not need.
+      - name: Install CUDA toolkit (linux-x64)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/cuda-keyring.deb" \
+            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i "$RUNNER_TEMP/cuda-keyring.deb"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cuda-nvcc-12-6 cuda-cudart-dev-12-6 libcublas-dev-12-6
+          echo "/usr/local/cuda-12.6/bin" >> "$GITHUB_PATH"
+
       - name: Fetch llama-server (linux-x64)
         if: matrix.platform == 'ubuntu-22.04'
-        run: bash apps/desktop/scripts/fetch-llama-server.sh linux-x64
+        run: |
+          bash apps/desktop/scripts/fetch-llama-server.sh linux-x64
+          # Shared libraries the bundled server expects from the user's system.
+          ldd apps/desktop/src-tauri/resources/tools/llama-server/llama-server | grep -E 'cuda|cublas|not found' || true
 
       # No runtime-pack injection: the committed fixture ships as-is so the app
       # detects "runtime not ready" and bootstraps it from the baked signed source.
