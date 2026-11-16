@@ -4,7 +4,7 @@
 
 ## Español
 
-Esta versión publica **EntropIA Pro** y **EntropIA Lite**. Agrega el **asistente de ayuda en la app (Ayuda)**, la **transcripción local con Parakeet y diarización opcional**, y un **importador de Internet Archive por lotes**, además de mejoras en el **OCR local** y las **opciones de modelos**.
+Esta versión publica **EntropIA Pro** y **EntropIA Lite**. Agrega el **asistente de ayuda en la app (Ayuda)**, la **transcripción local con Parakeet y diarización opcional**, y un **importador de Internet Archive por lotes**, además de mejoras en el **OCR local** y las **opciones de modelos**, y **homogeneiza la interfaz** en toda la app.
 
 No agrega migraciones: se puede actualizar en cualquier orden entre equipos con 1.7.x.
 
@@ -47,11 +47,17 @@ EntropIA Pro también se ofrece en Microsoft Store como MSIX (publicación en Pa
 
 - **El grafo Relaciones 3D se guarda como GEXF** para Gephi y ya no desaparece al cambiar de pestaña.
 - Enlace de GitHub centrado en la barra de estado.
-- Manual actualizado (mapa de pantallas, preguntas frecuentes y ayuda).
+- Manual unificado Pro/Lite con edición en inglés (mapa de pantallas, preguntas frecuentes y ayuda).
+
+### Interfaz homogénea
+
+- **Mismos diálogos, botones y barras de búsqueda en toda la app.** Visores y celdas en el Dialog unificado (con ConfirmDialog), citas y selectores en SelectTrigger, filtro lateral y búsqueda global en SearchBar, botones con variante enlace y casillas con tamaño compacto y variante tarjeta.
+- **Ajustes y formularios unificados.** Pestañas de ajustes sobre RadioGroup/RadioCard, Switch, Disclosure y Textarea; destinos, dependencias y lote con RadioGroup, ProgressBar y StatusBadge; claves y rutas en monoespaciada, foco visible y estados coherentes.
+- **Resaltados de PDF fiables.** Las selecciones de varios rangos guardan todas sus líneas y la conversión usa el viewport del momento de la selección, así un zoom o re-render intermedio ya no deforma los resaltados.
 
 ## English
 
-This release publishes **EntropIA Pro** and **EntropIA Lite**. It adds the **in-app help assistant (Ayuda)**, **local transcription with Parakeet and optional diarization**, and a **batch Internet Archive importer**, plus improvements to **local OCR** and **model options**.
+This release publishes **EntropIA Pro** and **EntropIA Lite**. It adds the **in-app help assistant (Ayuda)**, **local transcription with Parakeet and optional diarization**, and a **batch Internet Archive importer**, plus improvements to **local OCR** and **model options**, and **homogenizes the interface** across the app.
 
 It adds no migrations: devices on 1.7.x can update in any order.
 
@@ -94,18 +100,28 @@ EntropIA Pro is also offered on the Microsoft Store as an MSIX (pending Partner 
 
 - **The Relaciones 3D graph saves as GEXF** for Gephi and no longer vanishes across tab switches.
 - GitHub link centred in the status bar.
-- Updated manual (screen map, FAQs, help).
+- Unified Pro/Lite manual with an English edition (screen map, FAQs, help).
+
+### Consistent interface
+
+- **Same dialogs, buttons and search bars everywhere.** Viewers and cell dialogs on the unified Dialog (with ConfirmDialog), citation and other pickers on SelectTrigger, sidebar filter and global search on SearchBar, buttons with a link variant and checkboxes with a compact size and card variant.
+- **Unified settings and forms.** Settings tabs on RadioGroup/RadioCard, Switch, Disclosure and Textarea; destinations, dependencies and batch on RadioGroup, ProgressBar and StatusBadge; keys and paths in monospace, visible focus and consistent states.
+- **Reliable PDF highlights.** Multi-range selections save all their lines and conversion uses the selection-time viewport, so an intermediate zoom or re-render no longer distorts highlights.
 
 ---
 
 ## Part 2 — Release checklist (local → publication)
 
-> Local-only so far: nothing is pushed, tagged or published from here. Push / PR / merge / tag `v1.8.0` / publish the draft are manual decisions of the user.
+> Local-only so far: main is merged in locally (`c3ba72b9`); nothing is pushed, tagged or published from here. Push / PR / merge / Build Runtime Pack / bootstrap / tag `v1.8.0` / publish the draft are manual decisions of the user.
 
 - [x] Version bump done — `pnpm version:bump 1.8.0` committed on `release/1.8.0` (`9f30d122`); `pnpm version:check` passes.
-- [ ] Publish the runtime bootstrap for **app_version 1.8.0** for **windows-x86_64** and **linux-x86_64** (two dispatches of `publish-runtime-bootstrap.yml`: `platform` + `app_version: 1.8.0` + `pack_version` + `runtime_pack_run_id`, onto tag `runtime-bootstrap`) — **before tagging**. `release.yml` gates each Pro leg with `node apps/desktop/scripts/check-runtime-bootstrap.mjs --platform <windows-x86_64|linux-x86_64>` (exact `app_version` + `platform` match in the signed manifest; the leg fails without it).
+- [x] `origin/main` merged into `release/1.8.0` (`c3ba72b9`); Part 1 refreshed to cover v1.7.1..HEAD (no new migrations: horizon stays at 0065, already in v1.7.1).
 - [x] Read the Partner Center identity of EntropIA Pro (Product management > Product identity): `CONICET.EntropIAPro`, `CN=89DF40E5-581A-4120-9A24-F701205485D6`, `HLab` → package family `CONICET.EntropIAPro_b16na7gwepwme`. They stay mandatory parameters.
-- [ ] Local Pro MSI build (Pro release build with `--features local-ml`, `--bundles msi`, `--config src-tauri/tauri.connector.pro.conf.json` and the three `ENTROPIA_RUNTIME_BOOTSTRAP_*` values from `release.yml`), then `apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1 -MsiPath <Pro MSI> -IdentityName CONICET.EntropIAPro -IdentityPublisher "CN=89DF40E5-581A-4120-9A24-F701205485D6" -PublisherDisplayName HLab -OutDir .tmp/pro-msix` (`-StoreVersion 1.8.0.0` by default; needs `makeappx.exe` from the Windows SDK). Output is unsigned — the Store signs it.
+- [ ] Push the branch, open the PR to main, wait for CI green, merge (T6).
+- [ ] On main: Build Runtime Pack for 1.8.0 for **windows-x86_64** and **linux-x86_64** (new `pack_version` 2026.11.4) (T7).
+- [ ] Publish the runtime bootstrap for **app_version 1.8.0** for **windows-x86_64** and **linux-x86_64** (two dispatches of `publish-runtime-bootstrap.yml`: `platform` + `app_version: 1.8.0` + `pack_version` + `runtime_pack_run_id`, onto tag `runtime-bootstrap`) — **after the merge to main, before tagging**. `release.yml` gates each Pro leg with `node apps/desktop/scripts/check-runtime-bootstrap.mjs --platform <windows-x86_64|linux-x86_64>` (exact `app_version` + `platform` match in the signed manifest; the leg fails without it).
+- [ ] Push tag `v1.8.0` on main (builds Pro `.deb`/installers + Lite MSIX + draft release) (T8).
+- [ ] Release workflow draft: attach backfills if needed, paste Part 1 as the release body, publish (T9).
+- [ ] Rebuild the Pro MSI from the merged code (Pro release build with `--features local-ml`, `--bundles msi`, `--config src-tauri/tauri.connector.pro.conf.json` and the three `ENTROPIA_RUNTIME_BOOTSTRAP_*` values from `release.yml`), then rebuild the Store MSIX with `apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1 -MsiPath <Pro MSI> -IdentityName CONICET.EntropIAPro -IdentityPublisher "CN=89DF40E5-581A-4120-9A24-F701205485D6" -PublisherDisplayName HLab -OutDir .tmp/pro-msix` (`-StoreVersion 1.8.0.0` by default; needs `makeappx.exe` from the Windows SDK). A pre-merge MSIX already exists locally (`.tmp/pro-msix/EntropIAPro-Store-1.8.0.0.msix`, SHA256 `E297F21FF80A9993EC1B6CFA1FDE0050CAF9F12DC9FA34C3A09580AF711286A0`) but is stale — it predates `c3ba72b9`. Output is unsigned — the Store signs it.
 - [ ] Optional: WACK (Windows App Certification Kit) on the unsigned MSIX.
 - [ ] Lite MSIX: comes from the Release workflow `build-lite` artifact (`EntropIALite-msix`) — not built locally.
-- [ ] User's manual calls: push the branch, open/merge the PR, push tag `v1.8.0` (builds Pro `.deb`/installers + Lite MSIX + draft release), attach backfills if needed, publish the draft.
