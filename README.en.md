@@ -15,9 +15,9 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 | LLM / NER / RAG     | local Gemma 4 + OpenRouter; local spaCy for NER; local BGE reranker | OpenRouter (Gemma 4 by default) or a self-hosted OpenAI-compatible server; optional Vercel AI Gateway fallback |
 | Embeddings          | local BGE-M3 (ONNX) + OpenRouter (`baai/bge-m3`)         | OpenRouter (`baai/bge-m3`)                                                                        |
 | Native ML runtime   | yes (downloads itself at startup)                        | no                                                                                                |
-| Installer           | Windows: NSIS + MSI · Linux: DEB (GitHub)                | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: universal DMG (GitHub) · Linux: DEB (GitHub) |
+| Installer           | Windows: NSIS + MSI · MSIX (Store, local script) · Linux: DEB (GitHub) | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: universal DMG (GitHub) · Linux: DEB (GitHub) |
 | Tauri identifier    | `com.entropia.pro.desktop`                               | `com.entropia.lite`                                                                               |
-| Store MSIX identity | —                                                        | `CONICET.EntropIALite`                                                                            |
+| Store MSIX identity | `CONICET.EntropIAPro`                                  | `CONICET.EntropIALite`                                                                            |
 | Built with          | `--features local-ml` + `VITE_LOCAL_ML=1`                | lean default features + `VITE_LOCAL_ML=0`                                                         |
 
 **Pro** runs AI on the machine by default (offline-first) and lets users select remote providers in settings; `auto` modes apply fallback where implemented. **Lite** is 100% remote (OpenRouter / AssemblyAI / GLM-OCR, with Vercel AI Gateway as an optional OpenRouter fallback): no native models or runtime, small installer, Microsoft Store distribution.
@@ -150,6 +150,8 @@ Pro release flow:
 The version lives in one place: `apps/desktop/package.json`. Bump it with `pnpm version:bump x.y.z`, which rewrites every derived declaration (Cargo.toml/Cargo.lock, Tauri configs, runtime manifests, and the MSIX packaging), and verify with `pnpm version:check`.
 
 **Lite — GitHub installers + MSIX for the Store.** The `build-lite` job in the **Release** workflow builds the lean variant with `--bundles nsis,msi`; the `attach-lite-installers` job attaches the `.exe` (NSIS) + `.msi` to the GitHub release (downloadable like Pro's). In parallel, the `.msi` feeds the **repack** of a captured base MSIX (`apps/desktop/src-tauri/msix/`), rewriting the identity to `CONICET.EntropIALite` + the version; the unsigned `.msix` (the Store signs it) remains an Actions artifact for Partner Center only, not a release asset.
+
+**Pro — Store MSIX (local script, no CI).** `apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1` builds an unsigned `.msix` from the release MSI (manifest generated from scratch, no captured base); the Partner Center identity is passed as parameters and Microsoft Store signs it on submission. Details in [`apps/desktop/src-tauri/msix/README.md`](./apps/desktop/src-tauri/msix/README.md).
 
 **Lite — macOS and Linux.** The `lite-unix` job in the **Release** workflow calls **Lite preview** (`lite-preview.yml`), which builds the universal `.dmg` and the `.deb` and checks that the app starts on Ubuntu 22.04 and 24.04 and on macOS arm64 and Intel. The `attach-lite-unix` job attaches them to the release only if every one of those checks passed. The `.dmg` carries an ad-hoc signature and is not notarized. **Lite preview** can also be dispatched by hand to get the installers without publishing anything.
 

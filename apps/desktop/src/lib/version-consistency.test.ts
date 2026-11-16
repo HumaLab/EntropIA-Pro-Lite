@@ -22,6 +22,7 @@ const DECLARATION_PATHS = [
   'apps/desktop/src-tauri/resources/runtime-pack/windows-x86_64/manifest.json',
   'apps/desktop/src-tauri/resources/runtime-pack/linux-x86_64/manifest.json',
   'apps/desktop/src-tauri/scripts/repack-store-msix.ps1',
+  'apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1',
   'apps/desktop/src-tauri/msix/README.md',
 ] as const
 
@@ -120,7 +121,7 @@ describe('version single source of truth (C-04)', () => {
     expect(result.stdout + result.stderr).toContain('0.9.9.0')
   })
 
-  it('bump rewrites all nine declarations with targeted edits only', () => {
+  it('bump rewrites all ten declarations with targeted edits only', () => {
     const root = makeTempRepo()
     const result = runVersionScript(['bump', '2.3.4', '--root', root])
     expect(result.stdout + result.stderr).toContain('2.3.4')
@@ -156,6 +157,10 @@ describe('version single source of truth (C-04)', () => {
     const ps1 = readFixture(root, 'apps/desktop/src-tauri/scripts/repack-store-msix.ps1')
     expect(ps1).not.toContain(storeVersion)
     expect(ps1.match(/2\.3\.4\.0/g)).toHaveLength(2)
+
+    const proPs1 = readFixture(root, 'apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1')
+    expect(proPs1).not.toContain(storeVersion)
+    expect(proPs1.match(/2\.3\.4\.0/g)).toHaveLength(2)
 
     const msixReadme = readFixture(root, 'apps/desktop/src-tauri/msix/README.md')
     expect(msixReadme).not.toContain(storeVersion)

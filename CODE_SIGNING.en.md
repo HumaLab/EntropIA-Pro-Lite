@@ -4,14 +4,14 @@
 
 Installer signing is not integrated into the repository. Installers and packages produced today may be unsigned; the Ed25519 signature on Pro's remote bootstrap protects a different trust boundary and is not Authenticode signing of the installer.
 
-**Decision (2026-09-26):** the project does not buy paid signing certificates. The only signed Windows channel is Microsoft Store, which signs the Lite MSIX when it is published. The GitHub NSIS/MSI installers, Pro and Lite, ship unsigned on purpose: Windows SmartScreen shows them as "unknown publisher" and some antivirus products may delay or block the first run.
+**Decision (2026-09-26):** the project does not buy paid signing certificates. The only signed Windows channel is Microsoft Store, which signs the Lite and Pro MSIX packages when they are published. The GitHub NSIS/MSI installers, Pro and Lite, ship unsigned on purpose: Windows SmartScreen shows them as "unknown publisher" and some antivirus products may delay or block the first run.
 
 ## Current status
 
 | Area | Pro | Lite | Status |
 | ---- | --- | ---- | ------ |
 | Windows NSIS/MSI | Yes | Yes | Unsigned by decision: there is no Authenticode certificate. |
-| Microsoft Store MSIX | No | Yes | The only signed Windows channel: CI produces it unsigned and Microsoft Store signs it after submission. |
+| Microsoft Store MSIX | Yes (local script, no CI) | Yes | The only signed Windows channel: both are produced unsigned and Microsoft Store signs them after submission. |
 | Linux DEB | Yes | Yes | `Release` can build it; no package signing is integrated. |
 | macOS | Yes, arm64, through a manual run with `release_platform=all` | Yes, universal DMG | No code signing or notarization is integrated. |
 | Remote runtime bootstrap | Yes, for lean installers | No | Ed25519-signed manifest/catalog and SHA-256-validated archive. |
@@ -22,7 +22,7 @@ Installer signing is not integrated into the repository. Installers and packages
 
 ### 1. Installer and package signing
 
-There is no integration for Authenticode, Linux package signing, or Apple code signing/notarization. By project decision no paid signing provider is used, and SignPath Foundation's free open-source signing, which would publish the installers under its own name, was not requested. The signature on the Lite MSIX is applied by Microsoft Store, not by the project. No GitHub asset should be presented as an installer signed by the project.
+There is no integration for Authenticode, Linux package signing, or Apple code signing/notarization. By project decision no paid signing provider is used, and SignPath Foundation's free open-source signing, which would publish the installers under its own name, was not requested. The signature on the Lite and Pro MSIX packages is applied by Microsoft Store, not by the project. No GitHub asset should be presented as an installer signed by the project.
 
 ### 2. Pro remote bootstrap signing and integrity
 
@@ -32,7 +32,7 @@ These controls protect the remote runtime, not the installer. The conditions `pa
 
 ### 3. GitHub Release draft and manual publication
 
-On a tag, `Release` creates the Pro release as a draft and attaches the applicable assets. Lite NSIS/MSI installers and, when they passed their startup checks, the Lite `.deb` and `.dmg` are also attached on tags; the MSIX remains a separate artifact for Microsoft Store. Publishing the draft is a manual action outside the workflow and is not an enforced CI signing approval.
+On a tag, `Release` creates the Pro release as a draft and attaches the applicable assets. Lite NSIS/MSI installers and, when they passed their startup checks, the Lite `.deb` and `.dmg` are also attached on tags; the Lite MSIX remains a separate artifact for Microsoft Store; the Pro one is generated locally only with `apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1`, outside CI. Publishing the draft is a manual action outside the workflow and is not an enforced CI signing approval.
 
 ## Current release path
 

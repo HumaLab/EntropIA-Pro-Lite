@@ -94,14 +94,18 @@ function Add-StoreMsixConnector {
     [string]$ConnectorPath,
 
     [Parameter(Mandatory = $true)]
-    [string]$PayloadDirectory
+    [string]$PayloadDirectory,
+
+    # Lite packs the connector as entropia-agent-connector.exe; Pro passes its own
+    # name (entropia-pro-agent-connector.exe) so both Store packages can coexist.
+    [string]$ConnectorFileName = $script:StoreMsixConnectorFileName
   )
 
   if (-not (Test-Path -LiteralPath $ConnectorPath -PathType Leaf)) {
     throw "Agent connector not found: $ConnectorPath"
   }
 
-  $destination = Join-Path $PayloadDirectory $script:StoreMsixConnectorFileName
+  $destination = Join-Path $PayloadDirectory $ConnectorFileName
   Copy-Item -LiteralPath $ConnectorPath -Destination $destination -Force
   return $destination
 }
@@ -120,7 +124,11 @@ function Add-StoreMsixConnectorAlias {
   #>
   param(
     [Parameter(Mandatory = $true)]
-    [xml]$Manifest
+    [xml]$Manifest,
+
+    # Lite packs the connector as entropia-agent-connector.exe; Pro passes its own
+    # name (entropia-pro-agent-connector.exe) so both Store packages can coexist.
+    [string]$ConnectorFileName = $script:StoreMsixConnectorFileName
   )
 
   $package = $Manifest.DocumentElement
@@ -152,12 +160,12 @@ function Add-StoreMsixConnectorAlias {
 
   $extension = $Manifest.CreateElement("uap3", "Extension", $script:StoreMsixUap3Namespace)
   $extension.SetAttribute("Category", "windows.appExecutionAlias")
-  $extension.SetAttribute("Executable", $script:StoreMsixConnectorFileName)
+  $extension.SetAttribute("Executable", $ConnectorFileName)
   $extension.SetAttribute("EntryPoint", "Windows.FullTrustApplication")
 
   $aliasContainer = $Manifest.CreateElement("uap3", "AppExecutionAlias", $script:StoreMsixUap3Namespace)
   $executionAlias = $Manifest.CreateElement("desktop", "ExecutionAlias", $script:StoreMsixDesktopNamespace)
-  $executionAlias.SetAttribute("Alias", $script:StoreMsixConnectorFileName)
+  $executionAlias.SetAttribute("Alias", $ConnectorFileName)
 
   [void]$aliasContainer.AppendChild($executionAlias)
   [void]$extension.AppendChild($aliasContainer)
@@ -176,16 +184,20 @@ function Assert-StoreMsixConnectorAlias {
     [xml]$Manifest,
 
     [Parameter(Mandatory = $true)]
-    [string]$PayloadDirectory
+    [string]$PayloadDirectory,
+
+    # Lite packs the connector as entropia-agent-connector.exe; Pro passes its own
+    # name (entropia-pro-agent-connector.exe) so both Store packages can coexist.
+    [string]$ConnectorFileName = $script:StoreMsixConnectorFileName
   )
 
   if (-not (Test-Path -LiteralPath $PayloadDirectory -PathType Container)) {
     throw "MSIX payload directory not found: $PayloadDirectory"
   }
 
-  $packaged = Join-Path $PayloadDirectory $script:StoreMsixConnectorFileName
+  $packaged = Join-Path $PayloadDirectory $ConnectorFileName
   if (-not (Test-Path -LiteralPath $packaged -PathType Leaf)) {
-    throw "MSIX payload has no $($script:StoreMsixConnectorFileName); the execution alias would resolve to nothing."
+    throw "MSIX payload has no $ConnectorFileName; the execution alias would resolve to nothing."
   }
 
   $aliases = @($Manifest.SelectNodes("//*[local-name()='Extension'][@Category='windows.appExecutionAlias']"))
@@ -196,8 +208,8 @@ function Assert-StoreMsixConnectorAlias {
   $alias = $aliases[0]
   $executable = $alias.GetAttribute("Executable")
   $entryPoint = $alias.GetAttribute("EntryPoint")
-  if ($executable -cne $script:StoreMsixConnectorFileName) {
-    throw "MSIX appExecutionAlias Executable '$executable' is not '$($script:StoreMsixConnectorFileName)'."
+  if ($executable -cne $ConnectorFileName) {
+    throw "MSIX appExecutionAlias Executable '$executable' is not '$ConnectorFileName'."
   }
   if ([System.IO.Path]::IsPathRooted($executable) -or $executable -match 'WindowsApps') {
     throw "MSIX appExecutionAlias Executable '$executable' must be package-relative."
@@ -211,8 +223,8 @@ function Assert-StoreMsixConnectorAlias {
       ForEach-Object { $_.GetAttribute("Alias") } |
       Where-Object { $_ }
   )
-  if ($names.Count -ne 1 -or $names[0] -cne $script:StoreMsixConnectorFileName) {
-    throw "MSIX appExecutionAlias must declare the single alias '$($script:StoreMsixConnectorFileName)'; found: $($names -join ', ')."
+  if ($names.Count -ne 1 -or $names[0] -cne $ConnectorFileName) {
+    throw "MSIX appExecutionAlias must declare the single alias '$ConnectorFileName'; found: $($names -join ', ')."
   }
 }
 
@@ -226,7 +238,11 @@ function Assert-StoreMsixConnectorInArchive {
     [string]$ArchivePath,
 
     [Parameter(Mandatory = $true)]
-    [string]$ConnectorPath
+    [string]$ConnectorPath,
+
+    # Lite packs the connector as entropia-agent-connector.exe; Pro passes its own
+    # name (entropia-pro-agent-connector.exe) so both Store packages can coexist.
+    [string]$ConnectorFileName = $script:StoreMsixConnectorFileName
   )
 
   $expected = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $ConnectorPath).Path)
@@ -236,12 +252,12 @@ function Assert-StoreMsixConnectorInArchive {
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   $zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
   try {
-    $entry = $zip.GetEntry($script:StoreMsixConnectorFileName)
+    $entry = $zip.GetEntry($ConnectorFileName)
     if (-not $entry) {
-      throw "$($script:StoreMsixConnectorFileName) not found in $ArchivePath"
+      throw "$ConnectorFileName not found in $ArchivePath"
     }
     if ($entry.Length -ne $expected.Length) {
-      throw "$($script:StoreMsixConnectorFileName) in the MSIX has size $($entry.Length), expected $($expected.Length)"
+      throw "$ConnectorFileName in the MSIX has size $($entry.Length), expected $($expected.Length)"
     }
 
     $stream = $entry.Open()
@@ -254,7 +270,7 @@ function Assert-StoreMsixConnectorInArchive {
     finally { $stream.Dispose() }
 
     if ($actualHash -ne $expectedHash) {
-      throw "$($script:StoreMsixConnectorFileName) in the MSIX differs from $ConnectorPath"
+      throw "$ConnectorFileName in the MSIX differs from $ConnectorPath"
     }
   }
   finally {

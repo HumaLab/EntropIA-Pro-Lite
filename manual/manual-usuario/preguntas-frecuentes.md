@@ -136,7 +136,7 @@ Fuente: Capítulo 16. Configuración y herramientas generales › 16.1. Configur
 
 ### Los PDF no se abren en mi Mac, ¿qué hago?
 Variantes: pdf no abre mac; macos viejo pdf; safari pdf no abre
-Fuente: Capítulo 2. Introducción a EntropIA Lite › 2.1. Qué necesitás para cada tarea
+Fuente: Capítulo 2. Introducción a EntropIA Pro y Lite › 2.1. Qué necesitás para cada tarea
 
 1. El visor de PDF necesita Safari 16.4, que llega con **macOS 13.3 Ventura o posterior**: actualizá el sistema.
 2. En versiones anteriores los PDF no abren; no es un problema de tus archivos.

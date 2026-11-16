@@ -4,14 +4,14 @@
 
 La firma de instaladores no está integrada en el repositorio. Los instaladores y paquetes producidos actualmente pueden estar sin firmar; la firma Ed25519 del bootstrap remoto de Pro protege otro límite de confianza y no constituye firma Authenticode del instalador.
 
-**Decisión (2026-09-26):** el proyecto no contrata certificados de firma pagos. El único canal firmado en Windows es Microsoft Store, que firma el MSIX de Lite al publicarlo. Los instaladores NSIS/MSI de GitHub, de Pro y de Lite, se distribuyen sin firma a propósito: Windows SmartScreen los muestra como "editor desconocido" y algunos antivirus pueden demorar o bloquear la primera ejecución.
+**Decisión (2026-09-26):** el proyecto no contrata certificados de firma pagos. El único canal firmado en Windows es Microsoft Store, que firma los MSIX de Lite y de Pro al publicarlos. Los instaladores NSIS/MSI de GitHub, de Pro y de Lite, se distribuyen sin firma a propósito: Windows SmartScreen los muestra como "editor desconocido" y algunos antivirus pueden demorar o bloquear la primera ejecución.
 
 ## Estado actual
 
 | Área | Pro | Lite | Estado |
 | ---- | --- | ---- | ------ |
 | Windows NSIS/MSI | Sí | Sí | Sin firma, por decisión: no hay certificado Authenticode. |
-| Microsoft Store MSIX | No | Sí | Único canal firmado en Windows: CI lo produce sin firma y Microsoft Store lo firma después del envío. |
+| Microsoft Store MSIX | Sí (script local, sin CI) | Sí | Único canal firmado en Windows: ambos se producen sin firma y Microsoft Store los firma después del envío. |
 | Linux DEB | Sí | Sí | `Release` puede construirlo; no hay firma de paquetes integrada. |
 | macOS | Sí, arm64, mediante ejecución manual con `release_platform=all` | Sí, DMG universal | No hay firma de código ni notarización integrada. |
 | Bootstrap remoto del runtime | Sí, para instaladores lean | No | Manifest/catálogo firmado con Ed25519 y archivo validado con SHA-256. |
@@ -22,7 +22,7 @@ La firma de instaladores no está integrada en el repositorio. Los instaladores 
 
 ### 1. Firma de instaladores y paquetes
 
-No existe una integración para Authenticode, firma de paquetes Linux ni firma/notarización de Apple. Por decisión del proyecto no se contrata un proveedor de firma pago, y tampoco se solicitó la firma gratuita para código abierto de SignPath Foundation, que publicaría los instaladores bajo su nombre. La firma que recibe el MSIX de Lite la aplica Microsoft Store, no el proyecto. Ningún asset de GitHub debe presentarse como instalador firmado por el proyecto.
+No existe una integración para Authenticode, firma de paquetes Linux ni firma/notarización de Apple. Por decisión del proyecto no se contrata un proveedor de firma pago, y tampoco se solicitó la firma gratuita para código abierto de SignPath Foundation, que publicaría los instaladores bajo su nombre. La firma que reciben los MSIX de Lite y de Pro la aplica Microsoft Store, no el proyecto. Ningún asset de GitHub debe presentarse como instalador firmado por el proyecto.
 
 ### 2. Firma e integridad del bootstrap remoto de Pro
 
@@ -32,7 +32,7 @@ Estos controles protegen el runtime remoto, no el instalador. Las condiciones `p
 
 ### 3. Draft de GitHub Release y publicación manual
 
-En un tag, `Release` crea la release de Pro como draft y adjunta los assets aplicables. Los instaladores NSIS/MSI de Lite y, si pasaron sus pruebas de arranque, el `.deb` y el `.dmg` de Lite también se adjuntan en tags; el MSIX permanece como artefacto separado para Microsoft Store. Publicar el draft es una acción manual fuera del workflow y no equivale a una aprobación de firma exigida por CI.
+En un tag, `Release` crea la release de Pro como draft y adjunta los assets aplicables. Los instaladores NSIS/MSI de Lite y, si pasaron sus pruebas de arranque, el `.deb` y el `.dmg` de Lite también se adjuntan en tags; el MSIX de Lite permanece como artefacto separado para Microsoft Store; el de Pro se genera solo en local con `apps/desktop/src-tauri/scripts/build-pro-store-msix.ps1`, sin pasar por CI. Publicar el draft es una acción manual fuera del workflow y no equivale a una aprobación de firma exigida por CI.
 
 ## Camino actual de release
 

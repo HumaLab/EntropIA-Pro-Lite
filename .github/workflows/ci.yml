@@ -314,7 +314,8 @@ jobs:
             (Join-Path $suitesRoot "engine-pin-bump-workflow.Tests.ps1"),
             (Join-Path $suitesRoot "store-msix-assets.Tests.ps1"),
             (Join-Path $suitesRoot "store-msix-shortcuts.Tests.ps1"),
-            (Join-Path $suitesRoot "store-msix-payload.Tests.ps1")
+            (Join-Path $suitesRoot "store-msix-payload.Tests.ps1"),
+            (Join-Path $suitesRoot "store-msix-pro.Tests.ps1")
           )
 
       - name: Run Rust quality report (non-blocking)
