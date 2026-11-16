@@ -148,7 +148,7 @@ AUMID, and SHA256.
 
 The Store identity has no default: `-IdentityName`, `-IdentityPublisher`
 (`CN=...`), and `-PublisherDisplayName` are mandatory, taken from Partner
-Center > Product management > Product identity (1.8.0.0 is the first Pro
+Center > Product management > Product identity (release 1.8.0 is the first Pro
 submission). The Partner Center values are:
 
 ```text
@@ -160,7 +160,7 @@ AUMID                = CONICET.EntropIAPro_b16na7gwepwme!EntropIAPro
 ```
 
 They stay parameters, not literals in the script, but `store-msix-pro.Tests.ps1`
-pins the package family name they produce. `-StoreVersion` defaults to `1.8.0.0` and is kept in sync by
+pins the package family name they produce. `-StoreVersion` defaults to the app version plus `.0` and is kept in sync by
 `pnpm version:bump` (`apps/desktop/scripts/version.mjs`).
 
 The prerequisite MSI comes from a Pro release build, run from `apps/desktop`
