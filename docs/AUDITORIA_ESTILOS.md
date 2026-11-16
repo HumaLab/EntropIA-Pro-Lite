@@ -44,7 +44,7 @@ Los problemas se concentran en **cuatro causas raíz**:
 | Métrica | Valor |
 | --- | --- |
 | `<button>` crudos / `<Button>` / `<IconButton>` | 250 / 255 / 107 |
-| `<input>` crudos, radios incluidos (sin contar los internos de `packages/ui`) / `<Input>` | ~60 / 50 |
+| `<input>` crudos, radios incluidos (sin contar los internos de `packages/ui`) / `<Input>` | 63 (27 radios, 33 `text`, 1 `password`, 2 sin `type`) / 50 |
 | `<textarea>` crudos (no existe componente) | 22 |
 | `<input type="radio">` nativos visibles sin `appearance: none` | 25 (16 con `accent-color`, 9 sin ningún estilo) |
 | `<progress>` nativos | 5 (3 sin ningún estilo) |
@@ -100,7 +100,7 @@ Rutas abreviadas: `D/` = `apps/desktop/src/`, `U/` = `packages/ui/src/components
 
 Además: `D/views/NavegadorView.svelte:812` (`surface-sunken` puro), `D/views/RagChatView.svelte:1261` (siempre con anillo de foco, aun sin foco), `D/views/WritingView.svelte:1197`, `:1402`, `D/views/DependenciasTab.svelte:948`, `D/views/InvestigationView.svelte:1486`.
 
-**R2 — Áreas de texto (`<textarea>`; no hay componente). Media.** 22 textareas con 9 clases distintas: `D/views/SettingsView.svelte:3947` (familia C), `D/views/ResearchView.svelte:1002` (B), `D/views/CollectionAnalysisPanel.svelte:727` (B), `D/views/CollectionsView.svelte:390` (A), `D/views/ItemTextPanel.svelte:686` (B, `radius-md`), `D/components/BibliographyAnnotationsPanel.svelte:652` (`surface-sunken`), `D/views/InvestigationView.svelte:2286` (`--color-border, currentColor`, `--radius-sm, 4px`, 10 textareas), `D/views/RagChatView.svelte:1691` (B), `D/views/SyncSettingsCard.svelte:938` (reutiliza la clase `sync-card__number-input` en un textarea). Paddings: `space-1/2`, `space-2`, `space-2/3`, `space-3`.
+**R2 — Áreas de texto (`<textarea>`; no hay componente). Media.** 22 textareas con 9 clases distintas: `D/views/SettingsView.svelte:3947` (familia C), `D/views/ResearchView.svelte:1002` (B), `D/views/CollectionAnalysisPanel.svelte:727` (B), `D/views/CollectionsView.svelte:390` (A), `D/views/ItemTextPanel.svelte:686` (B, `radius-md`), `D/components/BibliographyAnnotationsPanel.svelte:652` (`surface-sunken`), `D/views/InvestigationView.svelte:2286` (`--color-border, currentColor`, `--radius-sm, 4px`, 8 textareas), `D/views/RagChatView.svelte:1691` (B), `D/views/SyncSettingsCard.svelte:938` (reutiliza la clase `sync-card__number-input` en un textarea). Paddings: `space-1/2`, `space-2`, `space-2/3`, `space-3`.
 
 **R3 — Disparadores de select (botón que abre `ToolbarMenu`). Media.** 15 clases para el mismo patrón, en tres variantes visuales y tres radios distintos:
 
@@ -393,3 +393,34 @@ Criterio de hecho por área: sin `<input>`/`<textarea>`/`<button>` crudos salvo 
 | 5 Escalas | Media | F1–F9, S1–S3, B1–B4, E1–E7 | Bajo |
 | 6 Capas/movimiento | Baja | §2.10, E8, §2.11, §2.12, §2.14 | Bajo |
 | 7 Cierre | Baja | H4, S3, tokens sin uso | Bajo |
+
+---
+
+## 4. Resultado: antes / después
+
+Medido con `pnpm style:metrics` al cerrar el plan (paso 31), contra la línea de base `scripts/style-metrics.baseline.json` tomada en el paso 1. Cada valor que no llega a 0 es una excepción permanente de [`GUIA_DISENO.md`](./GUIA_DISENO.md) (sección «Excepciones aceptadas»).
+
+| Categoría | Antes | Después | Lo que queda |
+| --- | ---: | ---: | --- |
+| Archivos con hallazgos | 97 | 14 | Solo excepciones permanentes. |
+| Hex en `<style>` | 33 | 0 | — |
+| `rgb()`/`rgba()` en `<style>` | 42 | 0 | — |
+| `color-mix()` contra negro o blanco | 9 | 0 | — |
+| `var()` a tokens que no existen | 6 | 0 | — |
+| `var()` con fallback (cualquier variable) | 158 | 15 | Ganchos propios de un componente, con su valor por defecto (guía, excepciones). |
+| `var()` con fallback sobre un token publicado | 137 | 0 | — |
+| `font-size` literal | 22 | 0 | — |
+| `font-weight` numérico | 9 | 0 | — |
+| `line-height` literal | 48 | 1 | `line-height: 0` del contenedor de imagen de `WritingEditor`. |
+| `letter-spacing` literal | 66 | 0 | — |
+| Opacidad literal en `:disabled` | 36 | 0 | — |
+| `z-index` literal | 36 | 11 | Todos locales (0–4) dentro del contexto de apilamiento de su componente; ninguno de tres cifras. |
+| Transición o animación con duración literal | 26 | 0 | — |
+| `:global()` sobre componentes del sistema (fuera de `packages/ui`) | 36 | 0 | — |
+| `<input>` en markup (fuera de `packages/ui`) | 63 | 1 | Edición inline del título del documento en `WritingView`. |
+| `<textarea>` en markup | 24 | 1 | El de `Textarea`. |
+| `<progress>` en markup | 5 | 0 | — |
+| `<details>` en markup | 8 | 0 | — |
+| `<input type="radio">` en markup | 27 | 1 | El radio oculto de `RadioCard`. |
+
+Las guardas que sostienen estos números: `visual-contract.test.ts` y `design-tokens.test.ts` (ningún componente rompe ninguna regla de estilo), `scale-literals.test.ts` (capas, `line-height`, `letter-spacing`, duraciones, tamaños relativos y `--font-weight-bold`) y `eslint.config.js` (`<select>`, `<progress>`, `<textarea>` y `<svg>` a mano).

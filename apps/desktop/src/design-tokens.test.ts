@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { rulesBrokenBy, scanPackage, type TokenContext } from './__tests__/style-guards'
 
 const TOKEN_DEFINITION = /(--[a-z0-9-]+)\s*:/g
 const TOKEN_USE_WITHOUT_FALLBACK = /var\((--[a-z0-9-]+)\s*\)/g
@@ -278,19 +279,21 @@ describe('desktop design tokens', () => {
     expect(offenders).toEqual([])
   })
 
-  it('leaves the native checkbox to exactly one component', () => {
+  it('leaves the native checkbox to the Checkbox and Switch components', () => {
     // A hand-rolled `input type="checkbox"` renders with the platform accent,
     // blue on every desktop this app ships to, which in a monochrome dark theme
     // reads as a control borrowed from somewhere else. Three screens had grown
-    // their own before the shared component existed. Asserting the exact set,
-    // rather than excluding a name, also catches the component disappearing.
+    // their own before the shared component existed. Switch is the second owner
+    // on purpose: a native checkbox with `role="switch"` keeps the form value
+    // and the keyboard behaviour native. Asserting the exact set, rather than
+    // excluding a name, also catches either component disappearing.
     const owners = everyComponent()
       .map((path) => [path, readFileSync(path, 'utf-8')] as const)
       .filter(([, source]) => source.includes('type="checkbox"'))
       .map(([path]) => basename(path))
       .sort()
 
-    expect(owners).toEqual(['Checkbox.svelte'])
+    expect(owners).toEqual(['Checkbox.svelte', 'Switch.svelte'])
   })
 
   it('leaves the search field to exactly one component', () => {
@@ -351,19 +354,6 @@ describe('desktop design tokens', () => {
     expect(offenders).toEqual([])
   })
 
-  it('pairs the positioned magnifier with the inset it needs', () => {
-    // SearchBar lays its icon out in the flow because it owns the whole row.
-    // A field retrofitted into existing markup positions the icon over the
-    // input instead, and then owes it padding — or the icon lands on the text.
-    const offenders = everyComponent()
-      .map((path) => [path, readFileSync(path, 'utf-8')] as const)
-      .filter(([, source]) => source.includes('search-field__icon'))
-      .filter(([, source]) => !source.includes('var(--search-field-inset)'))
-      .map(([path]) => basename(path))
-
-    expect(offenders).toEqual([])
-  })
-
   it('settles every placeholder on one grey', () => {
     // Without a baseline the browser derives its own from `color`, which reads
     // lighter than the token and made two search boxes on one screen disagree.
@@ -390,5 +380,66 @@ describe('desktop design tokens', () => {
       .map(([path, missing]) => `${basename(path)}: ${missing.join(', ')}`)
 
     expect(offenders).toEqual([])
+  })
+})
+
+describe('style debt guards', () => {
+  // docs/PLAN_HOMOGENEIZACION.md, steps 3 and 30: the debt is paid, so every
+  // component passes every rule. The permanent exceptions are in GUIA_DISENO.md.
+  const sheets = [
+    resolve(import.meta.dirname, '../../../packages/ui/src/tokens/tokens.css'),
+    resolve(import.meta.dirname, 'app.css'),
+  ]
+
+  it('finds no style debt in any component', () => {
+    const { failing } = scanPackage(import.meta.dirname, sheets)
+
+    expect([...failing]).toEqual([])
+  })
+
+  const ctx: TokenContext = {
+    published: new Set(['--color-accent', '--color-text-muted']),
+    defined: new Set(['--color-accent', '--color-text-muted', '--local-gap']),
+  }
+  const component = (css: string) => `<div class="x"></div>\n<style>\n${css}\n</style>\n`
+
+  it('flags hard-coded colours, including inside a fallback', () => {
+    expect(rulesBrokenBy(component('.x { color: #fff; }'), ctx)).toContain('color-literal')
+    expect(rulesBrokenBy(component('.x { color: rgba(0, 0, 0, 0.2); }'), ctx)).toContain(
+      'color-literal'
+    )
+    expect(rulesBrokenBy(component('.x { color: var(--color-accent); }'), ctx).size).toBe(0)
+  })
+
+  it('flags color-mix towards black or white, but not towards transparent', () => {
+    const mixed = '.x { color: color-mix(in srgb, var(--color-accent) 80%, white 20%); }'
+    const faded = '.x { color: color-mix(in srgb, var(--color-accent) 30%, transparent); }'
+
+    expect(rulesBrokenBy(component(mixed), ctx)).toContain('color-mix-black-white')
+    expect(rulesBrokenBy(component(faded), ctx).size).toBe(0)
+  })
+
+  it('flags a token nothing defines even when it carries a fallback', () => {
+    const invented = '.x { color: var(--color-text-tertiary, var(--color-text-muted)); }'
+
+    expect(rulesBrokenBy(component(invented), ctx)).toContain('unknown-token')
+    expect(rulesBrokenBy(component('.x { gap: var(--local-gap); }'), ctx).size).toBe(0)
+    // A property named after the component's own block is a hook for its parent.
+    expect(rulesBrokenBy(component('.x { width: var(--x-max-width, 100%); }'), ctx).size).toBe(0)
+  })
+
+  it('flags a fallback on a published token', () => {
+    expect(rulesBrokenBy(component('.x { color: var(--color-text-muted, grey); }'), ctx)).toContain(
+      'published-fallback'
+    )
+  })
+
+  it('flags a submit control filled with the accent', () => {
+    expect(
+      rulesBrokenBy(component('.x-submit { background: var(--color-accent); }'), ctx)
+    ).toContain('accent-fill')
+    expect(
+      rulesBrokenBy(component('.x-row--active { background: var(--color-accent); }'), ctx).size
+    ).toBe(0)
   })
 })

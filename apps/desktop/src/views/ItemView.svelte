@@ -3535,7 +3535,7 @@
     class="item-view"
     bind:this={itemViewEl}
     style="grid-template-columns: 1fr auto {rightPanelOpen
-      ? `6px minmax(190px, ${sidebarWidth}%)`
+      ? `var(--space-2) minmax(190px, ${sidebarWidth}%)`
       : ''}"
   >
     <Panel variant="glass" padding="none" class="left-panel">
@@ -3667,9 +3667,7 @@
 
     <!-- Right panel toggle -->
     <IconButton
-      class="right-panel-toggle"
-      variant="ghost"
-      size="sm"
+      variant="edge"
       label={rightPanelOpen ? 'Ocultar panel derecho' : 'Mostrar panel derecho'}
       onclick={() => {
         rightPanelOpen = !rightPanelOpen
@@ -4088,8 +4086,6 @@
     flex-wrap: wrap;
     align-self: stretch;
     margin: 0 var(--space-3);
-    background: var(--surface-input);
-    border-color: var(--border-subtle);
   }
   :global(.right-panel-tab) {
     flex: 1 1 auto;
@@ -4129,40 +4125,14 @@
     font-family: var(--font-mono);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-normal);
-    letter-spacing: 0.15em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
-  /* The one IconButton meant to stretch: a 20px strip running the full
-     height of the panel edge. It opts out of the primitive's fixed square
-     explicitly (control-block-size.test.ts). Scoped under `.item-view` (not
-     just `.icon-button.right-panel-toggle`) so this wins on specificity
-     over IconButton's own scoped rules deterministically, rather than by
-     relying on stylesheet order. */
-  .item-view :global(.icon-button.right-panel-toggle) {
-    --icon-button-size: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: auto;
-    min-height: 0;
-    max-height: none;
-    flex-shrink: 0;
-    border-radius: var(--radius-dialog);
-    background: var(--surface-input);
-    border: 1px solid var(--border-subtle);
-    color: var(--color-text-muted);
-    cursor: pointer;
-  }
-  .item-view :global(.icon-button.right-panel-toggle:hover) {
-    color: var(--color-accent);
-    background: var(--color-accent-soft);
-  }
   .resize-handle {
-    width: 6px;
+    width: var(--space-2);
     position: relative;
     cursor: col-resize;
-    z-index: 1;
   }
   .resize-handle::before {
     content: '';
@@ -4174,12 +4144,18 @@
     width: 1px;
     background-color: var(--color-border);
     transition:
-      background-color 0.15s ease,
-      width 0.15s ease;
+      background-color var(--duration-base) ease,
+      width var(--duration-base) ease;
   }
   .resize-handle:hover::before {
-    background-color: var(--color-text-muted, var(--color-border));
-    width: 2px;
+    background-color: var(--color-text-muted);
+    width: var(--space-0-5);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .resize-handle::before {
+      transition: none;
+    }
   }
   :global(body.no-select),
   :global(body.no-select *) {
@@ -4190,7 +4166,7 @@
   .item-title {
     font-family: var(--font-ui);
     font-size: var(--font-size-md);
-    font-weight: var(--font-weight-bold);
+    font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
     min-width: 0;
     overflow: hidden;

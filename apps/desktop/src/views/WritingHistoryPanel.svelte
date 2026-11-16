@@ -5,6 +5,7 @@
     ActionIcon,
     Panel,
     WritingEditor,
+    SelectTrigger,
     ToolbarMenu,
     documentSections,
     sectionChanges,
@@ -27,6 +28,7 @@
   }
 
   let { onclose }: Props = $props()
+  const uid = $props.id()
 
   const labels = $derived(writingEditorLabels())
 
@@ -191,21 +193,27 @@
     <section class="history-panel__list">
       <h3>{t('writing.historyTitle')}</h3>
       {#if sections.length > 0}
-        <ToolbarMenu
-          label={t('writing.historySectionLabel')}
-          items={sectionItems}
-          bind:open={sectionMenuOpen}
-        >
-          {#snippet trigger(props, { open })}
-            <button type="button" class="history-panel__section" class:is-open={open} {...props}>
-              <span class="history-panel__hint">{t('writing.historySectionLabel')}:</span>
-              <span class="history-panel__section-name">
-                {section ? section.title || '…' : t('writing.historySectionAll')}
-              </span>
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
-          {/snippet}
-        </ToolbarMenu>
+        <div class="history-panel__picker">
+          <span class="history-panel__hint" id="{uid}-section-label"
+            >{t('writing.historySectionLabel')}:</span
+          >
+          <ToolbarMenu
+            label={t('writing.historySectionLabel')}
+            items={sectionItems}
+            bind:open={sectionMenuOpen}
+          >
+            {#snippet trigger(props, { open })}
+              <SelectTrigger
+                {...props}
+                id="{uid}-section-value"
+                size="sm"
+                {open}
+                label={section ? section.title || '…' : t('writing.historySectionAll')}
+                aria-labelledby="{uid}-section-label {uid}-section-value"
+              />
+            {/snippet}
+          </ToolbarMenu>
+        </div>
       {/if}
       {#if versions === null}
         <p class="history-panel__hint">…</p>
@@ -262,35 +270,6 @@
 </Panel>
 
 <style>
-  .history-panel__section {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    max-width: 100%;
-    margin-bottom: var(--space-2);
-    padding: var(--space-1) var(--space-2);
-    font: inherit;
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-    background: transparent;
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    cursor: pointer;
-  }
-
-  .history-panel__section.is-open,
-  .history-panel__section:focus-visible {
-    border-color: var(--color-accent);
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .history-panel__section-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   /* The close button takes its own track instead of floating over the
      preview: absolutely positioned at the top-right corner it sat on the
      preview's bordered editor box and on the hint beside it. */
@@ -308,7 +287,7 @@
 
   h3 {
     margin: 0 0 var(--space-2);
-    font-size: var(--font-size-md, 1rem);
+    font-size: var(--font-size-md);
   }
 
   ul {
@@ -325,7 +304,7 @@
     width: 100%;
     padding: var(--space-1) var(--space-2);
     border: 0;
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-sm);
     background: none;
     color: inherit;
     font: inherit;
@@ -335,7 +314,7 @@
 
   .history-panel__item:hover,
   .history-panel__item--selected {
-    background: var(--color-surface-hover, var(--color-surface));
+    background: var(--state-hover-row);
   }
 
   .history-panel__doc {
@@ -343,15 +322,24 @@
     overflow-y: auto;
     margin-bottom: var(--space-2);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-sm);
+  }
+
+  /* The label sits beside the trigger, as in the Zotero tab's pickers. */
+  .history-panel__picker {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    margin-bottom: var(--space-2);
   }
 
   .history-panel__hint {
     color: var(--color-text-secondary);
-    font-size: 0.9em;
+    font-size: var(--font-size-xs);
   }
 
   .history-panel__error {
-    color: var(--color-danger, #c0392b);
+    color: var(--color-danger);
   }
 </style>

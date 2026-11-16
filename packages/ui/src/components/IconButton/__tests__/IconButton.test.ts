@@ -1,6 +1,59 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { render, screen } from '@testing-library/svelte'
 import { describe, expect, it } from 'vitest'
 import IconButtonTestHost from './IconButtonTestHost.svelte'
+
+const STYLES = readFileSync(resolve(import.meta.dirname, '../IconButton.svelte'), 'utf-8')
+  .split(/<style[^>]*>/)[1]!
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+
+function rule(selector: string): string {
+  const at = STYLES.indexOf(`${selector} {`)
+  expect(at, `${selector} is not in the stylesheet`).toBeGreaterThan(-1)
+  return STYLES.slice(at, STYLES.indexOf('}', at))
+}
+
+/**
+ * The edge variant is the strip that opens and closes a side panel: 20px wide,
+ * as tall as the panel edge. Views used to get it by overriding IconButton
+ * with `:global` and a stronger selector (R11); the component owns it now.
+ */
+describe('IconButton variant="edge"', () => {
+  it('renders as an IconButton with the edge class', () => {
+    render(IconButtonTestHost, { props: { variant: 'edge', size: 'sm', label: 'Open panel' } })
+    expect(screen.getByRole('button', { name: 'Open panel' })).toHaveClass(
+      'icon-button',
+      'icon-button--edge'
+    )
+  })
+
+  it('is a 20px strip whose height follows its parent, not the size scale', () => {
+    const edge = rule('.icon-button--edge')
+    expect(edge).toMatch(/--icon-button-size:\s*20px/)
+    expect(edge).toMatch(/(?<![-\w])height:\s*auto/)
+    expect(edge).toMatch(/min-height:\s*0/)
+    expect(edge).toMatch(/max-height:\s*none/)
+  })
+
+  it('wins over every size rule by order inside the component, not by a caller', () => {
+    const edgeAt = STYLES.indexOf('.icon-button--edge {')
+    for (const size of ['xs', 'sm', 'md', 'lg']) {
+      expect(STYLES.indexOf(`.icon-button--${size} {`)).toBeLessThan(edgeAt)
+    }
+  })
+
+  it('draws the panel-edge surface and an accent hover', () => {
+    const edge = rule('.icon-button--edge')
+    expect(edge).toMatch(/border-radius:\s*var\(--radius-dialog\)/)
+    expect(edge).toMatch(/background:\s*var\(--surface-input\)/)
+    expect(edge).toMatch(/border-color:\s*var\(--border-subtle\)/)
+    expect(edge).toMatch(/color:\s*var\(--color-text-muted\)/)
+    const hover = rule('.icon-button--edge:hover:not(:disabled)')
+    expect(hover).toMatch(/color:\s*var\(--color-accent\)/)
+    expect(hover).toMatch(/background:\s*var\(--color-accent-soft\)/)
+  })
+})
 
 /**
  * IconButton is the single container for every icon-only control in the app.
@@ -45,5 +98,36 @@ describe('IconButton', () => {
 
     render(IconButtonTestHost, { props: { label: 'Plain action' } })
     expect(screen.getByRole('button', { name: 'Plain action' })).not.toHaveAttribute('aria-pressed')
+  })
+})
+
+/**
+ * A neutral button that warns only on hover: the window's close button turns
+ * red, a notification's "mark read" turns green. Views used to get it with a
+ * :global hover rule over IconButton; the component owns it now.
+ */
+describe('IconButton hover tone', () => {
+  it('adds no tone class by default', () => {
+    render(IconButtonTestHost, { props: { label: 'Plain' } })
+    const button = screen.getByRole('button', { name: 'Plain' })
+    expect(button.className).not.toMatch(/icon-button--hover-/)
+  })
+
+  it.each(['danger', 'success'] as const)('marks the %s tone', (tone) => {
+    render(IconButtonTestHost, { props: { label: tone, hoverTone: tone } })
+    expect(screen.getByRole('button', { name: tone })).toHaveClass(`icon-button--hover-${tone}`)
+  })
+
+  it.each(['danger', 'success'] as const)('paints the %s tone only on hover', (tone) => {
+    const hover = rule(`.icon-button--hover-${tone}:hover:not(:disabled)`)
+    expect(hover).toMatch(new RegExp(String.raw`color:\s*var\(--color-${tone}\)`))
+    expect(STYLES).not.toMatch(new RegExp(String.raw`\.icon-button--hover-${tone}\s*\{`))
+  })
+
+  it('tints the surface for danger only; success stays on the variant surface', () => {
+    expect(rule('.icon-button--hover-danger:hover:not(:disabled)')).toMatch(
+      /background:\s*var\(--color-danger-soft\)/
+    )
+    expect(rule('.icon-button--hover-success:hover:not(:disabled)')).not.toMatch(/background/)
   })
 })

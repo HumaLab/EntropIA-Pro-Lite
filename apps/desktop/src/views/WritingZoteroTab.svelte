@@ -4,7 +4,10 @@
     ActionIcon,
     Button,
     IconButton,
+    Input,
     SearchBar,
+    SelectTrigger,
+    StatusBadge,
     ToolbarMenu,
     type ToolbarMenuItem,
   } from '@entropia/ui'
@@ -438,18 +441,16 @@
         bind:open={libraryMenuOpen}
       >
         {#snippet trigger(props, { open })}
-          <button
-            type="button"
-            class="zotero__menu-trigger"
-            class:zotero__menu-trigger--open={open}
-            aria-labelledby="zotero-library-label zotero-library-value"
-            {...props}
-          >
-            <span class="zotero__menu-trigger-label" id="zotero-library-value">
-              {libraryHeading}
-            </span>
-            <ActionIcon name="chevron-down" size={12} />
-          </button>
+          <span class="zotero__menu-trigger">
+            <SelectTrigger
+              {...props}
+              id="zotero-library-value"
+              size="sm"
+              {open}
+              label={libraryHeading}
+              aria-labelledby="zotero-library-label zotero-library-value"
+            />
+          </span>
         {/snippet}
       </ToolbarMenu>
       <Button
@@ -476,32 +477,31 @@
           bind:open={typeMenuOpen}
         >
           {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="zotero__menu-trigger"
-              class:zotero__menu-trigger--open={open}
-              aria-labelledby="zotero-add-type-label zotero-add-type-value"
-              {...props}
-            >
-              <span class="zotero__menu-trigger-label" id="zotero-add-type-value">
-                {addTypeLabel}
-              </span>
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
+            <span class="zotero__menu-trigger">
+              <SelectTrigger
+                {...props}
+                id="zotero-add-type-value"
+                size="sm"
+                {open}
+                label={addTypeLabel}
+                aria-labelledby="zotero-add-type-label zotero-add-type-value"
+              />
+            </span>
           {/snippet}
         </ToolbarMenu>
         <label class="zotero__add-label" for="zotero-add-id">
           {t('writing.zoteroLibraryId')}
         </label>
-        <input
-          id="zotero-add-id"
-          class="zotero__input"
-          type="text"
-          inputmode="numeric"
-          autocomplete="off"
-          placeholder={t('writing.zoteroLibraryIdPlaceholder')}
-          bind:value={addId}
-        />
+        <span class="zotero__add-id">
+          <Input
+            id="zotero-add-id"
+            size="sm"
+            inputmode="numeric"
+            autocomplete="off"
+            placeholder={t('writing.zoteroLibraryIdPlaceholder')}
+            bind:value={addId}
+          />
+        </span>
         <div class="zotero__add-actions">
           <Button variant="secondary" size="sm" type="submit" loading={adding}>
             {t('writing.zoteroLibraryAdd')}
@@ -653,10 +653,18 @@
                 <span class="zotero__meta">
                   {[entry.authors, entry.year].filter(Boolean).join(' · ')}
                   {#if entry.semantic}
-                    <span class="zotero__semantic">{t('writing.zoteroSemanticTag')}</span>
+                    <span class="zotero__tag"
+                      ><StatusBadge variant="neutral" size="xs"
+                        >{t('writing.zoteroSemanticTag')}</StatusBadge
+                      ></span
+                    >
                   {/if}
                   {#if entry.content}
-                    <span class="zotero__semantic">{t('writing.zoteroContentTag')}</span>
+                    <span class="zotero__tag"
+                      ><StatusBadge variant="neutral" size="xs"
+                        >{t('writing.zoteroContentTag')}</StatusBadge
+                      ></span
+                    >
                   {/if}
                 </span>
                 {#if entry.content}
@@ -779,49 +787,19 @@
     font-size: var(--font-size-xs);
   }
 
-  .zotero__input {
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-input);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
-    max-width: 100%;
+  /* Room for a library id, as the native field it replaces had. */
+  .zotero__add-id {
+    flex: 0 1 12rem;
+    min-width: 0;
   }
 
-  /* The picker trigger wears this tab's own control look (the select it
-     replaced dressed exactly like the input above), shaped like the library
-     pickers of BibliotecaView and BatchProcessingTab: label, name, chevron. */
+  /* Only layout: the trigger itself is SelectTrigger, the same picker look
+     BibliotecaView and BatchProcessingTab use. This box keeps it from asking
+     for more than the panel has. */
   .zotero__menu-trigger {
     display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
+    min-width: 0;
     max-width: min(260px, 100%);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-input);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-  }
-
-  .zotero__menu-trigger:hover,
-  .zotero__menu-trigger--open {
-    border-color: color-mix(in srgb, var(--color-accent) 40%, var(--border-subtle));
-  }
-
-  .zotero__menu-trigger:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .zotero__menu-trigger-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .zotero__add {
@@ -840,7 +818,7 @@
   .zotero__list {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     margin: 0;
     padding: 0;
     list-style: none;
@@ -857,7 +835,7 @@
   }
 
   .zotero__row:hover {
-    background: var(--color-accent-faint);
+    background: var(--state-hover-row);
   }
 
   .zotero__row-actions {
@@ -872,7 +850,7 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     min-width: 0;
   }
 
@@ -896,12 +874,8 @@
     line-height: var(--line-height-base);
   }
 
-  .zotero__semantic {
+  .zotero__tag {
     margin-left: var(--space-1);
-    padding: 0 var(--space-1);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    color: var(--color-text-secondary);
   }
 
   .zotero__notice {

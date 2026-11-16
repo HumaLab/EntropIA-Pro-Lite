@@ -3,8 +3,10 @@
   import type { MapViewerLabels, MapViewerProps } from './MapViewer.types'
   import { onMount, onDestroy, tick } from 'svelte'
   import ActionIcon from '../Button/ActionIcon.svelte'
-  import ToolbarMenu from '../ToolbarMenu/ToolbarMenu.svelte'
-  import type { ToolbarMenuItem } from '../ToolbarMenu/ToolbarMenu.types'
+  import Button from '../Button/Button.svelte'
+  import IconButton from '../IconButton/IconButton.svelte'
+  import Select from '../SelectTrigger/Select.svelte'
+  import type { SelectOption } from '../SelectTrigger/SelectTrigger.types'
   import L from 'leaflet'
   import 'leaflet/dist/leaflet.css'
   import markerIconUrl from 'leaflet/dist/images/marker-icon.png'
@@ -47,7 +49,6 @@
   let draftLocation = $state<{ latitude: number; longitude: number } | null>(null)
   let saving = $state(false)
   let actionError = $state<string | null>(null)
-  let locationMenuOpen = $state(false)
   const leafletMarkers = new Map<string, L.Marker>()
 
   let ui = $derived({ ...defaultLabels, ...labels })
@@ -62,17 +63,11 @@
   let selectedMarker = $derived(
     markers.find((marker) => marker.entityId === selectedEntityId) ?? null
   )
-  /** The location picker: the canonical radio pattern (a ToolbarMenu whose
-   *  checked entry is the selection), never a native select — the operating
+  /** The location picker: the package Select (a SelectTrigger opening a
+   *  ToolbarMenu of radio entries), never a native select — the operating
    *  system would draw that outside the app's theme. */
-  let locationMenuItems = $derived<ToolbarMenuItem[]>(
-    availableLocations.map((location) => ({
-      kind: 'radio' as const,
-      id: location.entityId,
-      label: location.label,
-      checked: location.entityId === selectedEntityId,
-      onselect: () => selectLocation(location.entityId),
-    }))
+  let locationSelectOptions = $derived<SelectOption[]>(
+    availableLocations.map((location) => ({ value: location.entityId, label: location.label }))
   )
 
   const defaultCenter: L.LatLngExpression = [-34.6, -58.4]
@@ -332,46 +327,53 @@
         </span>
 
         {#if availableLocations.length > 1}
-          <ToolbarMenu label={ui.location} items={locationMenuItems} bind:open={locationMenuOpen}>
-            {#snippet trigger(props, { open })}
-              <button
-                type="button"
-                class="map-viewer__location-trigger"
-                class:map-viewer__location-trigger--open={open}
-                aria-label={ui.location}
-                disabled={editingEntityId !== null || saving}
-                {...props}
-              >
-                <span class="map-viewer__location-trigger-label"
-                  >{selectedLocation?.label ?? ''}</span
-                >
-                <ActionIcon name="chevron-down" size={12} />
-              </button>
-            {/snippet}
-          </ToolbarMenu>
+          <div class="map-viewer__location-picker">
+            <Select
+              label={ui.location}
+              aria-label={ui.location}
+              value={selectedEntityId ?? ''}
+              options={locationSelectOptions}
+              size="sm"
+              block
+              disabled={editingEntityId !== null || saving}
+              onchange={selectLocation}
+            />
+          </div>
         {:else if selectedLocation}
           <strong>{selectedLocation.label}</strong>
         {/if}
 
         {#if !editingEntityId}
-          <button
-            class:map-viewer__action--icon-only={Boolean(selectedMarker)}
-            type="button"
-            onclick={startLocationEdit}
-            disabled={!selectedLocation || saving}
-            aria-label={selectedMarker ? ui.edit : undefined}
-            use:tooltip={selectedMarker ? ui.edit : undefined}
-          >
-            {#if selectedMarker}
-              <ActionIcon name="map-pin-pen" size={16} />
-            {:else}
-              {ui.create}
-            {/if}
-          </button>
-          {#if selectedMarker?.hasManualLocation && onresetlocation}
-            <button type="button" onclick={resetAutomaticLocation} disabled={saving}
-              >{ui.reset}</button
+          {#if selectedMarker}
+            <IconButton
+              variant="secondary"
+              size="md"
+              label={ui.edit}
+              title={ui.edit}
+              onclick={startLocationEdit}
+              disabled={!selectedLocation || saving}
             >
+              <ActionIcon name="map-pin-pen" size={16} />
+            </IconButton>
+          {:else}
+            <Button
+              variant="secondary"
+              size="sm"
+              onclick={startLocationEdit}
+              disabled={!selectedLocation || saving}
+            >
+              {ui.create}
+            </Button>
+          {/if}
+          {#if selectedMarker?.hasManualLocation && onresetlocation}
+            <Button
+              variant="secondary"
+              size="sm"
+              onclick={resetAutomaticLocation}
+              disabled={saving}
+            >
+              {ui.reset}
+            </Button>
           {/if}
         {/if}
       </div>
@@ -382,10 +384,17 @@
           <output>{draftLocation.latitude.toFixed(6)}, {draftLocation.longitude.toFixed(6)}</output>
         {/if}
         <div class="map-viewer__actions">
-          <button type="button" onclick={saveLocationEdit} disabled={!draftLocation || saving}
-            >{ui.save}</button
+          <Button
+            variant="primary"
+            size="sm"
+            onclick={saveLocationEdit}
+            disabled={!draftLocation || saving}
           >
-          <button type="button" onclick={cancelLocationEdit} disabled={saving}>{ui.cancel}</button>
+            {ui.save}
+          </Button>
+          <Button variant="secondary" size="sm" onclick={cancelLocationEdit} disabled={saving}>
+            {ui.cancel}
+          </Button>
         </div>
       {/if}
 
@@ -399,10 +408,11 @@
 <style>
   .map-viewer {
     position: relative;
+    box-sizing: border-box;
     width: 100%;
     min-width: 0;
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-surface);
     overflow: hidden;
   }
 
@@ -424,36 +434,39 @@
 
   .map-viewer__empty p {
     color: var(--color-text-muted);
-    font-size: var(--font-size-sm, 0.875rem);
+    font-size: var(--font-size-sm);
   }
 
+  /* Leaflet stacks its own zoom and attribution controls at 1000 in the same
+     stacking context, so the editor takes the dialog layer to stay above them. */
   .map-viewer__editor {
     position: absolute;
-    z-index: 1000;
-    top: var(--space-2, 0.5rem);
-    right: var(--space-2, 0.5rem);
+    z-index: var(--z-dialog);
+    top: var(--space-2);
+    right: var(--space-2);
     display: grid;
-    gap: var(--space-2, 0.5rem);
-    width: min(19rem, calc(100% - 1rem));
+    gap: var(--space-2);
+    width: min(19rem, calc(100% - 2 * var(--space-2)));
     box-sizing: border-box;
-    padding: var(--space-3, 0.75rem);
+    padding: var(--space-3);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-surface);
     background: color-mix(in srgb, var(--color-surface) 94%, transparent);
-    box-shadow: var(--shadow-md, 0 8px 24px rgb(0 0 0 / 18%));
+    box-shadow: var(--shadow-md);
     backdrop-filter: blur(8px);
   }
 
   .map-viewer__actions {
     display: flex;
-    gap: var(--space-2, 0.5rem);
+    flex-wrap: wrap;
+    gap: var(--space-2);
     align-items: center;
   }
 
   .map-viewer__location-row {
     display: flex;
     flex-wrap: nowrap;
-    gap: var(--space-2, 0.5rem);
+    gap: var(--space-2);
     align-items: center;
     width: 100%;
     min-width: 0;
@@ -467,34 +480,14 @@
     color: var(--color-text-primary);
   }
 
-  /* The location picker trigger. It replaces the native select (the project
-     rule forbids one), so it keeps that selector's width constraint inside the
-     narrow editor row and adds the canonical name + chevron shape. */
-  .map-viewer__location-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
+  /* The picker's cell takes the row's free width and may shrink below its
+     content, so a long place name ellipsizes inside the narrow editor instead
+     of pushing the edit control out. The Select spans the cell (block). */
+  .map-viewer__location-picker {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
     flex: 1 1 auto;
-    width: 100%;
     min-width: 0;
-    max-width: 100%;
-    justify-content: space-between;
-    cursor: pointer;
-  }
-
-  .map-viewer__location-trigger:hover,
-  .map-viewer__location-trigger--open {
-    border-color: var(--color-accent, #5b7cfa);
-  }
-
-  .map-viewer__location-trigger-label {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-align: start;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--font-size-xs, 0.75rem);
   }
 
   .map-viewer__location-row strong {
@@ -506,46 +499,14 @@
   .map-viewer__editor output {
     margin: 0;
     color: var(--color-text-muted);
-    font-size: var(--font-size-xs, 0.75rem);
+    font-size: var(--font-size-xs);
   }
 
   .map-viewer__editor output {
     font-family: var(--font-mono);
   }
 
-  .map-viewer__actions {
-    flex-wrap: wrap;
-  }
-
-  .map-viewer__actions button,
-  .map-viewer__location-row button {
-    flex: 0 0 auto;
-    padding: 0.35rem 0.65rem;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm, 4px);
-    background: var(--color-surface);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: var(--font-size-xs, 0.75rem);
-    cursor: pointer;
-  }
-
-  .map-viewer__location-row button.map-viewer__action--icon-only {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--control-height-sm, 1.875rem);
-    height: var(--control-height-sm, 1.875rem);
-    padding: 0;
-  }
-
-  .map-viewer__actions button:disabled,
-  .map-viewer__location-row button:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .map-viewer__error {
-    color: var(--color-danger, #b42318) !important;
+  .map-viewer__editor .map-viewer__error {
+    color: var(--color-danger);
   }
 </style>

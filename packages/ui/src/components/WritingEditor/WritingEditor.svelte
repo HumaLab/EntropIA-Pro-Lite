@@ -4,6 +4,7 @@
   import ActionIcon from '../Button/ActionIcon.svelte'
   import Button from '../Button/Button.svelte'
   import IconButton from '../IconButton/IconButton.svelte'
+  import Input from '../Input/Input.svelte'
   import SearchBar from '../SearchBar/SearchBar.svelte'
   import ToolbarMenu from '../ToolbarMenu/ToolbarMenu.svelte'
   import ToolbarMenuList from '../ToolbarMenu/ToolbarMenuList.svelte'
@@ -1342,16 +1343,18 @@
         <!-- A one-field disclosure rather than a dialog: the shared modal shell
              does not exist yet, and a link does not warrant inventing one. -->
         <div class="writing-editor__link-row">
-          <input
-            class="writing-editor__link-input"
-            type="url"
-            inputmode="url"
-            placeholder="https://"
-            aria-label={labels.link}
-            onkeydown={onLinkKeydown}
-            onblur={(event) => commitLink(event.currentTarget.value)}
-            {@attach (node) => node.focus()}
-          />
+          <div class="writing-editor__link-field">
+            <Input
+              size="sm"
+              type="url"
+              inputmode="url"
+              placeholder="https://"
+              aria-label={labels.link}
+              onkeydown={onLinkKeydown}
+              onblur={(event) => commitLink(event.currentTarget.value)}
+              {@attach (node) => node.focus()}
+            />
+          </div>
         </div>
       {/if}
     {/if}
@@ -1555,6 +1558,11 @@
     background: var(--surface-toolbar);
   }
 
+  /* The link field keeps the width it had before it became the shared Input. */
+  .writing-editor__link-field {
+    max-width: 48ch;
+  }
+
   .writing-editor__link-input {
     width: 100%;
     max-width: 48ch;
@@ -1688,7 +1696,7 @@
      Every reading face is taller than one em, so a bare line-height of 1 ran
      the lines of a paragraph into each other. */
   :global(.writing-editor__surface [data-line-height]) {
-    line-height: calc(var(--writing-line-height, 1) * var(--font-reading-single-line, 1.35));
+    line-height: calc(var(--writing-line-height, 1) * var(--font-reading-single-line));
   }
 
   /* A marker is rendered outside its item's content box by default. The
@@ -1838,7 +1846,7 @@
        meet the next line's highlight, which the browser paints after them.
        Blending keeps the ink on top: each theme picks the mode under which
        its ink is the pixel that wins (tokens.css). */
-    mix-blend-mode: var(--writing-blend-highlight, normal);
+    mix-blend-mode: var(--writing-blend-highlight);
     border-radius: 2px;
     color: var(--color-text-primary);
     box-decoration-break: clone;

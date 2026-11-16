@@ -10,7 +10,15 @@
    * routed through TopBar), and the typography cards are the same
    * FontPresetGrid the top bar used to open in a popover.
    */
-  import { ActionIcon, Card, ToolbarMenu, tooltip, type ToolbarMenuItem } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    Card,
+    IconButton,
+    SelectTrigger,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
   import { locale, setLocale, t, type Locale } from '$lib/i18n'
   import {
     THEME_CYCLE,
@@ -139,16 +147,16 @@
         </span>
         <ToolbarMenu label={t('settings.appearance.themeLabel')} items={themeItems}>
           {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="appearance-tab__select"
-              class:appearance-tab__select--open={open}
-              aria-labelledby="appearance-theme-label appearance-theme-value"
+            <!-- Named by its label, then by itself: the current choice. -->
+            <SelectTrigger
               {...props}
-            >
-              <span id="appearance-theme-value">{themeLabels[theme]}</span>
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
+              id="appearance-theme-trigger"
+              variant="quiet"
+              size="sm"
+              {open}
+              label={themeLabels[theme]}
+              aria-labelledby="appearance-theme-label appearance-theme-trigger"
+            />
           {/snippet}
         </ToolbarMenu>
       </div>
@@ -159,16 +167,15 @@
         </span>
         <ToolbarMenu label={t('settings.appearance.contrastLabel')} items={contrastItems}>
           {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="appearance-tab__select"
-              class:appearance-tab__select--open={open}
-              aria-labelledby="appearance-contrast-label appearance-contrast-value"
+            <SelectTrigger
               {...props}
-            >
-              <span id="appearance-contrast-value">{contrastLabels[contrast]}</span>
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
+              id="appearance-contrast-trigger"
+              variant="quiet"
+              size="sm"
+              {open}
+              label={contrastLabels[contrast]}
+              aria-labelledby="appearance-contrast-label appearance-contrast-trigger"
+            />
           {/snippet}
         </ToolbarMenu>
       </div>
@@ -179,16 +186,15 @@
         </span>
         <ToolbarMenu label={t('settings.languageLabel')} items={localeItems}>
           {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="appearance-tab__select"
-              class:appearance-tab__select--open={open}
-              aria-labelledby="appearance-language-label appearance-language-value"
+            <SelectTrigger
               {...props}
-            >
-              <span id="appearance-language-value">{currentLanguageOption}</span>
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
+              id="appearance-language-trigger"
+              variant="quiet"
+              size="sm"
+              {open}
+              label={currentLanguageOption}
+              aria-labelledby="appearance-language-label appearance-language-trigger"
+            />
           {/snippet}
         </ToolbarMenu>
       </div>
@@ -198,35 +204,33 @@
           {t('topbar.zoomTitle')}
         </span>
         <div class="appearance-tab__zoom" role="group" aria-labelledby="appearance-zoom-label">
-          <button
-            type="button"
-            class="appearance-tab__zoom-step"
-            aria-label={t('topbar.zoomOut')}
-            use:tooltip={t('topbar.zoomOut')}
+          <IconButton
+            size="sm"
+            label={t('topbar.zoomOut')}
+            title={t('topbar.zoomOut')}
             disabled={$currentZoom <= ZOOM_MIN}
             onclick={() => void zoomOut()}
           >
             <ActionIcon name="zoom-out" size={14} />
-          </button>
+          </IconButton>
           <span
             class="appearance-tab__zoom-level"
             data-testid="appearance-zoom-level"
             aria-label={t('topbar.zoomLevelAria', { value: zoomPercent })}
             aria-live="polite">{zoomPercent}%</span
           >
-          <button
-            type="button"
-            class="appearance-tab__zoom-step"
-            aria-label={t('topbar.zoomIn')}
-            use:tooltip={t('topbar.zoomIn')}
+          <IconButton
+            size="sm"
+            label={t('topbar.zoomIn')}
+            title={t('topbar.zoomIn')}
             disabled={$currentZoom >= ZOOM_MAX}
             onclick={() => void zoomIn()}
           >
             <ActionIcon name="zoom-in" size={14} />
-          </button>
-          <button type="button" class="appearance-tab__zoom-reset" onclick={() => void resetZoom()}>
+          </IconButton>
+          <Button variant="ghost" size="sm" onclick={() => void resetZoom()}>
             {t('topbar.zoomReset')}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -238,16 +242,15 @@
              previews instead of a plain list. -->
         <ToolbarMenu label={t('typography.title')}>
           {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="appearance-tab__select"
-              class:appearance-tab__select--open={open}
-              aria-labelledby="appearance-font-label appearance-font-value"
+            <SelectTrigger
               {...props}
-            >
-              <span id="appearance-font-value">{t(fontLabelKey)}</span>
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
+              id="appearance-font-trigger"
+              variant="quiet"
+              size="sm"
+              {open}
+              label={t(fontLabelKey)}
+              aria-labelledby="appearance-font-label appearance-font-trigger"
+            />
           {/snippet}
           {#snippet children(menu)}
             <div class="appearance-tab__font-menu">
@@ -301,59 +304,12 @@
     font-weight: var(--font-weight-medium);
   }
 
-  /* The trigger of a preference choice. It replaces a native <select>, so it
-     states every surface the operating system used to decide. */
-  .appearance-tab__select {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    cursor: pointer;
-  }
-
-  /* No box at rest, only the chevron says it opens (user decision,
-     2026-10-08); the surface shows on hover and while open, like the zoom
-     steps. */
-  .appearance-tab__select:hover,
-  .appearance-tab__select--open {
-    background: var(--surface-toolbar);
-  }
-
+  /* The choices are quiet SelectTriggers: no box at rest, only the chevron
+     says it opens (user decision, 2026-10-08). */
   .appearance-tab__zoom {
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
-  }
-
-  .appearance-tab__zoom-step {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--control-height-sm);
-    height: var(--control-height-sm);
-    padding: 0;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-  }
-
-  .appearance-tab__zoom-step:hover:not(:disabled) {
-    background: var(--surface-toolbar);
-    color: var(--color-text-primary);
-  }
-
-  .appearance-tab__zoom-step:disabled {
-    opacity: 0.4;
-    cursor: default;
   }
 
   .appearance-tab__zoom-level {
@@ -364,23 +320,5 @@
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
     font-variant-numeric: tabular-nums;
-  }
-
-  .appearance-tab__zoom-reset {
-    padding: 0 var(--space-2);
-    min-height: var(--control-height-sm);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-secondary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    cursor: pointer;
-  }
-
-  .appearance-tab__zoom-reset:hover {
-    background: var(--surface-toolbar);
-    color: var(--color-text-primary);
   }
 </style>

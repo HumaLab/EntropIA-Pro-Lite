@@ -1,2 +1,2 @@
 export { default as SearchBar } from './SearchBar.svelte'
-export type { SearchBarProps } from './SearchBar.types'
+export type { SearchBarProps, SearchBarSize } from './SearchBar.types'

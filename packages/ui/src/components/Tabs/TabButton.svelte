@@ -59,7 +59,7 @@
 
   .tab-button:disabled {
     cursor: not-allowed;
-    opacity: 0.48;
+    opacity: var(--opacity-disabled);
   }
 
   .tab-button--active {

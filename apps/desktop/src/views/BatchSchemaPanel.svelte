@@ -7,6 +7,7 @@
     Checkbox,
     IconButton,
     Input,
+    SelectTrigger,
     ToolbarMenu,
     type ToolbarMenuItem,
   } from '@entropia/ui'
@@ -156,17 +157,15 @@
     <span class="batch-field__legend" id="schema-panel-label">{t('batch.schema')}</span>
     <ToolbarMenu label={t('batch.schema')} items={schemaItems}>
       {#snippet trigger(props, { open })}
-        <button
-          type="button"
-          class="menu-select"
-          class:menu-select--open={open}
+        <SelectTrigger
+          {...props}
+          id="schema-panel-value"
+          size="sm"
+          {open}
+          label={current?.name ?? t('batch.schemaNone')}
           aria-labelledby="schema-panel-label schema-panel-value"
           disabled={busy}
-          {...props}
-        >
-          <span id="schema-panel-value">{current?.name ?? t('batch.schemaNone')}</span>
-          <ActionIcon name="chevron-down" size={12} />
-        </button>
+        />
       {/snippet}
     </ToolbarMenu>
     <Button variant="ghost" size="sm" disabled={busy} onclick={() => (editing = blankSchema())}>
@@ -258,7 +257,7 @@
         </Button>
       </div>
       <div class="schema-panel__table">
-        <table>
+        <table class="schema-panel__records">
           <thead>
             <tr>
               <th>{t('batch.schemaDocument')}</th>
@@ -301,14 +300,14 @@
     display: grid;
     gap: var(--space-2);
     padding: var(--space-3);
-    border: 1px solid var(--color-border, rgba(127, 127, 127, 0.3));
-    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-surface);
   }
 
   .schema-panel__hint {
     margin: 0;
     color: var(--color-text-secondary);
-    font-size: 0.9em;
+    font-size: var(--font-size-xs);
   }
 
   .schema-panel__table {
@@ -316,49 +315,29 @@
     overflow: auto;
   }
 
-  table {
+  /* Same table as the batch tab's tasks and history: small tabular figures,
+     muted header, one hairline under each row and no outer frame. */
+  .schema-panel__records {
     border-collapse: collapse;
     width: 100%;
-    font-size: 0.9em;
+    font-size: var(--font-size-xs);
+    font-variant-numeric: tabular-nums;
   }
 
-  th,
-  td {
+  .schema-panel__records th,
+  .schema-panel__records td {
     padding: var(--space-1) var(--space-2);
-    border-bottom: 1px solid var(--color-border, rgba(127, 127, 127, 0.3));
+    border-bottom: 1px solid var(--border-subtle);
     text-align: left;
     vertical-align: top;
   }
 
-  /* Same trigger as the batch tab's state filter: the app's own menu, never a
-     native <select>, whose popup the operating system paints. */
-  .menu-select {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-  }
-
-  .menu-select:hover,
-  .menu-select--open {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
-  }
-
-  .menu-select:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
+  .schema-panel__records th {
+    color: var(--color-text-muted);
+    font-weight: var(--font-weight-medium);
   }
 
   .schema-panel__error {
-    color: var(--color-danger, #c0392b);
+    color: var(--color-danger);
   }
 </style>

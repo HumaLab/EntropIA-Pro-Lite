@@ -826,6 +826,14 @@ describe('the batch detail is compact and dark all the way down', () => {
     expect(options[0]).toHaveAttribute('aria-checked', 'true')
   })
 
+  it('draws the state filter and the priority with the shared SelectTrigger', async () => {
+    // One trigger for every one-of-many menu in the app, not a local copy.
+    await openDetail()
+
+    expect(screen.getByRole('button', { name: 'Estado Todos' })).toHaveClass('select-trigger')
+    expect(screen.getByRole('button', { name: /^Prioridad / })).toHaveClass('select-trigger')
+  })
+
   it('reloads the tasks through the chosen state', async () => {
     await openDetail()
     await fireEvent.click(screen.getByRole('button', { name: 'Estado Todos' }))
@@ -1435,6 +1443,17 @@ describe('batch OCR correction and page summaries', () => {
     await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Corregir y resumir' }))
     await waitFor(() => expect(correction).toBeChecked())
     expect(summary).toBeChecked()
+  })
+
+  it('draws the flow picker with the shared SelectTrigger', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      return null
+    })
+    render(BatchProcessingTab)
+
+    const trigger = await screen.findByRole('button', { name: 'Flujo guardado Elegir a mano' })
+    expect(trigger).toHaveClass('select-trigger')
   })
 
   it('loads a flow saved before the two toggles existed with both off', async () => {

@@ -99,6 +99,13 @@ describe('OpenrouterModelList', () => {
     expect(box().value).toBe('qwen/qwen-2.5-7b')
   })
 
+  it('builds the field on Input', async () => {
+    picker()
+    await loaded()
+
+    expect(box()).toHaveClass('input-field__input')
+  })
+
   it('busca en todo el catálogo y Enter elige el primer resultado', async () => {
     const { onchoose } = picker()
     await loaded()
@@ -272,6 +279,10 @@ describe('OpenrouterModelList', () => {
     })
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
 
+    expect(screen.getByRole('button', { name: 'Ir a Configuración' })).toHaveClass(
+      'btn',
+      'btn--link'
+    )
     await fireEvent.click(screen.getByRole('button', { name: 'Ir a Configuración' }))
     expect(requestSettingsTabMock).toHaveBeenCalledWith('api')
     expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'settings' })

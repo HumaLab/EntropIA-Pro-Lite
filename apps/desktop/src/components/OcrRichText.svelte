@@ -68,7 +68,7 @@
     min-width: 0;
     font-family: var(--font-reading);
     overflow-wrap: anywhere;
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
   }
 
   .ocr-rich-text :global(h1),
@@ -79,7 +79,7 @@
   .ocr-rich-text :global(h6) {
     margin: var(--space-4) 0 var(--space-2);
     color: var(--color-text-primary);
-    line-height: 1.25;
+    line-height: var(--line-height-tight);
   }
 
   .ocr-rich-text :global(p),

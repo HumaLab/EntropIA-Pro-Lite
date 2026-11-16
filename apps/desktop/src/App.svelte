@@ -182,7 +182,7 @@
     position: fixed;
     inset: 0;
     /* Above every dialog and editor overlay (the highest is 1200). */
-    z-index: 2000;
+    z-index: var(--z-blocking);
   }
 
   .startup {
@@ -197,7 +197,7 @@
         color-mix(in srgb, var(--color-accent) 12%, transparent),
         transparent 34%
       ),
-      var(--surface-app, var(--color-bg));
+      var(--surface-app);
   }
 
   .startup-card {
@@ -238,7 +238,7 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 

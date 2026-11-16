@@ -140,10 +140,10 @@ describe('Quick-access arrow is readable at rest', () => {
   })
 
   it('is drawn at the large text size, not the extra-small one it started with', () => {
-    // At --font-size-xs (12px) the glyph read as a speck next to the 17px title.
+    // At --font-size-xs (12px) the glyph read as a speck next to the 18px title.
     const rule = ruleFor('.home-view__quick-access-arrow {')
     expect(rule).toMatch(/font-size:\s*var\(--font-size-lg\)/)
-    expect(rule).toMatch(/line-height:\s*1;/)
+    expect(rule).toMatch(/line-height:\s*var\(--line-height-tight\);/)
   })
 
   it('brightens to secondary text on hover/focus', () => {
@@ -271,4 +271,71 @@ describe('Inicio header is translucent over the constellation', () => {
       /background:\s*color-mix\(in srgb, var\(--surface-app\) 78%, transparent\);/
     )
   })
+})
+
+/**
+ * Stage D migration (PLAN_HOMOGENEIZACION step 25): the cover's own type
+ * scale (F4) moves onto the shared tokens decided in step 4, and keyboard
+ * focus stops looking exactly like hover (E3).
+ */
+describe('Inicio type scale uses the shared tokens (F4)', () => {
+  it('declares no literal font-size anywhere in the stylesheet', () => {
+    expect(STYLES).not.toMatch(/font-size:\s*\d+(\.\d+)?(px|em|rem)/)
+  })
+
+  it('maps each cover size to its decided token', () => {
+    expect(ruleFor('.home-view h1 {')).toMatch(/font-size:\s*var\(--font-size-3xl\);/)
+    expect(ruleFor('.home-view__first-run h2 {')).toMatch(/font-size:\s*var\(--font-size-2xl\);/)
+    expect(ruleFor('.home-view__corpus-cell-value {')).toMatch(
+      /font-size:\s*var\(--font-size-xl\);/
+    )
+    expect(ruleFor('.home-view__continuar-row-title {')).toMatch(
+      /font-size:\s*var\(--font-size-lg\);/
+    )
+    expect(ruleFor('.home-view__quick-access-title {')).toMatch(
+      /font-size:\s*var\(--font-size-lg\);/
+    )
+    expect(ruleFor('.home-view__corpus-stage-value {')).toMatch(
+      /font-size:\s*var\(--font-size-md\);/
+    )
+    expect(ruleFor('.home-view__corpus-stage--full .home-view__corpus-stage-value {')).toMatch(
+      /font-size:\s*var\(--font-size-lg\);/
+    )
+  })
+
+  it('uses only line-height tokens', () => {
+    for (const m of STYLES.matchAll(/line-height:\s*([^;]+);/g)) {
+      expect(m[1]).toMatch(/^var\(--line-height-(tight|base|reading)\)$/)
+    }
+  })
+
+  it('writes 2px gaps with the spacing token', () => {
+    expect(STYLES).not.toMatch(/gap:\s*2px/)
+  })
+})
+
+describe('Keyboard focus is distinct from hover (E3)', () => {
+  const focusables = [
+    '.home-view__continuar-row',
+    '.home-view__recent-row',
+    '.home-view__quick-access-card',
+    '.home-view__corpus-pending',
+  ]
+
+  it.each(focusables)('%s draws the shared focus ring on :focus-visible', (selector) => {
+    const rule = ruleFor(`${selector}:focus-visible {`)
+    expect(rule).toMatch(/box-shadow:\s*(inset\s+)?var\(--focus-ring\);/)
+  })
+
+  it.each(focusables)('%s never removes the outline without the ring', (selector) => {
+    const rule = ruleFor(`${selector}:focus-visible {`)
+    if (/outline:\s*none/.test(rule)) expect(rule).toMatch(/var\(--focus-ring\)/)
+  })
+
+  it.each(['.home-view__continuar-row', '.home-view__recent-row'])(
+    '%s no longer shares its hover background with focus',
+    (selector) => {
+      expect(STYLES).not.toContain(`${selector}:hover,\n  ${selector}:focus-visible`)
+    }
+  )
 })

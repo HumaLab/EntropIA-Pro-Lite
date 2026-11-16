@@ -23,6 +23,12 @@
   --color-danger: #e26f7f;
   --color-danger-hover: #f28a98;
   --color-danger-soft: rgba(226, 111, 127, 0.11);
+  /* Text on a danger fill. Each theme's page colour clears 4.5:1 on its own
+     danger and danger-hover (contrast-floor.test.ts), so the ink follows the
+     theme instead of being a fixed #fff that fails on the dark palettes. */
+  --color-on-danger: var(--color-bg);
+  /* A mark on an accent fill (the help bubble's logo): white on every theme. */
+  --color-on-accent: #fff;
   --color-success: #79c39f;
   --color-success-soft: rgba(121, 195, 159, 0.11);
   --color-warning: #d8ad6a;
@@ -31,7 +37,6 @@
   --color-info-soft: rgba(134, 174, 244, 0.11);
   --color-overlay: rgba(3, 6, 12, 0.68);
   --color-primary: var(--color-accent);
-  --color-primary-subtle: var(--color-accent-soft);
 
   /* Semantic aliases */
   --surface-app: var(--color-bg);
@@ -54,8 +59,11 @@
   --state-evidence: var(--color-info);
   --state-evidence-soft: var(--color-info-soft);
   --state-evidence-border: color-mix(in srgb, var(--color-info) 28%, transparent);
+  /* The hover of a row in a list (history, recents, results): one quiet step. */
+  --state-hover-row: var(--color-accent-faint);
 
-  /* Spacing (4px base unit) */
+  /* Spacing (4px base unit; 0-5 is the one half step, for hairline gaps) */
+  --space-0-5: 2px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -73,19 +81,30 @@
   --font-size-base: var(--font-size-md);
   --font-size-lg: 18px;
   --font-size-xl: 22px;
+  /* Display sizes, for the home cover only (F4). */
+  --font-size-2xl: 26px;
+  --font-size-3xl: 30px;
   --font-weight-normal: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
-  --font-weight-bold: 600;
   --line-height-tight: 1.22;
   --line-height-base: 1.46;
+  --line-height-reading: 1.6;
+  /* A box exactly as tall as its font: icon glyphs, and the PDF text layer,
+     whose spans must sit on the rendered page. */
+  --line-height-none: 1;
+  --letter-spacing-caps: 0.075em;
+  /* Headings tighten; a small bold tag or badge opens up a little. */
+  --letter-spacing-heading: -0.025em;
+  --letter-spacing-tag: 0.04em;
+  /* Inline code inside running text, relative to that text. */
+  --font-size-code-inline: 0.9em;
 
   /* Border Radius */
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 10px;
-  --radius-xl: 12px;
   --radius-control: 6px;
   --radius-input: 8px;
   --radius-surface: 10px;
@@ -96,10 +115,22 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
   --shadow-md: 0 8px 18px rgba(0, 0, 0, 0.22);
   --shadow-lg: 0 18px 42px rgba(0, 0, 0, 0.34);
-  --shadow-glow: 0 0 0 1px var(--color-hairline), 0 10px 24px rgba(0, 0, 0, 0.18);
   --shadow-surface: 0 1px 0 rgba(255, 255, 255, 0.025) inset, 0 1px 2px rgba(0, 0, 0, 0.28);
+  /* The top highlight alone, without --shadow-surface's outer drop. */
+  --shadow-highlight: 0 1px 0 rgba(255, 255, 255, 0.025) inset;
+  /* The recessed edge of a sunken panel. */
+  --shadow-inset: 0 1px 0 rgba(0, 0, 0, 0.18) inset;
+  /* Marks drawn over a page or a scan, not over the theme: Zotero's fixed
+     annotation swatches and the OCR layout regions read the same everywhere.
+     The note's lift follows the theme's shadows and goes where they go. */
+  --annotation-ink: rgb(0 0 0 / 0.45);
+  --annotation-ink-soft: rgb(0 0 0 / 0.25);
+  --annotation-shadow: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.35));
+  --viewer-layout-block: rgb(245 158 11);
 
-  /* Controls */
+  /* Controls. xs is the dense row (tabs, menu items, badges); an icon-only
+     square follows IconButton's own ladder (24/28/32/40) instead. */
+  --control-height-xs: 28px;
   --control-height-sm: 30px;
   --control-height-md: 36px;
   --control-height-lg: 40px;
@@ -116,8 +147,43 @@
   --control-primary-text: #eef1f7;
   --focus-ring: 0 0 0 2px rgba(154, 164, 199, 0.22);
   --focus-ring-danger: 0 0 0 2px rgba(226, 111, 127, 0.22);
-  --transition-base: 0.14s ease;
-  --transition-smooth: 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Disabled controls. Primary keeps more of its fill so it still reads as
+     the primary action while unavailable. */
+  --opacity-disabled: 0.48;
+  --opacity-disabled-primary: 0.72;
+
+  /* Motion. fast is press feedback, base most state changes, smooth panels
+     and popovers, slow progress and larger moves. */
+  --duration-fast: 0.08s;
+  --duration-base: 0.14s;
+  --duration-smooth: 0.18s;
+  --duration-slow: 0.3s;
+  /* Loops: one turn of a spinner, one beat of a status pulse. */
+  --duration-spin: 0.8s;
+  --duration-pulse: 1.6s;
+  --transition-base: var(--duration-base) ease;
+  --transition-smooth: var(--duration-smooth) cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /*
+   * Layers, low to high. Every global z-index in the app today has a rung here,
+   * so moving a literal onto its token changes nothing on screen. A component's
+   * local 0–5 inside its own stacking context needs no token.
+   */
+  --z-sticky: 20;
+  --z-drawer: 25;
+  --z-popover: 30;
+  --z-popover-raised: 60;
+  --z-floating: 100;
+  --z-dropdown: 200;
+  --z-menu: 210;
+  /* The help assistant's bubble and panel: above menus, below every dialog. */
+  --z-assistant: 600;
+  --z-dialog: 1000;
+  --z-dialog-nested: 1100;
+  --z-dialog-top: 1200;
+  --z-tooltip: 1300;
+  --z-blocking: 2000;
 
   /*
    * The manuscript's colours (WritingEditor/writing-colors.ts). A manuscript
@@ -232,11 +298,12 @@
   --color-info-soft: rgba(49, 130, 206, 0.08);
   --color-overlay: rgba(0, 0, 0, 0.3);
   --color-primary: var(--color-accent);
-  --color-primary-subtle: var(--color-accent-soft);
   --shadow-sm: none;
   --shadow-md: none;
   --shadow-lg: none;
-  --shadow-glow: 0 0 0 1px var(--color-hairline);
+  --shadow-highlight: none;
+  --shadow-inset: none;
+  --annotation-shadow: none;
   --focus-ring: 0 0 0 2px rgba(90, 103, 216, 0.25);
   --focus-ring-danger: 0 0 0 2px rgba(229, 62, 62, 0.25);
   /* On a white page the ladder runs the other way: primary is the dark rung. */
@@ -313,14 +380,15 @@
   --color-info-soft: rgba(47, 111, 143, 0.08);
   --color-overlay: rgba(23, 38, 34, 0.26);
   --color-primary: var(--color-accent);
-  --color-primary-subtle: var(--color-accent-soft);
   /* No shadows at all. A raised surface here is told apart by its hairline and
      by a percent of lightness, which is the whole idea — a drop shadow would
      put weight back into a theme whose point is not having any. */
   --shadow-sm: none;
   --shadow-md: none;
   --shadow-lg: none;
-  --shadow-glow: 0 0 0 1px var(--color-hairline);
+  --shadow-highlight: none;
+  --shadow-inset: none;
+  --annotation-shadow: none;
   --focus-ring: 0 0 0 2px rgba(71, 119, 107, 0.28);
   --focus-ring-danger: 0 0 0 2px rgba(176, 58, 58, 0.25);
   /* On a pale page the ladder runs the other way: primary is the dark rung.
@@ -389,11 +457,12 @@
   --color-info-soft: rgba(45, 95, 134, 0.08);
   --color-overlay: rgba(40, 28, 12, 0.28);
   --color-primary: var(--color-accent);
-  --color-primary-subtle: var(--color-accent-soft);
   --shadow-sm: none;
   --shadow-md: none;
   --shadow-lg: none;
-  --shadow-glow: 0 0 0 1px var(--color-hairline);
+  --shadow-highlight: none;
+  --shadow-inset: none;
+  --annotation-shadow: none;
   --focus-ring: 0 0 0 2px rgba(139, 74, 36, 0.28);
   --focus-ring-danger: 0 0 0 2px rgba(168, 50, 44, 0.25);
   --control-primary-bg: #3a2e20;

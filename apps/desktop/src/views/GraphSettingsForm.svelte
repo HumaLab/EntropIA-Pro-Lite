@@ -9,7 +9,7 @@
     type GraphStructureSettings,
   } from '$lib/analysis-settings'
   import { GRAPH_LAYOUTS } from '$lib/graph-layouts'
-  import { ActionIcon, ToolbarMenu, type ToolbarMenuItem } from '@entropia/ui'
+  import { SelectTrigger, ToolbarMenu, type ToolbarMenuItem } from '@entropia/ui'
 
   let { graph, onchange }: { graph: GraphSettings; onchange: (graph: GraphSettings) => void } =
     $props()
@@ -205,26 +205,23 @@
           <span class="graph-settings__label" id="graph-setting-layout-label">
             {translate('graphSettings.layout')}
           </span>
-          <ToolbarMenu
-            label={translate('graphSettings.layout')}
-            items={layoutItems}
-            bind:open={layoutMenuOpen}
-          >
-            {#snippet trigger(props, { open })}
-              <button
-                type="button"
-                class="graph-settings__input graph-settings__menu"
-                class:is-open={open}
-                aria-labelledby="graph-setting-layout-label graph-setting-layout-value"
-                {...props}
-              >
-                <span id="graph-setting-layout-value">
-                  {translate(`graphSettings.layout.${graph.render.layout}`)}
-                </span>
-                <ActionIcon name="chevron-down" size={12} />
-              </button>
-            {/snippet}
-          </ToolbarMenu>
+          <div class="graph-settings__menu">
+            <ToolbarMenu
+              label={translate('graphSettings.layout')}
+              items={layoutItems}
+              bind:open={layoutMenuOpen}
+            >
+              {#snippet trigger(props, { open })}
+                <SelectTrigger
+                  {...props}
+                  {open}
+                  valueId="graph-setting-layout-value"
+                  label={translate(`graphSettings.layout.${graph.render.layout}`)}
+                  aria-labelledby="graph-setting-layout-label graph-setting-layout-value"
+                />
+              {/snippet}
+            </ToolbarMenu>
+          </div>
         </div>
         <p class="graph-settings__hint">
           {translate(`graphSettings.layoutHint.${graph.render.layout}`)}
@@ -281,7 +278,7 @@
   .graph-settings__title {
     margin: 0;
     font-size: var(--font-size-md);
-    font-weight: var(--font-weight-bold);
+    font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
   }
 
@@ -293,13 +290,13 @@
     padding: var(--space-3);
     min-width: 0;
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
+    border-radius: var(--radius-surface);
   }
 
   .graph-settings__legend {
     padding: 0 var(--space-1);
     font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-bold);
+    font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
   }
 
@@ -321,32 +318,11 @@
     color: var(--color-text-primary);
   }
 
+  /* The trigger keeps its content width, up to the cap a layout name needs. */
   .graph-settings__menu {
-    display: inline-flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
+    align-self: flex-start;
+    min-width: 0;
     max-width: 16rem;
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .graph-settings__input {
-    max-width: 120px;
-    padding: var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    font-family: inherit;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .graph-settings__input:focus-visible {
-    outline: none;
-    border-color: var(--border-focus);
-    box-shadow: var(--focus-ring);
   }
 
   .graph-settings__hint {

@@ -1,6 +1,14 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import {
+  rulesBrokenBy,
+  scanPackage,
+  STYLE_RULES,
+  stylesOf,
+  type TokenContext,
+} from './style-guards'
+import { componentContractProblems } from './component-contract'
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(import.meta.dirname, relativePath), 'utf-8')
@@ -244,4 +252,116 @@ describe('design system visual contract', () => {
       '--annotation-toolbar-icon-size: calc(16px * var(--annotation-toolbar-scale));'
     )
   })
+})
+
+describe('base component states and motion', () => {
+  // docs/PLAN_HOMOGENEIZACION.md, step 9: the base components take their
+  // highlight, inset, disabled opacity and motion from tokens, so a theme can
+  // switch them off and a reduced-motion preference reaches every one.
+  const BASE_COMPONENTS = [
+    'Button/Button.svelte',
+    'IconButton/IconButton.svelte',
+    'Input/Input.svelte',
+    'Checkbox/Checkbox.svelte',
+    'NumberField/NumberField.svelte',
+    'ToolbarMenu/ToolbarMenuList.svelte',
+    'Panel/Panel.svelte',
+  ]
+  const DISABLED_SELECTOR = /:disabled|\[disabled\]|aria-disabled|--disabled\b/
+  const LITERAL_OPACITY = /(?<![\w-])opacity\s*:\s*[0-9.]+/
+  const LITERAL_DURATION =
+    /(?:transition|animation)(?:-duration)?\s*:[^;}]*?(?<![\w-])\d*\.?\d+m?s\b[^;}]*/
+  const REDUCED_MOTION =
+    /@media \(prefers-reduced-motion: reduce\)\s*\{[^{}]*\{[^{}]*transition: none;/
+
+  const stylesFor = (relativePath: string) => stylesOf(readSource(`../${relativePath}`))
+
+  it('writes no hand-made inset highlight or shadow', () => {
+    const offenders = BASE_COMPONENTS.filter((path) => /inset 0 1px 0 rgba/.test(stylesFor(path)))
+
+    expect(offenders).toEqual([])
+  })
+
+  it('dims disabled controls only through the disabled opacity tokens', () => {
+    const offenders = BASE_COMPONENTS.flatMap((path) =>
+      Array.from(stylesFor(path).matchAll(CSS_RULE))
+        .filter(
+          ([, selector = '', body = '']) =>
+            DISABLED_SELECTOR.test(selector) && LITERAL_OPACITY.test(body)
+        )
+        .map(([, selector = '']) => `${basename(path)}: ${selector.trim()}`)
+    )
+
+    expect(offenders).toEqual([])
+    expect(stylesFor('Button/Button.svelte')).toMatch(
+      /\.btn--primary:disabled\s*\{[^}]*opacity: var\(--opacity-disabled-primary\);/
+    )
+  })
+
+  it('times every transition and animation with motion tokens', () => {
+    const offenders = BASE_COMPONENTS.filter((path) => LITERAL_DURATION.test(stylesFor(path)))
+
+    expect(offenders).toEqual([])
+  })
+
+  it('drops transitions under a reduced-motion preference', () => {
+    const offenders = BASE_COMPONENTS.filter((path) => {
+      const styles = stylesFor(path)
+      return /transition\s*:/.test(styles) && !REDUCED_MOTION.test(styles)
+    })
+
+    expect(offenders).toEqual([])
+  })
+})
+
+describe('style debt guards', () => {
+  // docs/PLAN_HOMOGENEIZACION.md, steps 3 and 30: the debt is paid, so every
+  // component passes every rule. The permanent exceptions are in GUIA_DISENO.md.
+  // The accent-fill rule stays with the targeted test above in this package.
+  const rules = STYLE_RULES.filter((rule) => rule !== 'accent-fill')
+
+  it('finds no style debt in any component', () => {
+    const { failing } = scanPackage(
+      resolve(import.meta.dirname, '../..'),
+      [resolve(import.meta.dirname, '../../tokens/tokens.css')],
+      rules
+    )
+
+    expect([...failing]).toEqual([])
+  })
+
+  it('flags a hard-coded colour in a component stylesheet', () => {
+    const ctx: TokenContext = { published: new Set(), defined: new Set() }
+    const component = '<div class="x"></div>\n<style>\n.x { background: #fff; }\n</style>\n'
+
+    expect(rulesBrokenBy(component, ctx)).toContain('color-literal')
+  })
+})
+
+/**
+ * Stage C of PLAN_HOMOGENEIZACION.md: every component added or widened there
+ * holds the contract in component-contract.ts. A component joins this list in
+ * the commit that builds it.
+ */
+const STAGE_C_COMPONENTS: string[] = [
+  'Input',
+  'Textarea',
+  'RadioGroup',
+  'SelectTrigger',
+  'ProgressBar',
+  'StatusBadge',
+  'Switch',
+  'Disclosure',
+  'Button',
+  'Dialog',
+  'ConfirmDialog',
+]
+
+describe('stage C component contract', () => {
+  it.each(STAGE_C_COMPONENTS)(
+    '%s has no colour literal or fallback, sizes by token, resolves in every theme and is exported',
+    (name) => {
+      expect(componentContractProblems(name)).toEqual([])
+    }
+  )
 })

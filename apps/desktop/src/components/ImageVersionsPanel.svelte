@@ -204,7 +204,7 @@
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
-    line-height: 1.4;
+    line-height: var(--line-height-base);
   }
 
   .versions-error {

@@ -119,7 +119,7 @@ describe('a highlight never covers text', () => {
   it('blends the highlight with a mode each theme chooses', () => {
     const at = STYLES.indexOf('.writing-editor__surface mark[data-highlight])')
     const rule = STYLES.slice(at, STYLES.indexOf('}', at))
-    expect(rule).toMatch(/mix-blend-mode:\s*var\(--writing-blend-highlight,/)
+    expect(rule).toMatch(/mix-blend-mode:\s*var\(--writing-blend-highlight\)/)
   })
 
   it('lets the lighter pixel win on dark themes and the darker one on light themes', () => {
@@ -149,7 +149,7 @@ describe('line spacing', () => {
     expect(at).toBeGreaterThan(-1)
     const rule = STYLES.slice(at, STYLES.indexOf('}', at))
     expect(rule).toMatch(
-      /line-height:\s*calc\(\s*var\(--writing-line-height,\s*1\)\s*\*\s*var\(--font-reading-single-line,/
+      /line-height:\s*calc\(\s*var\(--writing-line-height,\s*1\)\s*\*\s*var\(--font-reading-single-line\)/
     )
   })
 

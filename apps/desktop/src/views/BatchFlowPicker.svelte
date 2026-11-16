@@ -4,6 +4,7 @@
     Button,
     IconButton,
     Input,
+    SelectTrigger,
     ToolbarMenu,
     type ToolbarMenuItem,
   } from '@entropia/ui'
@@ -101,16 +102,14 @@
   <span class="batch-field__legend" id="batch-flow-label">{t('batch.flow')}</span>
   <ToolbarMenu label={t('batch.flow')} {items}>
     {#snippet trigger(props, { open })}
-      <button
-        type="button"
-        class="menu-select"
-        class:menu-select--open={open}
-        aria-labelledby="batch-flow-label batch-flow-value"
+      <SelectTrigger
         {...props}
-      >
-        <span id="batch-flow-value">{chosen || t('batch.flowNone')}</span>
-        <ActionIcon name="chevron-down" size={12} />
-      </button>
+        id="batch-flow-value"
+        size="sm"
+        {open}
+        label={chosen || t('batch.flowNone')}
+        aria-labelledby="batch-flow-label batch-flow-value"
+      />
     {/snippet}
   </ToolbarMenu>
   {#if chosen}
@@ -141,36 +140,8 @@
     gap: var(--space-2);
   }
 
-  /* Same trigger as the batch tab's state filter: the app's own menu, never a
-     native <select>, whose popup the operating system paints. */
-  .menu-select {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-  }
-
-  .menu-select:hover,
-  .menu-select--open {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
-  }
-
-  .menu-select:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
   .flow-picker__error {
     flex-basis: 100%;
-    color: var(--color-danger, #c0392b);
+    color: var(--color-danger);
   }
 </style>

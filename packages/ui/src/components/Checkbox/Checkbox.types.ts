@@ -1,5 +1,10 @@
 import type { Snippet } from 'svelte'
 
+/** md is the default row; sm is the compact one (tighter padding, xs type). */
+export type CheckboxSize = 'sm' | 'md'
+/** row is a plain row; card is a bordered surface that lifts off a sunken list. */
+export type CheckboxVariant = 'row' | 'card'
+
 export interface CheckboxProps {
   /** Checked state. Bindable, so callers can use `bind:checked`. */
   checked?: boolean
@@ -12,5 +17,7 @@ export interface CheckboxProps {
   onchange?: (checked: boolean) => void
   /** Accessible name when the row renders no visible label. */
   label?: string
+  size?: CheckboxSize
+  variant?: CheckboxVariant
   class?: string
 }

@@ -87,7 +87,7 @@ describe('NavegadorCopyDialog', () => {
     expect(await screen.findByText('Voces')).toBeInTheDocument()
     expect(screen.getByText('Obras')).toBeInTheDocument()
     expect(screen.getByText('+ Nueva colección')).toBeInTheDocument()
-    expect(screen.getByRole('group', { name: 'Colección de destino' })).toBeInTheDocument()
+    expect(screen.getByRole('radiogroup', { name: 'Colección de destino' })).toBeInTheDocument()
     expect(screen.getByText(/borrar la fuente no la toca/)).toBeInTheDocument()
     expect(screen.getByText(/La cuestión social/)).toBeInTheDocument()
   })
@@ -207,6 +207,23 @@ describe('NavegadorCopyDialog', () => {
         target: { value: name },
       })
     }
+
+    it('chooses the new collection when its name field gets focus', async () => {
+      open()
+      await screen.findByText('Voces')
+      const field = screen.getByLabelText('Nombre de la nueva colección')
+
+      expect(field).not.toBeDisabled()
+      await fireEvent.focusIn(field)
+
+      expect(
+        (
+          screen.getByLabelText(/\+ Nueva colección/, {
+            selector: 'input[type=radio]',
+          }) as HTMLInputElement
+        ).checked
+      ).toBe(true)
+    })
 
     it('needs a name before it copies', async () => {
       open()

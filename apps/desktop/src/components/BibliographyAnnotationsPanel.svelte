@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, tick, untrack } from 'svelte'
-  import { ActionIcon, Button, IconButton } from '@entropia/ui'
+  import { ActionIcon, Button, IconButton, StatusBadge, Textarea } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import {
     EXISTENCE_FIELD,
@@ -229,6 +229,13 @@
     }
   }
 
+  /** Badge colour of a sync state: a conflict asks for a decision, an error failed. */
+  function stateTone(view: AnnotationView): 'warning' | 'danger' | 'info' {
+    if (view.syncState === 'conflict') return 'warning'
+    if (view.syncState === 'error') return 'danger'
+    return 'info'
+  }
+
   function since(view: AnnotationView): string {
     return new Date(view.updatedAt).toLocaleString($currentLocale)
   }
@@ -300,9 +307,10 @@
                   {/if}
                 </button>
                 {#if state}
-                  <span
-                    class="annotation-entry__badge annotation-entry__badge--{view.syncState}"
-                    data-testid="annotation-sync-badge">{state}</span
+                  <StatusBadge
+                    variant={stateTone(view)}
+                    size="xs"
+                    data-testid="annotation-sync-badge">{state}</StatusBadge
                   >
                 {/if}
                 <IconButton
@@ -325,15 +333,18 @@
                 />
               {/if}
 
-              <textarea
-                class="annotation-entry__comment"
-                rows="1"
+              <!-- One line while empty; grows with the comment up to 12 lines. -->
+              <Textarea
+                rows={1}
+                autosize
+                maxRows={12}
                 aria-label={$currentLocale && t('bibliographyAnnotations.commentLabel')}
                 placeholder={$currentLocale && t('bibliographyAnnotations.commentPlaceholder')}
                 value={commentOf(view)}
                 oninput={(event) =>
                   editComment(view.key, (event.currentTarget as HTMLTextAreaElement).value)}
-                onblur={() => flush(view.key)}></textarea>
+                onblur={() => flush(view.key)}
+              />
 
               {#if Array.isArray(view.data?.tags) && view.data.tags.length > 0}
                 <p class="annotation-entry__tags">
@@ -514,7 +525,7 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 
@@ -587,7 +598,7 @@
     display: flex;
     flex: 1;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     min-width: 0;
     padding: 0;
     border: none;
@@ -606,7 +617,7 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-2xs);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: var(--letter-spacing-caps);
   }
 
   .annotation-entry__quote {
@@ -619,24 +630,6 @@
     font-size: var(--font-size-sm);
   }
 
-  .annotation-entry__badge {
-    flex: 0 0 auto;
-    padding: 0 var(--space-1);
-    border-radius: var(--radius-sm);
-    background: var(--color-info-soft);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-2xs);
-    white-space: nowrap;
-  }
-
-  .annotation-entry__badge--conflict {
-    background: var(--color-warning-soft);
-  }
-
-  .annotation-entry__badge--error {
-    background: var(--color-danger-soft);
-  }
-
   /* Sized by the image itself: a column flex child would stretch it to the
      full width and letterbox a narrow region. */
   .annotation-entry__preview {
@@ -647,28 +640,7 @@
     max-width: 100%;
     max-height: 160px;
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-sm);
-  }
-
-  .annotation-entry__comment {
-    width: 100%;
-    min-height: var(--control-height-md);
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    background: var(--color-surface-sunken);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: var(--font-size-sm);
-    /* One line while empty; grows with the comment. */
-    field-sizing: content;
-    max-height: 12lh;
-    resize: none;
-  }
-
-  .annotation-entry__comment:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
+    border-radius: var(--radius-control);
   }
 
   .annotation-entry__tags,

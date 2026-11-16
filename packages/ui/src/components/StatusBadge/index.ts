@@ -1,2 +1,7 @@
 export { default as StatusBadge } from './StatusBadge.svelte'
-export type { StatusBadgeProps, StatusBadgeSize, StatusBadgeVariant } from './StatusBadge.types'
+export type {
+  StatusBadgeProps,
+  StatusBadgeSize,
+  StatusBadgeTone,
+  StatusBadgeVariant,
+} from './StatusBadge.types'

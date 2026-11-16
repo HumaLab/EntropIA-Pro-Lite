@@ -739,7 +739,7 @@
   .home-view h1 {
     font-family: var(--font-reading);
     font-weight: var(--font-weight-medium);
-    font-size: 30px;
+    font-size: var(--font-size-3xl);
     letter-spacing: normal;
   }
 
@@ -825,7 +825,7 @@
   .home-view__section-label {
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
@@ -866,13 +866,16 @@
     color: inherit;
   }
 
-  .home-view__continuar-row:hover,
-  .home-view__continuar-row:focus-visible {
-    background: var(--color-accent-faint);
+  .home-view__continuar-row:hover {
+    background: var(--state-hover-row);
   }
 
+  /* Focus draws the shared ring instead of repeating the hover background
+     (E3). Inset, because the row spans its panel edge to edge and the
+     panel's overflow: hidden would clip an outer ring at both sides. */
   .home-view__continuar-row:focus-visible {
     outline: none;
+    box-shadow: inset var(--focus-ring);
   }
 
   .home-view__continuar-icon {
@@ -890,14 +893,14 @@
   .home-view__continuar-copy {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     min-width: 0;
     flex: 1;
   }
 
   .home-view__continuar-row-title {
     font-family: var(--font-reading);
-    font-size: 17px;
+    font-size: var(--font-size-lg);
     font-weight: var(--font-weight-medium);
     overflow: hidden;
     white-space: nowrap;
@@ -927,7 +930,7 @@
 
   .home-view__first-run h2 {
     font-family: var(--font-reading);
-    font-size: 26px;
+    font-size: var(--font-size-2xl);
     font-weight: var(--font-weight-medium);
   }
 
@@ -987,7 +990,7 @@
 
   .home-view__corpus-cell-value {
     font-family: var(--font-reading);
-    font-size: 22px;
+    font-size: var(--font-size-xl);
     font-weight: var(--font-weight-medium);
     font-variant-numeric: tabular-nums;
   }
@@ -1023,7 +1026,7 @@
   .home-view__corpus-stage-body {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     min-width: 0;
     flex: 1;
   }
@@ -1043,12 +1046,12 @@
 
   .home-view__corpus-stage-value {
     font-family: var(--font-reading);
-    font-size: 15px;
+    font-size: var(--font-size-md);
     font-variant-numeric: tabular-nums;
   }
 
   .home-view__corpus-stage--full .home-view__corpus-stage-value {
-    font-size: 17px;
+    font-size: var(--font-size-lg);
   }
 
   .home-view__corpus-stage-meta {
@@ -1090,11 +1093,17 @@
     color: var(--color-text-secondary);
     cursor: pointer;
     text-align: left;
+    border-radius: var(--radius-control);
   }
 
-  .home-view__corpus-pending:hover,
+  .home-view__corpus-pending:hover {
+    color: var(--color-text-primary);
+  }
+
   .home-view__corpus-pending:focus-visible {
     color: var(--color-text-primary);
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   .home-view__corpus-dot {
@@ -1165,10 +1174,14 @@
     text-align: left;
   }
 
-  .home-view__quick-access-card:hover,
-  .home-view__quick-access-card:focus-visible {
+  .home-view__quick-access-card:hover {
     border-color: var(--color-border-hover);
     background: var(--color-accent-faint);
+  }
+
+  .home-view__quick-access-card:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   .home-view__quick-access-copy {
@@ -1185,7 +1198,7 @@
   .home-view__quick-access-arrow {
     flex: 0 0 auto;
     font-size: var(--font-size-lg);
-    line-height: 1;
+    line-height: var(--line-height-tight);
     color: var(--color-text-muted);
     transition: color var(--transition-smooth);
   }
@@ -1197,7 +1210,7 @@
 
   .home-view__quick-access-title {
     font-family: var(--font-reading);
-    font-size: 17px;
+    font-size: var(--font-size-lg);
     color: var(--color-text-primary);
   }
 
@@ -1223,7 +1236,7 @@
     align-items: center;
     gap: var(--space-3);
     padding: 0 var(--space-4);
-    min-height: 36px;
+    min-height: var(--control-height-md);
     border-bottom: 1px solid var(--color-hairline);
     cursor: pointer;
   }
@@ -1249,17 +1262,22 @@
     border-bottom: none;
   }
 
-  .home-view__recent-row:hover,
+  .home-view__recent-row:hover {
+    background: var(--state-hover-row);
+  }
+
+  /* Same inset ring as the Continuar rows (E3): the table's rows run edge to
+     edge inside an overflow: hidden panel. */
   .home-view__recent-row:focus-visible {
-    background: var(--color-accent-faint);
     outline: none;
+    box-shadow: inset var(--focus-ring);
   }
 
   .home-view__recent-row--header {
     cursor: default;
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
   }

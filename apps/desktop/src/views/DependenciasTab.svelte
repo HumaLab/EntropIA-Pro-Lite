@@ -1,8 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-  import { ActionIcon, Button, IconButton } from '@entropia/ui'
-  import { dependencyStatusIcon, dependencyStatusColor } from '$lib/deps-status'
+  import {
+    ActionIcon,
+    Button,
+    Dialog,
+    IconButton,
+    Input,
+    ProgressBar,
+    StatusBadge,
+  } from '@entropia/ui'
+  import { dependencyStatusIcon, dependencyStatusIconClass } from '$lib/deps-status'
   import { registerListeners } from '$lib/register-listeners'
   import {
     checkAllDeps,
@@ -45,7 +53,6 @@
     type EmbeddingDownloadProgressPayload,
     type LocalEmbeddingModelInfo,
   } from '$lib/embeddings'
-  import { getFocusableElements, getNextFocusTrapTarget } from '$lib/modal-focus'
 
   // ---------------------------------------------------------------------------
   // State
@@ -71,8 +78,6 @@
   let resetConfirmationOpen = $state(false)
   let resetConfirmationText = $state('')
   let resetting = $state(false)
-  let resetConfirmationEl: HTMLElement | undefined = $state()
-  let resetConfirmationTriggerEl: HTMLElement | null = null
   let runtimeOperationInFlight = false
 
   const RESET_CONFIRMATION_PHRASE = 'resetear entorno'
@@ -424,9 +429,9 @@
     }
   }
 
+  // Dialog owns focus: it moves it to the typed-phrase input on open, traps
+  // Tab, answers Escape and gives focus back to the trigger once it closes.
   function openResetConfirmation() {
-    resetConfirmationTriggerEl =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
     resetConfirmationOpen = true
     resetConfirmationText = ''
     errorBanner = null
@@ -436,30 +441,6 @@
     if (resetting) return
     resetConfirmationOpen = false
     resetConfirmationText = ''
-    resetConfirmationTriggerEl?.focus()
-    resetConfirmationTriggerEl = null
-  }
-
-  function handleResetConfirmationKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      cancelResetConfirmation()
-      return
-    }
-
-    if (event.key !== 'Tab') return
-
-    const target = getNextFocusTrapTarget(
-      getFocusableElements(resetConfirmationEl ?? null),
-      event.target instanceof HTMLElement ? event.target : null,
-      event.shiftKey,
-      resetConfirmationEl ?? null
-    )
-
-    if (target) {
-      event.preventDefault()
-      target.focus()
-    }
   }
 
   async function handleReset() {
@@ -472,21 +453,12 @@
       await refreshAllState()
       resetConfirmationOpen = false
       resetConfirmationText = ''
-      resetConfirmationTriggerEl = null
     } catch (e) {
       errorBanner = String(e)
     } finally {
       resetting = false
     }
   }
-
-  $effect(() => {
-    if (!resetConfirmationOpen || !resetConfirmationEl) return
-
-    setTimeout(() => {
-      getFocusableElements(resetConfirmationEl ?? null)[0]?.focus()
-    }, 0)
-  })
 
   async function handleRuntimeRepair() {
     try {
@@ -801,10 +773,12 @@
   <!-- Progress bar -->
   {#if installing}
     <div class="deps-progress">
-      <div class="deps-progress__bar">
-        <div class="deps-progress__fill" style="width: {overallProgress()}%"></div>
+      <div class="deps-progress__track">
+        <ProgressBar value={overallProgress()} aria-labelledby="deps-progress-label" />
       </div>
-      <span class="deps-progress__label">{overallProgress()}% instalado</span>
+      <span id="deps-progress-label" class="deps-progress__label"
+        >{overallProgress()}% instalado</span
+      >
     </div>
   {/if}
 
@@ -829,7 +803,7 @@
     {#each deps as dep (dep.id)}
       <div class="deps-row" class:deps-row--failed={dep.status.type === 'failed'}>
         <!-- Status icon -->
-        <span class="deps-row__icon" style="color: {dependencyStatusColor(dep.status)}">
+        <span class="deps-row__icon {dependencyStatusIconClass(dep.status)}">
           <ActionIcon name={dependencyStatusIcon(dep.status)} size={16} />
         </span>
 
@@ -838,12 +812,14 @@
           <div class="deps-row__name-line">
             <strong class="deps-row__name">{getDepDisplayName(dep)}</strong>
             {#if isCritical(dep.id)}
-              <span class="deps-badge deps-badge--required">Requerido</span>
+              <StatusBadge variant="info" size="xs">Requerido</StatusBadge>
             {/if}
             {#if dep.status.type === 'installed'}
               {@const version = getInstalledVersion(dep)}
               {#if version}
-                <span class="deps-badge deps-badge--version">{version}</span>
+                <StatusBadge variant="success" size="xs">
+                  <span class="deps-row__version">{version}</span>
+                </StatusBadge>
               {/if}
             {/if}
           </div>
@@ -852,11 +828,12 @@
           <!-- Installing progress per-item -->
           {#if dep.status.type === 'installing'}
             <div class="deps-row__progress">
-              <div class="deps-progress__bar deps-progress__bar--sm">
-                <div
-                  class="deps-progress__fill"
-                  style="width: {getInstallingPercent(dep.status)}%"
-                ></div>
+              <div class="deps-row__progress-track">
+                <ProgressBar
+                  size="sm"
+                  value={getInstallingPercent(dep.status)}
+                  label={`Instalando ${getDepDisplayName(dep)}`}
+                />
               </div>
               <span class="deps-row__progress-pct">{getInstallingPercent(dep.status)}%</span>
             </div>
@@ -864,13 +841,11 @@
 
           <!-- Error detail (expandable) -->
           {#if dep.status.type === 'failed'}
-            <button
-              class="deps-row__error-toggle"
-              type="button"
-              onclick={() => toggleError(dep.id)}
-            >
-              {expandedErrors.has(dep.id) ? 'Ocultar detalle' : 'Ver detalle del error'}
-            </button>
+            <span class="deps-row__error-toggle">
+              <Button variant="link" onclick={() => toggleError(dep.id)}>
+                {expandedErrors.has(dep.id) ? 'Ocultar detalle' : 'Ver detalle del error'}
+              </Button>
+            </span>
             {#if expandedErrors.has(dep.id)}
               <pre class="deps-row__error-detail">{getFailedMessage(dep.status)}</pre>
             {/if}
@@ -923,52 +898,41 @@
     </p>
   </div>
 
-  {#if resetConfirmationOpen}
-    <div
-      bind:this={resetConfirmationEl}
-      class="deps-reset-confirmation"
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="deps-reset-title"
-      aria-describedby="deps-reset-description"
-      tabindex="-1"
-      onkeydown={handleResetConfirmationKeydown}
-    >
-      <div class="deps-reset-confirmation__copy">
-        <strong id="deps-reset-title">Confirmar reseteo del entorno</strong>
-        <p id="deps-reset-description">
-          Esta acción elimina el entorno administrado de IA y limpia las rutas Python usadas por
-          OCR, transcripción y NLP. Para confirmar, escribí <code>{RESET_CONFIRMATION_PHRASE}</code
-          >.
-        </p>
-      </div>
-      <label class="deps-reset-confirmation__label" for="deps-reset-confirmation-input">
-        Confirmación requerida
-      </label>
-      <input
-        id="deps-reset-confirmation-input"
-        class="deps-reset-confirmation__input"
-        type="text"
-        bind:value={resetConfirmationText}
-        placeholder={RESET_CONFIRMATION_PHRASE}
-        disabled={resetting}
-        autocomplete="off"
-      />
-      <div class="deps-reset-confirmation__actions">
-        <Button variant="ghost" onclick={cancelResetConfirmation} disabled={resetting}>
-          Cancelar
-        </Button>
-        <Button
-          variant="danger"
-          onclick={handleReset}
-          disabled={resetConfirmationText !== RESET_CONFIRMATION_PHRASE || resetting}
-          loading={resetting}
-        >
-          Confirmar reseteo
-        </Button>
-      </div>
-    </div>
-  {/if}
+  <Dialog
+    bind:open={() => resetConfirmationOpen, (next) => !next && cancelResetConfirmation()}
+    title="Confirmar reseteo del entorno"
+    titleId="deps-reset-title"
+    description="Esta acción elimina el entorno administrado de IA y limpia las rutas Python usadas por OCR, transcripción y NLP."
+    dismissible={!resetting}
+    dismissOnBackdrop={false}
+  >
+    <p class="deps-reset-confirmation__phrase">
+      Para confirmar, escribí <code>{RESET_CONFIRMATION_PHRASE}</code>.
+    </p>
+    <Input
+      id="deps-reset-confirmation-input"
+      label="Confirmación requerida"
+      font="mono"
+      bind:value={resetConfirmationText}
+      placeholder={RESET_CONFIRMATION_PHRASE}
+      disabled={resetting}
+      autocomplete="off"
+      data-dialog-initial-focus
+    />
+    {#snippet footer()}
+      <Button variant="secondary" onclick={cancelResetConfirmation} disabled={resetting}>
+        Cancelar
+      </Button>
+      <Button
+        variant="danger"
+        onclick={handleReset}
+        disabled={resetConfirmationText !== RESET_CONFIRMATION_PHRASE || resetting}
+        loading={resetting}
+      >
+        Confirmar reseteo
+      </Button>
+    {/snippet}
+  </Dialog>
 </div>
 
 <style>
@@ -983,9 +947,9 @@
     justify-content: space-between;
     gap: var(--space-4);
     padding: var(--space-3) var(--space-4);
-    border: 1px solid rgba(245, 158, 11, 0.35);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
     border-radius: var(--radius-md);
-    background: rgba(245, 158, 11, 0.08);
+    background: var(--color-warning-soft);
     color: var(--color-warning);
   }
 
@@ -994,9 +958,9 @@
     justify-content: space-between;
     gap: var(--space-4);
     padding: var(--space-4);
-    border: 1px solid rgba(99, 102, 241, 0.35);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
     border-radius: var(--radius-md);
-    background: rgba(99, 102, 241, 0.08);
+    background: var(--color-accent-soft);
   }
 
   .deps-prepare-panel__copy {
@@ -1009,7 +973,7 @@
   .deps-prepare-panel__progress {
     margin: 0;
     font-size: var(--font-size-xs);
-    color: var(--color-accent, #4f46e5);
+    color: var(--color-accent);
     font-family: var(--font-mono);
   }
 
@@ -1036,8 +1000,8 @@
     gap: var(--space-1);
     margin-top: var(--space-2);
     padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-sm, 4px);
-    background: rgba(245, 158, 11, 0.12);
+    border-radius: var(--radius-sm);
+    background: var(--color-warning-soft);
   }
 
   .deps-runtime-panel__blocked strong {
@@ -1064,19 +1028,19 @@
 
   .deps-banner--error {
     background: var(--color-danger-soft);
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
     color: var(--color-danger);
   }
 
   .deps-banner--success {
     background: var(--color-success-soft);
-    border: 1px solid rgba(34, 197, 94, 0.3);
+    border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
     color: var(--color-success);
   }
 
   .deps-banner--warning {
     background: var(--color-warning-soft);
-    border: 1px solid rgba(245, 158, 11, 0.3);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
     color: var(--color-warning);
   }
 
@@ -1091,16 +1055,16 @@
 
   .deps-uv-status__text {
     font-size: var(--font-size-xs);
-    color: var(--color-text-muted, #6b7280);
+    color: var(--color-text-muted);
     font-family: var(--font-mono);
   }
 
   .deps-uv-status__text--warn {
-    color: var(--color-warning, #f59e0b);
+    color: var(--color-warning);
   }
 
   .deps-uv-status__text--info {
-    color: var(--color-accent, #4f46e5);
+    color: var(--color-accent);
   }
 
   .deps-uv-warning {
@@ -1120,7 +1084,7 @@
   .deps-actions__hint {
     margin: 0;
     font-size: var(--font-size-xs);
-    color: var(--color-text-muted, #6b7280);
+    color: var(--color-text-muted);
   }
 
   /* Progress bar */
@@ -1130,30 +1094,14 @@
     gap: var(--space-3);
   }
 
-  .deps-progress__bar {
+  .deps-progress__track {
     flex: 1;
-    height: 6px;
-    background: var(--color-border-subtle, #e5e7eb);
-    border-radius: var(--radius-full, 9999px);
-    overflow: hidden;
-  }
-
-  .deps-progress__bar--sm {
-    flex: none;
-    width: 120px;
-    height: 4px;
-  }
-
-  .deps-progress__fill {
-    height: 100%;
-    background: var(--color-accent, #6366f1);
-    border-radius: var(--radius-full, 9999px);
-    transition: width 0.3s ease;
+    min-width: 0;
   }
 
   .deps-progress__label {
     font-size: var(--font-size-xs);
-    color: var(--color-text-muted, #6b7280);
+    color: var(--color-text-muted);
     white-space: nowrap;
   }
 
@@ -1169,14 +1117,14 @@
     align-items: flex-start;
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
-    border: 1px solid var(--color-border-subtle, #e5e7eb);
+    border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
     background: var(--color-surface);
   }
 
   .deps-row--failed {
-    border-color: rgba(245, 158, 11, 0.4);
-    background: rgba(245, 158, 11, 0.04);
+    border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
+    background: var(--color-warning-soft);
   }
 
   /* Holds a 16px ActionIcon: font-size no longer aligns anything, so the box
@@ -1188,6 +1136,22 @@
     width: 16px;
     height: 24px;
     flex: 0 0 auto;
+  }
+
+  .deps-row__icon--installed {
+    color: var(--color-success);
+  }
+
+  .deps-row__icon--missing {
+    color: var(--color-danger);
+  }
+
+  .deps-row__icon--failed {
+    color: var(--color-warning);
+  }
+
+  .deps-row__icon--neutral {
+    color: var(--color-text-muted);
   }
 
   .deps-row__info {
@@ -1211,7 +1175,7 @@
 
   .deps-row__desc {
     font-size: var(--font-size-xs);
-    color: var(--color-text-secondary, #6b7280);
+    color: var(--color-text-secondary);
     margin: 0;
   }
 
@@ -1222,28 +1186,28 @@
     margin-top: var(--space-1);
   }
 
-  .deps-row__progress-pct {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted, #6b7280);
+  .deps-row__progress-track {
+    flex: none;
+    width: 120px;
   }
 
-  .deps-row__error-toggle {
-    background: none;
-    border: none;
-    cursor: pointer;
+  .deps-row__progress-pct {
     font-size: var(--font-size-xs);
-    color: var(--color-warning, #f59e0b);
-    padding: 0;
-    text-decoration: underline;
-    text-align: left;
+    color: var(--color-text-muted);
+  }
+
+  /* Sizes the link-style Button, which takes its text size from here. */
+  .deps-row__error-toggle {
+    align-self: flex-start;
+    font-size: var(--font-size-xs);
   }
 
   .deps-row__error-detail {
-    font-size: 11px;
+    font-size: var(--font-size-2xs);
     font-family: var(--font-mono);
-    background: var(--color-surface-sunken, #f3f4f6);
-    border: 1px solid var(--color-border, #d1d5db);
-    border-radius: var(--radius-sm, 4px);
+    background: var(--color-surface-sunken);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
     padding: var(--space-2) var(--space-3);
     white-space: pre-wrap;
     word-break: break-all;
@@ -1257,31 +1221,15 @@
     flex: 0 0 auto;
   }
 
-  /* Badges */
-  .deps-badge {
-    display: inline-block;
-    padding: 2px 7px;
-    border-radius: var(--radius-full, 9999px);
-    font-size: 10px;
-    font-weight: var(--font-weight-medium, 500);
-    vertical-align: middle;
-  }
-
-  .deps-badge--required {
-    background: rgba(99, 102, 241, 0.12);
-    color: var(--color-accent);
-  }
-
-  .deps-badge--version {
-    background: rgba(34, 197, 94, 0.12);
-    color: var(--color-success);
+  /* A version is machine text: mono inside the badge. */
+  .deps-row__version {
     font-family: var(--font-mono);
   }
 
   /* Empty state */
   .deps-empty {
     font-size: var(--font-size-sm);
-    color: var(--color-text-muted, #6b7280);
+    color: var(--color-text-muted);
     text-align: center;
     padding: var(--space-6) 0;
   }
@@ -1289,10 +1237,10 @@
   /* Disk estimate */
   .deps-disk-estimate {
     font-size: var(--font-size-xs);
-    color: var(--color-text-muted, #6b7280);
+    color: var(--color-text-muted);
     margin: 0;
     padding: var(--space-2) 0;
-    border-top: 1px solid var(--color-border-subtle, #e5e7eb);
+    border-top: 1px solid var(--color-border-subtle);
   }
 
   /* Danger zone */
@@ -1301,78 +1249,29 @@
     align-items: center;
     gap: var(--space-4);
     padding: var(--space-3) var(--space-4);
-    border: 1px solid rgba(239, 68, 68, 0.2);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
     border-radius: var(--radius-md);
-    background: rgba(239, 68, 68, 0.04);
+    background: var(--color-danger-soft);
   }
 
   .deps-danger-zone__hint {
     font-size: var(--font-size-xs);
-    color: var(--color-text-muted, #6b7280);
+    color: var(--color-text-muted);
     margin: 0;
     flex: 1;
   }
 
-  .deps-reset-confirmation {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-    padding: var(--space-4);
-    border: 1px solid rgba(239, 68, 68, 0.35);
-    border-radius: var(--radius-md);
-    background: rgba(127, 29, 29, 0.12);
-  }
-
-  .deps-reset-confirmation__copy {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .deps-reset-confirmation__copy strong {
-    color: var(--color-text-primary);
-  }
-
-  .deps-reset-confirmation__copy p {
+  .deps-reset-confirmation__phrase {
     margin: 0;
-    color: var(--color-text-secondary, #6b7280);
+    color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
   }
 
-  .deps-reset-confirmation__copy code {
-    padding: 2px 6px;
-    border-radius: var(--radius-sm, 4px);
-    background: rgba(239, 68, 68, 0.12);
+  .deps-reset-confirmation__phrase code {
+    padding: var(--space-0-5) var(--space-1);
+    border-radius: var(--radius-sm);
+    background: var(--color-danger-soft);
     color: var(--color-danger);
     font-family: var(--font-mono);
-  }
-
-  .deps-reset-confirmation__label {
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium, 500);
-    color: var(--color-text-primary);
-  }
-
-  .deps-reset-confirmation__input {
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-border-subtle, #e5e7eb);
-    border-radius: var(--radius-md);
-    background: var(--color-surface);
-    color: var(--color-text-primary);
-    font-family: var(--font-mono);
-  }
-
-  .deps-reset-confirmation__input:focus {
-    outline: none;
-    box-shadow: var(--focus-ring);
-    border-color: var(--color-danger);
-  }
-
-  .deps-reset-confirmation__actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--space-2);
-    flex-wrap: wrap;
   }
 </style>

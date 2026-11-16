@@ -33,7 +33,7 @@
     type HelpStep,
     type HelpTurn,
   } from '$lib/help'
-  import { ActionIcon, Button, Checkbox, ConfirmDialog, tooltip } from '@entropia/ui'
+  import { ActionIcon, Button, Checkbox, ConfirmDialog, Textarea, tooltip } from '@entropia/ui'
   import HelpApprovalDialog from '../components/HelpApprovalDialog.svelte'
 
   const navigation = getNavigation()
@@ -809,14 +809,16 @@
         </div>
       </div>
       <div class="help-view__input-row">
-        <textarea
-          class="help-view__input"
-          rows="2"
-          bind:value={draft}
-          placeholder={$currentLocale && t('help.placeholder')}
-          aria-label={$currentLocale && t('help.placeholder')}
-          onkeydown={handleComposerKeydown}
-          disabled={sending}></textarea>
+        <div class="help-view__input">
+          <Textarea
+            rows={2}
+            bind:value={draft}
+            placeholder={$currentLocale && t('help.placeholder')}
+            aria-label={$currentLocale && t('help.placeholder')}
+            onkeydown={handleComposerKeydown}
+            disabled={sending}
+          />
+        </div>
         {#if sending}
           <Button
             variant="primary"
@@ -977,7 +979,7 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
-    line-height: var(--line-height-base, 1.5);
+    line-height: var(--line-height-base);
   }
 
   .help-view__suggestions {
@@ -1018,7 +1020,7 @@
     border-color: color-mix(in srgb, var(--color-accent) 24%, var(--border-subtle));
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: var(--line-height-base, 1.5);
+    line-height: var(--line-height-base);
     white-space: pre-wrap;
   }
 
@@ -1030,12 +1032,12 @@
     border-inline-start: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: var(--line-height-base, 1.5);
+    line-height: var(--line-height-base);
   }
 
   .help-view__markdown {
     white-space: normal;
-    line-height: var(--line-height-base, 1.5);
+    line-height: var(--line-height-base);
   }
 
   .help-view__markdown :global(p) {
@@ -1073,7 +1075,7 @@
     border-radius: var(--radius-sm);
     background: var(--surface-toolbar);
     font-family: var(--font-mono);
-    font-size: 0.9em;
+    font-size: var(--font-size-code-inline);
   }
 
   .help-view__markdown :global(a) {
@@ -1140,7 +1142,7 @@
 
   .help-view__meta-toggle:focus-visible {
     outline: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     box-shadow: var(--focus-ring);
   }
 
@@ -1201,7 +1203,7 @@
   }
 
   .help-view__notice--approved .help-view__notice-mark {
-    color: var(--color-success, var(--color-accent));
+    color: var(--color-success);
   }
 
   .help-view__notice--rejected .help-view__notice-mark,
@@ -1302,7 +1304,7 @@
 
   .help-view__preview-toggle:focus-visible {
     outline: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     box-shadow: var(--focus-ring);
   }
 
@@ -1405,20 +1407,5 @@
   .help-view__input {
     flex: 1;
     min-width: 0;
-    min-height: var(--control-height-md);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: var(--font-size-sm);
-    resize: vertical;
-  }
-
-  .help-view__input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
   }
 </style>

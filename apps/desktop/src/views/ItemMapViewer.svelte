@@ -60,8 +60,4 @@
     min-width: 0;
     min-height: 0;
   }
-
-  .item-map-viewer :global(.map-viewer) {
-    box-sizing: border-box;
-  }
 </style>

@@ -142,13 +142,19 @@
   import { PRODUCT_NAME } from '$lib/product'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
   import {
-    tooltip,
     ActionIcon,
     Button,
     Card,
     Checkbox,
     ConfirmDialog,
+    IconButton,
     Input,
+    ProgressBar,
+    RadioCard,
+    RadioGroup,
+    SelectTrigger,
+    StatusBadge,
+    Textarea,
     TabButton,
     TabList,
     ToolbarMenu,
@@ -2094,50 +2100,45 @@
                 <p>{currentModeDescription}</p>
               </div>
 
-              <div class="settings__mode-options">
-                <label class="settings__radio" class:active={llmMode === 'local'}>
-                  <input type="radio" name="llm_mode" value="local" bind:group={llmMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.llmMode.local.label')}</strong>
-                    <span class="settings__radio-desc">
-                      {t('settings.llmMode.local.description')}
-                      {#if localModel?.exists}
-                        <span class="settings__badge settings__badge--ok"
-                          >{t('settings.badge.available')}</span
-                        >
-                      {:else if localModel?.can_auto_download || localAvailable}
-                        <span class="settings__badge settings__badge--warn"
-                          >{t('settings.badge.downloadable')}</span
-                        >
-                      {:else}
-                        <span class="settings__badge settings__badge--warn"
-                          >{t('settings.badge.notFound')}</span
-                        >
-                      {/if}
-                    </span>
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={llmMode === 'openrouter'}>
-                  <input type="radio" name="llm_mode" value="openrouter" bind:group={llmMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.llmMode.openrouter.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.llmMode.openrouter.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={llmMode === 'auto'}>
-                  <input type="radio" name="llm_mode" value="auto" bind:group={llmMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.llmMode.auto.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.llmMode.auto.description')}</span
-                    >
-                  </div>
-                </label>
-              </div>
+              <RadioGroup
+                name="llm_mode"
+                value={llmMode}
+                onchange={(next) => (llmMode = next as LlmMode)}
+                label={t('settings.llmModeTitle')}
+                hideLabel
+                columnMin="100%"
+              >
+                <RadioCard value="local" label={t('settings.llmMode.local.label')} wrapDescription>
+                  {#snippet description()}
+                    {t('settings.llmMode.local.description')}
+                    {#if localModel?.exists}
+                      <StatusBadge variant="success" size="xs"
+                        >{t('settings.badge.available')}</StatusBadge
+                      >
+                    {:else if localModel?.can_auto_download || localAvailable}
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.badge.downloadable')}</StatusBadge
+                      >
+                    {:else}
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.badge.notFound')}</StatusBadge
+                      >
+                    {/if}
+                  {/snippet}
+                </RadioCard>
+                <RadioCard
+                  value="openrouter"
+                  label={t('settings.llmMode.openrouter.label')}
+                  description={t('settings.llmMode.openrouter.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="auto"
+                  label={t('settings.llmMode.auto.label')}
+                  description={t('settings.llmMode.auto.description')}
+                  wrapDescription
+                />
+              </RadioGroup>
             </section>
           </Card>
         {/if}
@@ -2155,19 +2156,19 @@
                   <div class="settings__local-model-row">
                     <span class="settings__label">{t('settings.localModel.status')}</span>
                     {#if localModel.exists}
-                      <span class="settings__badge settings__badge--ok"
-                        >{t('settings.localModel.found')}</span
+                      <StatusBadge variant="success" size="xs"
+                        >{t('settings.localModel.found')}</StatusBadge
                       >
                       <span class="settings__local-model-size"
                         >{formatBytes(localModel.size_bytes)}</span
                       >
                     {:else if localModel.can_auto_download}
-                      <span class="settings__badge settings__badge--warn"
-                        >{t('settings.localModel.downloadable')}</span
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.localModel.downloadable')}</StatusBadge
                       >
                     {:else}
-                      <span class="settings__badge settings__badge--warn"
-                        >{t('settings.localModel.missing')}</span
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.localModel.missing')}</StatusBadge
                       >
                     {/if}
                   </div>
@@ -2187,10 +2188,10 @@
                       <label class="settings__label" for="local-model-filename-{paneId}"
                         >{t('settings.localModel.filename')}</label
                       >
-                      <input
+                      <Input
                         id="local-model-filename-{paneId}"
-                        type="text"
-                        class="settings__input"
+                        size="sm"
+                        font="mono"
                         bind:value={localModelFilename}
                         placeholder={localModel?.filename ?? ''}
                       />
@@ -2200,10 +2201,10 @@
                       <label class="settings__label" for="local-model-source-{paneId}"
                         >{t('settings.localModel.sourceUrl')}</label
                       >
-                      <input
+                      <Input
                         id="local-model-source-{paneId}"
-                        type="text"
-                        class="settings__input"
+                        size="sm"
+                        font="mono"
                         bind:value={localModelSourceUrl}
                         placeholder="https://…"
                       />
@@ -2211,8 +2212,10 @@
 
                     {#if downloading}
                       <div class="settings__download-progress">
-                        <span class="settings__download-progress-bar" style="width: {downloadPct}%"
-                        ></span>
+                        <ProgressBar
+                          value={downloadPct}
+                          label={t('settings.localModel.downloading')}
+                        />
                         <span class="settings__download-progress-text"
                           >{downloadPct}% — {t('settings.localModel.downloading')}</span
                         >
@@ -2252,47 +2255,37 @@
                 <p>{t('settings.embeddingProvider.description', { product: PRODUCT_NAME })}</p>
               </div>
 
-              <div class="settings__mode-options">
-                <label class="settings__radio" class:active={embeddingProvider === 'api'}>
-                  <input
-                    type="radio"
-                    name="embedding_provider"
-                    value="api"
-                    bind:group={embeddingProvider}
-                  />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.embeddingProvider.api.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.embeddingProvider.api.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={embeddingProvider === 'local'}>
-                  <input
-                    type="radio"
-                    name="embedding_provider"
-                    value="local"
-                    bind:group={embeddingProvider}
-                  />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.embeddingProvider.local.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.embeddingProvider.local.description')}</span
-                    >
-                  </div>
-                </label>
-              </div>
+              <RadioGroup
+                name="embedding_provider"
+                value={embeddingProvider}
+                onchange={(next) => (embeddingProvider = next as EmbeddingProvider)}
+                label={t('settings.embeddingProvider.title')}
+                hideLabel
+                columnMin="100%"
+              >
+                <RadioCard
+                  value="api"
+                  label={t('settings.embeddingProvider.api.label')}
+                  description={t('settings.embeddingProvider.api.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="local"
+                  label={t('settings.embeddingProvider.local.label')}
+                  description={t('settings.embeddingProvider.local.description')}
+                  wrapDescription
+                />
+              </RadioGroup>
 
               {#if embeddingProvider === 'local'}
                 <div class="settings__field settings__field--stacked">
                   <label class="settings__label" for="local-embedding-model-dir-{paneId}">
                     {t('settings.embeddingProvider.localPath')}
                   </label>
-                  <input
+                  <Input
                     id="local-embedding-model-dir-{paneId}"
-                    type="text"
-                    class="settings__input"
+                    size="sm"
+                    font="mono"
                     bind:value={localEmbeddingModelDir}
                     placeholder={t('settings.embeddingProvider.localPathPlaceholder')}
                   />
@@ -2308,12 +2301,12 @@
                         >{t('settings.embeddingProvider.localStatus')}</span
                       >
                       {#if localEmbeddingModel.available}
-                        <span class="settings__badge settings__badge--ok"
-                          >{t('settings.embeddingProvider.localComplete')}</span
+                        <StatusBadge variant="success" size="xs"
+                          >{t('settings.embeddingProvider.localComplete')}</StatusBadge
                         >
                       {:else}
-                        <span class="settings__badge settings__badge--warn"
-                          >{t('settings.embeddingProvider.localIncomplete')}</span
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.embeddingProvider.localIncomplete')}</StatusBadge
                         >
                       {/if}
                     </div>
@@ -2347,10 +2340,10 @@
 
                     {#if embeddingDownloading}
                       <div class="settings__download-progress">
-                        <span
-                          class="settings__download-progress-bar"
-                          style="width: {embeddingDownloadPct}%"
-                        ></span>
+                        <ProgressBar
+                          value={embeddingDownloadPct}
+                          label={t('settings.embeddingProvider.downloading')}
+                        />
                         <span class="settings__download-progress-text">
                           {embeddingDownloadPct}% — {embeddingDownloadFile ||
                             t('settings.embeddingProvider.downloading')}
@@ -2393,12 +2386,12 @@
                   <div class="settings__local-model-row">
                     <span class="settings__label">{t('settings.reranker.title')}</span>
                     {#if localRerankerModel.available}
-                      <span class="settings__badge settings__badge--ok"
-                        >{t('settings.reranker.ready')}</span
+                      <StatusBadge variant="success" size="xs"
+                        >{t('settings.reranker.ready')}</StatusBadge
                       >
                     {:else}
-                      <span class="settings__badge settings__badge--warn"
-                        >{t('settings.reranker.missing')}</span
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.reranker.missing')}</StatusBadge
                       >
                     {/if}
                   </div>
@@ -2414,10 +2407,10 @@
 
                   {#if rerankerDownloading}
                     <div class="settings__download-progress">
-                      <span
-                        class="settings__download-progress-bar"
-                        style="width: {rerankerDownloadPct}%"
-                      ></span>
+                      <ProgressBar
+                        value={rerankerDownloadPct}
+                        label={t('settings.reranker.downloading')}
+                      />
                       <span class="settings__download-progress-text">
                         {rerankerDownloadPct}% — {rerankerDownloadFile ||
                           t('settings.reranker.downloading')}
@@ -2473,51 +2466,46 @@
             <div class="settings__field settings__field--stacked">
               <label class="settings__label" for="api-key-{paneId}">{t('settings.apiKey')}</label>
               <div class="settings__input-row">
-                {#if showApiKey}
-                  <input
+                <div class="settings__key-field">
+                  <Input
                     id="api-key-{paneId}"
-                    type="text"
-                    class="settings__input"
+                    type={showApiKey ? 'text' : 'password'}
+                    size="sm"
+                    font="mono"
                     bind:value={apiKey}
                     placeholder={t('settings.apiKeyPlaceholder')}
                   />
-                {:else}
-                  <input
-                    id="api-key-{paneId}"
-                    type="password"
-                    class="settings__input"
-                    bind:value={apiKey}
-                    placeholder={t('settings.apiKeyPlaceholder')}
-                  />
-                {/if}
-                <button
-                  class="settings__icon-btn"
-                  type="button"
-                  onclick={() => (showApiKey = !showApiKey)}
-                  use:tooltip={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-                  aria-label={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-                >
-                  <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={14} />
-                </button>
-                {#if maskedApiKey}
-                  <button
-                    class="settings__icon-btn"
-                    type="button"
-                    onclick={() => requestClearKey('openrouter')}
-                    use:tooltip={t('settings.clearKey', { service: 'OpenRouter' })}
-                    aria-label={t('settings.clearKey', { service: 'OpenRouter' })}
-                  >
-                    <ActionIcon name="delete" size={14} />
-                  </button>
-                {/if}
-                <Button
+                </div>
+                <IconButton
                   variant="secondary"
                   size="sm"
-                  onclick={handleTestConnection}
-                  disabled={testing || !hasOpenRouterCredential}
+                  onclick={() => (showApiKey = !showApiKey)}
+                  title={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                  label={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 >
-                  {testing ? t('settings.testingConnection') : t('settings.testConnection')}
-                </Button>
+                  <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={14} />
+                </IconButton>
+                {#if maskedApiKey}
+                  <IconButton
+                    variant="secondary"
+                    size="sm"
+                    onclick={() => requestClearKey('openrouter')}
+                    title={t('settings.clearKey', { service: 'OpenRouter' })}
+                    label={t('settings.clearKey', { service: 'OpenRouter' })}
+                  >
+                    <ActionIcon name="delete" size={14} />
+                  </IconButton>
+                {/if}
+                <div class="settings__key-action">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onclick={handleTestConnection}
+                    disabled={testing || !hasOpenRouterCredential}
+                  >
+                    {testing ? t('settings.testingConnection') : t('settings.testConnection')}
+                  </Button>
+                </div>
               </div>
 
               {#if openRouterKeyStatus}
@@ -2550,10 +2538,10 @@
               <label class="settings__label" for="openai-base-url-{paneId}"
                 >{t('settings.openaiCompatibleBaseUrl.label')}</label
               >
-              <input
+              <Input
                 id="openai-base-url-{paneId}"
-                type="text"
-                class="settings__input"
+                size="sm"
+                font="mono"
                 bind:value={openaiCompatibleBaseUrl}
                 placeholder="http://127.0.0.1:11434"
               />
@@ -2567,12 +2555,14 @@
                 <Input
                   label={t('settings.model')}
                   type="text"
+                  size="sm"
                   bind:value={model}
                   placeholder={t('settings.modelPlaceholder')}
                 />
                 <Input
                   label={t('settings.embeddingProvider.model')}
                   type="text"
+                  size="sm"
                   bind:value={embeddingModel}
                   placeholder={DEFAULT_OPENROUTER_EMBEDDING_MODEL}
                 />
@@ -2613,80 +2603,64 @@
                 <p>{currentSttModeDescription}</p>
               </div>
 
-              <div class="settings__mode-options">
-                <label class="settings__radio" class:active={sttMode === 'local'}>
-                  <input type="radio" name="stt_mode" value="local" bind:group={sttMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.sttMode.local.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.sttMode.local.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={sttMode === 'assemblyai'}>
-                  <input type="radio" name="stt_mode" value="assemblyai" bind:group={sttMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.sttMode.assemblyai.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.sttMode.assemblyai.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={sttMode === 'auto'}>
-                  <input type="radio" name="stt_mode" value="auto" bind:group={sttMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.sttMode.auto.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.sttMode.auto.description')}</span
-                    >
-                  </div>
-                </label>
-              </div>
+              <RadioGroup
+                name="stt_mode"
+                value={sttMode}
+                onchange={(next) => (sttMode = next as SttMode)}
+                label={t('settings.sttModeTitle')}
+                hideLabel
+                columnMin="100%"
+              >
+                <RadioCard
+                  value="local"
+                  label={t('settings.sttMode.local.label')}
+                  description={t('settings.sttMode.local.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="assemblyai"
+                  label={t('settings.sttMode.assemblyai.label')}
+                  description={t('settings.sttMode.assemblyai.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="auto"
+                  label={t('settings.sttMode.auto.label')}
+                  description={t('settings.sttMode.auto.description')}
+                  wrapDescription
+                />
+              </RadioGroup>
 
               {#if sttMode === 'local'}
                 <div class="settings__field settings__field--stacked">
-                  <span class="settings__label">{t('settings.sttLocalEngine.title')}</span>
-                  <div class="settings__mode-options">
-                    <label class="settings__radio" class:active={sttLocalEngine === 'parakeet'}>
-                      <input
-                        type="radio"
-                        name="stt_local_engine"
-                        value="parakeet"
-                        bind:group={sttLocalEngine}
-                      />
-                      <div class="settings__radio-content">
-                        <strong>{t('settings.sttLocalEngine.parakeet.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.sttLocalEngine.parakeet.description')}</span
-                        >
-                      </div>
-                    </label>
-                    <label class="settings__radio" class:active={sttLocalEngine === 'whisper'}>
-                      <input
-                        type="radio"
-                        name="stt_local_engine"
-                        value="whisper"
-                        bind:group={sttLocalEngine}
-                      />
-                      <div class="settings__radio-content">
-                        <strong>{t('settings.sttLocalEngine.whisper.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.sttLocalEngine.whisper.description')}</span
-                        >
-                      </div>
-                    </label>
-                  </div>
+                  <RadioGroup
+                    name="stt_local_engine"
+                    value={sttLocalEngine}
+                    onchange={(next) => (sttLocalEngine = next as SttLocalEngine)}
+                    label={t('settings.sttLocalEngine.title')}
+                    columnMin="100%"
+                  >
+                    <RadioCard
+                      value="parakeet"
+                      label={t('settings.sttLocalEngine.parakeet.label')}
+                      description={t('settings.sttLocalEngine.parakeet.description')}
+                      wrapDescription
+                    />
+                    <RadioCard
+                      value="whisper"
+                      label={t('settings.sttLocalEngine.whisper.label')}
+                      description={t('settings.sttLocalEngine.whisper.description')}
+                      wrapDescription
+                    />
+                  </RadioGroup>
                   {#if sttLocalEngine === 'parakeet'}
-                    <label class="settings__check">
-                      <Checkbox bind:checked={sttLocalDiarize}>
-                        <strong>{t('settings.sttLocalDiarize.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.sttLocalDiarize.description')}</span
-                        >
-                      </Checkbox>
-                    </label>
+                    <!-- Checkbox is its own label: no wrapping label around it. -->
+                    <Checkbox bind:checked={sttLocalDiarize}>
+                      <strong>{t('settings.sttLocalDiarize.label')}</strong>
+                      <span class="settings__check-desc"
+                        >{t('settings.sttLocalDiarize.description')}</span
+                      >
+                    </Checkbox>
                   {/if}
                 </div>
               {/if}
@@ -2730,47 +2704,48 @@
                 >{t('settings.apiKey')}</label
               >
               <div class="settings__input-row">
-                <input
-                  id="assemblyai-api-key-{paneId}"
-                  type={showAssemblyAiApiKey ? 'text' : 'password'}
-                  class="settings__input"
-                  bind:value={assemblyAiApiKey}
-                  placeholder={t('settings.assemblyAiApiKeyPlaceholder')}
-                />
-                <button
-                  class="settings__icon-btn"
-                  type="button"
-                  onclick={() => (showAssemblyAiApiKey = !showAssemblyAiApiKey)}
-                  use:tooltip={showAssemblyAiApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
-                  aria-label={showAssemblyAiApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
-                >
-                  <ActionIcon name={showAssemblyAiApiKey ? 'eye-off' : 'eye'} size={14} />
-                </button>
-                {#if maskedAssemblyAiApiKey}
-                  <button
-                    class="settings__icon-btn"
-                    type="button"
-                    onclick={() => requestClearKey('assemblyai')}
-                    use:tooltip={t('settings.clearKey', { service: 'AssemblyAI' })}
-                    aria-label={t('settings.clearKey', { service: 'AssemblyAI' })}
-                  >
-                    <ActionIcon name="delete" size={14} />
-                  </button>
-                {/if}
-                <Button
+                <div class="settings__key-field">
+                  <Input
+                    id="assemblyai-api-key-{paneId}"
+                    type={showAssemblyAiApiKey ? 'text' : 'password'}
+                    size="sm"
+                    font="mono"
+                    bind:value={assemblyAiApiKey}
+                    placeholder={t('settings.assemblyAiApiKeyPlaceholder')}
+                  />
+                </div>
+                <IconButton
                   variant="secondary"
                   size="sm"
-                  onclick={handleTestAssemblyAiConnection}
-                  disabled={testingAssemblyAi || !hasAssemblyAiCredential}
+                  onclick={() => (showAssemblyAiApiKey = !showAssemblyAiApiKey)}
+                  title={showAssemblyAiApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                  label={showAssemblyAiApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 >
-                  {testingAssemblyAi
-                    ? t('settings.testingConnection')
-                    : t('settings.testConnection')}
-                </Button>
+                  <ActionIcon name={showAssemblyAiApiKey ? 'eye-off' : 'eye'} size={14} />
+                </IconButton>
+                {#if maskedAssemblyAiApiKey}
+                  <IconButton
+                    variant="secondary"
+                    size="sm"
+                    onclick={() => requestClearKey('assemblyai')}
+                    title={t('settings.clearKey', { service: 'AssemblyAI' })}
+                    label={t('settings.clearKey', { service: 'AssemblyAI' })}
+                  >
+                    <ActionIcon name="delete" size={14} />
+                  </IconButton>
+                {/if}
+                <div class="settings__key-action">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onclick={handleTestAssemblyAiConnection}
+                    disabled={testingAssemblyAi || !hasAssemblyAiCredential}
+                  >
+                    {testingAssemblyAi
+                      ? t('settings.testingConnection')
+                      : t('settings.testConnection')}
+                  </Button>
+                </div>
               </div>
 
               {#if assemblyAiKeyStatus}
@@ -2811,16 +2786,16 @@
                   items={speakerLabelItems}
                 >
                   {#snippet trigger(props, { open })}
-                    <button
-                      type="button"
-                      class="settings__select"
-                      class:settings__select--open={open}
-                      aria-labelledby="assemblyai-speaker-labels-label-{paneId} assemblyai-speaker-labels-value-{paneId}"
+                    <!-- Named by the visible label and its own value, read
+                         together: the trigger lists itself in aria-labelledby. -->
+                    <SelectTrigger
                       {...props}
-                    >
-                      <span id="assemblyai-speaker-labels-value-{paneId}">{speakerLabelValue}</span>
-                      <ActionIcon name="chevron-down" size={12} />
-                    </button>
+                      id="assemblyai-speaker-labels-value-{paneId}"
+                      size="sm"
+                      {open}
+                      label={speakerLabelValue}
+                      aria-labelledby="assemblyai-speaker-labels-label-{paneId} assemblyai-speaker-labels-value-{paneId}"
+                    />
                   {/snippet}
                 </ToolbarMenu>
               </div>
@@ -2837,37 +2812,33 @@
                 <p>{currentOcrhModeDescription}</p>
               </div>
 
-              <div class="settings__mode-options">
-                <label class="settings__radio" class:active={ocrhMode === 'local'}>
-                  <input type="radio" name="ocrh_mode" value="local" bind:group={ocrhMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.ocrhMode.local.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.ocrhMode.local.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={ocrhMode === 'glm_ocr'}>
-                  <input type="radio" name="ocrh_mode" value="glm_ocr" bind:group={ocrhMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.ocrhMode.glm_ocr.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.ocrhMode.glm_ocr.description')}</span
-                    >
-                  </div>
-                </label>
-
-                <label class="settings__radio" class:active={ocrhMode === 'auto'}>
-                  <input type="radio" name="ocrh_mode" value="auto" bind:group={ocrhMode} />
-                  <div class="settings__radio-content">
-                    <strong>{t('settings.ocrhMode.auto.label')}</strong>
-                    <span class="settings__radio-desc"
-                      >{t('settings.ocrhMode.auto.description')}</span
-                    >
-                  </div>
-                </label>
-              </div>
+              <RadioGroup
+                name="ocrh_mode"
+                value={ocrhMode}
+                onchange={(next) => (ocrhMode = next as OcrhMode)}
+                label={t('settings.ocrhModeTitle')}
+                hideLabel
+                columnMin="100%"
+              >
+                <RadioCard
+                  value="local"
+                  label={t('settings.ocrhMode.local.label')}
+                  description={t('settings.ocrhMode.local.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="glm_ocr"
+                  label={t('settings.ocrhMode.glm_ocr.label')}
+                  description={t('settings.ocrhMode.glm_ocr.description')}
+                  wrapDescription
+                />
+                <RadioCard
+                  value="auto"
+                  label={t('settings.ocrhMode.auto.label')}
+                  description={t('settings.ocrhMode.auto.description')}
+                  wrapDescription
+                />
+              </RadioGroup>
 
               {#if ocrhMode !== 'local'}
                 <p class="settings__hint settings__hint--privacy">
@@ -2877,69 +2848,55 @@
 
               {#if ocrhMode === 'local'}
                 <div class="settings__field settings__field--stacked">
-                  <span class="settings__label">{t('settings.ocrhLocalEngine.title')}</span>
-                  <div class="settings__mode-options">
-                    <label class="settings__radio" class:active={ocrhLocalEngine === 'auto'}>
-                      <input
-                        type="radio"
-                        name="ocrh_local_engine"
-                        value="auto"
-                        bind:group={ocrhLocalEngine}
-                      />
-                      <div class="settings__radio-content">
-                        <strong>{t('settings.ocrhLocalEngine.auto.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.ocrhLocalEngine.auto.description')}</span
-                        >
-                      </div>
-                    </label>
-
-                    <label class="settings__radio" class:active={ocrhLocalEngine === 'glm_ocr'}>
-                      <input
-                        type="radio"
-                        name="ocrh_local_engine"
-                        value="glm_ocr"
-                        bind:group={ocrhLocalEngine}
-                      />
-                      <div class="settings__radio-content">
-                        <strong>{t('settings.ocrhLocalEngine.glm_ocr.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.ocrhLocalEngine.glm_ocr.description')}</span
-                        >
-                      </div>
-                    </label>
-
-                    <label class="settings__radio" class:active={ocrhLocalEngine === 'paddle_vl'}>
-                      <input
-                        type="radio"
-                        name="ocrh_local_engine"
-                        value="paddle_vl"
-                        bind:group={ocrhLocalEngine}
-                      />
-                      <div class="settings__radio-content">
-                        <strong>{t('settings.ocrhLocalEngine.paddle_vl.label')}</strong>
-                        <span class="settings__radio-desc"
-                          >{t('settings.ocrhLocalEngine.paddle_vl.description')}</span
-                        >
-                      </div>
-                    </label>
-                  </div>
+                  <RadioGroup
+                    name="ocrh_local_engine"
+                    value={ocrhLocalEngine}
+                    onchange={(next) => (ocrhLocalEngine = next as OcrhLocalEngine)}
+                    label={t('settings.ocrhLocalEngine.title')}
+                    columnMin="100%"
+                  >
+                    <RadioCard
+                      value="auto"
+                      label={t('settings.ocrhLocalEngine.auto.label')}
+                      description={t('settings.ocrhLocalEngine.auto.description')}
+                      wrapDescription
+                    />
+                    <RadioCard
+                      value="glm_ocr"
+                      label={t('settings.ocrhLocalEngine.glm_ocr.label')}
+                      description={t('settings.ocrhLocalEngine.glm_ocr.description')}
+                      wrapDescription
+                    />
+                    <RadioCard
+                      value="paddle_vl"
+                      label={t('settings.ocrhLocalEngine.paddle_vl.label')}
+                      description={t('settings.ocrhLocalEngine.paddle_vl.description')}
+                      wrapDescription
+                    />
+                  </RadioGroup>
                 </div>
 
                 {#if glmOcrLocal}
                   <div class="settings__local-model">
                     <div class="settings__local-model-row">
                       {#if glmOcrLocal.model_present && glmOcrLocal.mmproj_present}
-                        <span class="settings__badge settings__badge--ok"
-                          >{t('settings.glmOcrLocal.modelsReady')}</span
+                        <StatusBadge variant="success" size="xs"
+                          >{t('settings.glmOcrLocal.modelsReady')}</StatusBadge
                         >
                       {:else}
-                        <span class="settings__badge settings__badge--warn">
-                          {t('settings.glmOcrLocal.modelsMissing')}
-                          {!glmOcrLocal.model_present
-                            ? ' GLM-OCR-Q8_0.gguf'
-                            : ''}{!glmOcrLocal.mmproj_present ? ' mmproj-GLM-OCR-Q8_0.gguf' : ''}
-                        </span>
+                        <!-- The badge holds the state; the file names, long enough to
+                             overflow a one-line pill, sit beside it. -->
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.glmOcrLocal.modelsMissing')}</StatusBadge
+                        >
+                        <code class="settings__local-model-path"
+                          >{[
+                            !glmOcrLocal.model_present && 'GLM-OCR-Q8_0.gguf',
+                            !glmOcrLocal.mmproj_present && 'mmproj-GLM-OCR-Q8_0.gguf',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}</code
+                        >
                       {/if}
                     </div>
 
@@ -2949,10 +2906,10 @@
 
                     {#if glmOcrDownloading}
                       <div class="settings__download-progress">
-                        <span
-                          class="settings__download-progress-bar"
-                          style="width: {glmOcrDownloadPct}%"
-                        ></span>
+                        <ProgressBar
+                          value={glmOcrDownloadPct}
+                          label={t('settings.glmOcrLocal.downloading')}
+                        />
                         <span class="settings__download-progress-text">
                           {glmOcrDownloadPct}% — {t('settings.glmOcrLocal.downloading')}
                         </span>
@@ -2979,18 +2936,21 @@
                     <div class="settings__local-model-row">
                       <span class="settings__label">{t('settings.qwenCorrectLocal.title')}</span>
                       {#if qwenLocal.model_present && qwenLocal.mmproj_present}
-                        <span class="settings__badge settings__badge--ok"
-                          >{t('settings.qwenCorrectLocal.modelsReady')}</span
+                        <StatusBadge variant="success" size="xs"
+                          >{t('settings.qwenCorrectLocal.modelsReady')}</StatusBadge
                         >
                       {:else}
-                        <span class="settings__badge settings__badge--warn">
-                          {t('settings.qwenCorrectLocal.modelsMissing')}
-                          {!qwenLocal.model_present
-                            ? ' Qwen3VL-4B-Instruct-Q4_K_M.gguf'
-                            : ''}{!qwenLocal.mmproj_present
-                            ? ' mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf'
-                            : ''}
-                        </span>
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.qwenCorrectLocal.modelsMissing')}</StatusBadge
+                        >
+                        <code class="settings__local-model-path"
+                          >{[
+                            !qwenLocal.model_present && 'Qwen3VL-4B-Instruct-Q4_K_M.gguf',
+                            !qwenLocal.mmproj_present && 'mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}</code
+                        >
                       {/if}
                     </div>
                     <p class="settings__hint">{t('settings.qwenCorrectLocal.description')}</p>
@@ -3001,10 +2961,10 @@
 
                     {#if qwenDownloading}
                       <div class="settings__download-progress">
-                        <span
-                          class="settings__download-progress-bar"
-                          style="width: {qwenDownloadPct}%"
-                        ></span>
+                        <ProgressBar
+                          value={qwenDownloadPct}
+                          label={t('settings.qwenCorrectLocal.downloading')}
+                        />
                         <span class="settings__download-progress-text">
                           {qwenDownloadPct}% — {t('settings.qwenCorrectLocal.downloading')}
                         </span>
@@ -3060,45 +3020,46 @@
                 >{t('settings.apiKey')}</label
               >
               <div class="settings__input-row">
-                <input
-                  id="glm-ocr-api-key-{paneId}"
-                  type={showGlmOcrApiKey ? 'text' : 'password'}
-                  class="settings__input"
-                  bind:value={glmOcrApiKey}
-                  placeholder={t('settings.glmOcrApiKeyPlaceholder')}
-                />
-                <button
-                  class="settings__icon-btn"
-                  type="button"
-                  onclick={() => (showGlmOcrApiKey = !showGlmOcrApiKey)}
-                  use:tooltip={showGlmOcrApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
-                  aria-label={showGlmOcrApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
-                >
-                  <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={14} />
-                </button>
-                {#if maskedGlmOcrApiKey}
-                  <button
-                    class="settings__icon-btn"
-                    type="button"
-                    onclick={() => requestClearKey('glmOcr')}
-                    use:tooltip={t('settings.clearKey', { service: 'GLM-OCR' })}
-                    aria-label={t('settings.clearKey', { service: 'GLM-OCR' })}
-                  >
-                    <ActionIcon name="delete" size={14} />
-                  </button>
-                {/if}
-                <Button
+                <div class="settings__key-field">
+                  <Input
+                    id="glm-ocr-api-key-{paneId}"
+                    type={showGlmOcrApiKey ? 'text' : 'password'}
+                    size="sm"
+                    font="mono"
+                    bind:value={glmOcrApiKey}
+                    placeholder={t('settings.glmOcrApiKeyPlaceholder')}
+                  />
+                </div>
+                <IconButton
                   variant="secondary"
                   size="sm"
-                  onclick={handleTestGlmOcrConnection}
-                  disabled={testingGlmOcr || !hasGlmOcrCredential}
+                  onclick={() => (showGlmOcrApiKey = !showGlmOcrApiKey)}
+                  title={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                  label={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 >
-                  {testingGlmOcr ? t('settings.testingConnection') : t('settings.testConnection')}
-                </Button>
+                  <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={14} />
+                </IconButton>
+                {#if maskedGlmOcrApiKey}
+                  <IconButton
+                    variant="secondary"
+                    size="sm"
+                    onclick={() => requestClearKey('glmOcr')}
+                    title={t('settings.clearKey', { service: 'GLM-OCR' })}
+                    label={t('settings.clearKey', { service: 'GLM-OCR' })}
+                  >
+                    <ActionIcon name="delete" size={14} />
+                  </IconButton>
+                {/if}
+                <div class="settings__key-action">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onclick={handleTestGlmOcrConnection}
+                    disabled={testingGlmOcr || !hasGlmOcrCredential}
+                  >
+                    {testingGlmOcr ? t('settings.testingConnection') : t('settings.testConnection')}
+                  </Button>
+                </div>
               </div>
 
               {#if glmOcrKeyStatus}
@@ -3152,46 +3113,47 @@
                 >{t('settings.zotero.keyLabel')}</label
               >
               <div class="settings__input-row">
-                <input
-                  id="zotero-api-key-{paneId}"
-                  type={showZoteroApiKey ? 'text' : 'password'}
-                  class="settings__input"
-                  bind:value={zoteroApiKey}
-                  placeholder={t('settings.zotero.keyPlaceholder')}
-                  autocomplete="off"
-                />
-                <button
-                  class="settings__icon-btn"
-                  type="button"
-                  onclick={() => (showZoteroApiKey = !showZoteroApiKey)}
-                  use:tooltip={showZoteroApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
-                  aria-label={showZoteroApiKey
-                    ? t('settings.hideApiKey')
-                    : t('settings.showApiKey')}
-                >
-                  <ActionIcon name={showZoteroApiKey ? 'eye-off' : 'eye'} size={14} />
-                </button>
-                {#if maskedZoteroApiKey}
-                  <button
-                    class="settings__icon-btn"
-                    type="button"
-                    onclick={() => requestClearKey('zotero')}
-                    use:tooltip={t('settings.clearKey', { service: 'Zotero' })}
-                    aria-label={t('settings.clearKey', { service: 'Zotero' })}
-                  >
-                    <ActionIcon name="delete" size={14} />
-                  </button>
-                {/if}
-                <Button
+                <div class="settings__key-field">
+                  <Input
+                    id="zotero-api-key-{paneId}"
+                    type={showZoteroApiKey ? 'text' : 'password'}
+                    size="sm"
+                    font="mono"
+                    bind:value={zoteroApiKey}
+                    placeholder={t('settings.zotero.keyPlaceholder')}
+                    autocomplete="off"
+                  />
+                </div>
+                <IconButton
                   variant="secondary"
                   size="sm"
-                  onclick={handleVerifyZoteroKey}
-                  disabled={verifyingZotero || !hasZoteroCredential}
+                  onclick={() => (showZoteroApiKey = !showZoteroApiKey)}
+                  title={showZoteroApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                  label={showZoteroApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                 >
-                  {verifyingZotero ? t('settings.zotero.verifying') : t('settings.zotero.verify')}
-                </Button>
+                  <ActionIcon name={showZoteroApiKey ? 'eye-off' : 'eye'} size={14} />
+                </IconButton>
+                {#if maskedZoteroApiKey}
+                  <IconButton
+                    variant="secondary"
+                    size="sm"
+                    onclick={() => requestClearKey('zotero')}
+                    title={t('settings.clearKey', { service: 'Zotero' })}
+                    label={t('settings.clearKey', { service: 'Zotero' })}
+                  >
+                    <ActionIcon name="delete" size={14} />
+                  </IconButton>
+                {/if}
+                <div class="settings__key-action">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onclick={handleVerifyZoteroKey}
+                    disabled={verifyingZotero || !hasZoteroCredential}
+                  >
+                    {verifyingZotero ? t('settings.zotero.verifying') : t('settings.zotero.verify')}
+                  </Button>
+                </div>
               </div>
 
               {#if zoteroKeyStatus}
@@ -3257,14 +3219,12 @@
 
           <div class="settings__prompt-grid">
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="ocr-correction-prompt-{paneId}"
-                >OCR correction prompt</label
-              >
-              <textarea
-                id="ocr-correction-prompt-{paneId}"
-                class="settings__textarea"
-                rows="12"
-                bind:value={ocrCorrectionPrompt}></textarea>
+              <Textarea
+                label="OCR correction prompt"
+                font="mono"
+                rows={14}
+                bind:value={ocrCorrectionPrompt}
+              />
               {#if promptValidationFeedback.ocrCorrectionPrompt}
                 <p
                   class="settings__validation"
@@ -3290,12 +3250,7 @@
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="summary-prompt-{paneId}">Summary prompt</label>
-              <textarea
-                id="summary-prompt-{paneId}"
-                class="settings__textarea"
-                rows="10"
-                bind:value={summaryPrompt}></textarea>
+              <Textarea label="Summary prompt" font="mono" rows={14} bind:value={summaryPrompt} />
               {#if promptValidationFeedback.summaryPrompt}
                 <p
                   class="settings__validation"
@@ -3318,12 +3273,7 @@
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="ner-prompt-{paneId}">NER prompt</label>
-              <textarea
-                id="ner-prompt-{paneId}"
-                class="settings__textarea"
-                rows="8"
-                bind:value={nerPrompt}></textarea>
+              <Textarea label="NER prompt" font="mono" rows={14} bind:value={nerPrompt} />
               {#if promptValidationFeedback.nerPrompt}
                 <p
                   class="settings__validation"
@@ -3343,12 +3293,7 @@
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
-              <label class="settings__label" for="triplets-prompt-{paneId}">Triplets prompt</label>
-              <textarea
-                id="triplets-prompt-{paneId}"
-                class="settings__textarea"
-                rows="10"
-                bind:value={tripletsPrompt}></textarea>
+              <Textarea label="Triplets prompt" font="mono" rows={14} bind:value={tripletsPrompt} />
               {#if promptValidationFeedback.tripletsPrompt}
                 <p
                   class="settings__validation"
@@ -3447,22 +3392,22 @@
                     type="text"
                     bind:value={modelParamsByFlow[flow.id].frequencyPenalty}
                   />
-                  <div class="settings__field settings__field--stacked settings__field--wide">
-                    <label class="settings__label" for={`${flow.id}-stop-sequences`}
-                      >stopSequences</label
-                    >
-                    <textarea
-                      id={`${flow.id}-stop-sequences`}
-                      class="settings__textarea"
-                      rows="3"
+                  <div class="settings__field--wide">
+                    <Textarea
+                      label="stopSequences"
+                      hint={t('settings.modelParams.hint.stopSequences')}
+                      font="mono"
+                      rows={3}
                       bind:value={modelParamsByFlow[flow.id].stopSequences}
-                      placeholder={t('settings.modelParams.stopSequencesPlaceholder')}></textarea>
-                    <p class="settings__hint">{t('settings.modelParams.hint.stopSequences')}</p>
+                      placeholder={t('settings.modelParams.stopSequencesPlaceholder')}
+                    />
                   </div>
                 </div>
-                <Button variant="secondary" size="sm" onclick={() => resetModelParams(flow.id)}
-                  >{t('settings.modelParams.restoreDefaults')}</Button
-                >
+                <div class="settings__card-actions">
+                  <Button variant="secondary" size="sm" onclick={() => resetModelParams(flow.id)}
+                    >{t('settings.modelParams.restoreDefaults')}</Button
+                  >
+                </div>
               </div>
             {/each}
           </div>
@@ -3592,9 +3537,11 @@
                   bind:value={ragParams.maxTokens}
                 />
               </div>
-              <Button variant="secondary" size="sm" onclick={resetRagParams}
-                >{t('settings.ragParams.restoreDefaults')}</Button
-              >
+              <div class="settings__card-actions">
+                <Button variant="secondary" size="sm" onclick={resetRagParams}
+                  >{t('settings.ragParams.restoreDefaults')}</Button
+                >
+              </div>
             </div>
           </div>
         </section>
@@ -3744,7 +3691,7 @@
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     white-space: nowrap;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 2%);
+    box-shadow: var(--shadow-highlight);
   }
 
   .settings-provider-summary__dot {
@@ -3760,11 +3707,11 @@
     display: inline-block;
     width: 6px;
     height: 6px;
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     background: var(--color-warning);
     margin-left: var(--space-1);
     vertical-align: middle;
-    animation: tab-badge-pulse 2s ease-in-out 3;
+    animation: tab-badge-pulse var(--duration-pulse) ease-in-out 3;
   }
 
   @keyframes tab-badge-pulse {
@@ -3775,23 +3722,6 @@
     50% {
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 25%, transparent);
     }
-  }
-
-  .settings-view :global(.card) {
-    border-color: var(--color-hairline);
-    background: color-mix(in srgb, var(--color-surface-glass) 86%, transparent);
-    box-shadow: var(--shadow-surface);
-    backdrop-filter: none;
-  }
-
-  .settings-view :global(.card__header),
-  .settings-view :global(.card__footer) {
-    background-color: color-mix(in srgb, var(--color-surface) 88%, transparent);
-    border-color: var(--color-hairline);
-  }
-
-  .settings-view :global(.card__body) {
-    background: transparent;
   }
 
   .settings-card-section {
@@ -3881,41 +3811,6 @@
     color: var(--color-text-primary);
   }
 
-  /* The trigger of the speaker-label choice. It replaces a native <select>,
-     so it states every surface the operating system used to decide. */
-  .settings__select {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-control);
-    background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    cursor: pointer;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base);
-  }
-
-  .settings__select:hover,
-  .settings__select--open {
-    background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
-    border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-hairline));
-  }
-
-  .settings__select:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .settings__select :global(svg) {
-    color: var(--color-text-muted);
-  }
-
   .settings-card-section--vertical {
     align-items: stretch;
   }
@@ -3930,14 +3825,13 @@
     margin: 0;
     font-size: var(--font-size-base);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: -0.01em;
   }
 
   .settings-card-section__copy p,
   .settings__hint {
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
     margin: 0;
   }
 
@@ -3956,78 +3850,11 @@
     text-decoration: underline;
   }
 
-  .settings__mode-options {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-
-  .settings__radio {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-3);
-    padding: var(--space-4);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    background: color-mix(in srgb, var(--color-surface-glass) 76%, transparent);
-    transition:
-      border-color var(--transition-smooth),
-      background-color var(--transition-smooth),
-      box-shadow var(--transition-smooth),
-      transform var(--transition-smooth);
-  }
-
-  .settings__radio:hover {
-    border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-hairline));
-    background: color-mix(in srgb, var(--color-surface-glass) 86%, transparent);
-    transform: translateY(-1px);
-  }
-
-  .settings__radio.active {
-    border-color: var(--color-accent);
-    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-glass));
-    box-shadow: var(--shadow-sm);
-  }
-
-  .settings__radio input[type='radio'] {
-    margin-top: 3px;
-    accent-color: var(--color-accent);
-  }
-
-  .settings__radio-content {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .settings__radio-content strong {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-  }
-
-  .settings__radio-desc {
+  /* The explanation under the diarization checkbox's label. */
+  .settings__check-desc {
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
-    line-height: 1.5;
-  }
-
-  .settings__badge {
-    display: inline-block;
-    margin-left: var(--space-2);
-    padding: 2px 8px;
-    border-radius: var(--radius-full);
-    font-size: 10px;
-    font-weight: var(--font-weight-medium);
-    vertical-align: middle;
-  }
-  .settings__badge--ok {
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-  .settings__badge--warn {
-    background: var(--color-warning-soft);
-    color: var(--color-warning);
+    line-height: var(--line-height-base);
   }
 
   .settings__field {
@@ -4069,32 +3896,23 @@
     margin-bottom: 0;
     padding: var(--space-4);
     border: 1px solid color-mix(in srgb, var(--color-hairline) 72%, transparent);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-surface);
     background: color-mix(in srgb, var(--color-surface-glass) 70%, transparent);
-  }
-
-  .settings__prompt-card .settings__textarea {
-    flex: 1;
-    min-height: 300px;
   }
 
   .settings__button-row {
     display: flex;
     flex-wrap: wrap;
+    align-items: flex-start;
     gap: var(--space-2);
     margin-top: auto;
-  }
-
-  .settings__prompt-card .settings__button-row :global(.btn) {
-    align-self: flex-start;
-    margin-top: 0;
   }
 
   .settings__validation {
     margin: 0;
     color: var(--color-success);
     font-size: var(--font-size-sm);
-    line-height: 1.5;
+    line-height: var(--line-height-base);
   }
 
   .settings__validation--error {
@@ -4106,7 +3924,7 @@
     margin-bottom: 0;
     padding: var(--space-4);
     border: 1px solid color-mix(in srgb, var(--color-hairline) 72%, transparent);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-surface);
     background: color-mix(in srgb, var(--color-surface-glass) 70%, transparent);
   }
 
@@ -4122,30 +3940,9 @@
     gap: var(--space-3);
   }
 
-  .settings__param-card :global(.btn) {
-    align-self: flex-start;
+  /* The reset action sits at the foot of the card, at its own width. */
+  .settings__card-actions {
     margin-top: auto;
-  }
-
-  .settings__textarea {
-    width: 100%;
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-input);
-    background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    color: var(--color-text-primary);
-    padding: var(--space-3);
-    font: inherit;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-    line-height: 1.5;
-    resize: vertical;
-  }
-
-  .settings__textarea:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
   }
 
   /* Keyed to this pane's own width (the `pane` container WorkPane.svelte
@@ -4172,7 +3969,7 @@
     color: var(--color-text-muted);
     margin-bottom: var(--space-1);
     text-transform: uppercase;
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
   }
 
   .settings__input-row {
@@ -4182,103 +3979,21 @@
     align-items: center;
   }
 
-  /* The input gives up its content width so a long key ends in an ellipsis
-     rather than pushing the eye and the test button onto their own line. */
-  .settings__provider-grid .settings__input-row .settings__input {
+  /* The key field gives up its content width so a long key ends in an
+     ellipsis rather than pushing the eye and the test button onto their own
+     line. */
+  .settings__key-field {
     min-width: 0;
     flex: 1 1 8rem;
   }
 
-  .settings__provider-grid .settings__input,
-  .settings__provider-grid .settings__icon-btn,
-  .settings__provider-grid :global(.input-field__input) {
-    min-height: var(--control-height-sm);
-    height: auto;
-  }
-
-  .settings__provider-grid .settings__icon-btn {
-    width: var(--control-height-sm);
-  }
-
-  .settings__input {
-    flex: 1;
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-input);
-    background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    color: var(--color-text-primary);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-  }
-
-  .settings__input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
-  }
-
-  .settings__input--select {
-    max-width: 240px;
-    font-family: var(--font-ui);
-  }
-
-  .settings__icon-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--control-height-md);
-    height: var(--control-height-md);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-control);
-    background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    font-size: var(--font-size-sm);
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base),
-      color var(--transition-base),
-      box-shadow var(--transition-base);
-  }
-
-  .settings__icon-btn:hover {
-    border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-hairline));
-    background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
-  }
-
-  .settings__icon-btn:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .settings-view :global(.input-field__input) {
-    border-color: color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    background-color: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-  }
-
-  .settings-view :global(.input-field__input:focus),
-  .settings-view :global(.input-field__input:focus-visible) {
-    background-color: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
-  }
-
-  .settings-view :global(.btn--secondary) {
-    border-color: color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 55%),
-      color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
-    box-shadow: none;
-  }
-
-  .settings-view :global(.btn--secondary:hover:not(:disabled)) {
-    border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-hairline));
-    background-color: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
+  .settings__key-action {
+    display: grid;
   }
 
   .settings__feedback {
     margin: 0;
-    line-height: 1.55;
+    line-height: var(--line-height-base);
   }
 
   .settings__load-error {
@@ -4380,45 +4095,27 @@
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
     margin: 0;
-    line-height: 1.5;
+    line-height: var(--line-height-base);
   }
 
   .settings__local-model-guide code {
     font-family: var(--font-mono);
     background: var(--color-surface-sunken);
-    padding: 2px 6px;
+    padding: var(--space-0-5) var(--space-1);
     border-radius: var(--radius-sm);
     font-size: var(--font-size-xs);
   }
 
   .settings__download-progress {
-    position: relative;
-    height: 24px;
-    background: var(--color-surface-sunken);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-  }
-
-  .settings__download-progress-bar {
-    position: absolute;
-    top: 0;
-    left: 0;
-    height: 100%;
-    background: var(--color-accent);
-    opacity: 0.25;
-    transition: width 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
   }
 
   .settings__download-progress-text {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    color: var(--color-text-primary);
-    z-index: 1;
+    color: var(--color-text-secondary);
   }
 
   /* Keyed to this pane's own width (the `pane` container WorkPane.svelte
@@ -4431,13 +4128,10 @@
       width: 100%;
     }
 
-    .settings-view__toolbar :global(.btn),
-    .settings__input-row :global(.btn) {
-      width: 100%;
-    }
-
-    .settings__icon-btn {
-      flex: 0 0 auto;
+    /* A grid item stretches, so the connection test takes the whole row;
+       the save button is a fixed square and stays one. */
+    .settings__key-action {
+      flex: 1 1 100%;
     }
   }
 </style>

@@ -162,6 +162,24 @@ describe('AppearanceTab', () => {
     })
   })
 
+  describe('controls', () => {
+    it('builds the choices on SelectTrigger and the zoom actions on IconButton and Button', () => {
+      render(AppearanceTab)
+
+      for (const trigger of [
+        themeTrigger(),
+        contrastTrigger(),
+        languageTrigger(),
+        screen.getByRole('button', { name: /Tipografía/ }),
+      ]) {
+        expect(trigger).toHaveClass('select-trigger', 'select-trigger--quiet')
+      }
+      expect(zoomDecrease()).toHaveClass('icon-button', 'icon-button--sm')
+      expect(zoomIncrease()).toHaveClass('icon-button', 'icon-button--sm')
+      expect(zoomReset()).toHaveClass('btn', 'btn--ghost', 'btn--sm')
+    })
+  })
+
   describe('typography', () => {
     function fontTrigger() {
       return screen.getByRole('button', { name: /Tipografía/ })

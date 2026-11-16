@@ -46,6 +46,7 @@
     Card,
     Checkbox,
     ConfirmDialog,
+    SelectTrigger,
     ToolbarMenu,
     type ToolbarMenuItem,
   } from '@entropia/ui'
@@ -907,17 +908,15 @@
           </span>
           <ToolbarMenu label={t('batch.priority')} items={priorityItems}>
             {#snippet trigger(props, { open })}
-              <button
-                type="button"
-                class="batch-select"
-                class:batch-select--open={open}
+              <SelectTrigger
+                {...props}
+                id="batch-priority-value"
+                size="sm"
+                {open}
+                label={priorityLabel(detail!.priority)}
                 aria-labelledby="batch-priority-label batch-priority-value"
                 disabled={busyBatchId === detail!.id}
-                {...props}
-              >
-                <span id="batch-priority-value">{priorityLabel(detail!.priority)}</span>
-                <ActionIcon name="chevron-down" size={12} />
-              </button>
+              />
             {/snippet}
           </ToolbarMenu>
         {/if}
@@ -975,16 +974,14 @@
         </span>
         <ToolbarMenu label={t('batch.filterState')} items={taskFilterItems}>
           {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="batch-select"
-              class:batch-select--open={open}
-              aria-labelledby="batch-task-filter-label batch-task-filter-value"
+            <SelectTrigger
               {...props}
-            >
-              <span id="batch-task-filter-value">{taskFilterLabel}</span>
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
+              id="batch-task-filter-value"
+              size="sm"
+              {open}
+              label={taskFilterLabel}
+              aria-labelledby="batch-task-filter-label batch-task-filter-value"
+            />
           {/snippet}
         </ToolbarMenu>
         <span class="batch-toolbar__count">
@@ -1259,37 +1256,37 @@
             <span class="batch-field__legend" id="batch-collections-label"
               >{t('batch.collections')}</span
             >
-            <Checkbox
-              class="batch-field__select-all"
-              checked={allSelected}
-              onchange={toggleSelectAll}
-            >
-              {t('batch.selectAll')} · {t('batch.selectedCount', { count: selectedCount })}
+            <Checkbox size="sm" checked={allSelected} onchange={toggleSelectAll}>
+              <span class="batch-field__select-all"
+                >{t('batch.selectAll')} · {t('batch.selectedCount', { count: selectedCount })}</span
+              >
             </Checkbox>
           </div>
           <div class="batch-field__scope-list">
             {#each collections as collection (collection.id)}
-              <Checkbox
-                class="batch-field__scope"
-                checked={Boolean(selected[collection.id])}
-                onchange={() => toggleCollection(collection.id)}
-              >
-                <span class="batch-field__scope-row">
-                  <span class="batch-field__scope-name" use:tooltip={collection.name}
-                    >{collection.name}</span
-                  >
-                  <span class="batch-field__count">{collection.items}</span>
-                </span>
-              </Checkbox>
+              <div class="batch-field__scope">
+                <Checkbox
+                  variant="card"
+                  checked={Boolean(selected[collection.id])}
+                  onchange={() => toggleCollection(collection.id)}
+                >
+                  <span class="batch-field__scope-row">
+                    <span class="batch-field__scope-name" use:tooltip={collection.name}
+                      >{collection.name}</span
+                    >
+                    <span class="batch-field__count">{collection.items}</span>
+                  </span>
+                </Checkbox>
+              </div>
             {/each}
           </div>
         </div>
         <BatchFlowPicker steps={flowSteps} onapply={applyFlow} />
         <div class="batch-ops" role="group" aria-labelledby="batch-ops-label">
           <span class="batch-field__legend" id="batch-ops-label">{t('batch.operations')}</span>
-          <Checkbox class="batch-ops__toggle" bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
+          <Checkbox variant="card" size="sm" bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrIncludeNativeHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={ocrIncludeNative} disabled={!runOcr}
+            <Checkbox variant="card" size="sm" bind:checked={ocrIncludeNative} disabled={!runOcr}
               >{t('batch.opOcrIncludeNative')}</Checkbox
             >
           </span>
@@ -1298,25 +1295,25 @@
                action also wires `aria-describedby`, so the sentence still
                reaches a screen reader off the checkbox it explains. -->
           <span class="batch-ops__hinted" use:tooltip={t('batch.opEmbeddingsHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={runEmbeddings}
+            <Checkbox variant="card" size="sm" bind:checked={runEmbeddings}
               >{t('batch.opEmbeddings')}</Checkbox
             >
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opNerHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={runNer}>{t('batch.opNer')}</Checkbox>
+            <Checkbox variant="card" size="sm" bind:checked={runNer}>{t('batch.opNer')}</Checkbox>
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opTriplesHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={runTriples}
+            <Checkbox variant="card" size="sm" bind:checked={runTriples}
               >{t('batch.opTriples')}</Checkbox
             >
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrCorrectionHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={runOcrCorrection}
+            <Checkbox variant="card" size="sm" bind:checked={runOcrCorrection}
               >{t('batch.opOcrCorrection')}</Checkbox
             >
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opSummaryHint')}>
-            <Checkbox class="batch-ops__toggle" bind:checked={runSummary}
+            <Checkbox variant="card" size="sm" bind:checked={runSummary}
               >{t('batch.opSummary')}</Checkbox
             >
           </span>
@@ -1657,9 +1654,7 @@
     font-weight: var(--font-weight-medium);
   }
 
-  .batch-field__head :global(.batch-field__select-all) {
-    padding: var(--space-1) var(--space-2);
-    font-size: var(--font-size-xs);
+  .batch-field__select-all {
     color: var(--color-text-secondary);
   }
 
@@ -1688,18 +1683,6 @@
     min-width: 0;
   }
 
-  .batch-ops :global(.batch-ops__toggle) {
-    gap: var(--space-2);
-    padding: var(--space-1) var(--space-2);
-    border-color: var(--border-subtle);
-    background: var(--surface-input);
-  }
-
-  .batch-ops :global(.batch-ops__toggle:has(input:checked)) {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
-  }
-
   /* The collection picker is the Colecciones grid in miniature: the same 260px
      track floor that page uses, and the card inside it is what gets tighter,
      since the only job here is ticking boxes.
@@ -1720,34 +1703,17 @@
     overflow-y: auto;
     padding: var(--space-2);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-input);
     background: var(--surface-input);
   }
 
-  /* The card IS the Checkbox, not a div wrapped around one. Its <label> already
-     makes the whole surface a click target, already toggles on Space, and
-     already draws exactly one focus ring — so there is no wrapper handler to
-     fire twice and no second ring to hide.
-
-     What is left to state is the lift off the sunken list, and a checked border
-     firmer than the resting one: the component's own checked rule lands on
-     --border-subtle, which is this card's RESTING border, so without this the
-     selected state would announce itself with nothing but the tick. */
-  .batch-field__scope-list :global(.batch-field__scope) {
-    gap: var(--space-2);
-    padding: var(--space-2);
+  /* The card is Checkbox variant="card": its <label> is the click target,
+     toggles on Space and draws the one focus ring, and the variant owns the
+     lift off this sunken list and the firmer checked border. The div around
+     it is only a grid item the view owns, so a long collection name shrinks
+     into its ellipsis instead of widening the track. */
+  .batch-field__scope {
     min-width: 0;
-    background: var(--surface-panel);
-    border-color: var(--border-subtle);
-  }
-
-  .batch-field__scope-list :global(.batch-field__scope:hover) {
-    background: var(--surface-toolbar);
-  }
-
-  .batch-field__scope-list :global(.batch-field__scope:has(input:checked)) {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
   }
 
   .batch-field__scope-row {
@@ -1807,7 +1773,7 @@
     text-align: start;
     background: none;
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: inherit;
     cursor: pointer;
     padding: var(--space-2) var(--space-3);
@@ -1844,7 +1810,7 @@
   }
 
   .batch-tab__batch-row:hover {
-    background: var(--surface-toolbar);
+    background: var(--state-hover-row);
   }
 
   .batch-tab__batch-row:focus-visible {
@@ -2029,7 +1995,7 @@
     padding: 0;
     background: none;
     border: 0;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-control);
     color: inherit;
     font: inherit;
     cursor: pointer;
@@ -2064,7 +2030,7 @@
      line up down the column whether or not a row can be opened. */
   .batch-tasks__plain {
     display: block;
-    padding-inline-start: calc(12px + var(--space-1));
+    padding-inline-start: calc(var(--space-3) + var(--space-1));
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -2127,7 +2093,7 @@
     height: var(--control-height-sm);
     padding: 0 var(--space-1);
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: none;
     color: var(--color-text-secondary);
     font: inherit;
@@ -2153,7 +2119,7 @@
 
   .batch-pager__step:disabled,
   .batch-pager__page:disabled {
-    opacity: 0.4;
+    opacity: var(--opacity-disabled);
     cursor: not-allowed;
   }
 
@@ -2223,42 +2189,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* The trigger of the state filter. It replaces a native <select>, so it
-     states every surface the operating system used to decide: the sunken
-     input background, one hairline, the app's control radius and height. */
-  .batch-select {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-    transition:
-      background-color var(--transition-base),
-      border-color var(--transition-base);
-  }
-
-  .batch-select:hover,
-  .batch-select--open {
-    background: var(--surface-toolbar);
-    border-color: var(--border-panel);
-  }
-
-  .batch-select:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .batch-select :global(svg) {
-    color: var(--color-text-muted);
-  }
-
   .batch-tab__detail-head {
     display: flex;
     flex-wrap: wrap;
@@ -2277,7 +2207,6 @@
 
   @media (prefers-reduced-motion: reduce) {
     .batch-tab__progress-bar,
-    .batch-select,
     .batch-pager__step,
     .batch-pager__page,
     .batch-tab__batch-row {

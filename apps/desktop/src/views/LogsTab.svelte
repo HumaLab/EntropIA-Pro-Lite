@@ -170,7 +170,7 @@
   .logs-tab__empty {
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
-    line-height: 1.55;
+    line-height: var(--line-height-base);
   }
 
   .logs-tab__actions {
@@ -228,7 +228,7 @@
     color: var(--color-text-primary);
   }
 
-  @media (max-width: 760px) {
+  @container pane (max-width: 760px) {
     .logs-tab__header {
       flex-direction: column;
     }

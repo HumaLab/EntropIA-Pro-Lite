@@ -39,7 +39,7 @@ export const typography = {
   sizeXl: 'var(--font-size-xl)',
   weightNormal: 'var(--font-weight-normal)',
   weightMedium: 'var(--font-weight-medium)',
-  weightBold: 'var(--font-weight-bold)',
+  weightSemibold: 'var(--font-weight-semibold)',
 } as const
 
 export const radius = {

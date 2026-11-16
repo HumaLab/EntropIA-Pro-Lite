@@ -3,8 +3,11 @@
     ActionIcon,
     Button,
     ConfirmDialog,
+    Disclosure,
     Input,
+    ProgressBar,
     StatusBadge,
+    Textarea,
     type StatusBadgeVariant,
   } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
@@ -188,13 +191,11 @@
             ? translate('item.assetPageLabel', { page: selectedAssetIndex + 1 })
             : (getAssetFilename(selectedAsset) ?? translate('item.assetNoSelection'))}
         </span>
-        <StatusBadge
-          variant={getJobStatusBadgeVariant(ocrState.status)}
-          size="sm"
-          class="ocr-status-badge"
-        >
-          {ocrState.status}
-        </StatusBadge>
+        <span class="ocr-status">
+          <StatusBadge variant={getJobStatusBadgeVariant(ocrState.status)} size="sm">
+            {ocrState.status}
+          </StatusBadge>
+        </span>
         <div class="ocr-btn-group">
           {#if !isPdfAsset && localOcrAvailable}
             <Button
@@ -263,9 +264,7 @@
 
       {#if ocrState.status === 'running'}
         {@const ocrStageLabel = getOcrStageLabel(ocrState.stage)}
-        <progress class="ocr-progress" value={ocrState.progress} max="100">
-          {ocrState.progress}%
-        </progress>
+        <ProgressBar value={ocrState.progress} label={translate('item.textExtraction')} />
         <p class="ocr-status-text">
           {ocrStageLabel
             ? translate('item.extractionRunningStage', {
@@ -282,48 +281,44 @@
         </p>
         {#if ocrEditedText.trim()}
           {@const displayLength = ocrEditedText.length}
-          <details class="ocr-result" open>
-            <summary>
-              {translate('item.extractedText')}
-              <span class="ocr-meta">
-                via {ocrState.method ?? translate('item.ocrMethodUnknown')} · {translate(
-                  'item.characters',
-                  { count: displayLength }
-                )}
-              </span>
-            </summary>
-            <textarea
-              class="ocr-result-body ocr-textarea"
-              rows="8"
+          <Disclosure open summary={translate('item.extractedText')}>
+            {#snippet meta()}
+              via {ocrState.method ?? translate('item.ocrMethodUnknown')} · {translate(
+                'item.characters',
+                { count: displayLength }
+              )}
+            {/snippet}
+            <Textarea
+              class="ocr-textarea"
+              font="mono"
+              rows={8}
+              value={ocrEditedText}
               disabled={ocrEditingDisabled}
               oninput={(event) => onOcrTextInput(selectedAsset.id, event.currentTarget.value)}
-              >{ocrEditedText}</textarea
-            >
-          </details>
+            />
+          </Disclosure>
         {/if}
       {:else if ocrState.status === 'done'}
         {#if ocrState.warning}
           <p class="ocr-warning">{ocrState.warning}</p>
         {/if}
         {@const displayLength = ocrEditedText.length}
-        <details class="ocr-result">
-          <summary>
-            {translate('item.extractedText')}
-            <span class="ocr-meta">
-              via {ocrState.method ?? translate('item.ocrMethodUnknown')} · {translate(
-                'item.characters',
-                { count: displayLength }
-              )}
-            </span>
-          </summary>
-          <textarea
-            class="ocr-result-body ocr-textarea"
-            rows="8"
+        <Disclosure summary={translate('item.extractedText')}>
+          {#snippet meta()}
+            via {ocrState.method ?? translate('item.ocrMethodUnknown')} · {translate(
+              'item.characters',
+              { count: displayLength }
+            )}
+          {/snippet}
+          <Textarea
+            class="ocr-textarea"
+            font="mono"
+            rows={8}
+            value={ocrEditedText}
             disabled={ocrEditingDisabled}
             oninput={(event) => onOcrTextInput(selectedAsset.id, event.currentTarget.value)}
-            >{ocrEditedText}</textarea
-          >
-        </details>
+          />
+        </Disclosure>
       {/if}
     </div>
   </section>
@@ -344,13 +339,11 @@
             {getAssetFilename(selectedAsset) ?? translate('item.audioLabel')}
           </span></span
         >
-        <StatusBadge
-          variant={getJobStatusBadgeVariant(transcriptionState.status)}
-          size="sm"
-          class="ocr-status-badge"
-        >
-          {transcriptionState.status}
-        </StatusBadge>
+        <span class="ocr-status">
+          <StatusBadge variant={getJobStatusBadgeVariant(transcriptionState.status)} size="sm">
+            {transcriptionState.status}
+          </StatusBadge>
+        </span>
         <div class="ocr-btn-group">
           <Button
             variant="secondary"
@@ -385,9 +378,10 @@
         <p role="alert" class="ocr-error">{transcriptionCheckError}</p>
       {/if}
       {#if transcriptionState.status === 'running'}
-        <progress class="ocr-progress" value={transcriptionState.progress} max="100">
-          {transcriptionState.progress}%
-        </progress>
+        <ProgressBar
+          value={transcriptionState.progress}
+          label={translate('item.audioTranscription')}
+        />
         <p class="ocr-status-text">
           {translate('item.transcriptionRunning', { progress: transcriptionState.progress })}
           {#if getTranscriptionStageLabel(transcriptionState.stage)}
@@ -402,26 +396,24 @@
         </p>
       {:else if transcriptionState.status === 'done'}
         {@const displayLength = transcriptionEditedText.length}
-        <details class="ocr-result">
-          <summary>
-            {translate('item.transcription')}
-            <span class="ocr-meta">
-              {#if transcriptionState.language}{transcriptionState.language} &middot;
-              {/if}{translate('item.characters', { count: displayLength })}
-              {#if transcriptionState.durationMs}
-                &middot; {translate('item.audioDurationSeconds', {
-                  count: Math.round(transcriptionState.durationMs / 1000),
-                })}{/if}
-            </span>
-          </summary>
-          <textarea
-            class="ocr-result-body ocr-textarea"
-            rows="8"
+        <Disclosure summary={translate('item.transcription')}>
+          {#snippet meta()}
+            {#if transcriptionState.language}{transcriptionState.language} &middot;
+            {/if}{translate('item.characters', { count: displayLength })}
+            {#if transcriptionState.durationMs}
+              &middot; {translate('item.audioDurationSeconds', {
+                count: Math.round(transcriptionState.durationMs / 1000),
+              })}{/if}
+          {/snippet}
+          <Textarea
+            class="ocr-textarea"
+            font="mono"
+            rows={8}
+            value={transcriptionEditedText}
             oninput={(event) =>
               onTranscriptionTextInput(selectedAsset.id, event.currentTarget.value)}
-            >{transcriptionEditedText}</textarea
-          >
-        </details>
+          />
+        </Disclosure>
         {#if transcriptionState.warning}
           <p class="ocr-status-text" role="note">{transcriptionState.warning}</p>
         {/if}
@@ -543,7 +535,7 @@
     word-wrap: break-word;
     max-height: 300px;
     overflow-y: auto;
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
     color: var(--color-text-secondary);
   }
 
@@ -555,7 +547,7 @@
     flex-direction: column;
     gap: var(--space-2);
     background: var(--surface-card);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+    box-shadow: var(--shadow-highlight);
     container-type: inline-size;
     container-name: ocr-item;
   }
@@ -590,9 +582,9 @@
     white-space: nowrap;
   }
 
-  :global(.ocr-status-badge) {
+  .ocr-status {
+    display: inline-flex;
     flex-shrink: 0;
-    text-transform: uppercase;
   }
 
   /* Surface, states and geometry all come from Button; only how the control
@@ -608,17 +600,6 @@
     margin-left: auto;
     max-width: 100%;
   }
-  @media (max-width: 420px) {
-    .ocr-btn-group {
-      flex: 1 1 100%;
-      justify-content: flex-start;
-    }
-    .ocr-btn-group :global(.ocr-btn) {
-      flex: 1 1 auto;
-      min-width: 64px;
-    }
-  }
-
   @container ocr-item (max-width: 420px) {
     .ocr-btn-group {
       flex: 1 1 100%;
@@ -640,13 +621,6 @@
     overflow-wrap: break-word;
   }
 
-  .ocr-progress {
-    width: 100%;
-    height: 6px;
-    border-radius: var(--radius-sm);
-    appearance: none;
-  }
-
   .ocr-status-text {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
@@ -655,61 +629,5 @@
   .ocr-error {
     font-size: var(--font-size-xs);
     color: var(--color-danger);
-  }
-
-  .ocr-meta {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-  }
-
-  .ocr-result {
-    font-size: var(--font-size-sm);
-  }
-  .ocr-result summary {
-    cursor: pointer;
-    color: var(--color-text-secondary);
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-1) 0;
-  }
-  .ocr-result-body {
-    margin-top: var(--space-1);
-    font-family: var(--font-reading);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .ocr-textarea {
-    width: 100%;
-    min-height: 7rem;
-    padding: var(--space-1) var(--space-2);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-    line-height: 1.5;
-    color: var(--color-text-secondary);
-    background: var(--surface-input);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    resize: vertical;
-    white-space: pre-wrap;
-    word-break: break-word;
-    outline: none;
-    transition:
-      border-color var(--transition-base),
-      box-shadow var(--transition-base);
-  }
-
-  .ocr-textarea:focus {
-    border-color: var(--border-focus);
-    box-shadow: var(--focus-ring);
-  }
-
-  .ocr-textarea:hover:not(:focus) {
-    border-color: var(--border-panel);
   }
 </style>

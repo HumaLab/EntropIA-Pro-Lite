@@ -6,6 +6,7 @@
     variant = 'primary',
     size = 'md',
     iconOnly = false,
+    wrap = false,
     disabled = false,
     loading = false,
     type = 'button',
@@ -21,6 +22,7 @@
 <button
   class="btn btn--{variant} btn--{size} {className}"
   class:btn--icon-only={iconOnly}
+  class:btn--wrap={wrap}
   class:btn--loading={loading}
   {type}
   disabled={isDisabled}
@@ -80,13 +82,13 @@
 
   .btn:disabled {
     cursor: not-allowed;
-    opacity: 0.48;
+    opacity: var(--opacity-disabled);
     transform: none;
   }
   /* A principal button that is off must still be seen (and hovered for its
      tooltip); at 48 % it melted into the surface. */
   .btn--primary:disabled {
-    opacity: 0.72;
+    opacity: var(--opacity-disabled-primary);
   }
 
   .btn:focus-visible {
@@ -100,7 +102,7 @@
     color: var(--control-primary-text);
     border-color: var(--control-primary-border);
     font-weight: var(--font-weight-semibold);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    box-shadow: var(--shadow-highlight);
   }
   .btn--primary:hover:not(:disabled) {
     background: var(--control-primary-bg-hover);
@@ -182,14 +184,57 @@
     font-size: var(--font-size-sm);
   }
 
+  /* A label that may take more than one line. Declared after the sizes so it
+     wins over their caps at equal specificity; each size keeps its floor. */
+  .btn--wrap {
+    max-height: none;
+    padding-block: var(--space-2);
+    justify-content: flex-start;
+    text-align: start;
+    white-space: normal;
+  }
+
+  /* ─── Link ─── */
+  /* Text that acts: the accent colours the label, never the surface, and the
+     underline shows on hover and keyboard focus. It sizes to its text and
+     takes the type of the line it sits in, so it is not capped at a control
+     height and a stretching parent cannot grow it. Declared after the sizes
+     so it wins over the `.btn--{size}` caps at equal specificity. */
+  .btn--link {
+    min-height: 0;
+    max-height: none;
+    flex: none;
+    align-self: baseline;
+    vertical-align: baseline;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--color-accent);
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    line-height: inherit;
+    text-decoration: none;
+    box-shadow: none;
+  }
+  .btn--link:hover:not(:disabled) {
+    color: var(--color-accent-hover);
+    text-decoration: underline;
+  }
+  .btn--link:focus-visible {
+    text-decoration: underline;
+  }
+
   /* ─── Spinner ─── */
   .btn__spinner {
-    width: 14px;
-    height: 14px;
+    --btn-spinner-size: 14px;
+    width: var(--btn-spinner-size);
+    height: var(--btn-spinner-size);
     border: 2px solid currentColor;
     border-right-color: transparent;
     border-radius: var(--radius-full);
-    animation: spin 0.6s linear infinite;
+    animation: spin calc(var(--duration-slow) * 2) linear infinite;
     position: absolute;
   }
 
@@ -246,6 +291,12 @@
   @keyframes spin {
     to {
       transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn {
+      transition: none;
     }
   }
 </style>

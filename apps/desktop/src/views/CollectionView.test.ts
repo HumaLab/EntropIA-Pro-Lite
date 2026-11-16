@@ -1088,7 +1088,7 @@ describe('CollectionView import flow', () => {
     })
   })
 
-  it('updates native progress per completed source file and keeps successful batch summaries visible', async () => {
+  it('updates the import progress bar per completed source file and keeps successful batch summaries visible', async () => {
     const firstPath = 'C:\\tmp\\first.png'
     const secondPath = 'C:\\tmp\\second.png'
     const firstImport = deferred<unknown>()
@@ -1118,8 +1118,9 @@ describe('CollectionView import flow', () => {
     })
 
     const progress = screen.getByRole('progressbar', { name: 'Progreso de la importación' })
-    expect(progress).toHaveAttribute('value', '0')
-    expect(progress).toHaveAttribute('max', '2')
+    expect(progress.tagName).not.toBe('PROGRESS')
+    expect(progress).toHaveAttribute('aria-valuenow', '0')
+    expect(progress).toHaveAttribute('aria-valuemax', '2')
     expect(progress).toHaveAttribute(
       'aria-describedby',
       'collection-import-progress-description-pane-test'
@@ -1130,7 +1131,7 @@ describe('CollectionView import flow', () => {
 
     await waitFor(() => {
       expect(importRequests()).toHaveLength(2)
-      expect(progress).toHaveAttribute('value', '1')
+      expect(progress).toHaveAttribute('aria-valuenow', '1')
     })
     expect(screen.getByText('Archivo actual: second.png.')).toBeInTheDocument()
     expect(

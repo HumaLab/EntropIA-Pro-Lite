@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MockItemAssetPanelDocumentViewer from './__mocks__/MockItemAssetPanelDocumentViewer.svelte'
 import MockOcrRichText from './__mocks__/MockOcrRichText.svelte'
 import ItemAssetPanel from './ItemAssetPanel.svelte'
+import itemAssetPanelSource from './ItemAssetPanel.svelte?raw'
 import { buildExportDefaultName, getAssetPathLabel } from '$lib/item-metadata'
 import { clearHighlight } from '$lib/highlight-fragment'
 
@@ -811,5 +812,27 @@ describe('ItemAssetPanel export default name', () => {
 
     expect(getAssetPathLabel(nativePath)).toBe('scan-texto-extraido.ext')
     expect(buildExportDefaultName(nativePath)).toBe('scan-texto-extraido')
+  })
+})
+
+describe('ItemAssetPanel controls come from the design system', () => {
+  it('opens the export formats in a ToolbarMenu that closes on Escape back to its trigger', async () => {
+    render(ItemAssetPanel, makeProps())
+    await openExtractedTextTab()
+    const trigger = screen.getByRole('button', { name: 'item.downloadExtractedTextAria' })
+    await fireEvent.click(trigger)
+
+    const menu = screen.getByRole('menu', { name: 'item.downloadExtractedTextMenu' })
+    expect(menu).toHaveClass('toolbar-menu')
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+
+    await fireEvent.keyDown(document.activeElement ?? menu, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(trigger).toHaveFocus()
+  })
+
+  it('leaves the extracted text scrollbar to the global one', () => {
+    expect(itemAssetPanelSource).not.toMatch(/::-webkit-scrollbar|scrollbar-(?:color|width)/)
   })
 })

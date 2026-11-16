@@ -12,7 +12,7 @@
    */
   import { onMount } from 'svelte'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-  import { ConfirmDialog, portal } from '@entropia/ui'
+  import { Button, ConfirmDialog, portal } from '@entropia/ui'
   import {
     AGENT_APPROVALS_CHANGED_EVENT,
     agentApprovalDecide,
@@ -272,9 +272,7 @@
 {#if notice}
   <div class="agent-approval__notice" role="alert" {@attach portal}>
     <span>{notice}</span>
-    <button type="button" class="agent-approval__dismiss" onclick={() => (notice = null)}>
-      Cerrar
-    </button>
+    <Button variant="link" onclick={() => (notice = null)}>Cerrar</Button>
   </div>
 {/if}
 
@@ -344,7 +342,7 @@
     position: fixed;
     right: var(--space-4);
     bottom: var(--space-4);
-    z-index: 1100;
+    z-index: var(--z-dialog-nested);
     display: flex;
     align-items: center;
     gap: var(--space-3);
@@ -356,14 +354,5 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     box-shadow: var(--shadow-surface);
-  }
-
-  .agent-approval__dismiss {
-    flex: 0 0 auto;
-    border: none;
-    background: none;
-    color: var(--color-accent);
-    font: inherit;
-    cursor: pointer;
   }
 </style>

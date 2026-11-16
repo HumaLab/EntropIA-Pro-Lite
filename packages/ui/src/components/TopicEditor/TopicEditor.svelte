@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ActionIcon } from '../Button'
+  import StatusBadge from '../StatusBadge/StatusBadge.svelte'
   import type { TopicEditorProps } from './TopicEditor.types'
 
   let { topics = [], suggestions = [], onchange }: TopicEditorProps = $props()
@@ -91,7 +92,7 @@
 <div class="topic-editor" bind:this={containerEl}>
   <div class="topic-editor__input-area">
     {#each topics as topic (topic)}
-      <span class="topic-editor__chip">
+      <StatusBadge class="topic-editor__chip" variant="neutral" size="sm">
         {topic}
         <button
           type="button"
@@ -101,7 +102,7 @@
         >
           <ActionIcon name="close" size={14} />
         </button>
-      </span>
+      </StatusBadge>
     {/each}
     <input
       bind:this={inputEl}
@@ -157,32 +158,20 @@
     box-shadow: var(--focus-ring);
   }
 
-  .topic-editor__chip {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    padding: var(--space-1) var(--space-2);
-    background-color: var(--color-accent);
-    color: var(--color-bg);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.2;
-    white-space: nowrap;
-  }
-
+  /* The chip is a neutral StatusBadge; only its remove control is drawn here,
+     an inline icon inside the badge (too small for an IconButton). */
   .topic-editor__chip-remove {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     padding: 0;
-    margin-left: 2px;
+    margin-left: var(--space-0-5);
     border: none;
+    border-radius: var(--radius-xs);
     background: transparent;
-    color: color-mix(in srgb, var(--color-bg) 76%, transparent);
+    color: var(--color-text-muted);
     cursor: pointer;
-    transition: color 0.15s ease;
+    transition: color var(--transition-base);
   }
 
   .topic-editor__chip-remove :global(svg) {
@@ -190,7 +179,13 @@
   }
 
   .topic-editor__chip-remove:hover {
-    color: var(--color-bg);
+    color: var(--color-text-primary);
+  }
+
+  .topic-editor__chip-remove:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    color: var(--color-text-primary);
   }
 
   .topic-editor__input {
@@ -203,7 +198,7 @@
     font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
-    line-height: 1.4;
+    line-height: var(--line-height-base);
   }
 
   .topic-editor__input::placeholder {
@@ -215,15 +210,15 @@
     top: 100%;
     left: 0;
     right: 0;
-    z-index: 100;
-    margin-top: 2px;
+    z-index: var(--z-floating);
+    margin-top: var(--space-0-5);
     padding: var(--space-1) 0;
     max-height: 180px;
     overflow-y: auto;
     list-style: none;
     background-color: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-dialog);
     box-shadow: var(--shadow-md);
   }
 
@@ -238,11 +233,20 @@
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
     cursor: pointer;
-    transition: background-color 0.1s ease;
+    transition: background-color var(--transition-base);
   }
 
+  /* A hovered suggestion reads by contrast (the soft hover surface), never by
+     an accent fill. */
   .topic-editor__suggestion:hover {
-    background-color: var(--color-accent);
-    color: var(--color-bg);
+    background-color: var(--color-accent-faint);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .topic-editor__input-area,
+    .topic-editor__chip-remove,
+    .topic-editor__suggestion {
+      transition: none;
+    }
   }
 </style>

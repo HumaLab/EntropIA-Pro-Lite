@@ -354,7 +354,7 @@
 <style>
   .help-bubble {
     position: fixed;
-    z-index: 600;
+    z-index: var(--z-assistant);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -378,12 +378,12 @@
     box-shadow: var(--shadow-lg), var(--focus-ring);
   }
 
-  /* The mark is a black-on-transparent PNG: as a mask it takes white, so it
+  /* The mark is a black-on-transparent PNG: as a mask it takes --color-on-accent, so it
      reads on the accent fill on every theme (same trick as TopBar's title). */
   .help-bubble__logo {
     width: 30px;
     height: 30px;
-    background: #fff;
+    background: var(--color-on-accent);
     object-fit: contain;
     mask-position: center;
     mask-repeat: no-repeat;
@@ -396,7 +396,7 @@
 
   .help-bubble__panel {
     position: fixed;
-    z-index: 600;
+    z-index: var(--z-assistant);
     display: flex;
     flex-direction: column;
     width: min(400px, calc(100vw - 32px));

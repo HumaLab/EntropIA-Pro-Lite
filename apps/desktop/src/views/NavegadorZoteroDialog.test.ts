@@ -354,6 +354,12 @@ describe('NavegadorZoteroDialog', () => {
     expect(screen.getByRole('radio', { name: 'prueba' })).toBeTruthy()
   })
 
+  it('groups the libraries as one choice named by its legend', async () => {
+    open()
+    await screen.findByRole('radio', { name: 'Mi biblioteca' })
+    expect(screen.getByRole('radiogroup', { name: 'Biblioteca de destino' })).toBeTruthy()
+  })
+
   it('tells the person that a closed Zotero makes the copy wait', async () => {
     open()
     await screen.findByRole('radio', { name: 'Mi biblioteca' })

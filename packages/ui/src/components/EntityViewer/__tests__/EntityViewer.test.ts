@@ -781,3 +781,55 @@ describe('entity aliases (T2)', () => {
     expect(screen.getByDisplayValue('Mdme. Cuevas')).toBeInTheDocument()
   })
 })
+
+// ───────────────────────────────────────────────────────────────────────────
+// Style contract (docs/PLAN_HOMOGENEIZACION.md, step 28)
+// ───────────────────────────────────────────────────────────────────────────
+
+const entityViewerStyles = (
+  entityViewerSource.match(/<style\b[^>]*>([\s\S]*?)<\/style>/)?.[1] ?? ''
+).replace(/\/\*[\s\S]*?\*\//g, '')
+
+function ruleBody(selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return entityViewerStyles.match(new RegExp(`(?:^|[}\\s,])${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+}
+
+describe('EntityViewer style contract', () => {
+  it('draws keyboard focus with the shared ring, never with an outline', () => {
+    expect(entityViewerStyles).not.toMatch(/outline:\s*\d+px\s+solid/)
+    for (const selector of [
+      '.entity-viewer__pill:focus-visible',
+      '.entity-viewer__chip--add:focus-visible',
+      '.entity-viewer__action:focus-visible',
+      '.entity-viewer__type-trigger:focus-visible',
+    ]) {
+      expect(ruleBody(selector), selector).toMatch(/box-shadow:[^;]*var\(--focus-ring\)/)
+    }
+  })
+
+  it('dims a disabled action with the shared disabled opacity', () => {
+    expect(ruleBody('.entity-viewer__action:disabled')).toMatch(
+      /opacity:\s*var\(--opacity-disabled\)/
+    )
+  })
+
+  it('takes transitions, layers and spacing from tokens', () => {
+    for (const [, value] of entityViewerStyles.matchAll(/transition:\s*([^;]+);/g)) {
+      expect(value).not.toMatch(/\d(?:\.\d+)?m?s\b/)
+    }
+    for (const [, value] of entityViewerStyles.matchAll(/z-index:\s*([^;]+);/g)) {
+      expect(value?.trim()).toMatch(/^var\(--z-[a-z-]+\)$/)
+    }
+    for (const [, value] of entityViewerStyles.matchAll(
+      /(?:^|[\s;{])(?:padding|margin|gap)(?:-[a-z-]+)?:\s*([^;]+);/g
+    )) {
+      expect(value).not.toMatch(/\b[1-9]\d*px\b/)
+    }
+    expect(entityViewerStyles).not.toMatch(/border-radius:\s*50%/)
+  })
+
+  it('stacks the type menu on the popover layer, above the sticky page header', () => {
+    expect(ruleBody('.entity-viewer__type-menu')).toMatch(/z-index:\s*var\(--z-popover\)/)
+  })
+})

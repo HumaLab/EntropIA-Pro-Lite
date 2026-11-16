@@ -50,6 +50,8 @@
     type PdfMarkupDraft,
     type PdfMarkupGeometryChange,
     IconButton,
+    SelectTrigger,
+    StatusBadge,
     TabButton,
     TabList,
     ToolbarMenu,
@@ -512,7 +514,7 @@
           <p class="work-header__meta">{metaLine}</p>
         {/if}
         {#if detail.libraryName}
-          <span class="work-header__chip">{detail.libraryName}</span>
+          <StatusBadge variant="neutral" size="sm">{detail.libraryName}</StatusBadge>
         {/if}
         {#if pdfAttachments.length > 0}
           <Button variant="secondary" onclick={() => (reprocessOpen = true)}>
@@ -544,26 +546,23 @@
       aria-label={$currentLocale && t('bibliographyWork.tabOriginal')}
     >
       {#if attachments.length > 1}
-        <ToolbarMenu
-          label={$currentLocale && t('bibliographyWork.attachmentMenu')}
-          items={attachmentItems}
-          bind:open={attachmentMenuOpen}
-        >
-          {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="work-attachment-trigger"
-              class:work-attachment-trigger--open={open}
-              aria-label={$currentLocale && t('bibliographyWork.attachmentMenu')}
-              {...props}
-            >
-              <span class="work-attachment-trigger__label">
-                {currentAttachment?.filename ?? currentAttachment?.attachmentKey ?? ''}
-              </span>
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
-          {/snippet}
-        </ToolbarMenu>
+        <div class="work-attachment-menu">
+          <ToolbarMenu
+            label={$currentLocale && t('bibliographyWork.attachmentMenu')}
+            items={attachmentItems}
+            bind:open={attachmentMenuOpen}
+          >
+            {#snippet trigger(props, { open })}
+              <SelectTrigger
+                {...props}
+                {open}
+                size="md"
+                label={currentAttachment?.filename ?? currentAttachment?.attachmentKey ?? ''}
+                aria-label={$currentLocale && t('bibliographyWork.attachmentMenu')}
+              />
+            {/snippet}
+          </ToolbarMenu>
+        </div>
       {/if}
 
       {#if openLoading}
@@ -779,17 +778,16 @@
                 {#if entry.contentType}
                   <span class="work-attachments__type">{entry.contentType}</span>
                 {/if}
-                <button
-                  type="button"
-                  class="work-attachments__open"
-                  aria-label={$currentLocale && t('bibliographyWork.attachmentOpen')}
+                <IconButton
+                  size="sm"
+                  label={$currentLocale && t('bibliographyWork.attachmentOpen')}
                   onclick={() => {
                     activeTab = 'original'
                     void openAttachment(entry.attachmentKey)
                   }}
                 >
                   <ActionIcon name="eye" size={14} />
-                </button>
+                </IconButton>
               </li>
             {/each}
           </ul>
@@ -856,14 +854,14 @@
     font-family: var(--font-mono);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.12em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 
   .work-header__title {
     margin: 0;
     font-size: var(--font-size-xl);
-    line-height: 1.2;
+    line-height: var(--line-height-tight);
   }
 
   .work-header__row {
@@ -877,16 +875,6 @@
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
-  }
-
-  .work-header__chip {
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-control);
-    background: color-mix(in srgb, var(--color-surface-glass) 88%, transparent);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-2xs);
-    white-space: nowrap;
   }
 
   .work-section {
@@ -914,40 +902,14 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 
-  .work-attachment-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
+  /* Caps a long filename; the trigger ellipsizes inside it. */
+  .work-attachment-menu {
     align-self: flex-start;
     max-width: 320px;
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-control);
-    background: var(--color-surface-glass);
-    color: var(--color-text-primary);
-    cursor: pointer;
-  }
-
-  .work-attachment-trigger:hover,
-  .work-attachment-trigger--open {
-    border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-hairline));
-  }
-
-  .work-attachment-trigger:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .work-attachment-trigger__label {
-    overflow: hidden;
-    font-size: var(--font-size-sm);
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   /* The viewer and the "Anotaciones" panel side by side; the panel scrolls on
@@ -965,19 +927,17 @@
        ItemAssetPanel's .left-panel-pane--document): its fit scale reads the
        container rect, which a min-height-only frame never made definite.
        The view's definite height (.work-view--fill) flows down to it; a
-       min-height floor here would push the pager and note out of the pane. */
-    display: flex;
+       min-height floor here would push the pager and note out of the pane.
+       One stretched grid cell gives the viewer that definite box on both
+       axes without reaching into DocumentViewer. */
+    display: grid;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
     flex: 1;
     min-height: 0;
     overflow: hidden;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-surface);
     background: var(--surface-app);
-  }
-
-  .work-viewer :global(.document-viewer) {
-    flex: 1;
-    min-height: 0;
   }
 
   .work-viewer-footer {
@@ -1030,7 +990,7 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.08em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 
@@ -1043,7 +1003,7 @@
     margin: 0;
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
     overflow-wrap: anywhere;
   }
 
@@ -1064,7 +1024,7 @@
   .work-page__rich :global(h6) {
     margin: var(--space-4) 0 var(--space-2);
     color: var(--color-text-primary);
-    line-height: 1.25;
+    line-height: var(--line-height-tight);
   }
 
   .work-page__rich :global(ul),
@@ -1074,7 +1034,7 @@
 
   .work-page__rich :global(blockquote) {
     padding-inline-start: var(--space-3);
-    border-inline-start: 2px solid var(--border-subtle);
+    border-inline-start: var(--space-0-5) solid var(--border-subtle);
     color: var(--color-text-secondary);
   }
 
@@ -1136,7 +1096,7 @@
   .work-meta dt {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.02em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-muted);
     overflow-wrap: anywhere;
@@ -1152,7 +1112,7 @@
   .work-attachments {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     margin: 0;
     padding: 0;
     list-style: none;
@@ -1168,7 +1128,7 @@
   }
 
   .work-attachments__row:hover {
-    background: var(--color-accent-faint);
+    background: var(--state-hover-row);
   }
 
   .work-attachments__name {
@@ -1184,28 +1144,5 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-2xs);
     white-space: nowrap;
-  }
-
-  .work-attachments__open {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: var(--control-height-md);
-    min-height: var(--control-height-md);
-    border: 1px solid transparent;
-    border-radius: var(--radius-control);
-    background: transparent;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-  }
-
-  .work-attachments__open:hover {
-    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-    color: var(--color-text-primary);
-  }
-
-  .work-attachments__open:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
   }
 </style>

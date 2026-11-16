@@ -96,7 +96,7 @@
 </script>
 
 <script lang="ts">
-  import { ActionIcon, Button } from '@entropia/ui'
+  import { ActionIcon, Button, StatusBadge } from '@entropia/ui'
   import { t } from '$lib/i18n'
 
   interface Props {
@@ -315,14 +315,14 @@
       <p class="details__error" role="alert">{openError}</p>
     {/if}
     {#if confirmedItem && verifiedAt !== null}
-      <p class="details__chip details__chip--ok" role="status">
+      <StatusBadge variant="success" size="xs" role="status">
         {t('writing.zoteroDetailSynced', { date: formatDetailDate(verifiedAt) })}
-      </p>
+      </StatusBadge>
       {@render ficha(confirmedItem)}
     {:else if tombstone}
-      <p class="details__chip details__chip--lost" role="status">
+      <StatusBadge variant="danger" size="xs" role="status">
         {t('writing.zoteroDetailLost')}
-      </p>
+      </StatusBadge>
       {#if tombstone.reason.trim()}
         <p class="details__notice">
           {t('writing.zoteroDetailReason', { reason: tombstone.reason })}
@@ -337,9 +337,9 @@
       <!-- The held CSL, already parsed by the entry: what the list showed, with
        a chip that says only that it is unverified right now. Nothing here
        claims Zotero is closed or absent — nothing observed says that. -->
-      <p class="details__chip details__chip--local" role="status">
+      <StatusBadge variant="neutral" size="xs" role="status">
         {t('writing.zoteroDetailLocalCopy')}
-      </p>
+      </StatusBadge>
       <h3 class="details__title">{entry.title}</h3>
       {#if entry.authors || entry.year}
         <p class="details__meta">{[entry.authors, entry.year].filter(Boolean).join(' · ')}</p>
@@ -373,33 +373,14 @@
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
-    font-weight: 600;
-  }
-
-  .details__chip {
-    margin: 0;
-    padding: var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-surface);
-    background: var(--surface-input);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-2xs);
-    line-height: var(--line-height-base);
-  }
-
-  .details__chip--lost {
-    color: var(--color-danger);
-  }
-
-  .details__chip--local {
-    color: var(--color-text-muted);
+    font-weight: var(--font-weight-semibold);
   }
 
   .details__title {
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     line-height: var(--line-height-base);
   }
 

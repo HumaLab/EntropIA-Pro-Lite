@@ -233,7 +233,7 @@
 
   /* Same surface as the zoom, language and typography menus in the top bar. */
   .toolbar-menu {
-    z-index: 210;
+    z-index: var(--z-menu);
     display: grid;
     gap: var(--space-1);
     min-width: 156px;

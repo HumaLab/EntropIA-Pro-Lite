@@ -183,7 +183,7 @@
   }
 
   .pdf__problem {
-    color: var(--color-danger, var(--color-text-primary));
+    color: var(--color-danger);
   }
 
   .pdf__viewer {

@@ -182,6 +182,38 @@ describe('the contrast levels', () => {
 })
 
 /**
+ * Text on a danger fill (C6). `--color-on-danger` may name another token, so
+ * it is followed through one `var()` to the hex that theme actually paints.
+ */
+describe('the danger fill', () => {
+  function hexOf(theme: (typeof THEMES)[number], name: string): string | null {
+    const declared = (body: string) =>
+      body.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{3,8}|var\\(--[a-z0-9-]+\\))`))?.[1]
+    const value = declared(block(theme.base)) ?? declared(block(':root'))
+    if (!value) return null
+    const alias = value.match(/^var\(--([a-z0-9-]+)\)$/)
+    return alias ? hexOf(theme, alias[1]!) : value
+  }
+
+  it.each(THEMES.map((theme) => theme.name))(
+    'keeps --color-on-danger at or above AA on the %s danger fill and its hover',
+    (name) => {
+      const theme = THEMES.find((entry) => entry.name === name)!
+      const ink = hexOf(theme, 'color-on-danger')
+      expect(ink, `${name} resolves no --color-on-danger`).not.toBeNull()
+
+      const failures = ['color-danger', 'color-danger-hover'].flatMap((fill) => {
+        const background = hexOf(theme, fill)!
+        const measured = ratio(ink!, background)
+        return measured < AA ? [`${ink} on ${fill} ${background} = ${measured.toFixed(2)}`] : []
+      })
+
+      expect(failures).toEqual([])
+    }
+  )
+})
+
+/**
  * The manuscript's text colours and highlights (writing-colors.ts).
  *
  * The page they sit on is the editor's surface, so that is what they are

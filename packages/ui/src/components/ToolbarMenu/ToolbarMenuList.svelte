@@ -63,7 +63,7 @@
     min-height: 28px;
     padding: var(--space-1) var(--space-2);
     border: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: transparent;
     color: var(--color-text-secondary);
     font-family: var(--font-ui);
@@ -88,7 +88,7 @@
   }
 
   .toolbar-menu__item:disabled {
-    opacity: 0.4;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 

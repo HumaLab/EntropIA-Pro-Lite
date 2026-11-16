@@ -33,6 +33,7 @@
     ConfirmDialog,
     IconButton,
     ItemCard,
+    ProgressBar,
     SearchBar,
     Button,
     StatusBadge,
@@ -1107,7 +1108,9 @@
 <div
   class="collection-shell"
   bind:this={collectionShellEl}
-  style="grid-template-columns: 1fr auto {analysisPanelOpen ? `6px ${analysisPanelWidth}%` : ''}"
+  style="grid-template-columns: 1fr auto {analysisPanelOpen
+    ? `var(--space-2) ${analysisPanelWidth}%`
+    : ''}"
 >
   <div
     class="collection-view page-shell"
@@ -1131,13 +1134,15 @@
       </div>
 
       <div class="page-toolbar collection-toolbar">
-        <SearchBar
-          placeholder={$currentLocale && t('collection.searchPlaceholder')}
-          clearAriaLabel={$currentLocale && t('collection.searchClear')}
-          inputRef={(el) => (searchInputEl = el)}
-          onsearch={handleSearch}
-          onclear={handleClearSearch}
-        />
+        <div class="collection-toolbar__search">
+          <SearchBar
+            placeholder={$currentLocale && t('collection.searchPlaceholder')}
+            clearAriaLabel={$currentLocale && t('collection.searchClear')}
+            inputRef={(el) => (searchInputEl = el)}
+            onsearch={handleSearch}
+            onclear={handleClearSearch}
+          />
+        </div>
         <Button
           variant="primary"
           iconOnly
@@ -1241,12 +1246,12 @@
 
         {#if importing && importProgress}
           <div class="import-progress">
-            <progress
+            <ProgressBar
               value={importProgress.completed}
               max={importProgress.total}
-              aria-label={t('collection.importSummary.progressBar')}
+              label={t('collection.importSummary.progressBar')}
               aria-describedby="collection-import-progress-description-{paneId}"
-            ></progress>
+            />
             <p id="collection-import-progress-description-{paneId}" class="import-summary__detail">
               {t('collection.importSummary.progressDescription', {
                 completed: importProgress.completed,
@@ -1442,9 +1447,7 @@
 
   <!-- Analysis panel toggle -->
   <IconButton
-    class="right-panel-toggle"
-    variant="ghost"
-    size="sm"
+    variant="edge"
     label={analysisPanelOpen
       ? $currentLocale && t('collectionAnalysis.toggleClose')
       : $currentLocale && t('collectionAnalysis.toggleOpen')}
@@ -1491,38 +1494,10 @@
     overflow-y: auto;
   }
 
-  /* The one IconButton meant to stretch: a 20px strip running the full
-     height of the panel edge. It opts out of the primitive's fixed square
-     explicitly (control-block-size.test.ts). Scoped under the shell's own
-     class (not just `.icon-button.right-panel-toggle`) so this wins on
-     specificity over IconButton's own scoped rules deterministically,
-     rather than by relying on stylesheet order. */
-  .collection-shell :global(.icon-button.right-panel-toggle) {
-    --icon-button-size: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: auto;
-    min-height: 0;
-    max-height: none;
-    flex-shrink: 0;
-    border-radius: var(--radius-dialog);
-    background: var(--surface-input);
-    border: 1px solid var(--border-subtle);
-    color: var(--color-text-muted);
-    cursor: pointer;
-  }
-
-  .collection-shell :global(.icon-button.right-panel-toggle:hover) {
-    color: var(--color-accent);
-    background: var(--color-accent-soft);
-  }
-
   .resize-handle {
-    width: 6px;
+    width: var(--space-2);
     position: relative;
     cursor: col-resize;
-    z-index: 1;
     margin-block-start: var(--space-4);
     margin-block-end: var(--space-4);
   }
@@ -1537,13 +1512,19 @@
     width: 1px;
     background-color: var(--color-border);
     transition:
-      background-color 0.15s ease,
-      width 0.15s ease;
+      background-color var(--duration-base) ease,
+      width var(--duration-base) ease;
   }
 
   .resize-handle:hover::before {
-    background-color: var(--color-text-muted, var(--color-border));
-    width: 2px;
+    background-color: var(--color-text-muted);
+    width: var(--space-0-5);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .resize-handle::before {
+      transition: none;
+    }
   }
 
   :global(body.no-select),
@@ -1567,7 +1548,7 @@
 
   .collection-text-export__menu {
     position: absolute;
-    z-index: 5;
+    z-index: var(--z-menu);
     top: calc(100% + var(--space-1));
     right: 0;
     display: grid;
@@ -1586,7 +1567,7 @@
     align-items: center;
     padding: var(--space-2) var(--space-3);
     border: 0;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-control);
     background: transparent;
     color: var(--color-text-secondary);
     font: inherit;
@@ -1607,7 +1588,7 @@
 
   .collection-text-export__menu button:disabled {
     cursor: not-allowed;
-    opacity: 0.48;
+    opacity: var(--opacity-disabled);
   }
 
   .collection-view__pipeline {
@@ -1616,20 +1597,19 @@
     gap: var(--space-2);
   }
 
-  .collection-toolbar :global(.search-bar) {
+  .collection-toolbar__search {
     min-width: min(100%, 340px);
     flex: 1 1 280px;
   }
 
+  /* One stretched cell: the analysis panel fills the slot on both axes and
+     can still shrink below its content, so it scrolls inside. */
   .collection-analysis-panel-slot {
-    display: flex;
+    display: grid;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
     min-height: 0;
     margin-block-start: var(--space-2);
     margin-block-end: var(--space-4);
-  }
-
-  .collection-analysis-panel-slot :global(.panel.analysis-panel) {
-    flex: 1;
   }
 
   .empty {
@@ -1667,8 +1647,8 @@
 
   .collection-view.drag-active {
     outline: 1px dashed var(--color-primary);
-    outline-offset: 6px;
-    border-radius: var(--radius-md);
+    outline-offset: var(--space-2);
+    border-radius: var(--radius-surface);
   }
 
   /* Keyed to this pane's own width (the `pane` container WorkPane.svelte
@@ -1681,8 +1661,7 @@
       justify-content: stretch;
     }
 
-    .collection-toolbar :global(.search-bar),
-    .collection-toolbar :global(.btn) {
+    .collection-toolbar__search {
       width: 100%;
     }
   }
@@ -1725,11 +1704,6 @@
     gap: var(--space-2);
   }
 
-  .import-progress progress {
-    width: 100%;
-    accent-color: var(--color-accent);
-  }
-
   .visually-hidden {
     position: absolute;
     width: 1px;
@@ -1752,7 +1726,7 @@
   .import-summary__counts div {
     min-width: 96px;
     padding: var(--space-2);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     background: var(--color-surface-sunken);
   }
 

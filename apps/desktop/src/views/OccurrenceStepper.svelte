@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { PartEvidence } from '$lib/relation-occurrences'
 
@@ -49,18 +50,20 @@
 
 <div class="occurrence-stepper">
   <div class="controls">
-    <button
-      type="button"
+    <Button
+      variant="secondary"
+      size="sm"
       disabled={index <= 0 || status === 'loading'}
-      onclick={() => onchange(index - 1)}>{translate('occurrence.previous')}</button
+      onclick={() => onchange(index - 1)}>{translate('occurrence.previous')}</Button
     >
     <span aria-live="polite"
       >{translate('occurrence.count', { index: total ? index + 1 : 0, total })}</span
     >
-    <button
-      type="button"
+    <Button
+      variant="secondary"
+      size="sm"
       disabled={index >= total - 1 || status === 'loading'}
-      onclick={() => onchange(index + 1)}>{translate('occurrence.next')}</button
+      onclick={() => onchange(index + 1)}>{translate('occurrence.next')}</Button
     >
   </div>
   {#if kind === 'relation'}
@@ -99,22 +102,6 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-2);
-  }
-  button {
-    font: inherit;
-    color: inherit;
-    background: var(--surface-input);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-xs);
-    padding: var(--space-1) var(--space-2);
-    cursor: pointer;
-  }
-  button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-  button:focus-visible {
-    outline: 2px solid var(--color-accent);
   }
   .legend {
     margin-top: var(--space-2);

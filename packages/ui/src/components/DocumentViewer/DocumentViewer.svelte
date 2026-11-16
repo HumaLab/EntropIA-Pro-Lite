@@ -1695,9 +1695,7 @@
                 {#if editDraft}
                   {@const ebox = toEditBox(editDraft)}
                   {@const isCrop = editTool === 'crop'}
-                  {@const editColor = isCrop
-                    ? 'var(--color-success, #16a34a)'
-                    : 'var(--color-danger, #dc2626)'}
+                  {@const editColor = isCrop ? 'var(--color-success)' : 'var(--color-danger)'}
                   {@const editLabel = isCrop
                     ? labels.cropRegionAriaLabel
                     : labels.eraseRegionAriaLabel}
@@ -2014,9 +2012,7 @@
 
         {#if hasRenderableBounds && editTool !== 'none'}
           {@const isCrop = editTool === 'crop'}
-          {@const editColor = isCrop
-            ? 'var(--color-success, #16a34a)'
-            : 'var(--color-danger, #dc2626)'}
+          {@const editColor = isCrop ? 'var(--color-success)' : 'var(--color-danger)'}
           <svg
             class="document-viewer__overlay document-viewer__pdf-edit-overlay"
             data-testid="pdf-edit-overlay"
@@ -2132,7 +2128,7 @@
   .document-viewer__image-rotator {
     position: relative;
     transform-origin: center center;
-    transition: transform 0.08s linear;
+    transition: transform var(--duration-fast) linear;
   }
 
   .document-viewer__image {
@@ -2148,9 +2144,9 @@
 
   .document-viewer__layout-region {
     transition:
-      fill 0.15s ease,
-      stroke 0.15s ease,
-      stroke-width 0.15s ease;
+      fill var(--transition-base),
+      stroke var(--transition-base),
+      stroke-width var(--transition-base);
   }
 
   .document-viewer__layout-region.editable {
@@ -2159,8 +2155,8 @@
   }
 
   .document-viewer__layout-handle {
-    fill: var(--color-surface, #fff);
-    stroke: rgb(245, 158, 11);
+    fill: var(--color-surface);
+    stroke: var(--viewer-layout-block);
     stroke-width: 1.5;
     touch-action: none;
   }
@@ -2208,7 +2204,7 @@
     left: 50%;
     top: 50%;
     transform-origin: center;
-    transition: transform 0.08s linear;
+    transition: transform var(--duration-fast) linear;
   }
 
   .document-viewer__pdf-crop-frame {
@@ -2245,7 +2241,7 @@
     border: 2px solid currentColor;
     border-right-color: transparent;
     border-radius: var(--radius-full);
-    animation: spin 0.6s linear infinite;
+    animation: spin var(--duration-spin) linear infinite;
   }
 
   .document-viewer__error {

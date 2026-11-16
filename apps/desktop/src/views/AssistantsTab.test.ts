@@ -285,7 +285,7 @@ describe('AssistantsTab', () => {
 
     await waitFor(() => expect(endpointState()).toHaveTextContent('Activo en 127.0.0.1:41123'))
     expect(invokeMock).toHaveBeenCalledWith('agent_access_status')
-    expect(enabledSwitch()).toHaveAttribute('aria-checked', 'true')
+    expect(enabledSwitch()).toBeChecked()
     expect(screen.getByText('Claude Code')).toBeInTheDocument()
     expect(screen.getByTestId('assistants-client-created-cl_abc123')).toHaveTextContent(
       '2026-01-01'
@@ -308,7 +308,7 @@ describe('AssistantsTab', () => {
     render(AssistantsTab)
 
     await waitFor(() => expect(endpointState()).toHaveTextContent('Deshabilitado'))
-    expect(enabledSwitch()).toHaveAttribute('aria-checked', 'false')
+    expect(enabledSwitch()).not.toBeChecked()
     expect(screen.getByText('Todavía no conectaste ningún asistente.')).toBeInTheDocument()
   })
 
@@ -316,14 +316,14 @@ describe('AssistantsTab', () => {
     respond({ agent_access_status: ACTIVE_STATUS, agent_access_set_enabled: STOPPED_STATUS })
     render(AssistantsTab)
 
-    await waitFor(() => expect(enabledSwitch()).toHaveAttribute('aria-checked', 'true'))
+    await waitFor(() => expect(enabledSwitch()).toBeChecked())
     await fireEvent.click(enabledSwitch())
 
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith('agent_access_set_enabled', { enabled: false })
     )
     await waitFor(() => expect(endpointState()).toHaveTextContent('Deshabilitado'))
-    expect(enabledSwitch()).toHaveAttribute('aria-checked', 'false')
+    expect(enabledSwitch()).not.toBeChecked()
   })
 
   it('pairs an assistant and shows the id with one line per client', async () => {
@@ -632,12 +632,54 @@ describe('AssistantsTab', () => {
     })
     render(AssistantsTab)
 
-    await waitFor(() => expect(enabledSwitch()).toHaveAttribute('aria-checked', 'true'))
+    await waitFor(() => expect(enabledSwitch()).toBeChecked())
     await fireEvent.click(enabledSwitch())
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'credential_store_unavailable: no hay llavero del sistema'
     )
+  })
+
+  it('is the shared Switch: a native checkbox that is disabled until the status arrives', async () => {
+    let answer: (status: AgentAccessStatus) => void = () => undefined
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'agent_access_status')
+        return new Promise<AgentAccessStatus>((resolve) => (answer = resolve))
+      if (command === 'agent_connector_location') return Promise.resolve(MISSING_CONNECTOR)
+      return Promise.reject(new Error(`unexpected command ${command}`))
+    })
+    render(AssistantsTab)
+
+    expect(enabledSwitch()).toHaveAttribute('type', 'checkbox')
+    expect(enabledSwitch()).toBeDisabled()
+
+    answer(ACTIVE_STATUS)
+    await waitFor(() => expect(enabledSwitch()).toBeEnabled())
+    expect(enabledSwitch()).toBeChecked()
+  })
+
+  it('shows the state the backend holds after a toggle that failed', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'agent_access_status') return Promise.resolve(ACTIVE_STATUS)
+      if (command === 'agent_connector_location') return Promise.resolve(MISSING_CONNECTOR)
+      return Promise.reject('endpoint_failed')
+    })
+    render(AssistantsTab)
+
+    await waitFor(() => expect(enabledSwitch()).toBeChecked())
+    await fireEvent.click(enabledSwitch())
+
+    await screen.findByRole('alert')
+    await waitFor(() => expect(enabledSwitch()).toBeEnabled())
+    expect(enabledSwitch()).toBeChecked()
+  })
+
+  it('marks an unused client with a StatusBadge', async () => {
+    respond({ agent_access_status: { ...ACTIVE_STATUS, clients: [FILE_STORED] } })
+    render(AssistantsTab)
+
+    const badge = await screen.findByText('sin usar')
+    expect(badge).toHaveClass('status-badge', 'status-badge--neutral', 'status-badge--xs')
   })
 
   it('never renders a token, even if the backend sent one', async () => {

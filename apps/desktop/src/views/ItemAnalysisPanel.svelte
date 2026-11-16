@@ -5,6 +5,7 @@
     Button,
     EntityViewer,
     IconButton,
+    Input,
     StatusBadge,
     type MapMarker,
     type StatusBadgeVariant,
@@ -503,66 +504,63 @@
                 onmouseleave={() => cancelPendingTripleDelete(triple.id)}
               >
                 {#if editingTripleId === triple.id}
-                  <input
-                    bind:this={editingTripleInput}
-                    class="triple-cell triple-input"
-                    type="text"
+                  <Input
+                    size="sm"
+                    bind:element={editingTripleInput}
                     aria-label={translate('item.tripleSubjectAria')}
                     bind:value={editingTriple.subject}
                     onkeydown={handleTripleEditKeydown}
                   />
-                  <input
-                    class="triple-cell triple-cell--predicate triple-input"
-                    type="text"
+                  <Input
+                    size="sm"
                     aria-label={translate('item.triplePredicateAria')}
                     bind:value={editingTriple.predicate}
                     onkeydown={handleTripleEditKeydown}
                   />
-                  <input
-                    class="triple-cell triple-input"
-                    type="text"
+                  <Input
+                    size="sm"
                     aria-label={translate('item.tripleObjectAria')}
                     bind:value={editingTriple.object}
                     onkeydown={handleTripleEditKeydown}
                   />
                   <div class="triple-actions">
-                    <button
-                      type="button"
-                      class="triple-action"
+                    <IconButton
+                      variant="ghost"
+                      size="xs"
                       disabled={!editingTripleIsComplete}
-                      aria-label={translate('item.tripleSaveAria')}
-                      use:tooltip={translate('item.tripleSaveTitle')}
+                      label={translate('item.tripleSaveAria')}
+                      title={translate('item.tripleSaveTitle')}
                       data-testid={`triple-save-${triple.id}`}
                       onclick={() => void saveEditingTriple()}
                     >
                       <ActionIcon name="check" size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      class="triple-action"
-                      aria-label={translate('item.tripleCancelAria')}
-                      use:tooltip={translate('item.tripleCancelTitle')}
+                    </IconButton>
+                    <IconButton
+                      variant="ghost"
+                      size="xs"
+                      label={translate('item.tripleCancelAria')}
+                      title={translate('item.tripleCancelTitle')}
                       data-testid={`triple-cancel-${triple.id}`}
                       onclick={cancelEditingTriple}
                     >
                       <ActionIcon name="close" size={12} />
-                    </button>
+                    </IconButton>
                   </div>
                 {:else}
                   <span class="triple-cell">{triple.subject}</span>
                   <span class="triple-cell triple-cell--predicate">{triple.predicate}</span>
                   <span class="triple-cell">{triple.object}</span>
                   <div class="triple-actions">
-                    <button
-                      type="button"
-                      class="triple-action"
-                      aria-label={translate('item.tripleEditAria', { subject: triple.subject })}
-                      use:tooltip={translate('item.tripleEditTitle')}
+                    <IconButton
+                      variant="ghost"
+                      size="xs"
+                      label={translate('item.tripleEditAria', { subject: triple.subject })}
+                      title={translate('item.tripleEditTitle')}
                       data-testid={`triple-edit-${triple.id}`}
                       onclick={() => startEditingTriple(triple)}
                     >
                       <ActionIcon name="edit" size={12} />
-                    </button>
+                    </IconButton>
                     <button
                       type="button"
                       class="triple-action triple-action--delete"
@@ -592,50 +590,47 @@
 
             {#if creatingTriple}
               <li class="triple-item triple-item--editing" data-testid="triple-new-row">
-                <input
-                  bind:this={newTripleInput}
-                  class="triple-cell triple-input"
-                  type="text"
+                <Input
+                  size="sm"
+                  bind:element={newTripleInput}
                   aria-label={translate('item.newTripleSubjectAria')}
                   bind:value={newTriple.subject}
                   onkeydown={handleNewTripleKeydown}
                 />
-                <input
-                  class="triple-cell triple-cell--predicate triple-input"
-                  type="text"
+                <Input
+                  size="sm"
                   aria-label={translate('item.newTriplePredicateAria')}
                   bind:value={newTriple.predicate}
                   onkeydown={handleNewTripleKeydown}
                 />
-                <input
-                  class="triple-cell triple-input"
-                  type="text"
+                <Input
+                  size="sm"
                   aria-label={translate('item.newTripleObjectAria')}
                   bind:value={newTriple.object}
                   onkeydown={handleNewTripleKeydown}
                 />
                 <div class="triple-actions">
-                  <button
-                    type="button"
-                    class="triple-action"
+                  <IconButton
+                    variant="ghost"
+                    size="xs"
                     disabled={!newTripleIsComplete}
-                    aria-label={translate('item.newTripleSaveAria')}
-                    use:tooltip={translate('item.tripleSaveTitle')}
+                    label={translate('item.newTripleSaveAria')}
+                    title={translate('item.tripleSaveTitle')}
                     data-testid="triple-new-save"
                     onclick={() => void saveNewTriple()}
                   >
                     <ActionIcon name="check" size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    class="triple-action"
-                    aria-label={translate('item.newTripleCancelAria')}
-                    use:tooltip={translate('item.tripleCancelTitle')}
+                  </IconButton>
+                  <IconButton
+                    variant="ghost"
+                    size="xs"
+                    label={translate('item.newTripleCancelAria')}
+                    title={translate('item.tripleCancelTitle')}
                     data-testid="triple-new-cancel"
                     onclick={cancelCreatingTriple}
                   >
                     <ActionIcon name="close" size={12} />
-                  </button>
+                  </IconButton>
                 </div>
               </li>
             {/if}
@@ -686,7 +681,7 @@
     border-radius: 0 0 var(--radius-surface) var(--radius-surface);
     overflow: hidden;
     background: var(--surface-card);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+    box-shadow: var(--shadow-highlight);
   }
 
   .analysis-panel--tabbed {
@@ -706,10 +701,6 @@
   .nlp-actions :global(.nlp-btn) {
     min-width: 0;
     padding: 0 var(--space-1);
-  }
-
-  :global(.nlp-badge) {
-    text-transform: uppercase;
   }
 
   .entities-section,
@@ -783,24 +774,6 @@
     text-align: center;
   }
 
-  .triple-input {
-    min-width: 0;
-    padding: 0 var(--space-1);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: var(--font-size-xs);
-    white-space: normal;
-  }
-
-  .triple-input:focus-visible {
-    outline: none;
-    border-color: var(--border-focus);
-    box-shadow: var(--focus-ring);
-  }
-
   .triple-actions {
     display: flex;
     align-items: center;
@@ -816,7 +789,7 @@
     padding-inline-start: var(--space-2);
     background: linear-gradient(to right, transparent, var(--color-surface-raised) var(--space-2));
     opacity: 0;
-    transition: opacity 120ms ease-out;
+    transition: opacity var(--duration-base) ease-out;
   }
 
   .triple-item:hover .triple-actions,
@@ -825,10 +798,10 @@
     opacity: 1;
   }
 
-  /* Reads as an IconButton and is sized like one — 24px is the container the
-     scale pairs with a 12px icon. It stays a plain button because the delete
-     control swaps its icon for a confirmation label, and a fixed square
-     primitive has nowhere to put that text. */
+  /* The delete control alone stays a plain button: it swaps its icon for a
+     confirmation label, and IconButton is a fixed square with nowhere to put
+     that text. It is sized like IconButton xs (the 24px the scale pairs with
+     a 12px icon) and grows sideways only for the label. */
   .triple-action {
     display: inline-flex;
     align-items: center;
@@ -857,11 +830,6 @@
     box-shadow: var(--focus-ring);
   }
 
-  .triple-action:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
   .triple-action--delete:hover:not(:disabled),
   .triple-action--pending {
     border-color: var(--color-danger);
@@ -883,6 +851,13 @@
     margin-top: var(--space-4);
     padding-top: var(--space-4);
     border-top: 1px solid var(--color-hairline);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .triple-item:not(.triple-item--editing) .triple-actions,
+    .triple-action {
+      transition: none;
+    }
   }
 
   @container (max-width: 30rem) {

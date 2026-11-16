@@ -12,7 +12,16 @@
   import { onMount } from 'svelte'
   import { locale, t } from '$lib/i18n'
   import { open as openFolderDialog } from '@tauri-apps/plugin-dialog'
-  import { ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    Card,
+    Checkbox,
+    ConfirmDialog,
+    Input,
+    StatusBadge,
+    Switch,
+  } from '@entropia/ui'
   import {
     agentSetupInstruction,
     connectorProgram,
@@ -38,6 +47,12 @@
   } from '$lib/agent-access'
 
   let status = $state<AgentAccessStatus | null>(null)
+  /**
+   * What the access switch shows. Its native box flips on the click itself;
+   * this puts it back on what the backend holds whenever the status arrives
+   * and after every toggle, also one that failed and left the status as it was.
+   */
+  let accessChecked = $derived(status?.enabled ?? false)
   /** Where this build installed the connector; `null` until the backend answers. */
   let connector = $state<ConnectorLocation | null>(null)
   /** The client created in this visit; its connection lines stay until revoked. */
@@ -136,6 +151,7 @@
       await refresh()
     } finally {
       busy = false
+      accessChecked = status?.enabled ?? false
     }
   }
 
@@ -387,18 +403,12 @@
           >{endpointLabel}</span
         >
       </div>
-      <button
-        type="button"
-        class="assistants-tab__switch"
-        class:assistants-tab__switch--on={status?.enabled ?? false}
-        role="switch"
-        aria-checked={status?.enabled ?? false}
-        aria-label="Permitir asistentes externos"
+      <Switch
+        bind:checked={accessChecked}
+        ariaLabel="Permitir asistentes externos"
         disabled={!status || busy}
-        onclick={toggleAccess}
-      >
-        <span class="assistants-tab__switch-knob"></span>
-      </button>
+        onchange={toggleAccess}
+      />
     </div>
 
     <div class="assistants-tab__field">
@@ -410,7 +420,7 @@
               <div class="assistants-tab__copy">
                 <span class="assistants-tab__value">{client.name}</span>
                 {#if client.lastUsedAt === null}
-                  <span class="assistants-tab__badge">{t('assistants.unused')}</span>
+                  <StatusBadge size="xs">{t('assistants.unused')}</StatusBadge>
                 {/if}
                 <span
                   class="assistants-tab__meta"
@@ -693,8 +703,8 @@
   .assistants-tab__error {
     margin: 0 0 var(--space-3);
     padding: var(--space-2) var(--space-3);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
+    border-radius: var(--radius-surface);
     background: var(--color-danger-soft);
     color: var(--color-danger);
     font-size: var(--font-size-sm);
@@ -710,7 +720,7 @@
   .assistants-tab__copy {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     min-width: 0;
   }
 
@@ -732,7 +742,7 @@
   }
 
   .assistants-tab__meta {
-    color: var(--color-text-muted, #6b7280);
+    color: var(--color-text-muted);
     font-size: var(--font-size-xs);
   }
 
@@ -742,44 +752,6 @@
     gap: var(--space-2);
     padding: var(--space-3) 0;
     border-top: 1px solid var(--color-hairline);
-  }
-
-  .assistants-tab__switch {
-    position: relative;
-    flex: 0 0 auto;
-    width: 36px;
-    height: 20px;
-    padding: 0;
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-full, 9999px);
-    background: var(--color-surface-sunken);
-    cursor: pointer;
-    transition: background var(--transition-base);
-  }
-
-  .assistants-tab__switch--on {
-    border-color: transparent;
-    background: var(--color-success);
-  }
-
-  .assistants-tab__switch:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .assistants-tab__switch-knob {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--color-surface-elevated);
-    transition: transform var(--transition-base);
-  }
-
-  .assistants-tab__switch--on .assistants-tab__switch-knob {
-    transform: translateX(16px);
   }
 
   .assistants-tab__clients {
@@ -798,16 +770,7 @@
     gap: var(--space-3);
     padding: var(--space-2) var(--space-3);
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-md);
-  }
-
-  .assistants-tab__badge {
-    align-self: flex-start;
-    padding: 2px var(--space-2);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-full, 9999px);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
+    border-radius: var(--radius-surface);
   }
 
   .assistants-tab__grants {
@@ -838,7 +801,7 @@
     gap: var(--space-2);
     padding: var(--space-3);
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-surface);
     background: var(--color-surface-sunken);
   }
 
@@ -873,7 +836,7 @@
     min-width: 0;
     padding: var(--space-1) var(--space-2);
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-control);
     background: var(--color-surface);
     color: var(--color-text-primary);
     font-family: var(--font-mono);

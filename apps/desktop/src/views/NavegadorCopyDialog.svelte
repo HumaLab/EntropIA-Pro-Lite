@@ -13,7 +13,7 @@
    * question and the result. The file is named by capture id and found by Rust.
    */
   import { onMount } from 'svelte'
-  import { ConfirmDialog } from '@entropia/ui'
+  import { ConfirmDialog, Input, RadioCard, RadioGroup } from '@entropia/ui'
   import type { Collection } from '@entropia/store'
   import { getStore } from '$lib/db'
   import { locale, t } from '$lib/i18n'
@@ -189,47 +189,38 @@
       {$currentLocale &&
         t(rendered ? 'navegador.copy.introText' : 'navegador.copy.intro', { title: capture.title })}
     </p>
-    <fieldset class="copy-dialog__destination">
-      <legend class="copy-dialog__legend">
-        {$currentLocale && t('navegador.copy.destination')}
-      </legend>
-
-      {#if loadError}
-        <p class="copy-dialog__problem" role="alert">{loadError}</p>
-      {:else if loading}
-        <p class="copy-dialog__status">{$currentLocale && t('navegador.copy.loading')}</p>
-      {:else}
-        <div class="copy-dialog__options">
+    {#if loadError}
+      <p class="copy-dialog__problem" role="alert">{loadError}</p>
+    {:else if loading}
+      <p class="copy-dialog__status">{$currentLocale && t('navegador.copy.loading')}</p>
+    {:else}
+      <div class="copy-dialog__options">
+        <RadioGroup
+          variant="list"
+          name="copy-destination"
+          label={$currentLocale && t('navegador.copy.destination')}
+          bind:value={choice}
+        >
           {#each collections as option (option.id)}
-            <label class="copy-dialog__option">
-              <input type="radio" name="copy-destination" value={option.id} bind:group={choice} />
-              <span class="copy-dialog__option-name">{option.name}</span>
-            </label>
+            <RadioCard value={option.id} label={option.name} />
           {/each}
 
-          <label class="copy-dialog__option">
-            <input
-              type="radio"
-              name="copy-destination"
-              value={NEW_COLLECTION}
-              bind:group={choice}
-            />
-            <span class="copy-dialog__option-name copy-dialog__option-name--fixed">
-              {$currentLocale && t('navegador.copy.newCollection')}
-            </span>
-            <input
-              type="text"
-              class="copy-dialog__new-name"
-              placeholder={$currentLocale && t('navegador.copy.newCollectionPlaceholder')}
-              aria-label={$currentLocale && t('navegador.copy.newCollectionAriaLabel')}
-              bind:value={newName}
-              disabled={!isNew}
-              onfocus={() => (choice = NEW_COLLECTION)}
-            />
-          </label>
-        </div>
-      {/if}
-    </fieldset>
+          <RadioCard
+            value={NEW_COLLECTION}
+            label={$currentLocale && t('navegador.copy.newCollection')}
+          >
+            {#snippet embedded()}
+              <Input
+                size="sm"
+                placeholder={$currentLocale && t('navegador.copy.newCollectionPlaceholder')}
+                aria-label={$currentLocale && t('navegador.copy.newCollectionAriaLabel')}
+                bind:value={newName}
+              />
+            {/snippet}
+          </RadioCard>
+        </RadioGroup>
+      </div>
+    {/if}
   {/if}
 </ConfirmDialog>
 
@@ -245,84 +236,14 @@
   .copy-dialog__problem {
     margin: 0;
     font-size: var(--font-size-sm);
-    color: var(--color-danger, var(--color-text-primary));
+    color: var(--color-danger);
   }
 
-  .copy-dialog__destination {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    margin: 0;
-    padding: 0;
-    border: none;
-  }
-
-  .copy-dialog__legend {
-    padding: 0;
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
-    text-transform: uppercase;
-    color: var(--color-text-muted);
-  }
-
+  /* A long list scrolls inside the dialog; the padding keeps the options'
+     focus ring clear of the scroll box's edge. */
   .copy-dialog__options {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
     max-height: 240px;
+    padding: var(--space-0-5);
     overflow-y: auto;
-  }
-
-  .copy-dialog__option {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2);
-    border-radius: var(--radius-control);
-    cursor: pointer;
-  }
-
-  .copy-dialog__option:hover {
-    background: var(--color-accent-faint);
-  }
-
-  .copy-dialog__option-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-  }
-
-  .copy-dialog__option-name--fixed {
-    flex: 0 0 auto;
-  }
-
-  .copy-dialog__new-name {
-    flex: 1;
-    min-width: 0;
-    height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-    background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    outline: none;
-  }
-
-  .copy-dialog__new-name:focus,
-  .copy-dialog__new-name:focus-visible {
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-  }
-
-  .copy-dialog__new-name:disabled {
-    cursor: not-allowed;
-    opacity: 0.56;
   }
 </style>

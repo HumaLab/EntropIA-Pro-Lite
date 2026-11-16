@@ -248,21 +248,38 @@
     placement: 'below' | 'above'
     text: string
     boxes: ViewportBox[]
+    /**
+     * The viewport the boxes were measured in. A re-render (zoom, resize,
+     * panel toggle) between pointerup and the popover click replaces the
+     * live `viewport` prop while the measured boxes stay valid, so creation
+     * converts with this snapshot instead of the current prop.
+     */
+    viewport: MarkupViewport
   } | null>(null)
 
   function readSelection() {
     const selection = typeof window !== 'undefined' ? window.getSelection() : null
     if (!selection || selection.isCollapsed || !textLayerEl || !rootEl) return null
-    const range = selection.getRangeAt(0)
-    if (!textLayerEl.contains(range.commonAncestorContainer)) return null
+    // Every range, not just the first: `selection.toString()` concatenates
+    // them all, so reading boxes from `getRangeAt(0)` alone saves rects that
+    // do not cover the saved text whenever the selection holds more ranges.
     const bounds = rootEl.getBoundingClientRect()
-    const boxes = Array.from(range.getClientRects()).map((rect) => ({
-      x: rect.left - bounds.left,
-      y: rect.top - bounds.top,
-      width: rect.width,
-      height: rect.height,
-    }))
-    const text = selection.toString().replace(/\s+/g, ' ').trim()
+    const texts: string[] = []
+    const boxes: ViewportBox[] = []
+    for (let index = 0; index < selection.rangeCount; index++) {
+      const range = selection.getRangeAt(index)
+      if (!textLayerEl.contains(range.commonAncestorContainer)) continue
+      texts.push(range.toString())
+      for (const rect of Array.from(range.getClientRects())) {
+        boxes.push({
+          x: rect.left - bounds.left,
+          y: rect.top - bounds.top,
+          width: rect.width,
+          height: rect.height,
+        })
+      }
+    }
+    const text = texts.join('').replace(/\s+/g, ' ').trim()
     if (!text || boxes.length === 0) return null
     return { text, boxes }
   }
@@ -273,11 +290,31 @@
     picked = popover
   ) {
     if (!picked) return
-    const rects = selectionToPdfRects(viewport, picked.boxes)
+    const rects = selectionToPdfRects(picked.viewport ?? viewport, picked.boxes)
     popover = null
     window.getSelection()?.removeAllRanges()
     if (rects.length === 0) return
     onCreate({ type, color: chosenColor, pageIndex, rects, text: picked.text })
+  }
+
+  /**
+   * The popover button click: prefer the live selection (it may have grown
+   * through the keyboard since pointerup) and fall back to the popover
+   * snapshot, whose boxes a re-render may already have orphaned from the DOM.
+   */
+  function confirmFromPopover(type: 'highlight' | 'underline') {
+    const live = readSelection()
+    if (live) {
+      createFromSelection(type, activePopoverColor, {
+        x: 0,
+        y: 0,
+        placement: 'below',
+        ...live,
+        viewport,
+      })
+    } else {
+      createFromSelection(type, activePopoverColor)
+    }
   }
 
   function handleTextPointerUp() {
@@ -287,12 +324,12 @@
       return
     }
     if (tool === 'highlight' || tool === 'underline') {
-      createFromSelection(tool, color, { x: 0, y: 0, placement: 'below', ...picked })
+      createFromSelection(tool, color, { x: 0, y: 0, placement: 'below', ...picked, viewport })
       return
     }
     const anchor = popoverAnchor(picked.boxes, viewport.height)
     if (!anchor) return
-    popover = { ...anchor, ...picked }
+    popover = { ...anchor, ...picked, viewport }
   }
 
   let popoverColor = $state<string | null>(null)
@@ -483,7 +520,7 @@
         iconOnly
         aria-label={labels.popoverHighlight}
         title={labels.popoverHighlight}
-        onclick={() => createFromSelection('highlight', activePopoverColor)}
+        onclick={() => confirmFromPopover('highlight')}
       >
         <ActionIcon name="highlight" size={20} />
       </Button>
@@ -493,7 +530,7 @@
         iconOnly
         aria-label={labels.popoverUnderline}
         title={labels.popoverUnderline}
-        onclick={() => createFromSelection('underline', activePopoverColor)}
+        onclick={() => confirmFromPopover('underline')}
       >
         <ActionIcon name="underline" size={20} />
       </Button>
@@ -512,7 +549,7 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
-    line-height: 1;
+    line-height: var(--line-height-none);
     pointer-events: auto;
     text-size-adjust: none;
     forced-color-adjust: none;
@@ -573,6 +610,8 @@
     cursor: pointer;
   }
 
+  /* An SVG shape takes no box-shadow, so a focused mark shows the ring as its
+     own stroke instead of the shared --focus-ring. */
   .pdf-markup:focus-visible {
     outline: none;
   }
@@ -592,14 +631,14 @@
   }
 
   .pdf-markup__note {
-    stroke: rgb(0 0 0 / 0.25);
+    stroke: var(--annotation-ink-soft);
     stroke-width: 1;
-    filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.35));
+    filter: var(--annotation-shadow);
   }
 
   /* Drawn on the note's own color: dark ink reads on every Zotero swatch. */
   .pdf-markup__note-line {
-    stroke: rgb(0 0 0 / 0.45);
+    stroke: var(--annotation-ink);
     stroke-linecap: round;
     pointer-events: none;
   }
@@ -657,7 +696,7 @@
 
   .pdf-markup-popover__colors {
     display: flex;
-    gap: 4px;
+    gap: var(--space-1);
     padding-right: var(--space-1);
     border-right: 1px solid var(--color-border);
   }
@@ -667,10 +706,16 @@
     height: 16px;
     padding: 0;
     border: 1px solid color-mix(in srgb, var(--color-text-primary) 20%, transparent);
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     cursor: pointer;
   }
 
+  .pdf-markup-popover__swatch:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  /* The ring marks the chosen colour, not focus: focus is the shared ring above. */
   .pdf-markup-popover__swatch--active {
     outline: 2px solid var(--color-accent);
     outline-offset: 1px;

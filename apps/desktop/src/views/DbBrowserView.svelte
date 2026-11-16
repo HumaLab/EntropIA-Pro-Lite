@@ -4,9 +4,10 @@
     tooltip,
     ActionIcon,
     Button,
+    Dialog,
     IconButton,
-    portal,
     SearchBar,
+    SelectTrigger,
     ToolbarMenu,
     type ToolbarMenuItem,
   } from '@entropia/ui'
@@ -35,7 +36,6 @@
   } from '$lib/document-explorer'
   import { exportCollectionToCsv, exportCollectionToJson } from '$lib/export'
   import { locale, t } from '$lib/i18n'
-  import { getFocusableElements, getNextFocusTrapTarget } from '$lib/modal-focus'
 
   const DEFAULT_PAGE_SIZE = 25
   const PAGE_SIZE_OPTIONS = [25, 50, 100] as const
@@ -90,7 +90,6 @@
   let pageSizeMenuOpen = $state(false)
 
   let copyFeedbackTimeout: ReturnType<typeof setTimeout> | null = null
-  let expandedModalElement = $state<HTMLDivElement | null>(null)
   let expandedCellTrigger: HTMLElement | null = null
 
   // Not $state: purely internal scheduling/guard bookkeeping, never read by
@@ -421,16 +420,6 @@
     }
   }
 
-  function getExpandedModalFocusables(): HTMLElement[] {
-    return getFocusableElements(expandedModalElement)
-  }
-
-  async function focusExpandedModal() {
-    await tick()
-    const initialFocusTarget = getExpandedModalFocusables()[0] ?? expandedModalElement
-    initialFocusTarget?.focus()
-  }
-
   function restoreExpandedCellFocus() {
     const trigger = expandedCellTrigger
     expandedCellTrigger = null
@@ -440,37 +429,13 @@
     }
   }
 
+  // Dialog owns Escape and Tab; the copy shortcut is the one key this dialog
+  // adds. Focus never leaves the open dialog, so the window sees every key.
   function handleExpandedCellKeydown(event: KeyboardEvent) {
     if (expandedCell && shouldCopyExpandedCellFromShortcut(event)) {
       event.preventDefault()
       void copyCellValue(expandedCell.text)
-      return
     }
-
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      closeExpandedCell()
-      return
-    }
-
-    if (event.key !== 'Tab') return
-
-    const focusableElements = getExpandedModalFocusables()
-    if (focusableElements.length === 0) {
-      event.preventDefault()
-      expandedModalElement?.focus()
-      return
-    }
-
-    const currentElement =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
-    event.preventDefault()
-    getNextFocusTrapTarget(
-      focusableElements,
-      currentElement,
-      event.shiftKey,
-      expandedModalElement
-    )?.focus()
   }
 
   function openExpandedCell(
@@ -489,8 +454,6 @@
       isJson,
       embedding,
     }
-
-    void focusExpandedModal()
   }
 
   function closeExpandedCell() {
@@ -578,6 +541,8 @@
   }
 </script>
 
+<svelte:window onkeydown={handleExpandedCellKeydown} />
+
 <div class="db-browser-view page-shell">
   <section class="page-header db-browser-view__header">
     <div class="page-header__content">
@@ -593,7 +558,7 @@
     </div>
 
     <div class="page-toolbar db-browser-toolbar">
-      <div class="db-browser-toolbar__field">
+      <div class="db-browser-toolbar__field db-browser-toolbar__field--table">
         <span class="db-browser-toolbar__label" id="db-browser-table-label"
           >{$currentLocale && translate('dbBrowser.tableLabel')}</span
         >
@@ -606,19 +571,15 @@
           bind:open={tableMenuOpen}
         >
           {#snippet trigger(props, { open })}
-            <button
-              type="button"
-              class="db-browser-menu-trigger"
-              class:db-browser-menu-trigger--open={open}
+            <SelectTrigger
+              block
+              label={selectedTable}
+              valueId="db-browser-table-value"
               aria-labelledby="db-browser-table-label db-browser-table-value"
               disabled={loadingTables || tables.length === 0}
               {...props}
-            >
-              <span class="db-browser-menu-trigger-label" id="db-browser-table-value"
-                >{selectedTable}</span
-              >
-              <ActionIcon name="chevron-down" size={12} />
-            </button>
+              {open}
+            />
           {/snippet}
         </ToolbarMenu>
       </div>
@@ -723,19 +684,14 @@
             bind:open={pageSizeMenuOpen}
           >
             {#snippet trigger(props, { open })}
-              <button
-                type="button"
-                class="db-browser-menu-trigger db-browser-page-size__trigger"
-                class:db-browser-menu-trigger--open={open}
+              <SelectTrigger
+                label={String(pageSize)}
+                valueId="db-browser-page-size-value"
                 aria-labelledby="db-browser-page-size-label db-browser-page-size-value"
                 disabled={loadingRows}
                 {...props}
-              >
-                <span class="db-browser-menu-trigger-label" id="db-browser-page-size-value"
-                  >{pageSize}</span
-                >
-                <ActionIcon name="chevron-down" size={12} />
-              </button>
+                {open}
+              />
             {/snippet}
           </ToolbarMenu>
         </div>
@@ -790,41 +746,37 @@
                         <span class="db-browser-table__cell">{cell.rawText}</span>
                         <div class="db-browser-table__cell-actions">
                           {#if cell.hasValue}
-                            <span class="db-browser-action-shell" data-tooltip={copyCellLabel}>
-                              <IconButton
-                                size="sm"
-                                variant="secondary"
-                                class="db-browser-table__cell-action"
-                                label={copyCellLabel}
-                                title={copyCellLabel}
-                                onclick={() => copyCellValue(cell.copyText)}
-                              >
-                                <ActionIcon name="copy" size={14} />
-                              </IconButton>
-                            </span>
+                            <IconButton
+                              size="sm"
+                              variant="secondary"
+                              class="db-browser-table__cell-action"
+                              label={copyCellLabel}
+                              title={copyCellLabel}
+                              onclick={() => copyCellValue(cell.copyText)}
+                            >
+                              <ActionIcon name="copy" size={14} />
+                            </IconButton>
                           {/if}
                           {#if cell.canExpand}
-                            <span class="db-browser-action-shell" data-tooltip={expandCellLabel}>
-                              <IconButton
-                                size="sm"
-                                variant="secondary"
-                                class="db-browser-table__cell-action"
-                                label={expandCellLabel}
-                                title={expandCellLabel}
-                                onclick={(event) =>
-                                  openExpandedCell(
-                                    column.name,
-                                    cell.expandedText,
-                                    cell.isJson,
-                                    column.name === EMBEDDING_COLUMN_NAME
-                                      ? embeddingCellContext(row)
-                                      : null,
-                                    event.currentTarget as HTMLElement
-                                  )}
-                              >
-                                <ActionIcon name="expand" size={14} />
-                              </IconButton>
-                            </span>
+                            <IconButton
+                              size="sm"
+                              variant="secondary"
+                              class="db-browser-table__cell-action"
+                              label={expandCellLabel}
+                              title={expandCellLabel}
+                              onclick={(event) =>
+                                openExpandedCell(
+                                  column.name,
+                                  cell.expandedText,
+                                  cell.isJson,
+                                  column.name === EMBEDDING_COLUMN_NAME
+                                    ? embeddingCellContext(row)
+                                    : null,
+                                  event.currentTarget as HTMLElement
+                                )}
+                            >
+                              <ActionIcon name="expand" size={14} />
+                            </IconButton>
                           {/if}
                         </div>
                       </div>
@@ -896,70 +848,47 @@
       column: activeExpandedCell.columnName,
     })}
     {@const closeExpandedLabel = translate('dbBrowser.expandDialogClose')}
-    <!-- Portalled out of the work pane, which is a size container and would clip
-         this full-window overlay; see portal in @entropia/ui. -->
-    <div class="modal-overlay" {@attach portal} onclick={closeExpandedCell} role="presentation">
-      <div
-        class="modal db-browser-modal"
-        tabindex="-1"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="db-browser-modal-title"
-        aria-describedby="db-browser-modal-description"
-        bind:this={expandedModalElement}
-        onclick={(event) => event.stopPropagation()}
-        onkeydown={handleExpandedCellKeydown}
-      >
-        <div class="db-browser-modal__header">
-          <div>
-            <h3 id="db-browser-modal-title" class="modal-title">
-              {translate('dbBrowser.expandDialogTitle', { column: activeExpandedCell.columnName })}
-            </h3>
-            <p id="db-browser-modal-description" class="db-browser-modal__subtitle">
-              {#if activeExpandedCell.embedding && activeExpandedCell.embedding.dimensions != null}
-                {translate('dbBrowser.expandDialogEmbeddingDimensions', {
-                  dimensions: activeExpandedCell.embedding.dimensions,
-                })}
-              {:else if activeExpandedCell.embedding}
-                {translate('dbBrowser.expandDialogEmbedding')}
-              {:else if activeExpandedCell.isJson}
-                {translate('dbBrowser.expandDialogJson')}
-              {:else}
-                {translate('dbBrowser.expandDialogText')}
-              {/if}
-            </p>
-          </div>
-          <div class="db-browser-modal__actions">
-            <span class="db-browser-action-shell" data-tooltip={copyExpandedLabel}>
-              <IconButton
-                size="sm"
-                variant="secondary"
-                class="db-browser-table__cell-action db-browser-modal__icon-action"
-                label={copyExpandedLabel}
-                title={copyExpandedLabel}
-                onclick={() => copyCellValue(activeExpandedCell.text)}
-              >
-                <ActionIcon name="copy" size={14} />
-              </IconButton>
-            </span>
-            <span class="db-browser-action-shell" data-tooltip={closeExpandedLabel}>
-              <IconButton
-                size="sm"
-                variant="secondary"
-                class="db-browser-table__cell-action db-browser-modal__icon-action"
-                label={closeExpandedLabel}
-                title={closeExpandedLabel}
-                onclick={closeExpandedCell}
-              >
-                <ActionIcon name="close" size={14} />
-              </IconButton>
-            </span>
-          </div>
-        </div>
+    {@const expandedDescription =
+      activeExpandedCell.embedding && activeExpandedCell.embedding.dimensions != null
+        ? translate('dbBrowser.expandDialogEmbeddingDimensions', {
+            dimensions: activeExpandedCell.embedding.dimensions,
+          })
+        : activeExpandedCell.embedding
+          ? translate('dbBrowser.expandDialogEmbedding')
+          : activeExpandedCell.isJson
+            ? translate('dbBrowser.expandDialogJson')
+            : translate('dbBrowser.expandDialogText')}
+    <Dialog
+      size="lg"
+      title={translate('dbBrowser.expandDialogTitle', { column: activeExpandedCell.columnName })}
+      description={expandedDescription}
+      onclose={closeExpandedCell}
+    >
+      {#snippet headerActions()}
+        <IconButton
+          size="sm"
+          variant="secondary"
+          class="db-browser-table__cell-action db-browser-modal__icon-action"
+          label={copyExpandedLabel}
+          title={copyExpandedLabel}
+          onclick={() => copyCellValue(activeExpandedCell.text)}
+        >
+          <ActionIcon name="copy" size={14} />
+        </IconButton>
+        <IconButton
+          size="sm"
+          variant="secondary"
+          class="db-browser-table__cell-action db-browser-modal__icon-action"
+          label={closeExpandedLabel}
+          title={closeExpandedLabel}
+          onclick={closeExpandedCell}
+        >
+          <ActionIcon name="close" size={14} />
+        </IconButton>
+      {/snippet}
 
-        <pre class="db-browser-modal__content"><code>{activeExpandedCell.text}</code></pre>
-      </div>
-    </div>
+      <pre class="db-browser-modal__content"><code>{activeExpandedCell.text}</code></pre>
+    </Dialog>
   {/if}
 </div>
 
@@ -995,57 +924,19 @@
     min-width: min(100%, 220px);
   }
 
+  /* The table picker fills its field up to the width it had as a hand-built
+     button; a long table name ellipsizes instead of widening the toolbar. */
+  .db-browser-toolbar__field--table {
+    max-width: 260px;
+  }
+
   .db-browser-toolbar__field label,
   .db-browser-toolbar__label {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-secondary);
-  }
-
-  /* The trigger of a choice menu. It replaces the native select this screen
-     used to render, so it wears the control look of BibliotecaView's library
-     picker (the other page-toolbar that opens radio menus): label, name,
-     chevron. */
-  .db-browser-menu-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    max-width: 260px;
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-control);
-    background: var(--color-surface-glass);
-    color: var(--color-text-primary);
-    cursor: pointer;
-  }
-
-  .db-browser-menu-trigger:hover,
-  .db-browser-menu-trigger--open {
-    border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-hairline));
-  }
-
-  .db-browser-menu-trigger:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
-  .db-browser-menu-trigger:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .db-browser-menu-trigger-label {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    font-size: var(--font-size-sm);
-    text-align: start;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .db-browser-card {
@@ -1098,15 +989,9 @@
   .db-browser-page-size__label {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     color: var(--color-text-secondary);
-  }
-
-  .db-browser-page-size__trigger {
-    width: auto;
-    min-width: 92px;
-    justify-content: space-between;
   }
 
   .db-browser-table-wrap {
@@ -1116,7 +1001,7 @@
     min-height: 12rem;
     overflow: auto;
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-surface);
     background: var(--color-surface-sunken);
   }
 
@@ -1138,7 +1023,7 @@
   .db-browser-table thead th {
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: var(--z-sticky);
     background: var(--color-surface);
   }
 
@@ -1158,7 +1043,7 @@
 
   .db-browser-table__sort:focus-visible {
     outline: none;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-control);
     box-shadow: var(--focus-ring);
   }
 
@@ -1189,106 +1074,16 @@
     gap: var(--space-1);
   }
 
-  .db-browser-action-shell {
-    position: relative;
-    display: inline-flex;
-  }
-
-  .db-browser-action-shell::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    left: 50%;
-    bottom: calc(100% + var(--space-2));
-    transform: translateX(-50%) translateY(4px);
-    opacity: 0;
-    pointer-events: none;
-    z-index: 3;
-    min-width: max-content;
-    max-width: 220px;
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid color-mix(in srgb, var(--color-accent) 24%, var(--color-border-subtle));
-    border-radius: var(--radius-sm);
-    background: var(--color-surface-elevated);
-    box-shadow: var(--shadow-md);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-2xs);
-    line-height: 1.35;
-    text-align: center;
-    white-space: normal;
-    transition:
-      opacity 0.14s ease,
-      transform 0.14s ease;
-  }
-
-  /* The class is now only a hook: it drives the tooltip shell and the accent
-     hover. Size, border, radius and focus ring come from IconButton size="sm". */
-  .db-browser-action-shell:has(:global(.db-browser-table__cell-action):hover)::after,
-  .db-browser-action-shell:has(:global(.db-browser-table__cell-action):focus-visible)::after {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-
-  :global(.db-browser-table__cell-action):hover:not(:disabled),
-  :global(.db-browser-table__cell-action):focus-visible {
-    border-color: var(--color-accent);
-    color: var(--color-text-primary);
-    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-raised));
-  }
-
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-4);
-    background-color: var(--surface-overlay);
-    z-index: 1000;
-  }
-
-  .modal-title {
-    margin: 0;
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-bold);
-    color: var(--color-text-primary);
-  }
-
-  .db-browser-modal {
-    width: min(900px, calc(100vw - 2rem));
-    max-height: min(80vh, 720px);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-    padding: var(--space-6);
-    background: var(--color-surface-glass);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-dialog);
-    box-shadow: var(--shadow-lg);
-  }
-
-  .db-browser-modal__header {
-    display: flex;
-    gap: var(--space-3);
-    align-items: flex-start;
-    justify-content: space-between;
-  }
-
-  .db-browser-modal__subtitle {
-    margin: var(--space-1) 0 0;
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-sm);
-  }
-
   .db-browser-modal__content {
     margin: 0;
     padding: var(--space-4);
     overflow: auto;
     border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-surface);
     background: var(--color-surface-sunken);
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -1304,7 +1099,7 @@
   .db-browser-pagination__actions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: var(--space-0-5);
   }
 
   .db-browser-pagination__divider {
@@ -1314,7 +1109,7 @@
     background: var(--border-subtle);
   }
 
-  @media (max-width: 900px) {
+  @container pane (max-width: 900px) {
     .db-browser-toolbar,
     .db-browser-toolbar__search,
     .db-browser-toolbar__field {
@@ -1327,8 +1122,7 @@
       justify-content: space-between;
     }
 
-    .db-browser-table__cell-wrap,
-    .db-browser-modal__header {
+    .db-browser-table__cell-wrap {
       flex-direction: column;
     }
   }

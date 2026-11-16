@@ -212,7 +212,7 @@
   }
 
   .help-settings-tab__hint {
-    color: var(--color-text-muted, #6b7280);
+    color: var(--color-text-muted);
     font-size: var(--font-size-xs);
   }
 
@@ -228,7 +228,7 @@
   }
 
   .help-settings-tab__meta {
-    color: var(--color-text-muted, #6b7280);
+    color: var(--color-text-muted);
     font-size: var(--font-size-xs);
   }
 

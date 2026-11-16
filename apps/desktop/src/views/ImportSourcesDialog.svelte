@@ -21,7 +21,7 @@
     type ImportSummary,
   } from '$lib/collection-import'
   import { notifyDocumentExplorerCollectionChanged } from '$lib/document-explorer'
-  import { ConfirmDialog, Button } from '@entropia/ui'
+  import { ConfirmDialog, Button, Input, ProgressBar, RadioCard, RadioGroup } from '@entropia/ui'
   import type { Collection } from '@entropia/store'
 
   const navigation = getNavigation()
@@ -95,10 +95,6 @@
     return count === 1
       ? t('home.recent.itemCount.one', { count })
       : t('home.recent.itemCount.other', { count })
-  }
-
-  function focusNewCollection() {
-    destinationChoice = NEW_COLLECTION
   }
 
   async function handleConfirm() {
@@ -220,11 +216,11 @@
     <div class="import-dialog__progress" role="status" aria-live="polite">
       <p class="import-dialog__progress-title">{t('collection.importSummary.importingTitle')}</p>
       {#if importProgress}
-        <progress
+        <ProgressBar
           value={importProgress.completed}
           max={importProgress.total}
-          aria-label={t('collection.importSummary.progressBar')}
-        ></progress>
+          label={t('collection.importSummary.progressBar')}
+        />
         <p class="import-dialog__progress-detail">
           {t('collection.importSummary.progressDescription', {
             completed: importProgress.completed,
@@ -279,50 +275,40 @@
       {/if}
     </div>
   {:else}
-    <fieldset class="import-dialog__destination">
-      <legend class="import-dialog__legend">{t('home.importDialog.destination')}</legend>
-
-      {#if loadError}
-        <p class="surface-message surface-message--error" role="alert">{loadError}</p>
-      {:else}
-        <div class="import-dialog__options">
+    {#if loadError}
+      <p class="surface-message surface-message--error" role="alert">{loadError}</p>
+    {:else}
+      <div class="import-dialog__options">
+        <RadioGroup
+          variant="list"
+          name="import-destination"
+          label={t('home.importDialog.destination')}
+          bind:value={destinationChoice}
+        >
           {#each collections as collection (collection.id)}
-            <label class="import-dialog__option">
-              <input
-                type="radio"
-                name="import-destination"
-                value={collection.id}
-                bind:group={destinationChoice}
-              />
-              <span class="import-dialog__option-name">{collection.name}</span>
-              <span class="import-dialog__option-count" aria-hidden="true"
-                >{formatCount(collection.count)}</span
-              >
-              <span class="sr-only">{itemCountLabel(collection.count)}</span>
-            </label>
+            <RadioCard value={collection.id} label={collection.name}>
+              {#snippet description()}
+                <span class="import-dialog__option-count" aria-hidden="true"
+                  >{formatCount(collection.count)}</span
+                >
+                <span class="sr-only">{itemCountLabel(collection.count)}</span>
+              {/snippet}
+            </RadioCard>
           {/each}
 
-          <label class="import-dialog__option import-dialog__option--new">
-            <input
-              type="radio"
-              name="import-destination"
-              value={NEW_COLLECTION}
-              bind:group={destinationChoice}
-            />
-            <span class="import-dialog__option-name">{t('home.importDialog.newCollection')}</span>
-            <input
-              type="text"
-              class="import-dialog__new-name"
-              placeholder={t('home.importDialog.newCollectionPlaceholder')}
-              aria-label={t('home.importDialog.newCollectionAriaLabel')}
-              bind:value={newCollectionName}
-              disabled={!isNewCollection}
-              onfocus={focusNewCollection}
-            />
-          </label>
-        </div>
-      {/if}
-    </fieldset>
+          <RadioCard value={NEW_COLLECTION} label={t('home.importDialog.newCollection')}>
+            {#snippet embedded()}
+              <Input
+                size="sm"
+                placeholder={t('home.importDialog.newCollectionPlaceholder')}
+                aria-label={t('home.importDialog.newCollectionAriaLabel')}
+                bind:value={newCollectionName}
+              />
+            {/snippet}
+          </RadioCard>
+        </RadioGroup>
+      </div>
+    {/if}
     {#if onOpenInternetArchive}
       <div class="import-dialog__ia">
         <Button variant="secondary" onclick={handleOpenInternetArchive}>
@@ -367,7 +353,7 @@
   .import-dialog__summary-counts dt {
     font-size: var(--font-size-2xs);
     text-transform: uppercase;
-    letter-spacing: 0.075em;
+    letter-spacing: var(--letter-spacing-caps);
     color: var(--color-text-muted);
   }
 
@@ -392,92 +378,16 @@
     list-style: none;
   }
 
-  .import-dialog__destination {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    margin: 0;
-    padding: 0;
-    border: none;
-  }
-
-  .import-dialog__legend {
-    padding: 0;
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    letter-spacing: 0.075em;
-    text-transform: uppercase;
-    color: var(--color-text-muted);
-  }
-
+  /* A long list scrolls inside the dialog; the padding keeps the options'
+     focus ring clear of the scroll box's edge. */
   .import-dialog__options {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
     max-height: 240px;
+    padding: var(--space-0-5);
     overflow-y: auto;
   }
 
-  .import-dialog__option {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-2);
-    border-radius: var(--radius-control);
-    cursor: pointer;
-  }
-
-  .import-dialog__option:hover {
-    background: var(--color-accent-faint);
-  }
-
-  .import-dialog__option-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-  }
-
   .import-dialog__option-count {
-    flex: 0 0 auto;
-    font-size: var(--font-size-xs);
     font-variant-numeric: tabular-nums;
-    color: var(--color-text-muted);
-  }
-
-  .import-dialog__option--new .import-dialog__option-name {
-    flex: 0 0 auto;
-  }
-
-  .import-dialog__new-name {
-    flex: 1;
-    min-width: 0;
-    height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-primary);
-    background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    outline: none;
-    transition:
-      border-color var(--transition-smooth),
-      box-shadow var(--transition-smooth);
-  }
-
-  .import-dialog__new-name:focus,
-  .import-dialog__new-name:focus-visible {
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-  }
-
-  .import-dialog__new-name:disabled {
-    cursor: not-allowed;
-    opacity: 0.56;
   }
 
   .sr-only {

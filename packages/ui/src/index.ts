@@ -18,12 +18,12 @@ export type {
 } from './components/Button/index'
 
 export { Input } from './components/Input/index'
-export type { InputProps, InputType } from './components/Input/index'
+export type { InputFont, InputProps, InputSize, InputType } from './components/Input/index'
 export { NumberField } from './components/NumberField/index'
 export type { NumberFieldProps } from './components/NumberField/index'
 
 export { Checkbox } from './components/Checkbox/index'
-export type { CheckboxProps } from './components/Checkbox/index'
+export type { CheckboxProps, CheckboxSize, CheckboxVariant } from './components/Checkbox/index'
 
 export { Card } from './components/Card/index'
 export type { CardProps, CardPadding } from './components/Card/index'
@@ -43,6 +43,7 @@ export type {
   IconButtonProps,
   IconButtonSize,
   IconButtonVariant,
+  IconButtonHoverTone,
 } from './components/IconButton/index'
 export { ToolbarMenu, ToolbarMenuList, placeMenu } from './components/ToolbarMenu/index'
 export type {
@@ -66,6 +67,7 @@ export { StatusBadge } from './components/StatusBadge/index'
 export type {
   StatusBadgeProps,
   StatusBadgeSize,
+  StatusBadgeTone,
   StatusBadgeVariant,
 } from './components/StatusBadge/index'
 
@@ -103,7 +105,7 @@ export * from './components/PdfMarkup/index'
 export { AudioPlayer } from './components/AudioPlayer/index'
 
 export { SearchBar } from './components/SearchBar/index'
-export type { SearchBarProps } from './components/SearchBar/index'
+export type { SearchBarProps, SearchBarSize } from './components/SearchBar/index'
 
 export { MetadataEditor } from './components/MetadataEditor/index'
 export type { MetadataEditorProps } from './components/MetadataEditor/index'
@@ -217,3 +219,38 @@ export type {
   WritingEditorLabels,
   WritingEditorProps,
 } from './components/WritingEditor/index'
+export { Textarea } from './components/Textarea/index'
+export type { TextareaFont, TextareaProps } from './components/Textarea/index'
+export { RadioCard, RadioGroup } from './components/RadioGroup/index'
+export type {
+  RadioCardProps,
+  RadioGroupProps,
+  RadioGroupVariant,
+} from './components/RadioGroup/index'
+export { Select, SelectTrigger } from './components/SelectTrigger/index'
+export type {
+  SelectOption,
+  SelectProps,
+  SelectTriggerProps,
+  SelectTriggerSize,
+  SelectTriggerVariant,
+} from './components/SelectTrigger/index'
+export { ProgressBar } from './components/ProgressBar/index'
+export type {
+  ProgressBarProps,
+  ProgressBarSize,
+  ProgressBarTone,
+} from './components/ProgressBar/index'
+
+export { Switch } from './components/Switch/index'
+export type { SwitchProps, SwitchSize } from './components/Switch/index'
+
+export { Disclosure } from './components/Disclosure/index'
+export type {
+  DisclosureProps,
+  DisclosureSize,
+  DisclosureVariant,
+} from './components/Disclosure/index'
+
+export { Dialog } from './components/Dialog/index'
+export type { DialogProps, DialogSize } from './components/Dialog/index'

@@ -3,6 +3,9 @@ import globals from 'globals'
 import tseslint from 'typescript-eslint'
 import svelte from 'eslint-plugin-svelte'
 
+const RESTRICTED_ELEMENTS_MESSAGE =
+  'This app owns every glyph and control. Hand-written <svg> drifts from the icon contract (stroke 2, 24 grid) — use <ActionIcon name="..." />. A native <select> is drawn by the operating system outside the app theme — use Select or SelectTrigger. A native <progress> keeps the browser track — use ProgressBar. A native <textarea> repeats the field look by hand — use Textarea. Data visualisations and viewer overlays are exempt — see the SVG allowlist in eslint.config.js.'
+
 export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
@@ -80,9 +83,21 @@ export default tseslint.config(
       'svelte/no-restricted-html-elements': [
         'error',
         {
-          elements: ['svg', 'select'],
-          message:
-            'This app owns every glyph and control. Hand-written <svg> drifts from the icon contract (stroke 2, 24 grid) — use <ActionIcon name="..." />. A native <select> is drawn by the operating system outside the app theme — use the ToolbarMenu radio pattern (see WritingZoteroTab). Data visualisations and viewer overlays are exempt — add the file to the allowlist in eslint.config.js.',
+          elements: ['svg', 'select', 'progress', 'textarea'],
+          message: RESTRICTED_ELEMENTS_MESSAGE,
+        },
+      ],
+    },
+  },
+  {
+    // Textarea is the one place a native <textarea> is drawn.
+    files: ['packages/ui/src/components/Textarea/Textarea.svelte'],
+    rules: {
+      'svelte/no-restricted-html-elements': [
+        'error',
+        {
+          elements: ['svg', 'select', 'progress'],
+          message: RESTRICTED_ELEMENTS_MESSAGE,
         },
       ],
     },

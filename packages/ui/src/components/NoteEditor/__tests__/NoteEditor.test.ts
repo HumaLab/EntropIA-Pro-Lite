@@ -171,9 +171,36 @@ describe('NoteEditor', () => {
     })
     await fireEvent.click(screen.getByTestId('note-editor-link-submit'))
 
-    expect(screen.getByTestId('note-editor-link-error')).toHaveTextContent(
+    expect(screen.getByRole('alert')).toHaveTextContent(
       'Enter a valid URL, for example https://entropia.app.'
     )
+    expect(screen.getByLabelText('URL')).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('keeps Tab inside the link modal', async () => {
+    render(NoteEditor, { props: {} })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Add link' }))
+    const dialog = screen.getByRole('dialog', { name: 'Insert link' })
+    const submit = screen.getByRole('button', { name: 'Insert' })
+    submit.focus()
+
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    submit.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+  })
+
+  it('closes the link modal without applying a link on Cancel', async () => {
+    render(NoteEditor, { props: {} })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Add link' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Insert link' })).not.toBeInTheDocument()
+    })
   })
 
   it('closes the link modal when escape is pressed', async () => {

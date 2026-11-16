@@ -19,6 +19,9 @@ Algunos caminos de red se disparan **automáticamente**, sin que los pidas expl�
 | Manuscritos de Escritura y su historial de versiones  | Se guardan localmente en la base de datos de la app.           |
 | Biblioteca (catálogo, texto y embeddings de obras de Zotero) | Se guarda localmente; no viaja con la sincronización.   |
 | Copias de seguridad                                   | Se escriben solo en la carpeta que elijas.                     |
+| Historial de procesos de cada documento               | Se guarda localmente; no viaja con la sincronización.          |
+| Conversaciones del chat de ayuda y su índice del manual | Se guardan localmente (historial en la carpeta de datos, índice en la caché); no viajan con la sincronización. |
+| Credenciales de los asistentes externos               | En el gestor de credenciales del sistema o en un archivo que solo tu usuario puede leer; registro de auditoría local. |
 | Archivos de modelos locales y dependencias de runtime (Pro) | Se guardan localmente en directorios de app/runtime.     |
 | API keys de proveedores y token de sesión de sincronización | Se guardan en el gestor de credenciales del sistema operativo, no en la base de la app ni en las copias de seguridad. |
 
@@ -44,7 +47,12 @@ Algunos caminos de red se disparan **automáticamente**, sin que los pidas expl�
 | Sincronización entre dispositivos | Servicio de sincronización de EntropIA, operado por HLab (`entropia-cloud.app.hlab.com.ar`) | Envía credenciales al registrar la cuenta o iniciar sesión, y las filas y archivos de lo que se sincroniza (ver abajo). |
 | Compartir un manuscrito           | El mismo servicio de sincronización                               | El manuscrito compartido, con sus imágenes, llega a la cuenta con la que lo compartiste.                                                                              |
 | Enviar a hlab.com.ar              | `hlab.com.ar`                                                     | Solo cuando lo pedís: el título y el texto del manuscrito, con la clave de publicación que guardaste.                                                                 |
-| Clave de la Web API de Zotero     | `api.zotero.org`                                                  | Solo si guardás una clave: la verifica y muestra sus permisos. Hoy solo la usa una función experimental que no viene activada en las versiones publicadas.            |
+| Clave de la Web API de Zotero     | `api.zotero.org`                                                  | Solo si guardás una clave: la verifica y muestra sus permisos; lee y escribe las anotaciones de los PDF de tu biblioteca personal (resaltados, comentarios) y, desde el Navegador, completa campos vacíos de un elemento al **Copiar a Zotero**. |
+| Servidor compatible con OpenAI (opcional) | La dirección que escribas en la tarjeta de OpenRouter    | Si la completás, el texto de las tareas de generación (corrección, resúmenes, relaciones, esquemas, Chat) va a ese servidor en lugar de OpenRouter, sin clave ni respaldo de Vercel. Un servidor local no saca nada del equipo. |
+| Navegador                         | Los sitios que visites                                            | Las páginas que abras y los PDF que descargues, como en cualquier navegador; no guarda cookies ni sesiones entre usos. |
+| Modelos locales de Pro            | Hugging Face (repositorios de los modelos)                        | Solo cuando pulsás su descarga (o un asistente la pide con `models_setup`): Parakeet TDT y el modelo de diarización, GLM-OCR local, Qwen3-VL, BGE-M3 y el reranker. Después corren sin conexión. |
+| Chat de ayuda (próxima versión)   | API de OpenRouter; GitHub y `hlab.com.ar`                         | Las preguntas que no se responden en el equipo, con los fragmentos del manual que el modelo consulta. Solo si marcás cada casilla: el diagnóstico saneado (versión, modos, claves como sí/no, últimos errores sin rutas ni textos entre comillas) y fragmentos de tus documentos. Para dudas fuera del manual puede leer el repositorio público en GitHub y la página de EntropIA en hlab.com.ar. El historial queda solo en este equipo. |
+| Asistentes externos (MCP)         | El asistente que conectes y su proveedor de IA                    | Apagado de entrada. EntropIA atiende solo en esta computadora (127.0.0.1 y, en Windows, una tubería con nombre de tu usuario). Lo que el asistente lee de tu archivo pasa a su conversación y a su proveedor (Anthropic, OpenAI u otro). Gastar, importar, reemplazar texto o borrar requiere tu aprobación. |
 | Lista de modelos de OpenRouter    | API de OpenRouter                                                 | Al probar la conexión o abrir un selector de modelo, pide el catálogo de modelos con tu clave.                                                                       |
 | Aviso de actualización (Lite en Windows) | Microsoft Store                                            | Consulta a la Store si hay una versión más nueva publicada. No descarga ni instala nada.                                                                              |
 | Links externos en la UI           | Navegador/handler del sistema                                     | Abre la URL seleccionada fuera de la app.                                                                                                                             |
@@ -59,7 +67,8 @@ La sincronización está **desactivada hasta que iniciás sesión**. Cuando la a
 - la conexión exige HTTPS;
 - el token de sesión se guarda en el gestor de credenciales del sistema operativo — llavero en Linux, Administrador de credenciales en Windows, Llavero en macOS — y no en la base de datos de la app;
 - el servicio recibe colecciones, documentos y sus archivos, textos, notas, tópicos, anotaciones, entidades, relaciones, resultados de IA, embeddings, conversaciones del Chat, manuscritos con sus imágenes y las investigaciones terminadas o fallidas, con la misma sensibilidad que tengan tus colecciones;
-- no recibe la Biblioteca, los esquemas propios, las preferencias, las colecciones de ejemplo ni las API keys.
+- también recibe el contexto para la IA de cada colección, los alias de entidades y la oración de origen de cada relación;
+- no recibe la Biblioteca, los esquemas propios, el historial de procesos, las conversaciones del chat de ayuda, los asistentes emparejados, las preferencias, las colecciones de ejemplo ni las API keys.
 
 Para cortar el camino remoto por completo, cerrá la sesión de sincronización. **Borrar mis datos del servidor**, en Configuración → Sincronización, elimina los datos remotos de tu cuenta y conserva los locales.
 
@@ -77,6 +86,7 @@ Las API keys de OpenRouter, Vercel AI Gateway, AssemblyAI, GLM-OCR, Zotero y la 
 - Quitá API keys de proveedores desde Configuración (botón **Quitar clave**) para deshabilitar esos caminos remotos. Sin API key de OpenRouter tampoco se genera el título automático de conversaciones ni se procesa la Biblioteca por significado; sin clave de Vercel no hay respaldo.
 - No sincronices bibliotecas de Zotero en la Biblioteca si no querés que el texto de sus obras se envíe a OpenRouter y GLM-OCR.
 - No marques entidades como lugar, o no las guardes, si no querés que su texto se consulte contra Nominatim.
+- Dejá apagado **Permitir asistentes externos** si no usás asistentes, revocá los que ya no uses, y en la ayuda no marques **Incluir diagnóstico** ni **Buscar en mis documentos** si no querés que esa información viaje a OpenRouter.
 - Cerrá la sesión de sincronización para que nada salga por ese camino.
 - Las copias de seguridad contienen todo tu archivo: guardalas en una carpeta protegida.
 - Eliminá el directorio local de datos de la app si querés borrar bases locales, logs, archivos de runtime y salidas generadas. Las API keys y el token de sincronización no viven ahí: se quitan desde Configuración o cerrando la sesión.

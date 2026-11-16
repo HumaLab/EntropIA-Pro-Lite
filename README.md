@@ -10,9 +10,9 @@ EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resulta
 
 |                         | **EntropIA Pro**                                        | **EntropIA Lite**                                                                                 |
 | ----------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| OCR                     | PaddleOCR local (Light) + PaddleOCR-VL o GLM-OCR (High) | GLM-OCR remoto (Light y High usan el mismo proveedor)                                             |
-| Transcripción           | faster-whisper local + AssemblyAI                       | AssemblyAI                                                                                        |
-| LLM / NER / RAG         | Gemma 4 local + OpenRouter; spaCy local para NER        | OpenRouter (Gemma 4 por defecto); Vercel AI Gateway como respaldo opcional                        |
+| OCR                     | PaddleOCR local con layout (Light) + PaddleOCR-VL, GLM-OCR local (GPU NVIDIA) o GLM-OCR remoto (High); corrector local Qwen3-VL | GLM-OCR remoto (Light y High usan el mismo proveedor)                                             |
+| Transcripción           | Parakeet TDT o faster-whisper locales (diarización opcional con Sortformer) + AssemblyAI | AssemblyAI                                                                                        |
+| LLM / NER / RAG         | Gemma 4 local + OpenRouter; spaCy local para NER; reranker BGE local | OpenRouter (Gemma 4 por defecto) o un servidor propio compatible con OpenAI; Vercel AI Gateway como respaldo opcional |
 | Embeddings              | BGE-M3 local (ONNX) + OpenRouter (`baai/bge-m3`)        | OpenRouter (`baai/bge-m3`)                                                                        |
 | Runtime ML nativo       | sí (se descarga solo al iniciar)                        | no                                                                                                |
 | Instalador              | Windows: NSIS + MSI · MSIX (Store, script local) · Linux: DEB (GitHub) | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: DMG universal (GitHub) · Linux: DEB (GitHub) |
@@ -24,7 +24,7 @@ EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resulta
 
 ## Guía rápida
 
-- **Manual de usuario**: [Manual de usuario](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html) — guía completa de uso, en español.
+- **Manual de usuario**: [Manual de usuario](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html) — guía completa de uso de Lite y Pro, en español y [en inglés](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.en.html). Dentro de la app, la burbuja de ayuda responde a partir de ese mismo manual.
 - **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`; Linux x64 (Ubuntu 22.04 o posterior): `.deb`. En ambos, el runtime local de IA se descarga solo al iniciar —un aviso muestra el avance y permite pausar o reintentar— y después se instalan solas las dependencias de IA. Disponibles en [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
 - **EntropIA Lite** — Windows x64: Microsoft Store (<https://apps.microsoft.com/detail/9N328K9L95JD>) o `.exe`/`.msi`; macOS (Apple Silicon e Intel): `.dmg` universal; Linux x64 (Ubuntu 22.04 o posterior): `.deb`. Todos en [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
   - **macOS**: requiere **macOS 13.3 Ventura o posterior** (la app usa el motor del sistema, y los PDF necesitan el de Safari 16.4 en adelante). El `.dmg` no está notarizado por Apple. La primera vez, macOS bloquea la apertura: abrí **Configuración del Sistema → Privacidad y seguridad** y tocá **Abrir de todos modos**.
@@ -48,7 +48,7 @@ pnpm install --frozen-lockfile
 
 ### Manual de usuario
 
-Las fuentes del manual (Markdown + generador) viven en `manual/`; se publican en GitHub Pages automáticamente vía `.github/workflows/manual-pages.yml`. Para regenerarlo en local: `python manual/manual-usuario/build_html.py --out _site` (requiere `pip install -r manual/manual-usuario/requirements.txt`).
+Las fuentes del manual (Markdown en español `*.md` e inglés `*.en.md`, más el generador) viven en `manual/`; se publican en GitHub Pages automáticamente vía `.github/workflows/manual-pages.yml`. Para regenerarlo en local: `python manual/manual-usuario/build_html.py --out _site` (requiere `pip install -r manual/manual-usuario/requirements.txt`).
 
 ### Correr y buildear cada variante
 
@@ -78,7 +78,7 @@ pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri
 > - Si querés correrlo desde la **raíz** sin hacer `cd`, usá `pnpm --filter @entropia-pro/desktop exec tauri ...`.
 > - Lite es el default lean de Cargo. No pases `--features local-ml` cuando uses `tauri.lite.conf.json`.
 > - En PowerShell `$env:VITE_LOCAL_ML` **persiste en la sesión** → seteálo en cada cambio de variante (o abrí terminal nueva). En bash va adelante: `VITE_LOCAL_ML=0 pnpm exec tauri …`.
-> - Lite usa `identifier com.entropia.lite` → **datos de app separados** de Pro (podés correr ambas sin pisarte).
+> - Lite usa `identifier com.entropia.lite` y Pro `com.entropia.pro.desktop` (instalaciones, accesos y entradas de desinstalación separadas), pero **las dos abren el mismo archivo** en `com.entropia.shared` (ver `src-tauri/src/path_utils.rs`): no las abras a la vez.
 > - `tauri build` de Lite genera el **`.exe` (NSIS) + `.msi`**; el **MSIX** final de Store sale del repack (ver _Release e instaladores_).
 > - Con el `runtime-pack` fixture commiteado, un `tauri build` de release de **Pro** (`--features local-ml`) para Windows/Linux exige definir las tres variables `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL`, `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID` y `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64` con los valores de [`.github/workflows/release.yml`](./.github/workflows/release.yml). **Lite no necesita ninguna**: sin `local-ml` el runtime se compila afuera y el guard de `build.rs` no corre. `tauri dev` tampoco las necesita.
 
@@ -100,19 +100,20 @@ Ambas variantes cubren los mismos flujos principales de investigación; cambia e
 
 - Inicio: vista de arranque con lo último retomable, el estado del corpus (OCR, embeddings, pendientes) y accesos rápidos a Colecciones, Chat, Investigación y Escritura. Un archivo nuevo trae tres colecciones de ejemplo con el análisis hecho, que no se sincronizan.
 - Organización de corpus en colecciones, ítems y assets locales (SQLite).
-- Ingesta de imágenes, PDFs y audio; importación de PDF públicos desde Internet Archive (búsqueda, colección o enlace, con verificación, deduplicación y reanudación); exportación de una colección a JSON (documentos, textos, notas, entidades, layout).
-- OCR Light + OCR High con persistencia de layout (bloques, regiones, páginas, bounding boxes).
-- Transcripción de audio.
-- Corrección, resumen y extracción semántica asistida por LLM.
-- Entidades, triples, NER, FTS y embeddings asset-level (RAG).
-- Procesamiento por lote: OCR, embeddings, entidades, tripletes y extracción con un esquema propio (tabla descargable como CSV) sobre colecciones enteras desde Configuración, en segundo plano, con prioridad, flujos guardados, reintentos por elemento y reanudación ante cierres o cortes.
+- Ingesta de imágenes, PDFs y audio, con el texto nativo de los PDF guardado al importar; importación desde Internet Archive de PDF e imágenes (búsqueda, colección o enlace; filtro por tipo de archivo, registros enteros y colas de toda una búsqueda importadas por tandas, con verificación, deduplicación y reanudación); exportación de una colección a JSON (documentos, textos, notas, entidades, layout) y de todo su texto a TXT, Markdown, PDF, Word o CSV.
+- OCR Light + OCR High con persistencia de layout (bloques, regiones, páginas, bounding boxes), corrección manual de cajas con reconocimiento por GLM-OCR, y registro del archivo del que salió cada layout y cada texto para avisar cuando corresponden a otra versión de la imagen.
+- Transcripción de audio, con renombrado de hablantes; nunca se pisa una transcripción o un texto corregidos a mano sin confirmar.
+- Corrección, resumen y extracción semántica asistida por LLM, con un contexto de proyecto por colección que leen el chat, la investigación, la corrección y el agente de redacción.
+- Entidades (con alias globales y sugerencias de unificación), triples con su oración de origen, NER, FTS y embeddings asset-level (RAG).
+- Procesamiento por lote: OCR (opcionalmente también sobre páginas con texto nativo), embeddings, entidades, tripletes, corrección OCR, resúmenes por página y extracción con un esquema propio (tabla descargable como CSV) sobre colecciones enteras desde Configuración, en segundo plano, con prioridad, flujos guardados, reintentos por elemento y reanudación ante cierres o cortes.
 - Notas, anotaciones y edición manual de resultados: entidades y triples se crean, editan y borran a mano, no solo se leen.
-- Estado por proceso sobre cada documento (indexado, embeddings, NER, triples), para ver qué ya corrió sin volver a lanzarlo.
-- Grafo 3D de las relaciones (tripletas) de una colección, con el detalle de cada nombre y los documentos de donde sale.
+- Estado por proceso sobre cada documento (indexado, embeddings, NER, triples), para ver qué ya corrió sin volver a lanzarlo, e historial de procesos auditable (herramienta, modelo, versiones y huellas SHA-256), exportable a JSON.
+- Versiones de cada imagen editada, con elección de la que se muestra y una revisión de mantenimiento para reparar las que no coinciden con su layout.
+- Grafo 3D de las relaciones (tripletas) de una colección, configurable (umbrales, representación y algoritmos de disposición), que abre cada relación resaltada en el texto y se exporta a GEXF para Gephi; frases frecuentes, colocaciones G² y árbol de palabras por colección.
 - Chat de investigación sobre el corpus, la Biblioteca o ambos, con título automático de cada conversación nueva y fuentes que abren el fragmento citado.
 - Investigación por etapas (agente) con modelo elegible, alcance de colecciones y/o Biblioteca, presupuesto y un informe con fuentes verificables.
 - Biblioteca: sincronización de bibliotecas de Zotero (catálogo, texto de PDF y capturas web, búsqueda híbrida por texto y significado), vista por obra y reprocesamiento del texto dañado con costo estimado.
-- Escritura: editor de manuscritos con esquema, panel de investigación y citas ancladas al corpus, a pasajes de la Biblioteca o a una biblioteca Zotero local (estilo CSL); agente de redacción asistido por IA que nunca escribe solo; historial de versiones con restauración; sincronización propia, manuscritos compartidos entre cuentas y envío al blog de hlab.com.ar; exportación a Markdown, HTML o Word con notas al pie y bibliografía.
+- Escritura: editor de manuscritos con esquema, panel de investigación y citas ancladas al corpus, a pasajes de la Biblioteca o a una biblioteca Zotero local (estilo CSL); agente de redacción asistido por IA que nunca escribe solo; historial de versiones con restauración completa o de un solo apartado; sincronización propia, manuscritos compartidos entre cuentas y envío al blog de hlab.com.ar; exportación a Markdown, HTML o Word con notas al pie y bibliografía.
 - Pestañas estilo navegador (hasta 4) y vista dividida de dos paneles, cada uno con su propia navegación.
 - Grilla de colecciones con paginación keyset y thumbnails generados para lo que se mira, no para todo lo cargado.
 - Panel lateral en árbol, con las colecciones paginadas de a tandas.
@@ -122,6 +123,8 @@ Ambas variantes cubren los mismos flujos principales de investigación; cambia e
 - Copias de seguridad de todo el archivo (base y archivos) a una carpeta elegida, a mano o diarias/semanales, conservando las últimas N.
 - Mantenimiento del archivo: migraciones aplicadas en Rust al iniciar, auditoría de triggers y vistas, y compactación al cerrar cuando conviene.
 - Aviso de actualización de Microsoft Store (Lite en Windows): detecta si hay una versión más nueva publicada y abre la ficha de la Store; no descarga ni instala nada por sí mismo.
+- Asistentes externos por MCP (Claude Code, Codex, OpenCode, Pi u otro): conexión de un clic o instrucción para cualquier asistente, diagnóstico `--check`, conector incluido en cada instalador, transporte local (loopback y, en Windows, named pipe del usuario) y aprobación en la app de todo lo que gasta, importa, reemplaza texto o borra. Ver [integrations/agents](./integrations/agents/README.md).
+- Chat de ayuda dentro de la app (próxima versión): responde desde el manual empaquetado, con respuestas locales para preguntas frecuentes, diagnóstico opcional y saneado, y las mismas herramientas MCP con aprobación.
 
 ## Cómo funciona el flag de variante
 

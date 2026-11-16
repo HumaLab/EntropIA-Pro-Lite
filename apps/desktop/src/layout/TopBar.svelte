@@ -10,7 +10,7 @@
   // Black on transparent, the 'e' only: hlab-mark.png is a white disc behind
   // the 'e', so as a mask it paints a full circle.
   import appMark from '../assets/entropia-mark.png'
-  import { ActionIcon, IconButton, SearchClearButton, StatusBadge } from '@entropia/ui'
+  import { ActionIcon, IconButton, SearchBar, StatusBadge } from '@entropia/ui'
   import type { Collection, Item } from '@entropia/store'
   import { bibliographySearchWorks, type BibliographySearchHit } from '$lib/bibliography-search'
   import type { LibraryEntry } from '$lib/writing-zotero'
@@ -421,37 +421,23 @@
   </div>
 
   <div class="global-search" bind:this={searchContainerEl} onfocusout={handleFocusOut}>
-    <div class="global-search__input-wrap">
-      <span class="search-field__icon" aria-hidden="true">
-        <ActionIcon name="search" size={16} />
-      </span>
-      <input
-        class="global-search__input"
-        type="text"
-        role="combobox"
-        aria-expanded={showResults}
-        aria-controls={searchListboxId}
-        aria-autocomplete="list"
-        aria-activedescendant={activeOptionId}
-        bind:value={searchQuery}
-        bind:this={searchInputEl}
-        placeholder={$currentLocale && translate('topbar.searchPlaceholder')}
-        aria-label={$currentLocale && translate('topbar.searchAria')}
-        oninput={(event: Event) =>
-          handleSearchValueChange((event.currentTarget as HTMLInputElement).value, event)}
-        onkeydown={handleKeydown}
-        onfocus={handleFocus}
-      />
-
-      {#if searchQuery}
-        <SearchClearButton
-          class="search-clear-button--overlay"
-          label={$currentLocale ? translate('topbar.searchClear') : 'Limpiar búsqueda'}
-          title={$currentLocale ? translate('topbar.searchClear') : 'Limpiar búsqueda'}
-          onclick={handleClear}
-        />
-      {/if}
-    </div>
+    <SearchBar
+      value={searchQuery}
+      role="combobox"
+      aria-expanded={showResults}
+      aria-controls={searchListboxId}
+      aria-autocomplete="list"
+      aria-activedescendant={activeOptionId}
+      placeholder={$currentLocale && translate('topbar.searchPlaceholder')}
+      ariaLabel={$currentLocale && translate('topbar.searchAria')}
+      clearAriaLabel={$currentLocale ? translate('topbar.searchClear') : 'Limpiar búsqueda'}
+      emitSearch={false}
+      inputRef={(element) => (searchInputEl = element)}
+      onvaluechange={handleSearchValueChange}
+      onclear={handleClear}
+      onkeydown={handleKeydown}
+      onfocus={handleFocus}
+    />
 
     {#if showResults}
       <div
@@ -540,11 +526,7 @@
 
   <div class="topbar__actions" data-tauri-drag-region>
     {#if LOCAL_ML && hasDepsWarning}
-      <StatusBadge
-        variant="warning"
-        size="sm"
-        class="topbar__deps-badge"
-        title="Dependencias de IA pendientes">IA</StatusBadge
+      <StatusBadge variant="warning" size="sm" title="Dependencias de IA pendientes">IA</StatusBadge
       >
     {/if}
 
@@ -690,9 +672,10 @@
       </IconButton>
 
       <IconButton
-        class="topbar__window-btn topbar__window-btn--close"
+        class="topbar__window-btn"
         size="sm"
         variant="ghost"
+        hoverTone="danger"
         label="Cerrar ventana"
         title="Cerrar ventana"
         onclick={closeWindow}
@@ -746,7 +729,7 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.02em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
     white-space: nowrap;
   }
@@ -791,22 +774,6 @@
     border-left: 1px solid var(--border-subtle);
   }
 
-  /* Size comes from IconButton's own `size="sm"` (--icon-button-size:
-     28px), not from here: this used to also set `width`/`height:
-     var(--control-height-sm)` (30px), but that never won against
-     IconButton's own scoped rule at equal specificity — dead code that
-     rendered nothing different from the size prop alone. */
-  :global(.topbar__window-btn) {
-    border-radius: var(--radius-sm);
-    color: var(--color-text-secondary);
-  }
-
-  :global(.topbar__window-btn--close:hover:not(:disabled)) {
-    border-color: color-mix(in srgb, var(--color-danger) 24%, transparent);
-    background: var(--color-danger-soft);
-    color: var(--color-danger);
-  }
-
   .topbar__window-glyph {
     display: block;
     width: 12px;
@@ -827,73 +794,36 @@
 
   .topbar__window-glyph--maximize {
     border: 1.5px solid currentColor;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
   }
 
-  /* Size comes from IconButton's own `size="md"` (--icon-button-size:
-     32px), not from here: this used to also set `width`/`height:
-     var(--control-height-sm)` (30px), but that never won against
-     IconButton's own scoped rule at equal specificity — dead code that
-     rendered nothing different from the size prop alone. */
-  :global(.topbar__icon-btn) {
-    border-radius: var(--radius-control);
-  }
-
+  /* Size and radius come from IconButton's own `size="md"`. This only
+     anchors the pending-dependencies dot below; it changes no look. */
   :global(.topbar__icon-btn--settings) {
     position: relative;
   }
 
-  :global(.topbar__deps-badge) {
-    min-height: 24px;
-    font-size: var(--font-size-2xs);
-  }
-
   .topbar__badge {
     position: absolute;
-    top: 4px;
-    right: 4px;
+    top: var(--space-1);
+    right: var(--space-1);
     width: 7px;
     height: 7px;
-    border-radius: 50%;
+    border-radius: var(--radius-full);
     background: var(--color-warning);
     border: 1.5px solid var(--surface-toolbar);
     pointer-events: none;
     animation: none;
   }
 
+  /* The bar is not selectable; the search inside it is. */
   .global-search {
     grid-area: search;
     justify-self: end;
     position: relative;
     width: min(100%, 320px);
     min-width: 0;
-  }
-
-  .global-search__input-wrap {
-    position: relative;
-  }
-
-  .global-search__input {
-    width: 100%;
     user-select: text;
-    min-height: var(--control-height-md);
-    padding: 0 calc(var(--space-4) + 18px) 0 var(--search-field-inset);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    transition:
-      border-color var(--transition-smooth),
-      box-shadow var(--transition-smooth),
-      background-color var(--transition-smooth);
-  }
-
-  .global-search__input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: var(--surface-panel);
   }
 
   .global-search__result:focus-visible {
@@ -913,7 +843,7 @@
     box-shadow: var(--shadow-lg);
     max-height: 320px;
     overflow-y: auto;
-    z-index: 200;
+    z-index: var(--z-dropdown);
   }
 
   .global-search__status {
@@ -981,7 +911,7 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-2xs);
     font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.02em;
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
   }
 

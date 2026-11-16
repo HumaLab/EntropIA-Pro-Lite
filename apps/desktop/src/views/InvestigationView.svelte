@@ -58,7 +58,17 @@
   } from '$lib/investigation-export'
   import type { ExportFormat } from '$lib/export-fidelity'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
-  import { tooltip, Button, IconButton, ActionIcon, StatusBadge, NumberField } from '@entropia/ui'
+  import {
+    tooltip,
+    Button,
+    IconButton,
+    ActionIcon,
+    StatusBadge,
+    NumberField,
+    Textarea,
+    Input,
+    Disclosure,
+  } from '@entropia/ui'
 
   const navigation = getNavigation()
   const paneId = getPaneId()
@@ -1193,31 +1203,27 @@
                     <span class="investigation-round__axis"
                       >{$currentLocale && t('investigation.design.hypothesis')}</span
                     >
-                    <textarea
-                      class="investigation-round__input"
-                      rows="2"
+                    <Textarea
+                      rows={2}
                       bind:value={designDraft.hypothesis}
-                      disabled={answeringRound}></textarea>
+                      disabled={answeringRound}
+                    />
                   </label>
                   <label class="investigation-round__field">
                     <span class="investigation-round__axis"
                       >{$currentLocale && t('investigation.design.scope')}</span
                     >
-                    <textarea
-                      class="investigation-round__input"
-                      rows="2"
-                      bind:value={designDraft.scope}
-                      disabled={answeringRound}></textarea>
+                    <Textarea rows={2} bind:value={designDraft.scope} disabled={answeringRound} />
                   </label>
                   <label class="investigation-round__field">
                     <span class="investigation-round__axis"
                       >{$currentLocale && t('investigation.design.criteriaEdit')}</span
                     >
-                    <textarea
-                      class="investigation-round__input"
-                      rows="3"
+                    <Textarea
+                      rows={3}
                       bind:value={designDraft.criteria}
-                      disabled={answeringRound}></textarea>
+                      disabled={answeringRound}
+                    />
                   </label>
                 {:else}
                   <dl class="report__framing-list">
@@ -1244,11 +1250,14 @@
               <label class="investigation-round__field">
                 <span class="investigation-round__axis">{question.axis}</span>
                 <span class="investigation-round__question">{question.text}</span>
-                <textarea
-                  class="investigation-round__input"
-                  rows="2"
-                  bind:value={clarificationDraft[question.id]}
-                  disabled={answeringRound}></textarea>
+                <Textarea
+                  rows={2}
+                  bind:value={
+                    () => clarificationDraft[question.id] ?? '',
+                    (text) => (clarificationDraft[question.id] = text)
+                  }
+                  disabled={answeringRound}
+                />
               </label>
             {/each}
             <Button
@@ -1292,21 +1301,21 @@
                 <span class="investigation-round__axis"
                   >{$currentLocale && t('investigation.planGate.queriesEdit')}</span
                 >
-                <textarea
-                  class="investigation-round__input"
-                  rows="5"
+                <Textarea
+                  rows={5}
                   bind:value={planDraft.queries}
-                  disabled={planActionInFlight !== null}></textarea>
+                  disabled={planActionInFlight !== null}
+                />
               </label>
               <label class="investigation-round__field">
                 <span class="investigation-round__axis"
                   >{$currentLocale && t('investigation.planGate.bibliographyEdit')}</span
                 >
-                <textarea
-                  class="investigation-round__input"
-                  rows="3"
+                <Textarea
+                  rows={3}
                   bind:value={planDraft.bibliography}
-                  disabled={planActionInFlight !== null}></textarea>
+                  disabled={planActionInFlight !== null}
+                />
               </label>
             </div>
           {:else}
@@ -1483,8 +1492,8 @@
                       <span class="investigation-round__axis"
                         >{$currentLocale && t('investigation.section.titleLabel')}</span
                       >
-                      <input
-                        class="investigation-round__input"
+                      <Input
+                        size="md"
                         bind:value={sectionEdit.title}
                         disabled={sectionActionInFlight !== null}
                       />
@@ -1493,11 +1502,11 @@
                       <span class="investigation-round__axis"
                         >{$currentLocale && t('investigation.section.textLabel')}</span
                       >
-                      <textarea
-                        class="investigation-round__input"
-                        rows="8"
+                      <Textarea
+                        rows={8}
                         bind:value={sectionEdit.text}
-                        disabled={sectionActionInFlight !== null}></textarea>
+                        disabled={sectionActionInFlight !== null}
+                      />
                     </label>
                   </div>
                 {:else}
@@ -1550,11 +1559,11 @@
                       <span class="investigation-round__axis"
                         >{$currentLocale && t('investigation.section.instructionLabel')}</span
                       >
-                      <textarea
-                        class="investigation-round__input"
-                        rows="3"
+                      <Textarea
+                        rows={3}
                         bind:value={sectionRewrite.instruction}
-                        disabled={sectionActionInFlight !== null}></textarea>
+                        disabled={sectionActionInFlight !== null}
+                      />
                     </label>
                     <p class="investigation-round__intro">
                       {$currentLocale && t('investigation.section.instructionHint')}
@@ -1647,12 +1656,14 @@
                     <li>
                       {limitacion.message}
                       {#if limitacion.detail}
-                        <details class="report__technical-detail">
-                          <summary
-                            >{$currentLocale && t('investigation.report.technicalDetail')}</summary
+                        <div class="report__technical-detail">
+                          <Disclosure
+                            size="sm"
+                            summary={$currentLocale && t('investigation.report.technicalDetail')}
                           >
-                          <code>{limitacion.detail}</code>
-                        </details>
+                            <code class="report__technical-code">{limitacion.detail}</code>
+                          </Disclosure>
+                        </div>
                       {/if}
                     </li>
                   {/each}
@@ -1961,17 +1972,17 @@
   }
 
   .investigation-chat__report :global(code) {
-    padding: 0.1em 0.35em;
+    padding: var(--space-0-5) var(--space-1);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-xs);
     background: var(--surface-toolbar);
     font-family: var(--font-mono);
-    font-size: 0.9em;
+    font-size: var(--font-size-xs);
   }
 
   .investigation-chat__report :global(strong) {
     color: var(--color-text-primary);
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
   }
 
   /* La advertencia usa el ámbar del sistema, pero como acento fino, no como
@@ -1995,8 +2006,8 @@
   .report__title {
     min-width: 0;
     margin: 0;
-    font-size: var(--font-size-lg, 1.25rem);
-    line-height: 1.3;
+    font-size: var(--font-size-lg);
+    line-height: var(--line-height-tight);
   }
 
   .report__download-notice {
@@ -2006,66 +2017,66 @@
 
   .report__label {
     margin: 0 0 var(--space-2);
-    font-size: var(--font-size-xs, 0.75rem);
-    font-weight: 500;
-    letter-spacing: 0.075em;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: var(--letter-spacing-caps);
     text-transform: uppercase;
-    color: var(--color-text-muted, inherit);
+    color: var(--color-text-muted);
   }
 
   .report__coverage,
   .report__framing,
   .report__query,
   .report__sources {
-    margin-bottom: var(--space-5, 1.5rem);
+    margin-bottom: var(--space-5);
   }
 
   .report__query-text {
     margin: 0;
-    font-size: var(--font-size-sm, 0.875rem);
-    font-weight: var(--font-weight-medium, 500);
-    color: var(--color-text-primary, inherit);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
   }
 
   .report__table {
     width: 100%;
     border-collapse: collapse;
-    font-size: var(--font-size-sm, 0.875rem);
+    font-size: var(--font-size-sm);
   }
 
   .report__table th,
   .report__table td {
     padding: var(--space-1) var(--space-2);
-    border-bottom: 1px solid var(--border-subtle, currentColor);
+    border-bottom: 1px solid var(--border-subtle);
     text-align: right;
   }
 
   .report__table th[scope='row'],
   .report__table th[scope='col']:first-child {
     text-align: left;
-    font-weight: 500;
+    font-weight: var(--font-weight-medium);
   }
 
   .report__table-total th,
   .report__table-total td {
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     border-bottom: none;
   }
 
   .report__bias {
     margin: var(--space-2) 0 0;
-    font-size: var(--font-size-xs, 0.75rem);
-    color: var(--color-text-muted, inherit);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
   }
 
   /* La advertencia de cobertura no es decorativa: dice qué no se pudo leer. */
   .report__warning {
-    margin-bottom: var(--space-5, 1.5rem);
+    margin-bottom: var(--space-5);
     padding: var(--space-3);
-    border-left: 3px solid var(--color-warning, currentColor);
-    border-radius: var(--radius-sm, 4px);
-    background: var(--surface-toolbar, transparent);
-    font-size: var(--font-size-sm, 0.875rem);
+    border-left: 3px solid var(--color-warning);
+    border-radius: var(--radius-sm);
+    background: var(--surface-toolbar);
+    font-size: var(--font-size-sm);
   }
 
   .report__warning p,
@@ -2080,19 +2091,19 @@
 
   .report__framing-list {
     margin: 0;
-    font-size: var(--font-size-sm, 0.875rem);
+    font-size: var(--font-size-sm);
   }
 
   .report__framing-list dt {
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     margin-top: var(--space-2);
   }
 
   .report__framing-list dd {
     margin: var(--space-1) 0 0;
     padding-left: var(--space-3);
-    border-left: 2px solid var(--border-subtle, currentColor);
-    color: var(--color-text-muted, inherit);
+    border-left: 2px solid var(--border-subtle);
+    color: var(--color-text-muted);
     white-space: pre-line;
   }
 
@@ -2101,31 +2112,26 @@
   }
 
   .report__section {
-    margin-bottom: var(--space-5, 1.5rem);
+    margin-bottom: var(--space-5);
   }
 
   .report__technical-detail {
     margin-top: var(--space-1);
-    font-size: var(--font-size-xs, 0.75rem);
-    color: var(--color-text-muted, inherit);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
   }
 
-  .report__technical-detail summary {
-    cursor: pointer;
-  }
-
-  .report__technical-detail code {
+  .report__technical-code {
     display: block;
-    margin-top: var(--space-1);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
 
   .report__section-mark {
     margin: 0 0 var(--space-2);
-    font-size: var(--font-size-xs, 0.75rem);
+    font-size: var(--font-size-xs);
     font-style: italic;
-    color: var(--color-text-muted, inherit);
+    color: var(--color-text-muted);
   }
 
   .report__section-actions {
@@ -2155,34 +2161,41 @@
     box-sizing: border-box;
     padding: var(--space-2) var(--space-3);
     border: 1px solid transparent;
-    border-left: 3px solid var(--border-subtle, currentColor);
-    border-radius: var(--radius-sm, 4px);
+    border-left: 3px solid var(--border-subtle);
+    border-radius: var(--radius-control);
     background: none;
     cursor: pointer;
     text-align: left;
     font: inherit;
     color: inherit;
     transition:
-      background-color 120ms ease,
-      border-color 120ms ease;
+      background-color var(--transition-base),
+      border-color var(--transition-base);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .report__quote,
+    .report__source {
+      transition: none;
+    }
   }
 
   .report__quote:hover,
   .report__source:hover {
-    background: var(--surface-toolbar, transparent);
-    border-color: var(--border-subtle, currentColor);
+    background: var(--surface-toolbar);
+    border-color: var(--border-subtle);
   }
 
   .report__quote:focus-visible,
   .report__source:focus-visible {
     outline: none;
-    box-shadow: var(--focus-ring, 0 0 0 2px currentColor);
+    box-shadow: var(--focus-ring);
   }
 
   /* El fragmento es literal: se muestra tal cual, con sus saltos de línea. */
   .report__quote-text {
     white-space: pre-line;
-    font-size: var(--font-size-sm, 0.875rem);
+    font-size: var(--font-size-sm);
   }
 
   .report__quote-meta,
@@ -2191,12 +2204,12 @@
     flex-wrap: wrap;
     align-items: baseline;
     gap: var(--space-2);
-    font-size: var(--font-size-xs, 0.75rem);
-    color: var(--color-text-muted, inherit);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
   }
 
   .report__quote-ref {
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     font-variant-numeric: tabular-nums;
   }
 
@@ -2216,12 +2229,12 @@
 
   .investigation-round__title {
     margin: 0 0 var(--space-1);
-    font-size: var(--font-size-md, 1rem);
+    font-size: var(--font-size-md);
   }
 
   .investigation-round__intro {
     margin: 0 0 var(--space-3);
-    color: var(--color-text-muted, inherit);
+    color: var(--color-text-muted);
   }
 
   .investigation-round {
@@ -2239,14 +2252,14 @@
   }
 
   .investigation-round__axis {
-    font-size: var(--font-size-xs, 0.75rem);
+    font-size: var(--font-size-xs);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--color-text-muted, inherit);
+    letter-spacing: var(--letter-spacing-caps);
+    color: var(--color-text-muted);
   }
 
   .investigation-round__question {
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
   }
 
   .investigation-design {
@@ -2256,7 +2269,7 @@
     align-items: start;
     width: 100%;
     padding-bottom: var(--space-3);
-    border-bottom: 1px solid var(--border-subtle, currentColor);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .investigation-design h4 {
@@ -2274,7 +2287,7 @@
 
   .investigation-plan__list {
     margin: 0;
-    padding-left: var(--space-5, 1.5rem);
+    padding-left: var(--space-5);
   }
 
   .investigation-plan__actions {
@@ -2282,17 +2295,6 @@
     flex-wrap: wrap;
     gap: var(--space-2);
     margin-top: var(--space-3);
-  }
-
-  .investigation-round__input {
-    width: 100%;
-    resize: vertical;
-    padding: var(--space-2);
-    border: 1px solid var(--color-border, currentColor);
-    border-radius: var(--radius-sm, 4px);
-    background: var(--color-surface, transparent);
-    color: inherit;
-    font: inherit;
   }
 
   .investigation-view__toolbar {
@@ -2313,7 +2315,7 @@
 
   .investigation-chat__message {
     padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-surface);
   }
 
   .investigation-chat__message--user {
@@ -2367,7 +2369,7 @@
     color: var(--color-text-secondary);
   }
 
-  @media (max-width: 820px) {
+  @container pane (max-width: 820px) {
     .investigation-view__toolbar {
       justify-content: start;
     }
@@ -2378,8 +2380,8 @@
     align-items: end;
     gap: var(--space-3);
     padding: var(--space-3);
-    border: 1px solid var(--color-border, currentColor);
-    border-radius: var(--radius-sm, 4px);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
   }
 
   .investigation-budget .investigation-round__field {

@@ -223,7 +223,6 @@
               <p class="note-date note-date--inline">{formatNoteDate(note.createdAt)}</p>
               <div class="note-actions">
                 <IconButton
-                  class="note-action-button note-action-button--edit"
                   variant="ghost"
                   size="sm"
                   label={translate('item.editNote')}
@@ -235,8 +234,8 @@
                   <ActionIcon name="edit" />
                 </IconButton>
                 <IconButton
-                  class="note-action-button note-action-button--delete"
                   variant="ghost"
+                  hoverTone="danger"
                   size="sm"
                   label={translate('item.deleteNote')}
                   onclick={(event) => {
@@ -355,12 +354,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--color-text-primary);
-    line-height: 1.35;
+    line-height: var(--line-height-tight);
   }
 
   .note-content {
     color: var(--color-text-primary);
-    line-height: 1.6;
+    line-height: var(--line-height-reading);
     word-break: break-word;
   }
 
@@ -402,7 +401,7 @@
     background: color-mix(in srgb, var(--color-border) 65%, transparent);
     border-radius: var(--radius-sm);
     padding: 0.1rem 0.3rem;
-    font-size: 0.95em;
+    font-size: var(--font-size-code-inline);
   }
 
   .note-content--rich :global(pre) {
@@ -437,42 +436,6 @@
     margin-top: 0;
     align-items: center;
     justify-self: end;
-  }
-
-  :global(.icon-button.note-action-button) {
-    --icon-button-size: 1.75rem;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    box-shadow: none;
-    color: var(--color-text-muted);
-    transition:
-      color var(--transition-base),
-      opacity var(--transition-base);
-  }
-
-  :global(.note-action-button:hover) {
-    background: transparent;
-    box-shadow: none;
-    transform: none;
-  }
-
-  :global(.note-action-button--edit) {
-    color: var(--color-text-secondary);
-  }
-
-  :global(.note-action-button--edit:hover) {
-    color: var(--color-text-primary);
-    opacity: 1;
-  }
-
-  :global(.note-action-button--delete) {
-    color: var(--color-text-muted);
-    opacity: 0.9;
-  }
-
-  :global(.note-action-button--delete:hover) {
-    color: var(--color-danger);
-    opacity: 1;
   }
 
   .note-edit {

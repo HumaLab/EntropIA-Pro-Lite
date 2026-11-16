@@ -12,7 +12,10 @@
   --scrollbar-thumb-active: color-mix(in srgb, var(--color-text-primary) 32%, transparent);
 }
 
-:root[data-theme='light'] {
+/* Every light page: the default track above is a white wash for dark ones. */
+:root[data-theme='light'],
+:root[data-theme='lite'],
+:root[data-theme='paper'] {
   --scrollbar-track: rgba(0, 0, 0, 0.02);
   --scrollbar-thumb: rgba(0, 0, 0, 0.1);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.2);
@@ -76,7 +79,7 @@ body {
   border-radius: var(--scrollbar-radius);
   background: var(--scrollbar-thumb);
   background-clip: padding-box;
-  transition: background-color 0.18s ease;
+  transition: background-color var(--duration-smooth) ease;
 }
 
 *:hover::-webkit-scrollbar-thumb {
@@ -120,7 +123,7 @@ h2,
 h3 {
   font-family: var(--font-ui);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.025em;
+  letter-spacing: var(--letter-spacing-heading);
 }
 
 h1 {
@@ -165,7 +168,7 @@ p {
 .settings-view__sticky-header {
   position: sticky;
   top: 0;
-  z-index: 20;
+  z-index: var(--z-sticky);
   padding: var(--space-5) var(--space-4) var(--space-4);
   margin-block-end: var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
@@ -184,7 +187,7 @@ p {
 .page-header__eyebrow {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
-  letter-spacing: 0.075em;
+  letter-spacing: var(--letter-spacing-caps);
   text-transform: uppercase;
   color: var(--color-text-muted);
 }
@@ -262,29 +265,8 @@ p {
 }
 
 /* ── Search fields ────────────────────────────────────────────────────────
-   One treatment for every field that searches, taken from the SearchBar
-   component: a magnifier on the leading edge, sized 16 and drawn in the
-   secondary text colour.
-
-   The icon is positioned rather than added to the flow, so a field keeps
-   whatever markup it already has — each of these wraps is already relative
-   for its trailing clear button. `--search-field-inset` is the padding the
-   input owes the icon; it is one value so the gap never drifts per screen. */
-:root {
-  --search-field-icon-size: 16px;
-  --search-field-inset: calc(var(--space-3) + var(--search-field-icon-size) + var(--space-2));
-}
-
-.search-field__icon {
-  position: absolute;
-  inset-inline-start: var(--space-3);
-  top: 50%;
-  transform: translateY(-50%);
-  display: inline-flex;
-  color: var(--color-text-secondary);
-  opacity: 0.9;
-  pointer-events: none;
-}
+   Every field that searches is a SearchBar, which draws its own magnifier
+   and clear button. */
 
 /* Safety net: WebView2 draws a blue native "x" in every `type="search"` input.
    Search fields go through SearchBar, which draws the shared clear button; this

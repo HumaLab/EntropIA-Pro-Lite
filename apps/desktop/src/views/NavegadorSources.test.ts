@@ -539,3 +539,12 @@ describe('saved sources in English', () => {
     expect(within(panel).getByRole('button', { name: 'Delete source' })).toBeInTheDocument()
   })
 })
+
+// Step 27 (R8): the kind chips of a source are StatusBadge.
+describe('saved sources chips', () => {
+  it('draws the kinds of a source as StatusBadge', async () => {
+    await openDrawer()
+    const alpha = await within(drawer()).findByRole('button', { name: /Title of alpha/ })
+    expect(within(alpha).getByText('Página')).toHaveClass('status-badge', 'status-badge--neutral')
+  })
+})

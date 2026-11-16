@@ -36,7 +36,15 @@
   import { APP_VERSION, GITHUB_REPO_URL, PRODUCT_NAME_BADGE } from '$lib/product'
   import { watchSplitFit } from '$lib/resize-split-fit'
   import { clampSplitRatio } from '$lib/split-ratio'
-  import { tooltip, TooltipLayer, ActionIcon, Button, IconButton, StatusBadge } from '@entropia/ui'
+  import {
+    tooltip,
+    TooltipLayer,
+    ActionIcon,
+    Button,
+    IconButton,
+    SearchBar,
+    StatusBadge,
+  } from '@entropia/ui'
   import DocumentExplorer from './DocumentExplorer.svelte'
   import TopBar from './TopBar.svelte'
   import EntropicConstellation from './EntropicConstellation.svelte'
@@ -143,6 +151,7 @@
       newCollection: t('appshell.sidebarNewCollection'),
       filter: t('appshell.sidebarFilterCollections'),
       filterPlaceholder: t('appshell.sidebarFilterCollectionsPlaceholder'),
+      filterClear: t('collections.searchClear'),
       drawer: t('appshell.explorerDrawerAria'),
       closeDrawer: t('appshell.explorerDrawerClose'),
     }
@@ -664,7 +673,6 @@
         <div class="sidebar__toolbar">
           <!-- Toggle sidebar; in split view it opens the drawer in the active pane -->
           <IconButton
-            class="sidebar__tool"
             size="sm"
             variant="ghost"
             label={explorerExpanded ? sidebarLabels.collapse : sidebarLabels.expand}
@@ -696,7 +704,6 @@
     {#snippet explorerTools()}
       <!-- New collection -->
       <IconButton
-        class="sidebar__tool"
         size="sm"
         variant="ghost"
         label={sidebarLabels.newCollection}
@@ -708,26 +715,33 @@
 
       <!-- Search / filter -->
       {#if searchExpanded}
-        <input
-          bind:this={searchInputEl}
-          class="sidebar__search-input"
-          type="text"
-          placeholder={sidebarLabels.filterPlaceholder}
-          bind:value={searchFilter}
-          onblur={collapseSearch}
-          onkeydown={(e) => {
-            if (e.key === 'Escape') {
-              // Handled here: the drawer must not also close on this Escape.
-              e.preventDefault()
+        <div class="sidebar__search">
+          <SearchBar
+            size="sm"
+            value={searchFilter}
+            placeholder={sidebarLabels.filterPlaceholder}
+            clearAriaLabel={sidebarLabels.filterClear}
+            emitSearch={false}
+            inputRef={(element) => (searchInputEl = element)}
+            onvaluechange={(query) => (searchFilter = query)}
+            onclear={() => {
               searchFilter = ''
-              searchExpanded = false
-            }
-          }}
-        />
+              searchInputEl?.focus()
+            }}
+            onblur={collapseSearch}
+            onkeydown={(e) => {
+              if (e.key === 'Escape') {
+                // Handled here: the drawer must not also close on this Escape.
+                e.preventDefault()
+                searchFilter = ''
+                searchExpanded = false
+              }
+            }}
+          />
+        </div>
       {:else}
         <div class="sidebar__toolbar-spacer"></div>
         <IconButton
-          class="sidebar__tool"
           size="sm"
           variant="ghost"
           label={sidebarLabels.filter}
@@ -806,29 +820,29 @@
               {/if}
             </div>
             {#if shouldShowRuntimeRepairAction(runtimeStatus)}
-              <button class="deps-banner__btn" type="button" onclick={handleRuntimeRepair}>
-                <ActionIcon name="wrench" size={16} />
+              <Button variant="secondary" size="sm" onclick={handleRuntimeRepair}>
+                <ActionIcon name="wrench" size={14} />
                 Reparar runtime
-              </button>
+              </Button>
             {/if}
             {#if isBootstrapDownloading}
-              <button
-                class="deps-banner__btn"
-                type="button"
+              <Button
+                variant="secondary"
+                size="sm"
                 onclick={handleBootstrapCancel}
                 disabled={bootstrapBusy}
               >
                 Pausar descarga
-              </button>
+              </Button>
             {:else if showBootstrapRetry}
-              <button
-                class="deps-banner__btn"
-                type="button"
+              <Button
+                variant="secondary"
+                size="sm"
                 onclick={handleBootstrapRetry}
                 disabled={bootstrapBusy}
               >
                 Reintentar descarga
-              </button>
+              </Button>
             {/if}
           </div>
         {/if}
@@ -847,20 +861,20 @@
               Algunas funciones de IA no están disponibles.
             </span>
             {#if showDepsInstallRetry}
-              <button
-                class="deps-banner__btn"
-                type="button"
+              <Button
+                variant="secondary"
+                size="sm"
                 onclick={handleDepsInstallRetry}
                 disabled={depsInstallBusy}
               >
-                <ActionIcon name="rotate-cw" size={16} />
+                <ActionIcon name="rotate-cw" size={14} />
                 Reintentar instalación
-              </button>
+              </Button>
             {/if}
-            <button class="deps-banner__btn" type="button" onclick={goToDepSettings}>
-              <ActionIcon name="settings" size={16} />
+            <Button variant="secondary" size="sm" onclick={goToDepSettings}>
+              <ActionIcon name="settings" size={14} />
               Configurar dependencias
-            </button>
+            </Button>
           </div>
         {/if}
       {/if}
@@ -903,7 +917,6 @@
                 <div class="sidebar__toolbar">
                   {@render explorerTools()}
                   <IconButton
-                    class="sidebar__tool"
                     size="sm"
                     variant="ghost"
                     label={sidebarLabels.closeDrawer}
@@ -928,9 +941,7 @@
   {#key activeLocale}
     <footer class="statusbar" data-locale={activeLocale}>
       <div class="statusbar__left">
-        <StatusBadge variant="neutral" size="sm" class="statusbar__badge"
-          >{PRODUCT_NAME_BADGE}</StatusBadge
-        >
+        <StatusBadge variant="neutral" size="xs">{PRODUCT_NAME_BADGE}</StatusBadge>
         <span class="statusbar__sep">·</span>
         <span>{APP_VERSION}</span>
         <span class="statusbar__sep">·</span>
@@ -1002,7 +1013,7 @@
     display: flex;
     align-items: center;
     gap: 1px;
-    padding: 3px 4px;
+    padding: 3px var(--space-1);
     border-bottom: 1px solid var(--border-subtle);
     background: color-mix(in srgb, var(--surface-toolbar) 78%, transparent);
     flex-shrink: 0;
@@ -1010,43 +1021,17 @@
 
   .sidebar--collapsed .sidebar__toolbar {
     flex-direction: column;
-    padding: 4px 3px;
+    padding: var(--space-1) 3px;
   }
 
   .sidebar__toolbar-spacer {
     flex: 1;
   }
 
-  :global(.sidebar__tool) {
-    border-radius: var(--radius-sm);
-    color: var(--color-text-muted);
-  }
-
-  :global(.sidebar__tool:hover:not(:disabled)) {
-    background: var(--color-accent-faint);
-  }
-
-  .sidebar__search-input {
+  /* The filter takes the room the spacer leaves when it is closed. */
+  .sidebar__search {
     flex: 1;
     min-width: 0;
-    height: 26px;
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-xs);
-    outline: none;
-    transition: border-color var(--transition-base);
-  }
-
-  .sidebar__search-input:focus {
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-  }
-
-  .sidebar__search-input::placeholder {
-    color: var(--color-text-muted);
   }
 
   .sidebar__body {
@@ -1161,7 +1146,7 @@
        1300) — `.content__pane`'s `isolation: isolate` above keeps this
        comparison scoped to the pane instead of leaking either way (visual
        round 3, item 2: this used to be z-index: 2, below the header). */
-    z-index: 25;
+    z-index: var(--z-drawer);
     display: flex;
     flex-direction: column;
     max-width: 85%;
@@ -1201,7 +1186,7 @@
     display: flex;
     flex: 1 1 16rem;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
     min-width: 0;
   }
 
@@ -1228,9 +1213,9 @@
     margin-inline: var(--space-5);
     margin-bottom: var(--space-4);
     padding: var(--space-3);
-    border: 1px solid rgba(245, 158, 11, 0.32);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
     border-radius: var(--radius-md);
-    background: rgba(245, 158, 11, 0.08);
+    background: var(--color-warning-soft);
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
   }
@@ -1238,7 +1223,7 @@
   .deps-banner__copy {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--space-0-5);
   }
 
   .deps-banner__copy strong {
@@ -1257,7 +1242,7 @@
     height: 6px;
     overflow: hidden;
     border-radius: var(--radius-sm);
-    background: rgba(245, 158, 11, 0.18);
+    background: color-mix(in srgb, var(--color-warning) 30%, transparent);
   }
 
   .deps-banner__bar-fill {
@@ -1273,25 +1258,6 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-  }
-
-  .deps-banner__btn {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex-shrink: 0;
-    padding: var(--space-1) var(--space-3);
-    border: 1px solid rgba(245, 158, 11, 0.5);
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-warning);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-    transition: background-color var(--transition-base);
-  }
-
-  .deps-banner__btn:hover {
-    background: rgba(245, 158, 11, 0.12);
   }
 
   /* ── Status bar (compact, replaces footer) ── */
@@ -1314,7 +1280,6 @@
     font-size: var(--font-size-sm);
     color: var(--color-text-muted);
     flex-shrink: 0;
-    letter-spacing: 0.02em;
   }
 
   .statusbar__left,
@@ -1378,12 +1343,5 @@
 
   .statusbar__link b {
     font-weight: var(--font-weight-semibold);
-  }
-
-  :global(.statusbar__badge) {
-    min-height: 18px;
-    padding: 0 var(--space-2);
-    font-size: calc(0.58rem + 3px);
-    letter-spacing: 0.04em;
   }
 </style>
