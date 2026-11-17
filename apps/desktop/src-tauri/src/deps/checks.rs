@@ -66,6 +66,17 @@ pub async fn probe_one(
     dep: &crate::deps::registry::DependencySpec,
     python_path: &Path,
 ) -> DependencyStatus {
+    probe_one_with_reason(dep, python_path).await.0
+}
+
+/// [`probe_one`] plus why it did not pass: the last line of the probe's
+/// stderr (e.g. `DLL load failed ... Acceso denegado`). A failed check after
+/// an install that succeeded used to report only "No se pudo confirmar", and
+/// the cause of R5 stayed invisible in the UI and the log.
+pub async fn probe_one_with_reason(
+    dep: &crate::deps::registry::DependencySpec,
+    python_path: &Path,
+) -> (DependencyStatus, Option<String>) {
     let mut cmd = Command::new(python_path);
     #[cfg(windows)]
     {
@@ -82,14 +93,16 @@ pub async fn probe_one(
         Ok(Ok(output)) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.trim().contains("ok") {
-                DependencyStatus::Installed { version: None }
+                (DependencyStatus::Installed { version: None }, None)
             } else {
-                DependencyStatus::Missing
+                (DependencyStatus::Missing, None)
             }
         }
-        // Non-zero exit or I/O error from spawn
-        Ok(_) => DependencyStatus::Missing,
-        // Timeout
+        Ok(Ok(output)) => (
+            DependencyStatus::Missing,
+            last_stderr_line(&String::from_utf8_lossy(&output.stderr)),
+        ),
+        Ok(Err(error)) => (DependencyStatus::Missing, Some(error.to_string())),
         Err(_) => {
             log::warn!(
                 target: "deps/checks",
@@ -97,9 +110,22 @@ pub async fn probe_one(
                 dep.display_name,
                 python_path.display()
             );
-            DependencyStatus::Missing
+            (
+                DependencyStatus::Missing,
+                Some(format!("timeout ({PROBE_TIMEOUT_SECS} s)")),
+            )
         }
     }
+}
+
+/// The line of a Python traceback that names the error, bounded for a UI
+/// message.
+fn last_stderr_line(stderr: &str) -> Option<String> {
+    stderr
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .map(|line| line.chars().take(300).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +550,17 @@ fn probe_runtime_capabilities(path: &Path) -> RuntimeCapabilities {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// R5: the reason a probe gives is the error line, not the traceback head.
+    #[test]
+    fn probe_reason_is_the_last_traceback_line() {
+        let stderr = "Traceback (most recent call last):\r\n  File \"<string>\", line 1, in <module>\r\nImportError: DLL load failed while importing numpy_ops: Acceso denegado.\r\n\r\n";
+        assert_eq!(
+            last_stderr_line(stderr).as_deref(),
+            Some("ImportError: DLL load failed while importing numpy_ops: Acceso denegado.")
+        );
+        assert_eq!(last_stderr_line("  \n"), None);
+    }
 
     fn in_memory_conn() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().expect("in-memory SQLite");

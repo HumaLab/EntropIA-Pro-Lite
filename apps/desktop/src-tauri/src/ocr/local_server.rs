@@ -174,6 +174,13 @@ fn start(
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_err));
+    // llama-server reads these as its own flags. A user's `LLAMA_API_KEY`
+    // (set for some other Llama tool) made it demand a key the app never
+    // sends: every local correction answered HTTP 401. The app owns this
+    // server's configuration, so none of them may reach it.
+    for name in llama_server_env_overrides(std::env::vars_os().map(|(name, _)| name)) {
+        cmd.env_remove(name);
+    }
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -220,6 +227,19 @@ fn start(
         STARTUP_TIMEOUT.as_secs(),
         log_tail(&log_path)
     ))
+}
+
+/// The inherited variables llama-server would read as configuration:
+/// `LLAMA_API_KEY` and every `LLAMA_ARG_*` (port, context, host...).
+fn llama_server_env_overrides(
+    names: impl Iterator<Item = std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    names
+        .filter(|name| {
+            let name = name.to_string_lossy().to_ascii_uppercase();
+            name == "LLAMA_API_KEY" || name.starts_with("LLAMA_ARG_")
+        })
+        .collect()
 }
 
 fn stop(running: &mut RunningServer) {
@@ -310,6 +330,23 @@ fn kill_stale_server(db_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn llama_server_never_inherits_its_own_configuration_variables() {
+        let names = [
+            "LLAMA_API_KEY",
+            "LLAMA_ARG_PORT",
+            "llama_arg_ctx_size",
+            "LLAMA_BASE_URL",
+            "OPENROUTER_API_KEY",
+            "PATH",
+        ]
+        .map(std::ffi::OsString::from);
+        assert_eq!(
+            llama_server_env_overrides(names.into_iter()),
+            ["LLAMA_API_KEY", "LLAMA_ARG_PORT", "llama_arg_ctx_size"].map(std::ffi::OsString::from)
+        );
+    }
 
     #[test]
     fn only_a_200_status_line_is_healthy() {
