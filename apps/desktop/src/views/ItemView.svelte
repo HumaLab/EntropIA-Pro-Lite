@@ -128,7 +128,8 @@
     llmRestoreOriginalOcrAsset,
     llmExtractTriplesAsset,
     llmIsAvailable,
-    llmOcrCorrectionIsAvailable,
+    llmOcrCorrectionEngine,
+    type OcrCorrectionEngine,
     llmGetResult,
     llmGetResults,
   } from '$lib/llm'
@@ -849,7 +850,7 @@
   let llmTick = $state(0)
 
   let llmAvailable = $state(false)
-  let ocrCorrectionAvailable = $state(false)
+  let ocrCorrectionEngine = $state<OcrCorrectionEngine | null>(null)
   let summaryTexts = $state(new Map<string, string>()) // assetId → summary text
   let summaryTick = $state(0) // reactivity trigger for summary display
 
@@ -3434,12 +3435,12 @@
         llmAvailable = false
       })
 
-    llmOcrCorrectionIsAvailable()
-      .then((available) => {
-        ocrCorrectionAvailable = available
+    llmOcrCorrectionEngine()
+      .then((engine) => {
+        ocrCorrectionEngine = engine
       })
       .catch(() => {
-        ocrCorrectionAvailable = false
+        ocrCorrectionEngine = null
       })
 
     geoStore
@@ -3900,7 +3901,7 @@
               transcriptionEditedText={textPanelTranscriptionEditedText}
               llmState={textPanelLlmState}
               {llmAvailable}
-              {ocrCorrectionAvailable}
+              {ocrCorrectionEngine}
               localOcrAvailable={LOCAL_ML}
               isOcrCorrected={selectedAsset ? ocrCorrectedAssets.has(selectedAsset.id) : false}
               ocrEditingDisabled={correctingOcrAssetId === selectedAsset?.id ||

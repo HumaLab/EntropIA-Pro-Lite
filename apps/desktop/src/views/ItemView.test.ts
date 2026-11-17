@@ -9,6 +9,7 @@ import { workspace } from '$lib/workspace'
 import type { View } from '$lib/navigation'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
 import { DOCUMENT_ASSET_DELETED_EVENT } from '$lib/document-explorer'
+import type { OcrCorrectionEngine } from '$lib/llm'
 
 const {
   nlpEventHandlers,
@@ -30,7 +31,7 @@ const {
   assetFileFactsMock,
   clipboardWriteTextMock,
   llmIsAvailableMock,
-  llmOcrCorrectionIsAvailableMock,
+  llmOcrCorrectionEngineMock,
   invokeMock,
   emitMock,
   duplicateAssetFileMock,
@@ -76,7 +77,7 @@ const {
   ),
   clipboardWriteTextMock: vi.fn<(_: string) => Promise<void>>(),
   llmIsAvailableMock: vi.fn<() => Promise<boolean>>(),
-  llmOcrCorrectionIsAvailableMock: vi.fn<() => Promise<boolean>>(),
+  llmOcrCorrectionEngineMock: vi.fn<() => Promise<OcrCorrectionEngine>>(),
   invokeMock: vi.fn<(_: string, __?: unknown) => Promise<unknown>>(async (command: string) => {
     if (command === 'llm_get_results') return []
     if (command === 'llm_get_result') return null
@@ -404,7 +405,7 @@ vi.mock('$lib/llm', async () => {
   return {
     ...actual,
     llmIsAvailable: llmIsAvailableMock,
-    llmOcrCorrectionIsAvailable: llmOcrCorrectionIsAvailableMock,
+    llmOcrCorrectionEngine: llmOcrCorrectionEngineMock,
     llmGetResults: llmGetResultsMock,
     llmSummarize: vi.fn().mockResolvedValue(undefined),
     llmExtractTriples: llmExtractTriplesMock,
@@ -585,7 +586,12 @@ beforeEach(() => {
   })
   clipboardWriteTextMock.mockReset().mockResolvedValue(undefined)
   llmIsAvailableMock.mockReset().mockResolvedValue(true)
-  llmOcrCorrectionIsAvailableMock.mockReset().mockResolvedValue(true)
+  llmOcrCorrectionEngineMock.mockReset().mockResolvedValue({
+    available: true,
+    local: false,
+    tool: 'OpenRouter API',
+    model: 'google/gemini-2.5-flash-lite',
+  })
   llmCorrectOcrAssetMock.mockReset().mockResolvedValue(undefined)
   llmGetResultsMock.mockReset().mockResolvedValue([])
   llmCanRestoreOriginalOcrAssetMock.mockReset().mockResolvedValue(false)
@@ -5944,8 +5950,13 @@ describe('ItemView processing labels by asset type', () => {
     expect(screen.queryByRole('button', { name: 'PDFR' })).not.toBeInTheDocument()
   })
 
-  it('shows OCRC disabled when the remote correction provider is unavailable', async () => {
-    llmOcrCorrectionIsAvailableMock.mockResolvedValue(false)
+  it('shows OCRC disabled when no correction engine is available', async () => {
+    llmOcrCorrectionEngineMock.mockResolvedValue({
+      available: false,
+      local: false,
+      tool: null,
+      model: null,
+    })
     await renderTextTabForAsset('image')
 
     expect(screen.getByRole('button', { name: 'OCRC' })).toBeDisabled()

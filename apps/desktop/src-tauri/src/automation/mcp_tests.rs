@@ -1161,8 +1161,8 @@ async fn processing_prepare_takes_correction_and_summaries_and_documents_them() 
     let harness = harness().await;
     let (id, token) = harness.pair("Claude Code");
     harness.grant(&id, true, false);
-    // The key is what the prepare gate asks for in every variant: correction is
-    // always remote (`force_remote_ocr_correction`). `app_settings` lives outside
+    // The key is what the prepare gate asks for in every variant: it treats
+    // correction as remote (`is_always_remote`). `app_settings` lives outside
     // the migrated schema, as the app creates it.
     let conn = crate::db::open::open_archive_connection(&harness.db_path()).unwrap();
     conn.execute_batch(

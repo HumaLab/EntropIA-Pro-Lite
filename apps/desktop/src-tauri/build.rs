@@ -161,7 +161,7 @@ const APP_COMMANDS: &[&str] = &[
     "llm_can_restore_original_ocr_asset",
     "llm_restore_original_ocr_asset",
     "llm_is_available",
-    "llm_ocr_correction_is_available",
+    "llm_ocr_correction_engine",
     "llm_local_model_info",
     "llm_open_models_dir",
     "llm_download_model",

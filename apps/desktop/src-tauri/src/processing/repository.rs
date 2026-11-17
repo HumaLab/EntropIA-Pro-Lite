@@ -8524,6 +8524,7 @@ mod tests {
                     &super::super::ocr_correction::CorrectionComputeOutput {
                         expected_extraction: original.clone(),
                         corrected: "Texto nativo corregido.".to_string(),
+                        engine: None,
                     },
                 )
             },

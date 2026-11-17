@@ -154,7 +154,7 @@
     "allow-llm-can-restore-original-ocr-asset",
     "allow-llm-restore-original-ocr-asset",
     "allow-llm-is-available",
-    "allow-llm-ocr-correction-is-available",
+    "allow-llm-ocr-correction-engine",
     "allow-llm-local-model-info",
     "allow-llm-open-models-dir",
     "allow-llm-download-model",

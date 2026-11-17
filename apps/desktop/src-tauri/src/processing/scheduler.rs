@@ -1145,6 +1145,7 @@ mod tests {
             &EngineOutput::Correction(crate::processing::ocr_correction::CorrectionComputeOutput {
                 expected_extraction: "texto original del OCR".to_string(),
                 corrected: "Texto original del OCR.".to_string(),
+                engine: None,
             }),
         )
         .expect("a correction publishes");

@@ -257,9 +257,17 @@ export function llmIsAvailable(): Promise<boolean> {
   return invoke<boolean>('llm_is_available')
 }
 
-/** Check if the remote provider required by asset-level OCR correction is configured. */
-export function llmOcrCorrectionIsAvailable(): Promise<boolean> {
-  return invoke<boolean>('llm_ocr_correction_is_available')
+/** The engine OCR correction would use right now; `available` gates the OCRC button. */
+export interface OcrCorrectionEngine {
+  available: boolean
+  /** True when the text stays on this machine (local Qwen3-VL). */
+  local: boolean
+  tool: string | null
+  model: string | null
+}
+
+export function llmOcrCorrectionEngine(): Promise<OcrCorrectionEngine> {
+  return invoke<OcrCorrectionEngine>('llm_ocr_correction_engine')
 }
 
 /** Detailed status of the local GGUF model file. */

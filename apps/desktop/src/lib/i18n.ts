@@ -2616,6 +2616,8 @@ const es = {
   'item.ocrHighBusyTitle': 'Extracción en progreso…',
   'item.ocrCorrectTitle': 'Corrección OCR',
   'item.ocrCorrectUnavailable': 'Configurá OpenRouter o instalá el corrector local',
+  'item.ocrCorrectEngineLocal': 'corre en este equipo con {model}',
+  'item.ocrCorrectEngineRemote': 'envía el texto a {tool} ({model})',
   'item.ocrCorrectNeedsText': 'Extraé texto primero',
   'item.llmUnavailableHint':
     'Corrección, resumen y triples requieren OpenRouter. Configuralo en Configuración.',
@@ -6098,6 +6100,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.ocrHighBusyTitle': 'Extraction in progress…',
   'item.ocrCorrectTitle': 'OCR correction',
   'item.ocrCorrectUnavailable': 'Configure OpenRouter or install the local corrector',
+  'item.ocrCorrectEngineLocal': 'runs on this computer with {model}',
+  'item.ocrCorrectEngineRemote': 'sends the text to {tool} ({model})',
   'item.ocrCorrectNeedsText': 'Extract text first',
   'item.llmUnavailableHint':
     'Correction, summary, and triples require OpenRouter. Configure it in Settings.',

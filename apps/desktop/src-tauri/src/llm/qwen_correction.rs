@@ -2,9 +2,9 @@
 //!
 //! Upstream OCRC is remote-only ("no local vision path"). With local Qwen
 //! assets installed the app has a local vision model that follows the shared
-//! correction prompt faithfully, so correction falls back to it when no
-//! OpenRouter key is configured. Remote stays preferred whenever a key
-//! exists: bigger context window, no truncation surprises.
+//! correction prompt faithfully. Routing lives in
+//! [`super::correct_ocr_for_asset_blocking`]: outside `llm_mode = openrouter`
+//! this corrector is preferred whenever it is installed (R21).
 //!
 /// The prompt is the same `GenerationFlow::OcrCorrection` text the remote flow
 /// sends (plus the page image when the asset has one); a repetition penalty
@@ -217,6 +217,7 @@ pub(crate) fn correct_ocr_via_local_qwen(
     Ok(AssetCorrectionRun {
         expected_extraction,
         corrected,
+        engine: super::CorrectionEngine::local_qwen(qwen_local::MODEL_FILENAME),
     })
 }
 

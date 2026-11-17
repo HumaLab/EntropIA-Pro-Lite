@@ -845,6 +845,8 @@ fn persist_result(
 struct JobExecutionOutput {
     output: String,
     ocr_extraction_snapshot: Option<String>,
+    /// The engine that ran a correction job; `None` for every other job.
+    correction_engine: Option<CorrectionEngine>,
 }
 
 fn persist_generated_job_output(
@@ -861,6 +863,9 @@ fn persist_generated_job_output(
                     .ok_or_else(|| {
                         "OCR correction completion is missing its extraction snapshot".to_string()
                     })?;
+            let engine = generated.correction_engine.as_ref().ok_or_else(|| {
+                "OCR correction completion is missing the engine that ran it".to_string()
+            })?;
             let corrected = ocr_correction::commit_asset_correction_if_current(
                 conn,
                 asset_id,
@@ -869,16 +874,11 @@ fn persist_generated_job_output(
             )?;
             crate::asset_history::record_best_effort(
                 conn,
-                &llm_history_event(
-                    conn,
-                    asset_id,
-                    crate::asset_history::PROCESS_OCR_CORRECTION,
-                    generation::GenerationFlow::OcrCorrection,
-                )
-                .input_sha256(Some(crate::asset_history::sha256_hex(
-                    expected_extraction.as_bytes(),
-                )))
-                .output_text(&corrected),
+                &ocr_correction_history_event(conn, asset_id, engine)
+                    .input_sha256(Some(crate::asset_history::sha256_hex(
+                        expected_extraction.as_bytes(),
+                    )))
+                    .output_text(&corrected),
             );
             Ok(corrected)
         }
@@ -905,11 +905,12 @@ fn persist_completed_job_output(
     job: &LlmJob,
     output: &str,
 ) -> Result<String, String> {
-    let ocr_extraction_snapshot = match job {
-        LlmJob::CorrectOcrAsset { asset_id } => {
-            Some(text_provider::get_asset_text(conn, asset_id)?)
-        }
-        _ => None,
+    let (ocr_extraction_snapshot, correction_engine) = match job {
+        LlmJob::CorrectOcrAsset { asset_id } => (
+            Some(text_provider::get_asset_text(conn, asset_id)?),
+            Some(CorrectionEngine::remote("test/model".to_string(), false)),
+        ),
+        _ => (None, None),
     };
     persist_generated_job_output(
         conn,
@@ -917,6 +918,7 @@ fn persist_completed_job_output(
         &JobExecutionOutput {
             output: output.to_string(),
             ocr_extraction_snapshot,
+            correction_engine,
         },
     )
 }
@@ -1345,6 +1347,30 @@ pub(crate) fn llm_history_event(
     event.params(params)
 }
 
+/// The history row of one OCR correction, stamped from the engine that
+/// actually ran it (R21). Built from the `llm_mode` setting it claimed local
+/// processing for text that had been sent to OpenRouter.
+pub(crate) fn ocr_correction_history_event(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    engine: &CorrectionEngine,
+) -> crate::asset_history::ProcessEvent {
+    let remote = generation::generation_config_from_settings(
+        conn,
+        generation::GenerationFlow::OcrCorrection,
+    );
+    crate::asset_history::ProcessEvent::new(
+        asset_id,
+        crate::asset_history::PROCESS_OCR_CORRECTION,
+        engine.tool,
+    )
+    .model(engine.model.clone())
+    .params(serde_json::json!({
+        "local": engine.local,
+        "maxTokens": remote.params.max_tokens,
+    }))
+}
+
 /// UTF-16 span (end exclusive) of `evidence` in `text`, matching words exactly
 /// and any run of whitespace as any other. `None` when it does not occur, so a
 /// reader never highlights a wrong span.
@@ -1458,6 +1484,42 @@ pub(crate) fn require_openrouter_key(conn: &rusqlite::Connection) -> Result<Stri
     Ok(key)
 }
 
+/// The engine that produced an OCR correction: what the history row and the
+/// log name, never what the settings suggest (R21).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CorrectionEngine {
+    pub tool: &'static str,
+    pub model: String,
+    /// True when the text never left this machine.
+    pub local: bool,
+}
+
+impl CorrectionEngine {
+    pub const TOOL_OPENROUTER: &'static str = "OpenRouter API";
+    pub const TOOL_CUSTOM_ENDPOINT: &'static str = "Servidor compatible con OpenAI";
+    pub const TOOL_LOCAL_QWEN: &'static str = "Qwen3-VL local (llama-server)";
+
+    pub(crate) fn remote(model: String, custom_endpoint: bool) -> Self {
+        Self {
+            tool: if custom_endpoint {
+                Self::TOOL_CUSTOM_ENDPOINT
+            } else {
+                Self::TOOL_OPENROUTER
+            },
+            model,
+            local: false,
+        }
+    }
+
+    pub(crate) fn local_qwen(model: &str) -> Self {
+        Self {
+            tool: Self::TOOL_LOCAL_QWEN,
+            model: model.to_string(),
+            local: true,
+        }
+    }
+}
+
 /// One per-asset OCR correction run outside the LLM queue.
 pub(crate) struct AssetCorrectionRun {
     /// The extraction the prompt was built from: the commit gate refuses a
@@ -1465,12 +1527,103 @@ pub(crate) struct AssetCorrectionRun {
     pub(crate) expected_extraction: String,
     /// The model's corrected text, not yet committed.
     pub(crate) corrected: String,
+    pub(crate) engine: CorrectionEngine,
 }
 
-/// Runs the per-asset OCR correction outside the LLM queue (the batch
-/// executor's thread). Always remote, exactly like the per-document command
-/// (`force_remote_ocr_correction`): OCRC has no local vision path, in Pro as
-/// well. Blocks: never call it from inside the async runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OcrCorrectionRoute {
+    Remote,
+    LocalQwen,
+}
+
+const OCR_CORRECTION_NO_ENGINE: &str =
+    "OpenRouter API key no configurada. Andá a Configuración para agregarla.";
+
+/// Where an OCR correction runs (R21). `llm_mode = openrouter` sends it to
+/// the remote model; any other mode prefers the local Qwen corrector and
+/// goes remote only when Qwen is not installed. Without a remote key or
+/// endpoint the local corrector is the only path, whatever the mode.
+fn choose_ocr_correction_route(
+    llm_mode: &str,
+    local_available: bool,
+    remote_configured: bool,
+) -> Result<OcrCorrectionRoute, String> {
+    let prefer_local = llm_mode != "openrouter";
+    match (prefer_local, local_available, remote_configured) {
+        (true, true, _) | (false, true, false) => Ok(OcrCorrectionRoute::LocalQwen),
+        (_, _, true) => Ok(OcrCorrectionRoute::Remote),
+        _ => Err(OCR_CORRECTION_NO_ENGINE.to_string()),
+    }
+}
+
+/// The `llm_mode` OCR correction routes by: Lite has no local engine.
+fn ocr_correction_llm_mode(conn: &rusqlite::Connection) -> String {
+    if cfg!(feature = "local-ml") {
+        settings::get_setting(conn, "llm_mode").unwrap_or_else(|| "local".to_string())
+    } else {
+        "openrouter".to_string()
+    }
+}
+
+fn local_ocr_correction_available(_app_handle: &AppHandle, _db_path: &std::path::Path) -> bool {
+    #[cfg(feature = "paddle-ocr")]
+    return qwen_correction::local_correction_available_for(_app_handle, _db_path);
+    #[cfg(not(feature = "paddle-ocr"))]
+    false
+}
+
+/// What the OCRC button shows before running: the engine a correction would
+/// use right now, without starting anything.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OcrCorrectionEnginePreview {
+    pub available: bool,
+    pub local: bool,
+    pub tool: Option<String>,
+    pub model: Option<String>,
+}
+
+pub(crate) fn preview_ocr_correction_engine(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+) -> Result<OcrCorrectionEnginePreview, String> {
+    let conn = crate::db::open::open_archive_connection(db_path)?;
+    let custom_endpoint = resolve_custom_endpoint(&conn)?.is_some();
+    let remote_configured = custom_endpoint || require_openrouter_key(&conn).is_ok();
+    let local_available = local_ocr_correction_available(app_handle, db_path);
+    let route = choose_ocr_correction_route(
+        &ocr_correction_llm_mode(&conn),
+        local_available,
+        remote_configured,
+    );
+    let engine = match route {
+        Ok(OcrCorrectionRoute::LocalQwen) => Some(CorrectionEngine::local_qwen(LOCAL_QWEN_MODEL)),
+        Ok(OcrCorrectionRoute::Remote) => Some(CorrectionEngine::remote(
+            generation::generation_config_from_settings(
+                &conn,
+                generation::GenerationFlow::OcrCorrection,
+            )
+            .model,
+            custom_endpoint,
+        )),
+        Err(_) => None,
+    };
+    Ok(OcrCorrectionEnginePreview {
+        available: engine.is_some(),
+        local: engine.as_ref().is_some_and(|engine| engine.local),
+        tool: engine.as_ref().map(|engine| engine.tool.to_string()),
+        model: engine.map(|engine| engine.model),
+    })
+}
+
+#[cfg(feature = "paddle-ocr")]
+const LOCAL_QWEN_MODEL: &str = crate::ocr::qwen_local::MODEL_FILENAME;
+#[cfg(not(feature = "paddle-ocr"))]
+const LOCAL_QWEN_MODEL: &str = "";
+
+/// Runs one per-asset OCR correction: the single path behind the per-page
+/// button (through the LLM queue) and the batch executor, so both route by
+/// the same rule and report the engine that ran. Blocks: never call it from
+/// inside the async runtime.
 pub(crate) fn correct_ocr_for_asset_blocking(
     app_handle: &AppHandle,
     db_path: &std::path::Path,
@@ -1481,26 +1634,22 @@ pub(crate) fn correct_ocr_for_asset_blocking(
     };
     let conn = crate::db::open::open_archive_connection(db_path)?;
     // A custom OpenAI-compatible endpoint (local vLLM/Ollama) needs no API
-    // key and bypasses the local-Qwen fallback: the user pointed remote
-    // traffic at their own server on purpose.
+    // key: the user pointed remote traffic at their own server on purpose.
     let custom_endpoint = resolve_custom_endpoint(&conn)?;
-    // No remote key: correct on the local Qwen server when available,
-    // instead of failing like every other remote-only job.
-    if custom_endpoint.is_none() && require_openrouter_key(&conn).is_err() {
+    let api_key = require_openrouter_key(&conn).ok();
+    let route = choose_ocr_correction_route(
+        &ocr_correction_llm_mode(&conn),
+        local_ocr_correction_available(app_handle, db_path),
+        custom_endpoint.is_some() || api_key.is_some(),
+    )?;
+    if route == OcrCorrectionRoute::LocalQwen {
+        drop(conn);
+        log::info!(target: "llm-local", "OCRC {asset_id}: local Qwen3-VL");
         #[cfg(feature = "paddle-ocr")]
-        if qwen_correction::local_correction_available_for(app_handle, db_path) {
-            drop(conn);
-            return qwen_correction::correct_ocr_via_local_qwen(app_handle, db_path, asset_id);
-        }
-        return Err(
-            "OpenRouter API key no configurada. Andá a Configuración para agregarla.".to_string(),
-        );
+        return qwen_correction::correct_ocr_via_local_qwen(app_handle, db_path, asset_id);
+        #[cfg(not(feature = "paddle-ocr"))]
+        unreachable!("no local corrector is compiled without paddle-ocr");
     }
-    let api_key = if custom_endpoint.is_some() {
-        String::new()
-    } else {
-        require_openrouter_key(&conn)?
-    };
     let request = prepare_remote_job_request(
         &conn,
         &job,
@@ -1513,52 +1662,26 @@ pub(crate) fn correct_ocr_for_asset_blocking(
     let expected_extraction = request.ocr_extraction_snapshot.clone().ok_or_else(|| {
         "OCR correction completion is missing its extraction snapshot".to_string()
     })?;
-    let client = OpenRouterClient::new(api_key, request.generation.model.clone())
-        .with_custom_endpoint(custom_endpoint);
+    let engine =
+        CorrectionEngine::remote(request.generation.model.clone(), custom_endpoint.is_some());
+    log::info!(
+        target: "llm",
+        "OCRC {asset_id}: {} ({})",
+        engine.tool,
+        engine.model
+    );
+    let client = OpenRouterClient::new(
+        api_key.unwrap_or_default(),
+        request.generation.model.clone(),
+    )
+    .with_custom_endpoint(custom_endpoint);
     let generated =
         tauri::async_runtime::block_on(execute_remote_job_request(&client, &request, app_handle))?;
     Ok(AssetCorrectionRun {
         expected_extraction,
         corrected: generated.output,
+        engine,
     })
-}
-
-/// Local Qwen fallback for OCRC when no remote key exists.
-///
-/// Returns `Some` output only for correction jobs with local assets installed
-/// (or any build without the local engine compiled in: always `None`). The
-/// caller keeps its remote-key error otherwise.
-#[cfg_attr(not(feature = "paddle-ocr"), allow(unused_variables))]
-async fn local_qwen_correction_fallback(
-    app_handle: &AppHandle,
-    db_path: &std::path::Path,
-    job: &LlmJob,
-) -> Option<JobExecutionOutput> {
-    #[cfg(feature = "paddle-ocr")]
-    if let LlmJob::CorrectOcrAsset { asset_id } = job {
-        let handle = app_handle.clone();
-        let path = db_path.to_path_buf();
-        let asset = asset_id.clone();
-        let outcome = tokio::task::spawn_blocking(move || {
-            qwen_correction::correct_ocr_via_local_qwen(&handle, &path, &asset)
-        })
-        .await;
-        match outcome {
-            Ok(Ok(run)) => {
-                return Some(JobExecutionOutput {
-                    output: run.corrected,
-                    ocr_extraction_snapshot: Some(run.expected_extraction),
-                });
-            }
-            Ok(Err(error)) => {
-                log::warn!(target: "llm-local", "Local Qwen correction failed, keeping remote error: {error}");
-            }
-            Err(error) => {
-                log::warn!(target: "llm-local", "Local Qwen correction panicked: {error}");
-            }
-        }
-    }
-    None
 }
 
 /// The same for a page summary: the local engine or OpenRouter, chosen by the
@@ -1706,19 +1829,6 @@ impl LlmQueue {
         self.is_openrouter_configured()
     }
 
-    /// OCRC runs remote when an OpenRouter key exists, otherwise on the local
-    /// Qwen3-VL server when its assets are installed.
-    pub fn is_ocr_correction_available(&self) -> bool {
-        if self.is_openrouter_api_key_configured() {
-            return true;
-        }
-        #[cfg(feature = "paddle-ocr")]
-        if qwen_correction::local_correction_available(&self.db_path, None) {
-            return true;
-        }
-        false
-    }
-
     /// Report local availability without loading Gemma. Existing models are
     /// usable, and the default model can still auto-download on first local job.
     fn local_model_can_initialize(&self) -> bool {
@@ -1739,14 +1849,6 @@ impl LlmQueue {
         if mode != "openrouter" && mode != "auto" {
             return false;
         }
-        self.is_openrouter_api_key_configured_with_conn(&conn)
-    }
-
-    fn is_openrouter_api_key_configured(&self) -> bool {
-        let conn = match crate::db::open::open_archive_connection(&self.db_path) {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
         self.is_openrouter_api_key_configured_with_conn(&conn)
     }
 
@@ -1836,16 +1938,14 @@ impl LlmQueue {
                         continue;
                     }
                 };
-                let force_remote_ocr_correction = matches!(&job, LlmJob::CorrectOcrAsset { .. });
                 #[cfg(feature = "local-ml")]
                 let local_can_initialize = local_model_can_initialize_from_conn(&conn, &db_path);
                 #[cfg(feature = "local-ml")]
-                let use_openrouter = force_remote_ocr_correction
-                    || match llm_mode.as_str() {
-                        "openrouter" => true,
-                        "auto" => engine.is_none() && !local_can_initialize && !api_key.is_empty(),
-                        _ => false, // "local" or unknown
-                    };
+                let use_openrouter = match llm_mode.as_str() {
+                    "openrouter" => true,
+                    "auto" => engine.is_none() && !local_can_initialize && !api_key.is_empty(),
+                    _ => false, // "local" or unknown
+                };
                 // Without the local engine there is no local path; every job must
                 // go through OpenRouter, so force the remote selector on.
                 #[cfg(not(feature = "local-ml"))]
@@ -1854,28 +1954,35 @@ impl LlmQueue {
 
                 emit_progress(&app_handle, &id, job_name, 10);
 
-                let result = if use_openrouter {
+                let result = if let LlmJob::CorrectOcrAsset { asset_id } = &job {
+                    // One routing rule for the button and the batch (R21).
+                    let handle = app_handle.clone();
+                    let path = db_path.clone();
+                    let asset = asset_id.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        correct_ocr_for_asset_blocking(&handle, &path, &asset)
+                    })
+                    .await
+                    {
+                        Ok(Ok(run)) => Ok(JobExecutionOutput {
+                            output: run.corrected,
+                            ocr_extraction_snapshot: Some(run.expected_extraction),
+                            correction_engine: Some(run.engine),
+                        }),
+                        Ok(Err(error)) => Err(error),
+                        Err(error) => Err(format!("OCR correction panicked: {error}")),
+                    }
+                } else if use_openrouter {
                     // OpenRouter remote path
 
                     if custom_endpoint.is_none() && api_key.is_empty() {
-                        match local_qwen_correction_fallback(&app_handle, &db_path, &job).await {
-                            Some(generated) => {
-                                log::info!(
-                                    target: "llm-local",
-                                    "Running job '{job_name}' for {id} via local Qwen (no remote key)"
-                                );
-                                Ok(generated)
-                            }
-                            None => {
-                                emit_error(
-                                    &app_handle,
-                                    &id,
-                                    job_name,
-                                    "OpenRouter API key no configurada. Andá a Configuración para agregarla.",
-                                );
-                                continue;
-                            }
-                        }
+                        emit_error(
+                            &app_handle,
+                            &id,
+                            job_name,
+                            "OpenRouter API key no configurada. Andá a Configuración para agregarla.",
+                        );
+                        continue;
                     } else {
                         log::info!(
                             target: log_target(&job_log_prefix),
@@ -2611,6 +2718,7 @@ fn process_job(
     Ok(JobExecutionOutput {
         output,
         ocr_extraction_snapshot,
+        correction_engine: None,
     })
 }
 
@@ -2789,6 +2897,7 @@ async fn execute_remote_job_request(
     Ok(JobExecutionOutput {
         output,
         ocr_extraction_snapshot: request.ocr_extraction_snapshot.clone(),
+        correction_engine: None,
     })
 }
 
@@ -3047,6 +3156,76 @@ pub(crate) fn prepare_remote_job_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R21: Pro honours `llm_mode` for OCRC; a key no longer silently wins.
+    #[test]
+    fn ocr_correction_routes_by_llm_mode_and_installed_qwen() {
+        use OcrCorrectionRoute::{LocalQwen, Remote};
+        for (mode, local, remote, expected) in [
+            ("local", true, true, Some(LocalQwen)),
+            ("auto", true, true, Some(LocalQwen)),
+            ("local", false, true, Some(Remote)),
+            ("openrouter", true, true, Some(Remote)),
+            ("openrouter", true, false, Some(LocalQwen)),
+            ("openrouter", false, false, None),
+            ("local", false, false, None),
+        ] {
+            assert_eq!(
+                choose_ocr_correction_route(mode, local, remote).ok(),
+                expected,
+                "mode={mode} local={local} remote={remote}"
+            );
+        }
+        let error = choose_ocr_correction_route("local", false, false).expect_err("no engine");
+        assert!(
+            matches!(
+                crate::processing::ner::map_remote_llm_error(&error, "ocr_correction_failed"),
+                crate::processing::scheduler::ExecOutput::Blocked { .. }
+            ),
+            "no engine parks a batch unit instead of failing it"
+        );
+    }
+
+    /// R21: the history names the engine that ran, whatever `llm_mode` says.
+    #[test]
+    fn ocr_correction_history_names_the_engine_that_ran() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO app_settings (key, value) VALUES ('llm_mode', 'local');",
+        )
+        .expect("settings");
+        let remote = ocr_correction_history_event(
+            &conn,
+            "a1",
+            &CorrectionEngine::remote("google/gemini-2.5-flash-lite".to_string(), false),
+        );
+        assert_eq!(remote.tool, "OpenRouter API");
+        assert_eq!(
+            remote.model.as_deref(),
+            Some("google/gemini-2.5-flash-lite")
+        );
+        assert_eq!(remote.params.as_ref().unwrap()["local"], false);
+
+        let custom = ocr_correction_history_event(
+            &conn,
+            "a1",
+            &CorrectionEngine::remote("my-model".to_string(), true),
+        );
+        assert_eq!(custom.tool, CorrectionEngine::TOOL_CUSTOM_ENDPOINT);
+
+        let local = ocr_correction_history_event(
+            &conn,
+            "a1",
+            &CorrectionEngine::local_qwen("Qwen3VL-4B-Instruct-Q4_K_M.gguf"),
+        );
+        assert_eq!(local.tool, CorrectionEngine::TOOL_LOCAL_QWEN);
+        assert_eq!(
+            local.model.as_deref(),
+            Some("Qwen3VL-4B-Instruct-Q4_K_M.gguf")
+        );
+        assert_eq!(local.params.as_ref().unwrap()["local"], true);
+    }
 
     #[test]
     fn triples_carry_the_optional_evidence_sentence() {

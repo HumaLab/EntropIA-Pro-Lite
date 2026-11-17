@@ -1710,7 +1710,7 @@ pub fn run() {
             llm::commands::llm_can_restore_original_ocr_asset,
             llm::commands::llm_restore_original_ocr_asset,
             llm::commands::llm_is_available,
-            llm::commands::llm_ocr_correction_is_available,
+            llm::commands::llm_ocr_correction_engine,
             llm::commands::llm_local_model_info,
             llm::commands::llm_open_models_dir,
             llm::commands::llm_download_model,
