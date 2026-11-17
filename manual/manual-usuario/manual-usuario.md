@@ -264,7 +264,7 @@ Las cuentas de proveedores y la cuenta de sincronización son independientes. El
 - **Linux:** las claves se guardan en el llavero del sistema (gnome-keyring o KWallet); en instalaciones mínimas, instalá `gnome-keyring` y creá un llavero predeterminado.
 - **Windows:** los instaladores de GitHub no están firmados; SmartScreen muestra «Windows protegió tu PC» y se continúa con **Más información → Ejecutar de todos modos**. La versión de Microsoft Store (Lite) sí está firmada.
 
-Lite y Pro abren **el mismo archivo** de trabajo (la carpeta `com.entropia.shared`, ver [17.3](#copias-de-seguridad)): si instalás las dos en el mismo equipo, o pasás de una a otra, ves las mismas colecciones, documentos y manuscritos. Cerrá una antes de abrir la otra.
+Lite y Pro abren **el mismo archivo** de trabajo (la carpeta `com.entropia.shared`, ver [17.3](#copias-de-seguridad)): si instalás las dos en el mismo equipo, o pasás de una a otra, ves las mismas colecciones, documentos y manuscritos. Cerrá una antes de abrir la otra. También comparten los ajustes: si abrís Pro sobre un archivo que configuró Lite, **Inicio** muestra una vez **Este archivo usa servicios en la nube** y ofrece pasar a local el dictado y, con GPU NVIDIA, el OCRH y la IA de texto. **Usar los motores locales** los cambia; **Seguir con la nube** los deja como están. Los embeddings no se ofrecen: cambiar de proveedor recalcula todo el archivo. Cualquier modo se puede cambiar después en **Configuración → APIs remotas**.
 
 ### 2.2. Preparar una sesión de trabajo segura
 

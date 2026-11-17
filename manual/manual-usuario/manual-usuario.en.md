@@ -264,7 +264,7 @@ Provider accounts and the sync account are independent. Remote services may have
 - **Linux:** keys are stored in the system keyring (gnome-keyring or KWallet); on minimal installations, install `gnome-keyring` and create a default keyring.
 - **Windows:** the GitHub installers are not signed; SmartScreen shows "Windows protected your PC" and you continue with **More info → Run anyway**. The Microsoft Store version (Lite) is signed.
 
-Lite and Pro open **the same archive** (the `com.entropia.shared` folder, see [17.3](#copias-de-seguridad)): if you install both on the same computer, or switch from one to the other, you see the same collections, documents and manuscripts. Close one before opening the other.
+Lite and Pro open **the same archive** (the `com.entropia.shared` folder, see [17.3](#copias-de-seguridad)): if you install both on the same computer, or switch from one to the other, you see the same collections, documents and manuscripts. Close one before opening the other. They also share the settings: if you open Pro on an archive Lite configured, **Home** shows **This archive uses cloud services** once and offers to switch dictation to local and, with an NVIDIA GPU, OCRH and text AI too. **Use the local engines** switches them; **Stay on the cloud** leaves them as they are. Embeddings are not offered: changing the provider recomputes the whole archive. Any mode can be changed later in **Settings → Remote APIs**.
 
 ### 2.2. Prepare a safe working session
 

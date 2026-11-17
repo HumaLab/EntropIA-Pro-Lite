@@ -945,6 +945,7 @@
 - «Error al actualizar la colección» `collections.error.update`
 - «Fallado» `research.status.failed`
 - «La búsqueda de pasajes falló.» `bibliography.passagesNotice.failed`
+- «No se pudieron cambiar los modos: {error}» `home.localModes.failed`
 - «No se pudieron cargar las colecciones» `collections.error.load`
 - «No se pudieron cargar las obras.» `biblioteca.error`
 - «No se pudieron cargar los documentos de ejemplo: {error}» `home.firstRun.sampleFailed`
@@ -1137,6 +1138,17 @@
 - «No se pudieron cargar las colecciones»
 - «Nombre de la colección»
 - «Nombre de la nueva colección»
+
+### localModes
+
+- «Dictado y transcripción con Parakeet, en lugar de AssemblyAI»
+- «Este archivo usa servicios en la nube»
+- «IA de texto con el modelo local, en lugar de OpenRouter»
+- «Los modelos se descargan desde Configuración → APIs remotas. Podés volver a la nube cuando quieras.»
+- «OCRH con GLM-OCR local, en lugar de la API de GLM-OCR»
+- «Seguir con la nube»
+- «Usar los motores locales»
+- «Viene configurado desde EntropIA Lite. EntropIA Pro puede hacer esto en este equipo, sin enviar el contenido afuera:»
 
 ### quickAccess
 

@@ -36,6 +36,7 @@ mod image_versions;
 mod instance_guard;
 mod internet_archive;
 mod llm;
+mod local_modes_offer;
 mod logging;
 mod navegador;
 mod nlp;
@@ -1683,6 +1684,7 @@ pub fn run() {
             ocr::commands::qwen_correction_local_info,
             ocr::commands::qwen_correction_download_models,
             ocr::commands::llama_server_download,
+            local_modes_offer::local_modes_offer,
             ocr::commands::update_extraction_text_cmd,
             ocr::commands::extraction_is_edited_by_hand,
             ocr::block_reocr::reocr_layout_block,
