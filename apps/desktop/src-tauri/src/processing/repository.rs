@@ -5724,6 +5724,58 @@ pub fn execution_wanted(conn: &Connection, task_id: &str) -> Result<bool, String
     Ok(count > 0)
 }
 
+/// R14: true when a unit of a higher priority level than this running task
+/// is waiting to be claimed. The supervisor runs one unit at a time, so a
+/// long background unit (a 371-chunk embedding) used to hold the slot for
+/// minutes while the OCR a person had just asked for sat `pending`. The
+/// running unit's level is the highest priority among the running batches
+/// that want it, the same rule [`claim_next`] orders by; only units of a
+/// claimable kind, with no unfinished dependency, count.
+pub fn preempting_work_exists(
+    conn: &Connection,
+    task_id: &str,
+    kinds: &[&str],
+    now_ms: i64,
+) -> Result<bool, String> {
+    if kinds.is_empty() {
+        return Ok(false);
+    }
+    let kind_list = kinds
+        .iter()
+        .map(|kind| format!("'{kind}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    conn.query_row(
+        &format!(
+            "SELECT EXISTS(
+               SELECT 1 FROM processing_batches pb
+               JOIN processing_batch_tasks pl ON pl.batch_id = pb.id
+               JOIN processing_tasks t ON t.id = pl.task_id
+               WHERE pb.state = 'running' AND pb.desired_state = 'run'
+                 AND pl.request_state = 'active'
+                 AND pb.priority > (
+                   SELECT COALESCE(MAX(cb.priority), 0)
+                   FROM processing_batch_tasks cl
+                   JOIN processing_batches cb ON cb.id = cl.batch_id
+                   WHERE cl.task_id = ?1 AND cl.request_state = 'active'
+                     AND cb.state = 'running' AND cb.desired_state = 'run')
+                 AND t.id != ?1
+                 AND t.kind IN ({kind_list})
+                 AND (t.state = 'pending'
+                      OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL
+                          AND t.next_retry_at <= ?2))
+                 AND NOT EXISTS (
+                   SELECT 1 FROM processing_batch_tasks l2
+                   WHERE l2.task_id = t.id AND l2.dependency_task_id IS NOT NULL
+                     AND (SELECT state FROM processing_tasks d WHERE d.id = l2.dependency_task_id)
+                         NOT IN ('succeeded', 'skipped')))"
+        ),
+        rusqlite::params![task_id, now_ms],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("Failed to check for higher-priority work: {e}"))
+}
+
 /// Final publish of one task: validates lease, domain/subject/kind route,
 /// source pin, contract, and demand, runs the engine-specific `publish`
 /// (canonical rows + receipt), marks `succeeded`, closes the attempt, stamps
@@ -10195,6 +10247,47 @@ mod tests {
         )
         .unwrap()
         .is_some());
+    }
+
+    /// R14: a background unit yields only to waiting work of a strictly
+    /// higher level that this build can claim.
+    #[test]
+    fn background_work_yields_only_to_claimable_higher_priority_units() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "bg", "req-bg", r#"["embeddings"]"#);
+        insert_batch(&conn, "user", "req-user", r#"["ocr"]"#);
+        conn.execute_batch(
+            "UPDATE processing_batches SET state = 'running';
+             UPDATE processing_batches SET priority = 2 WHERE id = 'user';",
+        )
+        .unwrap();
+        let background = admit_or_attach(&conn, "bg", "embedding", "a7", 0, "fp", "c", None)
+            .unwrap()
+            .task_id;
+        let user = admit_or_attach(&conn, "user", "ocr", "a1", 0, "fp", "c", None)
+            .unwrap()
+            .task_id;
+        let kinds = ["ocr", "embedding"];
+
+        assert!(preempting_work_exists(&conn, &background, &kinds, 0).unwrap());
+        assert!(
+            !preempting_work_exists(&conn, &user, &kinds, 0).unwrap(),
+            "the top level never yields"
+        );
+        assert!(
+            !preempting_work_exists(&conn, &background, &["embedding"], 0).unwrap(),
+            "a kind this build cannot claim does not count"
+        );
+
+        conn.execute(
+            "UPDATE processing_batches SET desired_state = 'pause' WHERE id = 'user'",
+            [],
+        )
+        .unwrap();
+        assert!(
+            !preempting_work_exists(&conn, &background, &kinds, 0).unwrap(),
+            "a paused batch does not take the slot"
+        );
     }
 
     /// R29: an OCR batch that left embeddings out keeps its pages away from

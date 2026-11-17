@@ -362,14 +362,18 @@ pub fn run_one(
     }
     // Demand watcher: long native inferences cannot be preempted mid-call,
     // but chunk/page loops observe `stop` between units and abort early
-    // instead of burning provider budget after a pause or cancel.
+    // instead of burning provider budget after a pause or cancel. It also
+    // makes a unit yield the slot when higher-priority work is waiting (R14).
     let watcher_done = std::sync::Arc::new(AtomicBool::new(false));
+    let yielded = std::sync::Arc::new(AtomicBool::new(false));
     {
         let db_path = ctx.db_path.clone();
         let session_id = session_id.to_string();
         let task_id = task.task_id.clone();
+        let kinds = kinds.clone();
         let stop = std::sync::Arc::clone(&stop);
         let done = std::sync::Arc::clone(&watcher_done);
+        let yielded = std::sync::Arc::clone(&yielded);
         std::thread::Builder::new()
             .name("entropia-processing-watch".to_string())
             .spawn(move || loop {
@@ -377,14 +381,24 @@ pub fn run_one(
                 if done.load(Ordering::SeqCst) {
                     return;
                 }
-                if let Ok(conn) = open_archive_connection(&db_path) {
-                    let _ = heartbeat_owned(&conn, &session_id, repository::now_ms());
+                let Ok(conn) = open_archive_connection(&db_path) else {
+                    continue;
+                };
+                let _ = heartbeat_owned(&conn, &session_id, repository::now_ms());
+                if !execution_wanted(&conn, &task_id).unwrap_or(true) {
+                    stop.stop();
+                    return;
                 }
-                let wanted = open_archive_connection(&db_path)
-                    .ok()
-                    .and_then(|conn| execution_wanted(&conn, &task_id).ok())
-                    .unwrap_or(true);
-                if !wanted {
+                let kind_refs: Vec<&str> = kinds.iter().map(String::as_str).collect();
+                if repository::preempting_work_exists(
+                    &conn,
+                    &task_id,
+                    &kind_refs,
+                    repository::now_ms(),
+                )
+                .unwrap_or(false)
+                {
+                    yielded.store(true, Ordering::SeqCst);
                     stop.stop();
                     return;
                 }
@@ -581,6 +595,20 @@ pub fn run_one(
             )?;
             finalize_links(conn, &task_id)?;
             Ok(RunOneOutcome::Deferred { task_id })
+        }
+        ExecOutput::Stopped if yielded.load(Ordering::SeqCst) => {
+            // Still wanted, only out-prioritized: back to `pending` with its
+            // checkpoints, so it resumes after the higher-priority unit
+            // instead of sitting `interrupted` until someone resumes it.
+            repository::requeue_task(conn, &task_id, task.lease_epoch)?;
+            log_line(
+                "info",
+                &format!(
+                    "task {task_id} ({}) yields to higher-priority work",
+                    task.kind
+                ),
+            );
+            Ok(RunOneOutcome::Requeued { task_id })
         }
         ExecOutput::Stopped => {
             repository::interrupt_task(conn, &task_id, task.lease_epoch)?;
@@ -890,6 +918,40 @@ mod tests {
                     outcome: "text".to_string(),
                     receipt: r#"{"status":"completed"}"#.to_string(),
                 },
+            }
+        }
+    }
+
+    /// While it runs, a person asks for another page at interactive
+    /// priority; the executor then works until told to stop (R14).
+    struct OutprioritizedExecutor;
+
+    impl Executor for OutprioritizedExecutor {
+        fn kinds(&self) -> &[&str] {
+            &["ocr"]
+        }
+
+        fn run(&self, ctx: &ExecCtx, _task: &ClaimedTask, stop: &StopFlag) -> ExecResult {
+            let conn = open_archive_connection(&ctx.db_path).expect("open request connection");
+            conn.execute_batch(
+                "INSERT INTO assets (id, item_id, path, type, size, created_at) VALUES ('a2', 'i1', 'a2.png', 'image', 10, 2);
+                 INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, priority, created_at, updated_at)
+                   VALUES ('b2', 'req-2', 'manual', 'running', 'run', '[\"ocr\"]', 1, 2, 2, 2);
+                 INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+                   VALUES ('ocr-a2', 'ocr', 'a2', 'corpus', 'asset', 'a2', 'pending', 2, 2);
+                 INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+                   VALUES ('b2', 'ocr-a2', 'ocr', 'a2', 'corpus', 'asset', 'a2', 'active');",
+            )
+            .expect("a higher-priority request arrives");
+            let started = std::time::Instant::now();
+            while !stop.stopped() && started.elapsed() < Duration::from_secs(10) {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            ExecResult {
+                checkpoints: Vec::new(),
+                progress_total: None,
+                engine_output: None,
+                output: ExecOutput::Stopped,
             }
         }
     }
@@ -1364,6 +1426,37 @@ mod tests {
             )
             .expect("stopped task state");
         assert_eq!(durable, ("interrupted".to_string(), 0, None));
+    }
+
+    #[test]
+    fn a_running_unit_yields_to_higher_priority_work_and_requeues() {
+        let (dir, conn) = running_db();
+        let ctx = test_ctx(&dir);
+        let mut registry = ExecutorRegistry::new();
+        registry.register(Arc::new(OutprioritizedExecutor));
+
+        let outcome = run_one(
+            &conn,
+            &ctx,
+            &registry,
+            "s1",
+            1_000,
+            &noop_commit,
+            &noop_terminal,
+        )
+        .expect("yielding is not an error");
+        assert!(
+            matches!(outcome, RunOneOutcome::Requeued { ref task_id } if task_id == "ocr-a1"),
+            "{outcome:?}"
+        );
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = 'ocr-a1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("state");
+        assert_eq!(state, "pending", "it resumes by itself, not interrupted");
     }
 
     #[test]
