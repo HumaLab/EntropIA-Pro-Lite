@@ -139,6 +139,7 @@ const es = {
   'app.startupTitle': 'Preparando tu espacio de trabajo',
   'app.initializing': 'Inicializando...',
   'app.initError': 'No se pudo inicializar la base de datos',
+  'app.initErrorUnknown': 'Reintentá. Si vuelve a fallar, el detalle queda en el registro de diagnóstico.',
   'app.retryInit': 'Reintentar',
   'app.compactingTitle': 'Optimizando el archivo…',
   'app.compactingBody': 'No apagues el equipo. La ventana se cierra sola al terminar.',
@@ -317,7 +318,8 @@ const es = {
   'batch.opOcrIncludeNative': 'Incluir texto nativo',
   'batch.opOcrIncludeNativeHint':
     'Pasa por OCR también las páginas que solo tienen el texto nativo del PDF y reemplaza ese texto. Las páginas que ya pasaron por OCR se saltean igual.',
-  'batch.opEmbeddingsHint': 'Genera embeddings cuando el OCR produzca texto.',
+  'batch.opEmbeddingsHint':
+    'Genera embeddings cuando el OCR produzca texto. Si lo destildás, esas páginas no se vectorizan solas y quedan fuera de la búsqueda semántica hasta que las vectorices.',
   'batch.opNer': 'Entidades',
   'batch.opNerHint':
     'Busca personas, lugares y organizaciones en cada documento con texto. Saltea los que ya tienen entidades.',
@@ -4187,6 +4189,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'app.startupTitle': 'Preparing your workspace',
   'app.initializing': 'Initializing...',
   'app.initError': 'Failed to initialize database',
+  'app.initErrorUnknown': 'Retry. If it fails again, the details are in the diagnostic log.',
   'app.retryInit': 'Retry',
   'app.compactingTitle': 'Optimizing the archive…',
   'app.compactingBody': 'Do not turn off the computer. The window closes by itself when done.',
@@ -4366,7 +4369,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.opOcrIncludeNative': 'Include native text',
   'batch.opOcrIncludeNativeHint':
     'Also runs OCR on pages that only have the native PDF text, replacing that text. Pages that already went through OCR are still skipped.',
-  'batch.opEmbeddingsHint': 'Generate embeddings once OCR produces text.',
+  'batch.opEmbeddingsHint':
+    'Generate embeddings once OCR produces text. Unchecked, those pages are not embedded automatically and stay out of semantic search until you embed them.',
   'batch.opNer': 'Entities',
   'batch.opNerHint':
     'Finds people, places and organizations in every document with text. Skips documents that already have entities.',

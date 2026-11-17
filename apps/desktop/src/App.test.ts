@@ -396,6 +396,24 @@ describe('App Microsoft Store update notice', () => {
     expect(storeCheckMock).not.toHaveBeenCalled()
   })
 
+  // R25: Tauri rejects with a plain string; its text is the useful part.
+  it('shows and logs the cause when initialization rejects with a string', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    initDbMock.mockRejectedValue('database is locked')
+    render(App)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('No se pudo inicializar la base de datos')
+    expect(alert).toHaveTextContent('database is locked')
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('logs_append', {
+        level: 'error',
+        source: 'setup',
+        message: 'Inicio falló: database is locked',
+      })
+    )
+  })
+
   it('keeps the app usable while the check is pending or rejected', async () => {
     let rejectCheck!: (error: Error) => void
     storeCheckMock.mockReturnValue(

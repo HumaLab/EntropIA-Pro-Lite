@@ -2342,7 +2342,47 @@ pub(crate) fn scan_text_assets(
     limit: Option<usize>,
     missing_only: bool,
 ) -> Result<Vec<AssetEmbeddingCandidate>, String> {
-    let sql = String::from(
+    scan_text_assets_filtered(conn, limit, missing_only, false)
+}
+
+/// [`scan_text_assets`] for the automatic repair sweep: it also skips source
+/// revisions kept away from automatic embedding (a cancelled request, or a
+/// batch that left embeddings out, R29). Filtering before the limit matters:
+/// the sweep takes the oldest few candidates, and suppressed ones at the
+/// head of the list used to stall it for the whole archive.
+pub(crate) fn scan_auto_embedding_candidates(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<AssetEmbeddingCandidate>, String> {
+    scan_text_assets_filtered(conn, Some(limit), true, true)
+}
+
+fn scan_text_assets_filtered(
+    conn: &Connection,
+    limit: Option<usize>,
+    missing_only: bool,
+    skip_auto_suppressed: bool,
+) -> Result<Vec<AssetEmbeddingCandidate>, String> {
+    // A fresh archive runs the sweep before the queue tables exist.
+    let revisions_exist = skip_auto_suppressed
+        && conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'processing_asset_revisions'",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok();
+    let suppressed_clause = if revisions_exist {
+        "AND NOT EXISTS(
+            SELECT 1 FROM processing_asset_revisions r
+            WHERE r.asset_id = a.id
+              AND r.auto_suppressed_revision IS NOT NULL
+              AND r.auto_suppressed_revision = r.source_revision
+        )"
+    } else {
+        ""
+    };
+    let sql = format!(
         r#"
         SELECT a.id, a.item_id
         FROM assets a
@@ -2360,8 +2400,9 @@ pub(crate) fn scan_text_assets(
                   AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0
             )
         )
+        {suppressed_clause}
         ORDER BY a.created_at ASC, a.id ASC
-        "#,
+        "#
     );
     let mut stmt = conn
         .prepare(&sql)

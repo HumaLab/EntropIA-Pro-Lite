@@ -1082,7 +1082,8 @@ describe('the unit list is paged, not grown', () => {
 })
 
 describe('the composer keeps its operations on one strip', () => {
-  const HINT = 'Genera embeddings cuando el OCR produzca texto.'
+  const HINT =
+    'Genera embeddings cuando el OCR produzca texto. Si lo destildás, esas páginas no se vectorizan solas y quedan fuera de la búsqueda semántica hasta que las vectorices.'
 
   it('holds the label, both toggles and the action in one labelled group', async () => {
     render(BatchProcessingTab)

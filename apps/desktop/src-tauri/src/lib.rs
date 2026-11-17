@@ -268,6 +268,27 @@ fn processing_commit_observer(
                                         |row| row.get::<_, i64>(0),
                                     )
                                     .unwrap_or(0);
+                                // R29: a batch that left embeddings out keeps
+                                // this text away from automatic embedding;
+                                // the admission below then admits nothing.
+                                match processing::repository::ocr_excludes_embeddings(
+                                    &conn,
+                                    &task.task_id,
+                                ) {
+                                    Ok(true) => {
+                                        if let Err(error) =
+                                            processing::repository::suppress_auto_embedding(
+                                                &conn,
+                                                &task.asset_id,
+                                                revision,
+                                            )
+                                        {
+                                            log::warn!(target: "processing", "{error}");
+                                        }
+                                    }
+                                    Ok(false) => {}
+                                    Err(error) => log::warn!(target: "processing", "{error}"),
+                                }
                                 let fingerprint =
                                     processing::eligibility::embedding_input_fingerprint(
                                         &conn,

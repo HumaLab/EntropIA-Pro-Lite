@@ -939,7 +939,7 @@ fn scan_embedding_repair_candidates_at(
     conn: &rusqlite::Connection,
     _now_ms: i64,
 ) -> Result<Vec<embeddings::AssetEmbeddingCandidate>, String> {
-    embeddings::scan_text_assets(conn, Some(NLP_EMBEDDING_REPAIR_BATCH_SIZE), true)
+    embeddings::scan_auto_embedding_candidates(conn, NLP_EMBEDDING_REPAIR_BATCH_SIZE)
 }
 
 /// Admits repair candidates into the durable queue's repair batch. The old
