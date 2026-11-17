@@ -1472,7 +1472,7 @@ describe('SettingsView', () => {
   })
 
   it.runIf(LOCAL_ML)(
-    'shows local BGE-M3 install status and can start the embedding asset download',
+    'starts the local BGE-M3 download without switching the saved embedding provider',
     async () => {
       render(SettingsView)
 
@@ -1487,11 +1487,11 @@ describe('SettingsView', () => {
       await fireEvent.click(screen.getByRole('button', { name: 'Instalar BGE-M3 local' }))
 
       await waitFor(() => {
-        expect(settingsSetMock).toHaveBeenCalledWith('embedding_provider', 'local')
-        expect(settingsSetMock).toHaveBeenCalledWith('openrouter_embedding_model', 'baai/bge-m3')
         expect(settingsSetMock).toHaveBeenCalledWith('local_embedding_model_dir', '')
         expect(embeddingDownloadModelMock).toHaveBeenCalled()
       })
+      // R15: the provider changes only through "Guardar cambios".
+      expect(settingsSetMock).not.toHaveBeenCalledWith('embedding_provider', 'local')
     }
   )
 

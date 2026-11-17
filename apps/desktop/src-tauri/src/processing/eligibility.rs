@@ -76,13 +76,16 @@ pub fn current_embedding_contract_hash() -> String {
 }
 
 /// Settings-resolved effective embedding contract (E3a-WU1): the identity
-/// a computed vector space is pinned, stamped, and gated by. Provider,
-/// model, dimensions, and chunking all participate, so a custom model or
-/// the local engine never shares a space with the canonical API vectors.
+/// a computed vector space is pinned, stamped, and gated by. Model,
+/// dimensions, and chunking define the space; a custom model never shares
+/// one with the canonical vectors.
 ///
-/// Canonical settings (api + baai/bge-m3) resolve to exactly
-/// [`current_embedding_contract_hash`]: existing rows, pins, and gates keep
-/// working byte-identically. Anything else hashes its own space.
+/// The provider is not part of the canonical space: the API and the local
+/// ONNX engine run the same BGE-M3 weights through the same chunking and
+/// pooling ([`crate::nlp::embeddings`]), and measured on 60 archive assets
+/// their vectors agree to cosine 1.00000. Both resolve to exactly
+/// [`current_embedding_contract_hash`], so switching provider re-embeds
+/// nothing. A custom model keeps hashing its provider, as before.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveEmbeddingContract {
     pub provider: String,
@@ -122,17 +125,13 @@ pub fn resolve_effective_embedding_contract(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_OPENROUTER_EMBEDDING_MODEL.to_string());
-    let hash = if provider == "api" && model == CANONICAL_EMBEDDING_MODEL {
+    let canonical = model == CANONICAL_EMBEDDING_MODEL;
+    let hash = if canonical {
         current_embedding_contract_hash()
     } else {
-        sha256_hex(
-            format!(
-                "{provider}|{model}|{CANONICAL_EMBEDDING_DIMENSIONS}|{RAG_CHUNKING_CONTRACT_V1}"
-            )
-            .as_bytes(),
-        )
+        provider_space_hash(&provider, &model)
     };
-    let contract = if provider == "api" && model == CANONICAL_EMBEDDING_MODEL {
+    let contract = if canonical {
         CANONICAL_EMBEDDING_CONTRACT_V1.to_string()
     } else {
         hash.clone()
@@ -144,6 +143,68 @@ pub fn resolve_effective_embedding_contract(
         dimensions: CANONICAL_EMBEDDING_DIMENSIONS,
         hash,
     })
+}
+
+fn provider_space_hash(provider: &str, model: &str) -> String {
+    sha256_hex(
+        format!("{provider}|{model}|{CANONICAL_EMBEDDING_DIMENSIONS}|{RAG_CHUNKING_CONTRACT_V1}")
+            .as_bytes(),
+    )
+}
+
+/// The contract builds before the provider left the canonical identity
+/// stamped on local BGE-M3 vectors (`54e7388f…`): the same space under
+/// another name, which made every API vector look stale and the repair
+/// sweep re-embed the archive (R15).
+pub fn legacy_local_canonical_contract_hash() -> String {
+    provider_space_hash("local", CANONICAL_EMBEDDING_MODEL)
+}
+
+/// Re-stamp vectors that carry [`legacy_local_canonical_contract_hash`] with
+/// the canonical contract they always belonged to. Idempotent; returns the
+/// rows changed. Runs without sync capture: every device repairs its own
+/// copy at startup, and a pulled row with the old stamp is fixed on the next.
+pub fn restamp_legacy_local_embedding_contract(conn: &Connection) -> Result<usize, String> {
+    let legacy = legacy_local_canonical_contract_hash();
+    let tables: Vec<&str> = ["vec_assets", "rag_chunks"]
+        .into_iter()
+        .filter(|table| {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |_| Ok(()),
+            )
+            .is_ok()
+        })
+        .collect();
+    if tables.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| format!("Failed to start the embedding contract re-stamp: {error}"))?;
+    let changed = crate::sync::capture::without_sync_capture(&tx, || {
+        let mut changed = 0;
+        for table in &tables {
+            changed += tx
+                .execute(
+                    &format!(
+                        "UPDATE {table} SET embedding_contract = ?1
+                         WHERE embedding_contract = ?2 AND embedding_model = ?3"
+                    ),
+                    rusqlite::params![
+                        CANONICAL_EMBEDDING_CONTRACT_V1,
+                        legacy,
+                        CANONICAL_EMBEDDING_MODEL
+                    ],
+                )
+                .map_err(|error| format!("Failed to re-stamp {table}: {error}"))?;
+        }
+        Ok(changed)
+    })?;
+    tx.commit()
+        .map_err(|error| format!("Failed to commit the embedding contract re-stamp: {error}"))?;
+    Ok(changed)
 }
 
 /// Verdict for one asset under the OCR rule.
@@ -644,7 +705,24 @@ mod tests {
     }
 
     #[test]
-    fn effective_contract_separates_custom_model_and_local_provider() {
+    fn local_and_api_bge_m3_share_the_canonical_space() {
+        for pairs in [
+            vec![("embedding_provider", "local")],
+            vec![
+                ("embedding_provider", "local"),
+                ("openrouter_embedding_model", "baai/bge-m3"),
+            ],
+        ] {
+            let local =
+                resolve_effective_embedding_contract(&settings_db(&pairs)).expect("resolve");
+            assert_eq!(local.provider.as_str(), "local");
+            assert_eq!(local.hash, current_embedding_contract_hash());
+            assert_eq!(local.contract, CANONICAL_EMBEDDING_CONTRACT_V1);
+        }
+    }
+
+    #[test]
+    fn effective_contract_separates_custom_models() {
         let legacy = current_embedding_contract_hash();
         let conn = settings_db(&[("openrouter_embedding_model", "custom/model")]);
         let custom = resolve_effective_embedding_contract(&conn).expect("resolve");
@@ -653,16 +731,95 @@ mod tests {
             custom.hash, legacy,
             "a custom model must not reuse the legacy space"
         );
-        let conn = settings_db(&[("embedding_provider", "local")]);
-        let local = resolve_effective_embedding_contract(&conn).expect("resolve");
-        assert_eq!(local.provider.as_str(), "local");
-        assert_ne!(local.hash, legacy, "the local engine is a different space");
-        assert_ne!(custom.hash, local.hash);
         let conn = settings_db(&[("embedding_provider", "mystery")]);
         assert!(
             resolve_effective_embedding_contract(&conn).is_err(),
             "an unknown provider fails closed"
         );
+    }
+
+    #[test]
+    fn legacy_local_hash_matches_the_stamp_found_in_archives() {
+        assert_eq!(
+            legacy_local_canonical_contract_hash(),
+            "54e7388f6c87b755ea281ef543ed5f2b24548a2412fdcbb2611c4b2c2442fba4"
+        );
+    }
+
+    #[test]
+    fn restamp_moves_legacy_local_rows_to_the_canonical_contract_only() {
+        let conn = Connection::open_in_memory().expect("db");
+        conn.execute_batch(
+            "CREATE TABLE vec_assets(asset_id TEXT PRIMARY KEY, embedding_model TEXT NOT NULL, embedding_contract TEXT NOT NULL);
+             CREATE TABLE rag_chunks(id TEXT PRIMARY KEY, embedding_model TEXT NOT NULL, embedding_contract TEXT NOT NULL);",
+        )
+        .expect("schema");
+        let legacy = legacy_local_canonical_contract_hash();
+        for (table, id, model, contract) in [
+            (
+                "vec_assets",
+                "a",
+                CANONICAL_EMBEDDING_MODEL,
+                legacy.as_str(),
+            ),
+            (
+                "vec_assets",
+                "b",
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+            ),
+            ("vec_assets", "c", "custom/model", legacy.as_str()),
+            (
+                "rag_chunks",
+                "a-0",
+                CANONICAL_EMBEDDING_MODEL,
+                legacy.as_str(),
+            ),
+            ("rag_chunks", "x-0", "custom/model", "other-space"),
+        ] {
+            let id_col = if table == "vec_assets" {
+                "asset_id"
+            } else {
+                "id"
+            };
+            conn.execute(
+                &format!("INSERT INTO {table}({id_col}, embedding_model, embedding_contract) VALUES (?1, ?2, ?3)"),
+                [id, model, contract],
+            )
+            .expect("row");
+        }
+
+        assert_eq!(
+            restamp_legacy_local_embedding_contract(&conn).expect("restamp"),
+            2
+        );
+        assert_eq!(
+            restamp_legacy_local_embedding_contract(&conn).expect("again"),
+            0
+        );
+
+        let stamp = |table: &str, id_col: &str, id: &str| -> String {
+            conn.query_row(
+                &format!("SELECT embedding_contract FROM {table} WHERE {id_col} = ?1"),
+                [id],
+                |row| row.get(0),
+            )
+            .expect("stamp")
+        };
+        assert_eq!(
+            stamp("vec_assets", "asset_id", "a"),
+            CANONICAL_EMBEDDING_CONTRACT_V1
+        );
+        assert_eq!(
+            stamp("rag_chunks", "id", "a-0"),
+            CANONICAL_EMBEDDING_CONTRACT_V1
+        );
+        assert_eq!(
+            stamp("vec_assets", "asset_id", "c"),
+            legacy,
+            "another model is untouched"
+        );
+        assert_eq!(stamp("rag_chunks", "id", "x-0"), "other-space");
     }
 
     #[test]

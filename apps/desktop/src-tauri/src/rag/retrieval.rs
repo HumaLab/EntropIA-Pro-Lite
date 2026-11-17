@@ -3474,13 +3474,15 @@ mod tests {
         vector
     }
 
+    /// R15: switching to the local engine keeps every API-made chunk
+    /// searchable: both providers name the same canonical space.
     #[test]
-    fn chunk_vector_leg_reads_chunks_stamped_with_the_effective_local_contract() {
+    fn chunk_vector_leg_under_the_local_provider_reads_canonical_chunks() {
         let conn = setup_chunk_packing_db();
         set_setting(&conn, "embedding_provider", "local");
         let effective = crate::processing::eligibility::resolve_effective_embedding_contract(&conn)
             .expect("local provider resolves");
-        assert_ne!(effective.contract, CANONICAL_EMBEDDING_CONTRACT_V1);
+        assert_eq!(effective.contract, CANONICAL_EMBEDDING_CONTRACT_V1);
         insert_ocr_doc(
             &conn,
             ("col-1", "Archivo"),
@@ -3743,8 +3745,15 @@ mod tests {
             }
         );
 
-        // Chunks of another embedding space are not coverage.
+        // The local engine shares the canonical space (R15): still covered.
         set_setting(&conn, "embedding_provider", "local");
+        assert_eq!(
+            chunk_coverage(&conn).expect("coverage").assets_with_chunks,
+            1
+        );
+
+        // Chunks of another embedding space are not coverage.
+        set_setting(&conn, "openrouter_embedding_model", "custom/model");
         assert_eq!(
             chunk_coverage(&conn).expect("coverage").assets_with_chunks,
             0

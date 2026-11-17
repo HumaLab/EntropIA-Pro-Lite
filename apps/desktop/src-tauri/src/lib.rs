@@ -1068,6 +1068,17 @@ pub fn run() {
                 app_logs::error(&app.handle().clone(), "settings/migration", message);
             }
 
+            // Not fatal: a vector left with the old local stamp is only
+            // re-embedded once more, as before this repair existed (R15).
+            match processing::eligibility::restamp_legacy_local_embedding_contract(&ui_conn) {
+                Ok(0) => {}
+                Ok(rows) => log::info!(
+                    target: "setup",
+                    "re-stamped {rows} local BGE-M3 embedding rows with the canonical contract"
+                ),
+                Err(error) => log::warn!(target: "setup", "embedding contract re-stamp skipped: {error}"),
+            }
+
             let research = research::ResearchState::new(app_dir.clone(), db_path.clone())
                 .map_err(|e| fail("No se pudo abrir el estado de investigaciones.", e))?;
             app.manage(research);
