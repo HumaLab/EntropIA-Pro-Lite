@@ -18,6 +18,7 @@
 #
 # Usage: fetch-llama-server.sh <linux-x64> [--cpu]
 #   Default is a CUDA build (GGML_CUDA=ON, needs CUDA toolkit + ~5 min).
+set -euo pipefail
 PLATFORM="${1:-}"
 
 CPU_ONLY=0
@@ -65,18 +66,37 @@ else
   echo "warning: cargo registry copy not found, skipping revision check" >&2
 fi
 
-CMAKE_ARGS=(-B "$WORK/build" -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF)
+# The server ships with its libraries next to it, and the app starts it from
+# any working directory: resolve them through $ORIGIN, never through the build
+# tree's RUNPATH (a deleted temp dir plus an empty entry, which means cwd).
+CMAKE_ARGS=(-B "$WORK/build" -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
+  -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON '-DCMAKE_INSTALL_RPATH=$ORIGIN')
 if [[ "$CPU_ONLY" -eq 0 ]]; then
   CMAKE_ARGS+=(-DGGML_CUDA=ON)
 fi
-cmake -S "$WORK/src" "${CMAKE_ARGS[@]}" >"$WORK/cmake.log" 2>&1
-cmake --build "$WORK/build" --target llama-server -j "$(nproc)" >"$WORK/build.log" 2>&1
+# Quiet on success; on failure the log tail is the only useful output.
+run_logged() {
+  local log="$1"
+  shift
+  "$@" >"$log" 2>&1 || {
+    tail -n 40 "$log" >&2
+    echo "::error::$* failed (full log: $log)" >&2
+    exit 1
+  }
+}
+run_logged "$WORK/cmake.log" cmake -S "$WORK/src" "${CMAKE_ARGS[@]}"
+run_logged "$WORK/build.log" cmake --build "$WORK/build" --target llama-server -j "$(nproc)"
 
 mkdir -p "$DEST"
 cp -P "$WORK/build/bin/llama-server" "$WORK"/build/bin/lib*.so* "$DEST"/
 rm -f "$DEST"/lib*.so 2>/dev/null || true
 # Keep versioned .so files; the unversioned dev symlinks must not ship.
 (cd "$DEST" && for f in lib*.so; do [[ -L "$f" ]] && rm -f "$f"; done) || true
+# The bundled libraries must resolve from any working directory.
+if (cd / && ldd "$DEST/llama-server") | grep -E 'lib(ggml|llama|mtmd)[^ ]* => not found'; then
+  echo "::error::llama-server does not find its bundled libraries" >&2
+  exit 1
+fi
 
 echo "llama-server ($PLATFORM, $([[ "$CPU_ONLY" -eq 0 ]] && echo cuda || echo cpu)) -> $DEST"
 (cd "$DEST" && sha256sum llama-server lib*.so.* | awk '{print $2": "$1}')
