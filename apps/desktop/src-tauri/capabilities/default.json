@@ -105,6 +105,7 @@
     "allow-glm-ocr-download-models",
     "allow-qwen-correction-local-info",
     "allow-qwen-correction-download-models",
+    "allow-llama-server-download",
     "allow-update-extraction-text-cmd",
     "allow-extraction-is-edited-by-hand",
     "allow-reocr-layout-block",

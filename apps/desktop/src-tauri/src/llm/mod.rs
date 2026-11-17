@@ -1581,7 +1581,7 @@ fn local_ocr_correction_available(_app_handle: &AppHandle, _db_path: &std::path:
 /// `nvidia-smi` (or a hardware inventory query) and the hardware does not
 /// change while the app runs.
 #[cfg(feature = "paddle-ocr")]
-fn has_nvidia_gpu() -> bool {
+pub(crate) fn has_nvidia_gpu() -> bool {
     static HAS_GPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *HAS_GPU.get_or_init(crate::ocr::paddle_vl::detect_nvidia_gpu)
 }

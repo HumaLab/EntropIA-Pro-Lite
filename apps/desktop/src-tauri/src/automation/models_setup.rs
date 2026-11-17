@@ -137,7 +137,9 @@ pub fn status(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> ModelsSt
 
 #[cfg(feature = "local-ml")]
 fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> ModelsStatus {
+    use tauri::Manager;
     let mut components = Vec::new();
+    let resource_dir = app_handle.and_then(|handle| handle.path().resource_dir().ok());
 
     // Runtime pack (Python, venv, Paddle deps, scripts): needed for every
     // local OCR path. Needs the app handle for bundle/data-dir resolution.
@@ -189,7 +191,7 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
 
     // GLM-OCR (visión + servidor llama-server): motor OCRH preferido.
     {
-        let info = crate::ocr::glm_ocr_local::local_info(db_path);
+        let info = crate::ocr::glm_ocr_local::local_info(db_path, resource_dir.as_deref());
         let ready = info.model_present && info.mmproj_present && info.server_present;
         let mut missing = Vec::new();
         if !info.model_present {
@@ -199,7 +201,7 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
             missing.push("mmproj");
         }
         if !info.server_present {
-            missing.push("servidor llama-server");
+            missing.push(missing_server_label(info.server_source));
         }
         components.push(component(
             COMPONENT_GLM_OCR,
@@ -216,7 +218,7 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
 
     // Qwen3-VL corrección OCR.
     {
-        let info = crate::ocr::qwen_local::local_info(db_path);
+        let info = crate::ocr::qwen_local::local_info(db_path, resource_dir.as_deref());
         let ready = info.model_present && info.mmproj_present && info.server_present;
         components.push(component(
             COMPONENT_QWEN_CORRECT,
@@ -224,6 +226,11 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
             ready,
             if ready {
                 format!("modelos en {}", info.models_dir)
+            } else if !info.server_present {
+                format!(
+                    "incompleto (modelo, mmproj o {})",
+                    missing_server_label(info.server_source)
+                )
             } else {
                 "incompleto (modelo, mmproj o servidor)".to_string()
             },
@@ -278,6 +285,16 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
     }
 }
 
+#[cfg(feature = "local-ml")]
+fn missing_server_label(source: crate::ocr::local_server::ServerSource) -> &'static str {
+    match source {
+        crate::ocr::local_server::ServerSource::RequiresNvidiaGpu => {
+            "servidor llama-server (solo se descarga con GPU NVIDIA)"
+        }
+        _ => "servidor llama-server",
+    }
+}
+
 /// Queue the missing installs in the background and return what was started.
 /// Mirrors the Settings buttons; progress flows through the same events the UI
 /// listens to. Requires the running app (the downloads emit progress).
@@ -320,12 +337,16 @@ async fn start_missing_local_ml(
             COMPONENT_LLM => {
                 crate::llm::commands::start_local_model_download(db_path, app_handle.clone())
             }
-            COMPONENT_GLM_OCR => {
-                crate::ocr::commands::start_glm_ocr_download(db_path, app_handle.clone())
-            }
-            COMPONENT_QWEN_CORRECT => {
-                crate::ocr::commands::start_qwen_correction_download(db_path, app_handle.clone())
-            }
+            COMPONENT_GLM_OCR => with_server_download(
+                crate::ocr::commands::start_glm_ocr_download(db_path, app_handle.clone()),
+                db_path,
+                app_handle,
+            ),
+            COMPONENT_QWEN_CORRECT => with_server_download(
+                crate::ocr::commands::start_qwen_correction_download(db_path, app_handle.clone()),
+                db_path,
+                app_handle,
+            ),
             COMPONENT_EMBEDDINGS => {
                 crate::nlp::commands::start_embedding_download(db_path, app_handle.clone())
             }
@@ -344,6 +365,35 @@ async fn start_missing_local_ml(
     }
     report_unknown_components(only, &status.components, &mut started);
     Ok((started, status))
+}
+
+/// Both local vision engines also need `llama-server`. Where it is downloaded
+/// rather than bundled (Windows), the same request starts that download; the
+/// two components share it, so the second request finds it running.
+#[cfg(feature = "local-ml")]
+fn with_server_download(
+    models: Result<String, String>,
+    db_path: &Path,
+    app_handle: &tauri::AppHandle,
+) -> Result<String, String> {
+    use crate::ocr::local_server::{env_server_override, resolve_server, server_source};
+    use tauri::Manager;
+
+    let resource_dir = app_handle.path().resource_dir().ok();
+    let server_present =
+        resolve_server(db_path, env_server_override(), resource_dir.as_deref()).is_file();
+    if server_present || server_source() != crate::ocr::local_server::ServerSource::Download {
+        return models;
+    }
+    let server = crate::ocr::llama_server_download::start_download(db_path, app_handle.clone());
+    let describe = |outcome: Result<String, String>| {
+        outcome.unwrap_or_else(|error| format!("no se pudo iniciar ({error})"))
+    };
+    Ok(format!(
+        "modelos: {}; llama-server: {}",
+        describe(models),
+        describe(server)
+    ))
 }
 
 /// Flag filter ids that match no known component, so a typo does not look

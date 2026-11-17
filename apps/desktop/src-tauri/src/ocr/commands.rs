@@ -373,8 +373,14 @@ pub struct GlmOcrDownloadErrorPayload {
 #[tauri::command]
 pub async fn glm_ocr_local_info(
     db: State<'_, AppDbState>,
+    app_handle: AppHandle,
 ) -> Result<super::glm_ocr_local::GlmOcrLocalInfo, String> {
-    Ok(super::glm_ocr_local::local_info(&db.db_path))
+    use tauri::Manager;
+    let resource_dir = app_handle.path().resource_dir().ok();
+    Ok(super::glm_ocr_local::local_info(
+        &db.db_path,
+        resource_dir.as_deref(),
+    ))
 }
 
 /// Without `local-ml` there is no local engine to feed, so the command stays
@@ -505,8 +511,14 @@ pub struct QwenCorrectionDownloadErrorPayload {
 #[tauri::command]
 pub async fn qwen_correction_local_info(
     db: State<'_, AppDbState>,
+    app_handle: AppHandle,
 ) -> Result<super::qwen_local::QwenLocalInfo, String> {
-    Ok(super::qwen_local::local_info(&db.db_path))
+    use tauri::Manager;
+    let resource_dir = app_handle.path().resource_dir().ok();
+    Ok(super::qwen_local::local_info(
+        &db.db_path,
+        resource_dir.as_deref(),
+    ))
 }
 
 /// Without `local-ml` there is no local engine to feed, so the command stays
@@ -620,6 +632,29 @@ pub(crate) fn start_qwen_correction_download(
 #[cfg(not(feature = "local-ml"))]
 #[tauri::command]
 pub async fn qwen_correction_download_models(
+    _db: State<'_, AppDbState>,
+    _app_handle: AppHandle,
+) -> Result<String, String> {
+    Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
+/// Download the `llama-server` build both local engines run on, where the
+/// installer does not ship it (Windows; see `llama_server_download`). Emits
+/// `llama-server:download_progress`, `llama-server:download_complete` and
+/// `llama-server:download_error`. Returns immediately after queueing.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn llama_server_download(
+    db: State<'_, AppDbState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    super::llama_server_download::start_download(&db.db_path, app_handle)
+}
+
+/// Without `local-ml` there is no local engine to run.
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn llama_server_download(
     _db: State<'_, AppDbState>,
     _app_handle: AppHandle,
 ) -> Result<String, String> {

@@ -5,13 +5,16 @@
 # checks out one platform per job, so no per-platform subdirectories).
 #
 # The output is a build artifact, never committed (see .gitignore): ~220 MB of
-# CUDA shared libraries cannot live in git. Installers pick it up through the
-# `resources/tools/llama-server/*` entries in the tauri.*.conf.json overlays.
+# CUDA shared libraries cannot live in git. The Linux Pro installer picks it up
+# through `resources/tools/llama-server/*` in tauri.pro.linux.conf.json. Windows
+# installers ship none: the app downloads llama.cpp's own release of the same
+# revision on demand (src-tauri/src/ocr/llama_server_download.rs).
 #
-# Pinned revision: e21cdc11a0461d8b0cbd28cc356d993bf6be7282. It matches the
-# vendored sources (CMakeLists.txt and ggml/src/ggml.c are byte-identical to
-# the registry copy); the script re-checks that and refuses to build anything
-# else. Bump together with the llama-cpp-2 crate.
+# Pinned revision: e21cdc11a0461d8b0cbd28cc356d993bf6be7282 (release tag b8783).
+# It matches the vendored sources (CMakeLists.txt and ggml/src/ggml.c are
+# byte-identical to the registry copy); the script re-checks that and refuses
+# to build anything else. Bump together with the llama-cpp-2 crate and the
+# RELEASE_TAG/ASSETS pins in llama_server_download.rs.
 #
 # Usage: fetch-llama-server.sh <linux-x64> [--cpu]
 #   Default is a CUDA build (GGML_CUDA=ON, needs CUDA toolkit + ~5 min).

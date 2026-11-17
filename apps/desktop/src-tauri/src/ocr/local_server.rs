@@ -82,6 +82,63 @@ pub(crate) fn server_binary_name() -> &'static str {
     }
 }
 
+/// The `ENTROPIA_LLAMA_SERVER` override, when set to a non-empty path.
+pub(crate) fn env_server_override() -> Option<PathBuf> {
+    std::env::var_os(SERVER_BINARY_ENV)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+/// The server binary to run: the override, else the managed
+/// `<data>/tools/llama-server` install, else the installer-bundled build.
+/// When none exists it returns the managed path, so "missing" errors name
+/// the place a download would fill.
+pub(crate) fn resolve_server(
+    db_path: &Path,
+    env_server: Option<PathBuf>,
+    resource_dir: Option<&Path>,
+) -> PathBuf {
+    env_server.unwrap_or_else(|| {
+        let managed = server_dir(db_path).join(server_binary_name());
+        if managed.is_file() {
+            return managed;
+        }
+        if let Some(root) = resource_dir {
+            let bundled = root.join(BUNDLED_SERVER_SUBDIR).join(server_binary_name());
+            if bundled.is_file() {
+                return bundled;
+            }
+        }
+        managed
+    })
+}
+
+/// Where this build gets its `llama-server` from, for the Settings cards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerSource {
+    /// The installer ships it (Linux `.deb`, scripts/fetch-llama-server.sh).
+    Bundled,
+    /// Downloaded on demand (Windows), and this machine can run it.
+    Download,
+    /// Downloaded on demand, but there is no NVIDIA GPU: both local engines
+    /// are GPU-only, so the ~610 MB CUDA build is not offered.
+    RequiresNvidiaGpu,
+}
+
+/// Platforms whose installers ship no server (see `llama_server_download`).
+pub(crate) const SERVER_DOWNLOADED: bool = cfg!(all(windows, target_arch = "x86_64"));
+
+pub(crate) fn server_source() -> ServerSource {
+    if !SERVER_DOWNLOADED {
+        ServerSource::Bundled
+    } else if crate::llm::has_nvidia_gpu() {
+        ServerSource::Download
+    } else {
+        ServerSource::RequiresNvidiaGpu
+    }
+}
+
 struct RunningServer {
     child: Child,
     kind: ServerKind,

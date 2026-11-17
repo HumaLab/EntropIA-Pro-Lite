@@ -123,6 +123,8 @@
   import {
     glmOcrLocalInfo,
     glmOcrDownloadModels,
+    llamaServerDownload,
+    type LlamaServerSource,
     type GlmOcrLocalInfo,
     type GlmOcrDownloadProgressPayload,
     type GlmOcrDownloadCompletePayload,
@@ -545,6 +547,9 @@
   let qwenDownloading = $state(false)
   let qwenDownloadPct = $state(0)
   let qwenDownloadError = $state<string | null>(null)
+  let llamaServerDownloading = $state(false)
+  let llamaServerDownloadPct = $state(0)
+  let llamaServerDownloadError = $state<string | null>(null)
   let parakeetModel = $state<ParakeetModelInfo | null>(null)
   let parakeetDownloading = $state(false)
   let parakeetDownloadPct = $state(0)
@@ -961,6 +966,32 @@
               qwenDownloading = false
               qwenDownloadPct = 0
               qwenDownloadError = event.payload.error
+            }),
+          () =>
+            listen<GlmOcrDownloadProgressPayload>('llama-server:download_progress', (event) => {
+              if (destroyed) return
+              llamaServerDownloading = true
+              llamaServerDownloadPct = event.payload.pct
+              llamaServerDownloadError = null
+            }),
+          () =>
+            listen<GlmOcrDownloadCompletePayload>('llama-server:download_complete', async () => {
+              if (destroyed) return
+              // One server serves both cards.
+              ;[glmOcrLocal, qwenLocal] = await Promise.all([
+                glmOcrLocalInfo().catch(() => null),
+                qwenCorrectionLocalInfo().catch(() => null),
+              ])
+              llamaServerDownloading = false
+              llamaServerDownloadPct = 100
+              llamaServerDownloadError = null
+            }),
+          () =>
+            listen<GlmOcrDownloadErrorPayload>('llama-server:download_error', (event) => {
+              if (destroyed) return
+              llamaServerDownloading = false
+              llamaServerDownloadPct = 0
+              llamaServerDownloadError = event.payload.error
             }),
           () =>
             listen<ParakeetDownloadProgressPayload>('parakeet:download_progress', (event) => {
@@ -1971,6 +2002,27 @@
     }
   }
 
+  async function handleDownloadLlamaServer() {
+    if (llamaServerDownloading) return
+    llamaServerDownloading = true
+    llamaServerDownloadPct = 0
+    llamaServerDownloadError = null
+    try {
+      const state = await llamaServerDownload()
+      // 'already running' keeps the progress coming from the running download.
+      if (state !== 'started' && state !== 'already running') {
+        ;[glmOcrLocal, qwenLocal] = await Promise.all([
+          glmOcrLocalInfo().catch(() => null),
+          qwenCorrectionLocalInfo().catch(() => null),
+        ])
+        llamaServerDownloading = false
+      }
+    } catch (e) {
+      llamaServerDownloading = false
+      llamaServerDownloadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
   async function handleDownloadParakeet() {
     if (parakeetDownloading) return
     parakeetDownloading = true
@@ -2963,6 +3015,44 @@
                   </RadioGroup>
                 </div>
 
+                {#snippet llamaServerStatus(info: {
+                  server_present: boolean
+                  server_source: LlamaServerSource
+                })}
+                  {#if !info.server_present}
+                    {#if info.server_source === 'download'}
+                      <p class="settings__hint">{t('settings.llamaServer.missing')}</p>
+                      {#if llamaServerDownloading}
+                        <div class="settings__download-progress">
+                          <ProgressBar
+                            value={llamaServerDownloadPct}
+                            label={t('settings.llamaServer.downloading')}
+                          />
+                          <span class="settings__download-progress-text">
+                            {llamaServerDownloadPct}% — {t('settings.llamaServer.downloading')}
+                          </span>
+                        </div>
+                      {:else}
+                        <Button variant="primary" size="sm" onclick={handleDownloadLlamaServer}>
+                          {t('settings.llamaServer.download')}
+                        </Button>
+                      {/if}
+                      {#if llamaServerDownloadError}
+                        <p class="surface-message surface-message--error">
+                          {llamaServerDownloadError}
+                          <Button variant="secondary" size="sm" onclick={handleDownloadLlamaServer}>
+                            {t('settings.llamaServer.retry')}
+                          </Button>
+                        </p>
+                      {/if}
+                    {:else if info.server_source === 'requires_nvidia_gpu'}
+                      <p class="settings__hint">{t('settings.llamaServer.requiresNvidia')}</p>
+                    {:else}
+                      <p class="settings__hint">{t('settings.glmOcrLocal.serverMissing')}</p>
+                    {/if}
+                  {/if}
+                {/snippet}
+
                 {#if glmOcrLocal}
                   <div class="settings__local-model">
                     <div class="settings__local-model-row">
@@ -2987,9 +3077,7 @@
                       {/if}
                     </div>
 
-                    {#if !glmOcrLocal.server_present}
-                      <p class="settings__hint">{t('settings.glmOcrLocal.serverMissing')}</p>
-                    {/if}
+                    {@render llamaServerStatus(glmOcrLocal)}
 
                     {#if glmOcrDownloading}
                       <div class="settings__download-progress">
@@ -3042,9 +3130,7 @@
                     </div>
                     <p class="settings__hint">{t('settings.qwenCorrectLocal.description')}</p>
 
-                    {#if !qwenLocal.server_present}
-                      <p class="settings__hint">{t('settings.glmOcrLocal.serverMissing')}</p>
-                    {/if}
+                    {@render llamaServerStatus(qwenLocal)}
 
                     {#if qwenDownloading}
                       <div class="settings__download-progress">

@@ -112,6 +112,7 @@ const APP_COMMANDS: &[&str] = &[
     "glm_ocr_download_models",
     "qwen_correction_local_info",
     "qwen_correction_download_models",
+    "llama_server_download",
     "stt_parakeet_model_info",
     "stt_parakeet_download_model",
     "update_extraction_text_cmd",

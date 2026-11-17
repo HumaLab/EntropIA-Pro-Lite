@@ -786,6 +786,13 @@ const es = {
   'settings.qwenCorrectLocal.download': 'Descargar modelos (~2,9 GB)',
   'settings.qwenCorrectLocal.downloading': 'Descargando modelos…',
   'settings.qwenCorrectLocal.retry': 'Reintentar descarga',
+  'settings.llamaServer.missing':
+    'Falta llama-server, el programa que ejecuta estos modelos en la GPU (~1,1 GB en disco).',
+  'settings.llamaServer.requiresNvidia':
+    'Falta llama-server: se descarga solo en equipos con GPU NVIDIA, la única con la que corren estos modelos.',
+  'settings.llamaServer.download': 'Descargar llama-server (~610 MB)',
+  'settings.llamaServer.downloading': 'Descargando llama-server…',
+  'settings.llamaServer.retry': 'Reintentar descarga',
   'settings.badge.available': 'Disponible',
   'settings.badge.downloadable': 'Descargable',
   'settings.badge.notFound': 'Modelo no encontrado',
@@ -3524,6 +3531,11 @@ type ExtraI18nKey =
   | 'settings.qwenCorrectLocal.download'
   | 'settings.qwenCorrectLocal.downloading'
   | 'settings.qwenCorrectLocal.retry'
+  | 'settings.llamaServer.missing'
+  | 'settings.llamaServer.requiresNvidia'
+  | 'settings.llamaServer.download'
+  | 'settings.llamaServer.downloading'
+  | 'settings.llamaServer.retry'
   | 'settings.badge.available'
   | 'settings.badge.downloadable'
   | 'settings.badge.notFound'
@@ -4834,6 +4846,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.qwenCorrectLocal.download': 'Download models (~2.9 GB)',
   'settings.qwenCorrectLocal.downloading': 'Downloading models…',
   'settings.qwenCorrectLocal.retry': 'Retry download',
+  'settings.llamaServer.missing':
+    'llama-server missing: the program that runs these models on the GPU (~1.1 GB on disk).',
+  'settings.llamaServer.requiresNvidia':
+    'llama-server missing: it downloads only on computers with an NVIDIA GPU, the only kind these models run on.',
+  'settings.llamaServer.download': 'Download llama-server (~610 MB)',
+  'settings.llamaServer.downloading': 'Downloading llama-server…',
+  'settings.llamaServer.retry': 'Retry download',
   'settings.badge.available': 'Available',
   'settings.badge.downloadable': 'Downloadable',
   'settings.badge.notFound': 'Model not found',

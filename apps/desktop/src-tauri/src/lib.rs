@@ -1682,6 +1682,7 @@ pub fn run() {
             ocr::commands::glm_ocr_download_models,
             ocr::commands::qwen_correction_local_info,
             ocr::commands::qwen_correction_download_models,
+            ocr::commands::llama_server_download,
             ocr::commands::update_extraction_text_cmd,
             ocr::commands::extraction_is_edited_by_hand,
             ocr::block_reocr::reocr_layout_block,
@@ -3317,8 +3318,8 @@ mod tests {
             crate::llm::resolve_model_path(&db_path),
             models.join(crate::llm::MODEL_FILENAME)
         );
-        assert!(crate::ocr::glm_ocr_local::local_info(&db_path).model_present);
-        assert!(crate::ocr::qwen_local::local_info(&db_path).model_present);
+        assert!(crate::ocr::glm_ocr_local::local_info(&db_path, None).model_present);
+        assert!(crate::ocr::qwen_local::local_info(&db_path, None).model_present);
         let model_root = path_utils::model_root(&db_path);
         assert_eq!(
             crate::rag::reranker::resolve_local_reranker_model_dir(&model_root)

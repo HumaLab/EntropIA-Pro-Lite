@@ -51,6 +51,7 @@
 - «Optimizando el archivo…» `app.compactingTitle`
 - «Preparando tu espacio de trabajo» `app.startupTitle`
 - «Reintentar» `app.retryInit`
+- «Reintentá. Si vuelve a fallar, el detalle queda en el registro de diagnóstico.» `app.initErrorUnknown`
 
 ## Ventana
 
@@ -156,7 +157,7 @@
 - «Fecha» `batch.colDate`
 - «Flujo guardado» `batch.flow`
 - «Fondo» `batch.priorityBackground`
-- «Genera embeddings cuando el OCR produzca texto.» `batch.opEmbeddingsHint`
+- «Genera embeddings cuando el OCR produzca texto. Si lo destildás, esas páginas no se vectorizan solas y quedan fuera de la búsqueda semántica hasta que las vectorices.» `batch.opEmbeddingsHint`
 - «Guardar» `batch.flowSave`
 - «Guardar como flujo» `batch.flowSaveAs`
 - «Guardar esquema» `batch.schemaSave`
@@ -194,11 +195,11 @@
 - «Pausando…» `batch.pausing`
 - «Pausar» `batch.pause`
 - «Pendientes» `batch.statePending, batch.summaryPending`
-- «Preparando» `batch.batchStatePreparing`
-- «Primera página» `batch.firstPage`
 
 ### Varios (3/4)
 
+- «Preparando» `batch.batchStatePreparing`
+- «Primera página» `batch.firstPage`
 - «Primero cargá tu API key de OpenRouter, en Ajustes → OpenRouter. Sin ella no se pueden pedir embeddings, entidades, tripletes ni esquemas.» `batch.needsOpenrouterKey`
 - «Prioridad» `batch.priority`
 - «Procesamiento por lote» `batch.title`
@@ -241,11 +242,11 @@
 - «{count} intentos» `batch.attempts`
 - «{count} páginas reciben un resumen. Las que ya tienen uno se saltean.» `batch.summaryCount`
 - «{count} páginas se corrigen con el modelo de Prompts. Las que ya están corregidas se saltean.» `batch.ocrCorrectionCount`
-- «{count} requieren atención» `batch.statusAttention`
-- «{count} resultados» `batch.resultCount`
 
 ### Varios (4/4)
 
+- «{count} requieren atención» `batch.statusAttention`
+- «{count} resultados» `batch.resultCount`
 - «{count} seleccionadas» `batch.selectedCount`
 - «{done} de {total} páginas o fragmentos procesados» `batch.unitsOf`
 - «{done} de {total} registros sincronizados» `batch.bibliographyProgress`
@@ -1920,8 +1921,10 @@
 - «Volver a correr el OCR» `item.textRerun`
 - «Volver a correr el layout» `item.layoutRerun`
 - «Word (.docx)» `item.exportExtractedTextDocx`
+- «corre en este equipo con {model}» `item.ocrCorrectEngineLocal`
 - «desconocido» `item.ocrMethodUnknown`
 - «enviando a AssemblyAI» `item.transcriptionStage.submitting_remote`
+- «envía el texto a {tool} ({model})» `item.ocrCorrectEngineRemote`
 - «esperando respuesta remota» `item.transcriptionStage.polling_remote`
 - «no se pudo leer el archivo de la imagen para comprobar a qué versión corresponde.» `item.layoutVersionUnknown`
 - «nueva» `item.layoutBoxEditNewLabel`
@@ -2454,6 +2457,14 @@
 - «Turnos de historial»
 - «Vueltas máximas del agente»
 
+### llamaServer
+
+- «Descargando llama-server…»
+- «Descargar llama-server (~610 MB)»
+- «Falta llama-server, el programa que ejecuta estos modelos en la GPU (~1,1 GB en disco).»
+- «Falta llama-server: se descarga solo en equipos con GPU NVIDIA, la única con la que corren estos modelos.»
+- «Reintentar descarga»
+
 ### llmMode
 
 - «API remota. Requiere API key y conexión a internet.»
@@ -2564,6 +2575,14 @@
 - «Usa GLM-OCR como proveedor cloud para el botón OCRH.»
 - «Usa el pipeline local actual de OCR de alta precisión.»
 
+### parakeetModel
+
+- «Descargando Parakeet»
+- «Descargar Parakeet ({size})»
+- «El modelo Parakeet no está descargado: el dictado y la transcripción local no funcionan hasta descargarlo. Si la descarga se corta, continúa desde donde quedó.»
+- «Modelo Parakeet descargado.»
+- «Reintentar descarga»
+
 ### promptValidation
 
 - «Debe incluir el placeholder {text}.»
@@ -2585,7 +2604,7 @@
 ### qwenCorrectLocal
 
 - «Corrector local (Qwen3-VL)»
-- «Corrige OCR con un modelo local de 4B cuando no hay API key remota.»
+- «Corrige OCR en este equipo con un modelo de 4B cuando el modo LLM no es OpenRouter. Requiere GPU NVIDIA; sin ella, la corrección usa el modelo remoto.»
 - «Descargando modelos…»
 - «Descargar modelos (~2,9 GB)»
 - «Faltan modelos:»
