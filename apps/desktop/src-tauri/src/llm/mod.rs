@@ -1565,11 +1565,25 @@ fn ocr_correction_llm_mode(conn: &rusqlite::Connection) -> String {
     }
 }
 
+/// Whether the local Qwen corrector can take a page: assets installed AND an
+/// NVIDIA GPU. On CPU one page takes well over five minutes (the image alone
+/// ~3 min on a desktop CPU) and outlives the request timeout, so a GPU-less
+/// machine treats Qwen as not installed, like GLM-OCR's `auto` engine does.
 fn local_ocr_correction_available(_app_handle: &AppHandle, _db_path: &std::path::Path) -> bool {
     #[cfg(feature = "paddle-ocr")]
-    return qwen_correction::local_correction_available_for(_app_handle, _db_path);
+    return has_nvidia_gpu()
+        && qwen_correction::local_correction_available_for(_app_handle, _db_path);
     #[cfg(not(feature = "paddle-ocr"))]
     false
+}
+
+/// [`crate::ocr::paddle_vl::detect_nvidia_gpu`] once per session: it spawns
+/// `nvidia-smi` (or a hardware inventory query) and the hardware does not
+/// change while the app runs.
+#[cfg(feature = "paddle-ocr")]
+fn has_nvidia_gpu() -> bool {
+    static HAS_GPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HAS_GPU.get_or_init(crate::ocr::paddle_vl::detect_nvidia_gpu)
 }
 
 /// What the OCRC button shows before running: the engine a correction would

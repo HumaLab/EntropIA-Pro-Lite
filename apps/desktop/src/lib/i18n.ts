@@ -772,7 +772,7 @@ const es = {
   'settings.glmOcrLocal.retry': 'Reintentar descarga',
   'settings.qwenCorrectLocal.title': 'Corrector local (Qwen3-VL)',
   'settings.qwenCorrectLocal.description':
-    'Corrige OCR con un modelo local de 4B cuando no hay API key remota.',
+    'Corrige OCR en este equipo con un modelo de 4B cuando el modo LLM no es OpenRouter. Requiere GPU NVIDIA; sin ella, la corrección usa el modelo remoto.',
   'settings.qwenCorrectLocal.modelsReady': 'Modelos Qwen instalados.',
   'settings.qwenCorrectLocal.modelsMissing': 'Faltan modelos:',
   'settings.qwenCorrectLocal.download': 'Descargar modelos (~2,9 GB)',
@@ -4807,7 +4807,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.glmOcrLocal.retry': 'Retry download',
   'settings.qwenCorrectLocal.title': 'Local corrector (Qwen3-VL)',
   'settings.qwenCorrectLocal.description':
-    'Corrects OCR with a local 4B model when no remote API key is set.',
+    'Corrects OCR on this computer with a 4B model unless the LLM mode is OpenRouter. Needs an NVIDIA GPU; without one, correction uses the remote model.',
   'settings.qwenCorrectLocal.modelsReady': 'Qwen models installed.',
   'settings.qwenCorrectLocal.modelsMissing': 'Missing models:',
   'settings.qwenCorrectLocal.download': 'Download models (~2.9 GB)',
