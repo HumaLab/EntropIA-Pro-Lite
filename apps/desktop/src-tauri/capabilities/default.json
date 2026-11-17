@@ -56,6 +56,7 @@
     "allow-bibliography-reprocess-confirm",
     "allow-processing-list-batches",
     "allow-processing-get-batch",
+    "allow-processing-asset-active-task",
     "allow-processing-list-tasks",
     "allow-processing-get-task",
     "allow-writing-is-ready",

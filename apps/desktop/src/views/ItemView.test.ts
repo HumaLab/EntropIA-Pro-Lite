@@ -5963,6 +5963,45 @@ describe('ItemView processing labels by asset type', () => {
     expect(screen.getByRole('button', { name: 'OCRR' })).toBeInTheDocument()
   })
 
+  // R16: an OCR still running in the queue survives leaving and returning to
+  // the document; the panel no longer shows the previous text as DONE.
+  it('shows an OCR the queue is still running when the document is opened', async () => {
+    const fallback = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation(async (command: string, args?: unknown) =>
+      command === 'processing_asset_active_task'
+        ? {
+            taskId: 'ocr-1',
+            state: 'running',
+            progressDone: 2,
+            progressTotal: 5,
+            queuedAt: 1,
+          }
+        : fallback?.(command, args)
+    )
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-image-1',
+          itemId: 'item-1',
+          path: 'docs/sample.jpg',
+          type: 'image',
+          createdAt: 1,
+        },
+      ],
+      extractionsByAsset: { 'asset-image-1': { textContent: 'texto anterior', method: 'paddle' } },
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(await screen.findByRole('tab', { name: 'Texto' }))
+
+    const bar = await screen.findByRole('progressbar', { name: 'Extracción de texto' })
+    expect(bar).toHaveAttribute('aria-valuenow', '40')
+    expect(invokeMock).toHaveBeenCalledWith('processing_asset_active_task', {
+      assetId: 'asset-image-1',
+      kind: 'ocr',
+    })
+  })
+
   // Following a citation opens this view with the quoted fragment. Moving on to
   // the next document reuses the view: the fragment belongs to the first one
   // and must not be marked in the second, even where its words recur.

@@ -1633,6 +1633,7 @@ pub fn run() {
             bibliography::commands::bibliography_reprocess_confirm,
             processing::commands::processing_list_batches,
             processing::commands::processing_get_batch,
+            processing::commands::processing_asset_active_task,
             processing::commands::processing_list_tasks,
             processing::commands::processing_get_task,
             writing::commands::writing_is_ready,

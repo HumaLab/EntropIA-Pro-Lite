@@ -134,6 +134,7 @@
     llmGetResults,
   } from '$lib/llm'
   import { GeoStore, geocodeEntity } from '$lib/geo'
+  import { processingAssetActiveTask } from '$lib/batch-processing'
   import {
     ActionIcon,
     ConfirmDialog,
@@ -3238,23 +3239,43 @@
 
     if (asset.type !== 'audio') loadOcrTextEditedByHand(asset.id)
 
-    // Load existing extraction text for this asset
+    // Load existing extraction text for this asset, and any OCR the queue is
+    // still running for it: the OCR state lives in memory, so after leaving
+    // and coming back a running OCRH would otherwise show the old text as
+    // DONE (R16). The previous text stays visible while the new one runs.
     const store = getStore()
-    void store.extractions.findByAsset(asset.id).then((extraction) => {
-      if (
-        selectedAssetStateLoadGuard.isCurrent(requestToken) &&
-        isCurrentSelectedAsset(asset) &&
-        extraction
-      ) {
-        ocrStore._updateState(asset.id, {
-          status: 'done',
-          progress: 100,
-          textLength: extraction.textContent.length,
-          method: extraction.method,
-          textContent: extraction.textContent,
-        })
-        ocrTick++
+    void Promise.all([
+      store.extractions.findByAsset(asset.id),
+      asset.type === 'audio'
+        ? Promise.resolve(null)
+        : processingAssetActiveTask(asset.id, 'ocr').catch(() => null),
+    ]).then(([extraction, activeOcr]) => {
+      if (!selectedAssetStateLoadGuard.isCurrent(requestToken) || !isCurrentSelectedAsset(asset)) {
+        return
       }
+      if (!extraction && !activeOcr) return
+      const previous = extraction
+        ? {
+            textLength: extraction.textContent.length,
+            method: extraction.method,
+            textContent: extraction.textContent,
+          }
+        : {}
+      if (activeOcr) {
+        const running = activeOcr.state === 'running'
+        ocrStore._updateState(asset.id, {
+          ...previous,
+          status: running ? 'running' : 'pending',
+          progress:
+            running && activeOcr.progressTotal
+              ? Math.round((activeOcr.progressDone / activeOcr.progressTotal) * 100)
+              : 0,
+          stage: running ? 'running' : 'queued',
+        })
+      } else {
+        ocrStore._updateState(asset.id, { ...previous, status: 'done', progress: 100 })
+      }
+      ocrTick++
     })
 
     // Load existing transcription for audio assets

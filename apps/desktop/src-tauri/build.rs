@@ -63,6 +63,7 @@ const APP_COMMANDS: &[&str] = &[
     "bibliography_reprocess_confirm",
     "processing_list_batches",
     "processing_get_batch",
+    "processing_asset_active_task",
     "processing_list_tasks",
     "processing_get_task",
     "writing_is_ready",
