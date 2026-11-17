@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use super::local_server::{
-    data_dir, server_binary_name, server_dir, BUNDLED_SERVER_SUBDIR, SERVER_BINARY_ENV,
+    server_binary_name, server_dir, BUNDLED_SERVER_SUBDIR, SERVER_BINARY_ENV,
 };
 
 /// Qwen3-VL-4B instruct, Q4_K_M: fits next to a 2 GB KV cache on an 8 GB card.
@@ -74,9 +74,9 @@ pub fn local_info(db_path: &Path) -> QwenLocalInfo {
     }
 }
 
-/// `<data>/models/qwen3vl-4b-correct`, next to the other local models.
+/// `<cache>/models/qwen3vl-4b-correct`, next to the other local models.
 pub fn models_dir(db_path: &Path) -> PathBuf {
-    data_dir(db_path).join("models").join(MODELS_SUBDIR)
+    crate::path_utils::models_dir(db_path).join(MODELS_SUBDIR)
 }
 
 /// Resolve every asset, or explain which ones are missing.

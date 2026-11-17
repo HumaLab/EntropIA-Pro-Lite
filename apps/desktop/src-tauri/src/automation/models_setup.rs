@@ -255,7 +255,9 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
 
     // Reranker local: ordena candidatos del RAG.
     {
-        let dir = crate::rag::reranker::resolve_local_reranker_model_dir(db_path.parent());
+        let dir = crate::rag::reranker::resolve_local_reranker_model_dir(
+            &crate::path_utils::model_root(db_path),
+        );
         let info = crate::rag::reranker::get_local_reranker_model_info(dir);
         components.push(component(
             COMPONENT_RERANKER,

@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 pub(crate) use super::local_server::{
-    data_dir, server_binary_name, server_dir, BUNDLED_SERVER_SUBDIR, SERVER_BINARY_ENV,
+    server_binary_name, server_dir, BUNDLED_SERVER_SUBDIR, SERVER_BINARY_ENV,
 };
 
 /// Recognition model: Q8_0 decoder. Measured against f16 on scanned press
@@ -79,9 +79,9 @@ pub struct GlmLocalAssets {
     pub mmproj: PathBuf,
 }
 
-/// `<data>/models/glm-ocr`, next to the local LLM models.
+/// `<cache>/models/glm-ocr`, next to the local LLM models.
 pub fn models_dir(db_path: &Path) -> PathBuf {
-    data_dir(db_path).join("models").join(MODELS_SUBDIR)
+    crate::path_utils::models_dir(db_path).join(MODELS_SUBDIR)
 }
 
 /// Resolve every asset, or explain which ones are missing.

@@ -54,7 +54,7 @@ pub async fn llm_open_models_dir(db: State<'_, AppDbState>) -> Result<(), String
     let models_dir = resolve_model_path(db_path)
         .parent()
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| db_path.parent().unwrap_or(db_path).join("models"));
+        .unwrap_or_else(|| crate::path_utils::models_dir(db_path));
     std::fs::create_dir_all(&models_dir)
         .map_err(|e| format!("Failed to create models dir: {e}"))?;
 

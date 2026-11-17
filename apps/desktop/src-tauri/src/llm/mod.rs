@@ -113,10 +113,7 @@ pub(crate) struct LocalModelDownloadPaths {
 }
 
 fn managed_local_models_dir(db_path: &std::path::Path) -> std::path::PathBuf {
-    db_path
-        .parent()
-        .map(|parent| parent.join("models"))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("models"))
+    crate::path_utils::models_dir(db_path)
 }
 
 fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {

@@ -415,7 +415,46 @@ pub fn remember_cache_dir(dir: PathBuf) {
 /// `None` in unit tests and anywhere setup has not run; callers fall back to
 /// their previous behaviour so a test does not depend on process-wide state.
 pub fn remembered_cache_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = TEST_CACHE_DIR.with(|dir| dir.borrow().clone()) {
+        return Some(dir);
+    }
     REMEMBERED_CACHE_DIR.get().cloned()
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CACHE_DIR: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Give the calling test thread a cache directory without touching the
+/// process-wide value other tests rely on being unset.
+#[cfg(test)]
+// Only the `local-ml` model-resolver test sets it.
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
+pub fn set_test_cache_dir(dir: Option<PathBuf>) {
+    TEST_CACHE_DIR.with(|cell| *cell.borrow_mut() = dir);
+}
+
+/// The directory that holds every downloaded model: `<cache>/models`.
+///
+/// The one answer for downloaders, readers and the paths Settings shows. The
+/// startup migration moves `<data>/models` into the cache directory on every
+/// launch, so a model looked up beside the database is found only until the
+/// next start, and a redownload lands where the next start moves it again.
+pub fn models_dir(db_path: &Path) -> PathBuf {
+    model_root(db_path).join("models")
+}
+
+/// The directory `models/` hangs from, for resolvers that take a root.
+///
+/// Without a remembered cache directory (unit tests, any process that never
+/// ran setup) it is the database's directory, the layout before the split.
+pub fn model_root(db_path: &Path) -> PathBuf {
+    remembered_cache_dir()
+        .or_else(|| db_path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
 
 /// Resolve a stored `assets.path` at a command boundary.

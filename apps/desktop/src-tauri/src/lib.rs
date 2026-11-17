@@ -3238,6 +3238,66 @@ mod tests {
         assert!(cache.join("models").join("weights.bin").exists());
     }
 
+    /// R26: every model resolver must look where the migration puts models.
+    /// Before the fix the migration moved `<data>/models` into the cache and the
+    /// readers kept resolving `<data>/models`, so each start "lost" them.
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn models_moved_by_the_cache_migration_are_found_by_every_resolver() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let data = root.path().join("data");
+        let cache = root.path().join("cache");
+        fs::create_dir_all(&cache).expect("cache dir");
+        let db_path = data.join(SQLITE_BASENAME);
+
+        let reranker_file = Path::new("rerankers")
+            .join(crate::rag::reranker::LOCAL_RERANKER_DIR_NAME)
+            .join("model_int8.onnx");
+        let embedding_file = Path::new("embeddings").join("bge-m3").join("model.onnx");
+        let files = [
+            std::path::PathBuf::from(crate::llm::MODEL_FILENAME),
+            Path::new(crate::ocr::glm_ocr_local::MODELS_SUBDIR)
+                .join(crate::ocr::glm_ocr_local::MODEL_FILENAME),
+            Path::new(crate::ocr::qwen_local::MODELS_SUBDIR)
+                .join(crate::ocr::qwen_local::MODEL_FILENAME),
+            reranker_file.clone(),
+            embedding_file.clone(),
+        ];
+        // Where a build before the cache split downloaded them.
+        for file in &files {
+            let path = data.join("models").join(file);
+            fs::create_dir_all(path.parent().expect("parent")).expect("model dir");
+            fs::write(&path, b"weights").expect("model file");
+        }
+
+        migrate_cache_out_of_data_dir(&data, &cache).expect("migration succeeds");
+        assert!(
+            !data.join("models").exists(),
+            "nothing left in the data dir"
+        );
+
+        path_utils::set_test_cache_dir(Some(cache.clone()));
+        let models = cache.join("models");
+        assert_eq!(
+            crate::llm::resolve_model_path(&db_path),
+            models.join(crate::llm::MODEL_FILENAME)
+        );
+        assert!(crate::ocr::glm_ocr_local::local_info(&db_path).model_present);
+        assert!(crate::ocr::qwen_local::local_info(&db_path).model_present);
+        let model_root = path_utils::model_root(&db_path);
+        assert_eq!(
+            crate::rag::reranker::resolve_local_reranker_model_dir(&model_root)
+                .join("model_int8.onnx"),
+            models.join(&reranker_file)
+        );
+        assert_eq!(
+            crate::nlp::embeddings::resolve_local_embedding_model_dir(None, Some(&model_root))
+                .join("model.onnx"),
+            models.join(&embedding_file)
+        );
+        path_utils::set_test_cache_dir(None);
+    }
+
     #[test]
     fn the_cache_migration_merges_without_overwriting() {
         let root = tempfile::tempdir().expect("tempdir");
