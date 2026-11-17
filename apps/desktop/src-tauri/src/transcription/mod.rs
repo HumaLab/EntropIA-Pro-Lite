@@ -16,8 +16,8 @@ use engine::TranscriptionResult;
 use engine::{WhisperConfig, WhisperEngine};
 #[cfg(feature = "local-ml")]
 use parakeet::{
-    parakeet_supports_language, ParakeetConfig, ParakeetEngine, PARAKEET_MODEL_NAME,
-    PARAKEET_MODEL_SUBDIR,
+    parakeet_installed, parakeet_model_dir, parakeet_supports_language, ParakeetConfig,
+    ParakeetEngine, PARAKEET_MODEL_NAME,
 };
 use serde::Serialize;
 use std::path::Path;
@@ -414,10 +414,11 @@ pub(super) fn ensure_selected_cloud_key(conn: &rusqlite::Connection) -> Result<(
 
 #[cfg(feature = "local-ml")]
 pub fn local_transcription_available(settings_db_path: Option<&Path>) -> bool {
-    // Parakeet downloads its model on first use, so selecting it counts as
-    // available; otherwise fall back to the faster-whisper Python probe.
+    // Parakeet counts only once its model is on disk (R11): it used to count
+    // as available unconditionally and then download 2.5 GB inside the first
+    // dictation. A missing model is reported, never covered by faster-whisper.
     if local_engine_is_parakeet(settings_db_path) {
-        return true;
+        return settings_db_path.is_some_and(|path| parakeet_installed(&parakeet_model_dir(path)));
     }
     which_python(settings_db_path).is_some()
 }
@@ -465,12 +466,21 @@ fn transcribe_with_local_provider(
             emit_progress(app_handle, asset_id, pct, stage);
         }
     };
+    let mut parakeet_error = None;
     if get_local_engine(conn) == STT_LOCAL_ENGINE_PARAKEET
         && parakeet_supports_language(TRANSCRIPTION_LANGUAGE)
     {
-        let diarize = get_bool_setting(conn, STT_SETTING_LOCAL_DIARIZE);
-        match transcribe_with_parakeet(app_handle, settings_db_path, audio_path, diarize, &progress)
-        {
+        // Not downloaded is not a failure to cover with faster-whisper: the
+        // fallback probes every Python on the machine (~40 s) and then hides
+        // the one thing to do. Say it at once (R11); `auto` still falls back
+        // to AssemblyAI on this error.
+        if !settings_db_path.is_some_and(|path| parakeet_installed(&parakeet_model_dir(path))) {
+            return Err(parakeet::PARAKEET_NOT_DOWNLOADED.to_string());
+        }
+        // A dictation (no asset) is one voice inserting text: no speaker
+        // labels in it, and no 400 MB diarizer download inside the call.
+        let diarize = asset_id.is_some() && get_bool_setting(conn, STT_SETTING_LOCAL_DIARIZE);
+        match transcribe_with_parakeet(settings_db_path, audio_path, diarize, &progress) {
             Ok((result, warning)) => {
                 return Ok(ManagedTranscriptionResult {
                     transcription: result,
@@ -483,10 +493,20 @@ fn transcribe_with_local_provider(
                     target: "transcription",
                     "Parakeet failed, falling back to faster-whisper: {error}"
                 );
+                parakeet_error = Some(error);
             }
         }
     }
-    let result = transcribe_audio_file(app_handle, settings_db_path, audio_path)?;
+    let result = transcribe_audio_file(app_handle, settings_db_path, audio_path).map_err(
+        // The engine the user picked speaks first: "Parakeet is not
+        // downloaded" says what to do, a missing faster-whisper does not.
+        |whisper_error| match parakeet_error {
+            Some(parakeet_error) => {
+                format!("{parakeet_error} (respaldo faster-whisper: {whisper_error})")
+            }
+            None => whisper_error,
+        },
+    )?;
     Ok(ManagedTranscriptionResult {
         transcription: result,
         model_name: "faster-whisper/base",
@@ -501,11 +521,11 @@ fn get_bool_setting(conn: &rusqlite::Connection, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Load (once) + transcribe via the resident Parakeet engine.
+/// Load (once) + transcribe via the resident Parakeet engine. Never
+/// downloads: a missing model fails at once with [`parakeet::PARAKEET_NOT_DOWNLOADED`].
 #[cfg(feature = "local-ml")]
 fn transcribe_with_parakeet(
-    app_handle: &AppHandle,
-    _settings_db_path: Option<&Path>,
+    settings_db_path: Option<&Path>,
     audio_path: &str,
     diarize: bool,
     on_progress: &dyn Fn(u8, &str),
@@ -514,10 +534,11 @@ fn transcribe_with_parakeet(
         .lock()
         .map_err(|_| "Parakeet engine lock poisoned".to_string())?;
     if guard.is_none() {
-        let model_dir = resolve_model_cache_dir(app_handle)?.join(PARAKEET_MODEL_SUBDIR);
+        let db_path = settings_db_path
+            .ok_or_else(|| "Parakeet needs the archive path to find its model".to_string())?;
         let engine = ParakeetEngine::init(
             ParakeetConfig {
-                model_dir,
+                model_dir: parakeet_model_dir(db_path),
                 language: TRANSCRIPTION_LANGUAGE.to_string(),
             },
             on_progress,

@@ -136,6 +136,8 @@
     "allow-transcribe-audio",
     "allow-transcription-is-edited-by-hand",
     "allow-transcribe-dictation",
+    "allow-stt-parakeet-model-info",
+    "allow-stt-parakeet-download-model",
     "allow-test-assemblyai-connection",
     "allow-zotero-verify-key",
     "allow-update-transcription-text-cmd",

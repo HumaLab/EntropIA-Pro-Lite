@@ -53,6 +53,13 @@
     type EmbeddingDownloadProgressPayload,
     type LocalEmbeddingModelInfo,
   } from '$lib/embeddings'
+  import {
+    parakeetDownloadModel,
+    parakeetModelInfo,
+    type ParakeetDownloadErrorPayload,
+    type ParakeetDownloadProgressPayload,
+    type ParakeetModelInfo,
+  } from '$lib/transcription'
 
   // ---------------------------------------------------------------------------
   // State
@@ -68,6 +75,7 @@
   let runtimeRechecking = $state(false)
   let llmModel = $state<LocalModelInfo | null>(null)
   let embeddingModel = $state<LocalEmbeddingModelInfo | null>(null)
+  let parakeetModel = $state<ParakeetModelInfo | null>(null)
   let preparingEntropia = $state(false)
   let prepareStep = $state<string | null>(null)
   let llmDownloading = $state(false)
@@ -112,11 +120,13 @@
   let embeddingModelNeedsDownload = $derived(
     embeddingModel != null && !embeddingModel.available && embeddingModel.can_auto_download
   )
+  let parakeetModelNeedsDownload = $derived(parakeetModel != null && !parakeetModel.installed)
   let prepareEntropiaNeeded = $derived(
     runtimeBlocksInstalledCapabilities ||
       hasMissingOrFailed ||
       llmModelNeedsDownload ||
-      embeddingModelNeedsDownload
+      embeddingModelNeedsDownload ||
+      parakeetModelNeedsDownload
   )
 
   let overallProgress = $derived(() => {
@@ -311,12 +321,14 @@
   }
 
   async function refreshAiModelState() {
-    const [localLlm, localEmbedding] = await Promise.all([
+    const [localLlm, localEmbedding, parakeet] = await Promise.all([
       llmLocalModelInfo().catch(() => null),
       embeddingLocalModelInfo().catch(() => null),
+      parakeetModelInfo().catch(() => null),
     ])
     llmModel = localLlm
     embeddingModel = localEmbedding
+    parakeetModel = parakeet
   }
 
   async function waitForLlmDownload() {
@@ -375,6 +387,37 @@
     })
   }
 
+  // Parakeet (~2.5 GB) downloads with the other local models: dictation no
+  // longer fetches it on first use (R11).
+  async function waitForParakeetDownload() {
+    const unlisteners: UnlistenFn[] = []
+    const cleanup = () => unlisteners.splice(0).forEach((unlisten) => unlisten())
+
+    await new Promise<void>((resolve, reject) => {
+      void (async () => {
+        try {
+          unlisteners.push(
+            await listen<ParakeetDownloadProgressPayload>('parakeet:download_progress', (event) => {
+              prepareStep = `Descargando Parakeet (${event.payload.pct}%)`
+            }),
+            await listen('parakeet:download_complete', () => {
+              cleanup()
+              resolve()
+            }),
+            await listen<ParakeetDownloadErrorPayload>('parakeet:download_error', (event) => {
+              cleanup()
+              reject(new Error(event.payload.error))
+            })
+          )
+          await parakeetDownloadModel()
+        } catch (e) {
+          cleanup()
+          reject(e)
+        }
+      })()
+    })
+  }
+
   async function handlePrepareEntropia() {
     if (preparingEntropia) return
     preparingEntropia = true
@@ -414,6 +457,12 @@
       prepareStep = 'Descargando BGE-M3 local'
       if (embeddingModelNeedsDownload) {
         await waitForEmbeddingDownload()
+        await refreshAiModelState()
+      }
+
+      prepareStep = 'Descargando Parakeet'
+      if (parakeetModelNeedsDownload) {
+        await waitForParakeetDownload()
         await refreshAiModelState()
       }
 

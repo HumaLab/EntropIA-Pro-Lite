@@ -1692,6 +1692,8 @@ pub fn run() {
             transcription::commands::transcribe_audio,
             transcription::commands::transcription_is_edited_by_hand,
             transcription::commands::transcribe_dictation,
+            transcription::commands::stt_parakeet_model_info,
+            transcription::commands::stt_parakeet_download_model,
             transcription::commands::test_assemblyai_connection,
             zotero_web::zotero_verify_key,
             transcription::commands::update_transcription_text_cmd,

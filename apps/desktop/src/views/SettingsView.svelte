@@ -136,6 +136,13 @@
     type QwenCorrectionDownloadCompletePayload,
     type QwenCorrectionDownloadErrorPayload,
   } from '$lib/qwen-correction'
+  import {
+    parakeetModelInfo,
+    parakeetDownloadModel,
+    type ParakeetModelInfo,
+    type ParakeetDownloadProgressPayload,
+    type ParakeetDownloadErrorPayload,
+  } from '$lib/transcription'
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
   import { registerListeners } from '$lib/register-listeners'
@@ -538,6 +545,10 @@
   let qwenDownloading = $state(false)
   let qwenDownloadPct = $state(0)
   let qwenDownloadError = $state<string | null>(null)
+  let parakeetModel = $state<ParakeetModelInfo | null>(null)
+  let parakeetDownloading = $state(false)
+  let parakeetDownloadPct = $state(0)
+  let parakeetDownloadError = $state<string | null>(null)
 
   // Save state
   let saving = $state(false)
@@ -682,6 +693,7 @@
         rerankerModelInfo,
         glmOcrModelInfo,
         qwenModelInfo,
+        parakeetInfo,
       ] = await Promise.all([
         settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY),
         settingsGet(SETTINGS_KEYS.OPENROUTER_MODEL),
@@ -708,6 +720,7 @@
         rerankerLocalModelInfo().catch(() => null),
         glmOcrLocalInfo().catch(() => null),
         qwenCorrectionLocalInfo().catch(() => null),
+        parakeetModelInfo().catch(() => null),
       ])
       const settingsMap = new Map((await settingsGetAll()).map((entry) => [entry.key, entry.value]))
 
@@ -786,6 +799,8 @@
       localRerankerModel = rerankerModelInfo
       glmOcrLocal = glmOcrModelInfo
       qwenLocal = qwenModelInfo
+      parakeetModel = parakeetInfo
+      parakeetDownloading = parakeetInfo?.downloading ?? false
       ocrCorrectionPrompt = storedOcrCorrectionPrompt?.trim() || DEFAULT_PROMPTS.ocrCorrectionPrompt
       summaryPrompt = storedSummaryPrompt?.trim() || DEFAULT_PROMPTS.summaryPrompt
       nerPrompt = storedNerPrompt?.trim() || DEFAULT_PROMPTS.nerPrompt
@@ -946,6 +961,28 @@
               qwenDownloading = false
               qwenDownloadPct = 0
               qwenDownloadError = event.payload.error
+            }),
+          () =>
+            listen<ParakeetDownloadProgressPayload>('parakeet:download_progress', (event) => {
+              if (destroyed) return
+              parakeetDownloading = true
+              parakeetDownloadPct = event.payload.pct
+              parakeetDownloadError = null
+            }),
+          () =>
+            listen('parakeet:download_complete', async () => {
+              if (destroyed) return
+              parakeetModel = await parakeetModelInfo().catch(() => null)
+              parakeetDownloading = false
+              parakeetDownloadPct = 100
+              parakeetDownloadError = null
+            }),
+          () =>
+            listen<ParakeetDownloadErrorPayload>('parakeet:download_error', async (event) => {
+              if (destroyed) return
+              parakeetDownloading = false
+              parakeetDownloadError = event.payload.error
+              parakeetModel = await parakeetModelInfo().catch(() => null)
             }),
         ],
         () => destroyed
@@ -1934,6 +1971,24 @@
     }
   }
 
+  async function handleDownloadParakeet() {
+    if (parakeetDownloading) return
+    parakeetDownloading = true
+    parakeetDownloadPct = 0
+    parakeetDownloadError = null
+    try {
+      const state = await parakeetDownloadModel()
+      // 'in_progress' keeps the bar: another start is already running.
+      if (state !== 'started' && state !== 'in_progress') {
+        parakeetModel = await parakeetModelInfo().catch(() => null)
+        parakeetDownloading = false
+      }
+    } catch (e) {
+      parakeetDownloading = false
+      parakeetDownloadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
   async function resetPrompt(key: keyof typeof DEFAULT_PROMPTS) {
     const value = DEFAULT_PROMPTS[key]
     if (key === 'ocrCorrectionPrompt') ocrCorrectionPrompt = value
@@ -2661,6 +2716,38 @@
                         >{t('settings.sttLocalDiarize.description')}</span
                       >
                     </Checkbox>
+                    {#if parakeetModel}
+                      <div class="settings__local-model">
+                        {#if parakeetModel.installed}
+                          <p class="settings__hint">{t('settings.parakeetModel.ready')}</p>
+                        {:else if parakeetDownloading}
+                          <div class="settings__download-progress">
+                            <ProgressBar
+                              value={parakeetDownloadPct}
+                              label={t('settings.parakeetModel.downloading')}
+                            />
+                            <span class="settings__download-progress-text">
+                              {parakeetDownloadPct}% — {t('settings.parakeetModel.downloading')}
+                            </span>
+                          </div>
+                        {:else}
+                          <p class="settings__hint">{t('settings.parakeetModel.missing')}</p>
+                          <Button variant="primary" size="sm" onclick={handleDownloadParakeet}>
+                            {t('settings.parakeetModel.download', {
+                              size: formatBytes(parakeetModel.missing_bytes),
+                            })}
+                          </Button>
+                        {/if}
+                        {#if parakeetDownloadError}
+                          <p class="surface-message surface-message--error">
+                            {parakeetDownloadError}
+                            <Button variant="secondary" size="sm" onclick={handleDownloadParakeet}>
+                              {t('settings.parakeetModel.retry')}
+                            </Button>
+                          </p>
+                        {/if}
+                      </div>
+                    {/if}
                   {/if}
                 </div>
               {/if}

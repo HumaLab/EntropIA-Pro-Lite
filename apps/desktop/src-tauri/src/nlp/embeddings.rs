@@ -2002,6 +2002,15 @@ fn managed_venv_onnxruntime_capi_dirs(managed_root: &Path) -> Vec<PathBuf> {
 #[cfg(feature = "local-ml")]
 fn app_data_root_from_local_model_dir(model_dir: &Path) -> Option<PathBuf> {
     let category_dir = model_dir.parent()?;
+    if category_dir
+        .file_name()?
+        .to_string_lossy()
+        .eq_ignore_ascii_case("models")
+    {
+        // Flat layout: <app-data>/models/<model> (Parakeet since it left the
+        // runtime's HF cache, R23).
+        return category_dir.parent().map(Path::to_path_buf);
+    }
     let models_dir = category_dir.parent()?;
     if models_dir
         .file_name()?
@@ -2479,6 +2488,11 @@ mod tests {
         // HF cache layout: <root>/caches/hf/<model> (Parakeet et al.)
         assert_eq!(
             app_data_root_from_local_model_dir(Path::new("/data/caches/hf/parakeet-tdt-0.6b-v3")),
+            Some(PathBuf::from("/data"))
+        );
+        // Flat layout: <root>/models/<model> (Parakeet, R23)
+        assert_eq!(
+            app_data_root_from_local_model_dir(Path::new("/data/models/parakeet-tdt-0.6b-v3")),
             Some(PathBuf::from("/data"))
         );
         assert_eq!(

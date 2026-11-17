@@ -743,6 +743,12 @@ const es = {
   'settings.sttLocalDiarize.label': 'Detectar hablantes',
   'settings.sttLocalDiarize.description':
     'Etiqueta cada segmento con Hablante A, B… (máximo 4, solo Parakeet). Requiere descargar el modelo de diarización (~400 MB).',
+  'settings.parakeetModel.ready': 'Modelo Parakeet descargado.',
+  'settings.parakeetModel.missing':
+    'El modelo Parakeet no está descargado: el dictado y la transcripción local no funcionan hasta descargarlo. Si la descarga se corta, continúa desde donde quedó.',
+  'settings.parakeetModel.download': 'Descargar Parakeet ({size})',
+  'settings.parakeetModel.downloading': 'Descargando Parakeet',
+  'settings.parakeetModel.retry': 'Reintentar descarga',
   'settings.ocrhModeTitle': 'Modo OCRH',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Usa el pipeline local actual de OCR de alta precisión.',
@@ -3482,6 +3488,11 @@ type ExtraI18nKey =
   | 'settings.sttLocalEngine.whisper.description'
   | 'settings.sttLocalDiarize.label'
   | 'settings.sttLocalDiarize.description'
+  | 'settings.parakeetModel.ready'
+  | 'settings.parakeetModel.missing'
+  | 'settings.parakeetModel.download'
+  | 'settings.parakeetModel.downloading'
+  | 'settings.parakeetModel.retry'
   | 'settings.ocrhMode.local.label'
   | 'settings.ocrhMode.local.summary'
   | 'settings.ocrhMode.local.description'
@@ -4777,6 +4788,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.sttLocalDiarize.label': 'Detect speakers',
   'settings.sttLocalDiarize.description':
     'Tag each segment with its speaker (Hablante A, B…, max 4, Parakeet only). Requires downloading the diarization model (~400 MB).',
+  'settings.parakeetModel.ready': 'Parakeet model downloaded.',
+  'settings.parakeetModel.missing':
+    'The Parakeet model is not downloaded: dictation and local transcription do not work until it is. An interrupted download resumes where it stopped.',
+  'settings.parakeetModel.download': 'Download Parakeet ({size})',
+  'settings.parakeetModel.downloading': 'Downloading Parakeet',
+  'settings.parakeetModel.retry': 'Retry download',
   'settings.ocrhModeTitle': 'OCRH mode',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Use the current local high-accuracy OCR pipeline.',

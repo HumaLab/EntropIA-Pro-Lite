@@ -402,6 +402,66 @@ describe('SettingsView', () => {
     }
   )
 
+  // R11: dictation no longer downloads Parakeet; Configuración says whether
+  // the model is there and starts the download.
+  it.runIf(LOCAL_ML)(
+    'offers the Parakeet download while the model is missing',
+    async () => {
+      settingsGetMock.mockImplementation(async (key: string) => {
+        if (key === 'stt_mode') return 'local'
+        return null
+      })
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'stt_parakeet_model_info') {
+          return {
+            installed: false,
+            downloading: false,
+            missing_bytes: 2_552_491_649,
+            total_bytes: 2_552_491_649,
+            directory: 'C:/cache/models/parakeet-tdt-0.6b-v3',
+          }
+        }
+        if (command === 'stt_parakeet_download_model') return 'started'
+        return undefined
+      })
+      const { unmount } = render(SettingsView)
+      try {
+        await fireEvent.click(await screen.findByRole('button', { name: /Descargar Parakeet/ }))
+        await waitFor(() =>
+          expect(invokeMock).toHaveBeenCalledWith('stt_parakeet_download_model')
+        )
+        expect(await screen.findByText(/Descargando Parakeet/)).toBeInTheDocument()
+      } finally {
+        unmount()
+      }
+    }
+  )
+
+  it.runIf(LOCAL_ML)('shows the Parakeet model as ready once it is on disk', async () => {
+    settingsGetMock.mockImplementation(async (key: string) => {
+      if (key === 'stt_mode') return 'local'
+      return null
+    })
+    invokeMock.mockImplementation(async (command: string) =>
+      command === 'stt_parakeet_model_info'
+        ? {
+            installed: true,
+            downloading: false,
+            missing_bytes: 0,
+            total_bytes: 2_552_491_649,
+            directory: 'C:/cache/models/parakeet-tdt-0.6b-v3',
+          }
+        : undefined
+    )
+    const { unmount } = render(SettingsView)
+    try {
+      expect(await screen.findByText('Modelo Parakeet descargado.')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Descargar Parakeet/ })).toBeNull()
+    } finally {
+      unmount()
+    }
+  })
+
   it('saves a custom OpenAI-compatible base URL for remote generation', async () => {
     settingsGetMock.mockImplementation(async () => null)
     const { unmount } = render(SettingsView)
