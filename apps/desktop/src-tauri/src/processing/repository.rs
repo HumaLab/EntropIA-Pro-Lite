@@ -160,6 +160,8 @@ pub struct BatchOperations {
     pub ocr: bool,
     /// OCR also admits pages whose only extraction is native PDF text.
     pub ocr_include_native: bool,
+    /// With OCRH in local mode, run local OCRH instead of OCRL.
+    pub ocr_local_high: bool,
     pub embeddings: bool,
     pub ner: bool,
     pub triples: bool,
@@ -184,6 +186,7 @@ pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperat
             match entry.as_str() {
                 "ocr" => ops.ocr = true,
                 super::commands::OCR_INCLUDE_NATIVE => ops.ocr_include_native = true,
+                super::commands::OCR_LOCAL_HIGH => ops.ocr_local_high = true,
                 "embeddings" => ops.embeddings = true,
                 "ner" => ops.ner = true,
                 "triples" => ops.triples = true,
@@ -6252,7 +6255,7 @@ pub fn classify_batch_page(
     }
     // Read phase: eligibility verdicts for every member, no write lock held.
     // The OCR mode pins once per page from the saved setting (frozen scope).
-    let ocr_mode = super::ocr::resolve_batch_ocr_mode(conn);
+    let ocr_mode = super::ocr::resolve_batch_ocr_mode(conn, ops.ocr_local_high);
     let mut works = Vec::with_capacity(page.len());
     for (ordinal, asset_id) in &page {
         works.push(plan_member(conn, *ordinal, asset_id, &ops, &ocr_mode)?);

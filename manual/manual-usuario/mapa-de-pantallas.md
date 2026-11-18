@@ -128,6 +128,7 @@
 - «Completado» `batch.attemptSucceeded, batch.batchStateCompleted`
 - «Completado con errores» `batch.batchStateCompletedWithErrors`
 - «Completados» `batch.stateSucceeded`
+- «Con el modo OCRH en local, el lote usa OCRL (layout + PaddleOCR, segundos por página). Marcado, usa layout + OCRH local (PaddleOCR-VL o GLM-OCR): más preciso y mucho más lento.» `batch.opOcrLocalHighHint`
 - «Corrección OCR» `batch.opOcrCorrection`
 - «Corrige el texto OCR de cada página con el modelo de Prompts; guarda el original.» `batch.opOcrCorrectionHint`
 - «Código de error» `batch.colErrorCode`
@@ -136,12 +137,12 @@
 - «Descartar borrador» `batch.discard`
 - «Detalle del lote» `batch.detail`
 - «Documento» `batch.colDocument, batch.schemaDocument`
-- «Editar» `batch.schemaEdit`
-- «Ejecutá OCR y embeddings sobre colecciones enteras en segundo plano, con reanudación ante interrupciones.» `batch.subtitle`
-- «El modelo general» `batch.schemaModelPlaceholder`
 
 ### Varios (2/4)
 
+- «Editar» `batch.schemaEdit`
+- «Ejecutá OCR y embeddings sobre colecciones enteras en segundo plano, con reanudación ante interrupciones.» `batch.subtitle`
+- «El modelo general» `batch.schemaModelPlaceholder`
 - «Elegir a mano» `batch.flowNone`
 - «Emb.» `batch.colEmbeddingsShort`
 - «Embeddings» `batch.opEmbeddings`
@@ -153,6 +154,7 @@
 - «Escribe un resumen por página.» `batch.opSummaryHint`
 - «Esquema propio» `batch.schema`
 - «Estado» `batch.colState, batch.filterState`
+- «Este equipo no tiene GPU NVIDIA: OCRH local corre en el procesador y tarda unos 15 minutos por página.» `batch.ocrhCpuNotice`
 - «Extrae relaciones sujeto-verbo-objeto de cada documento con texto. Saltea los que ya tienen tripletes.» `batch.opTriplesHint`
 - «Fecha» `batch.colDate`
 - «Flujo guardado» `batch.flow`
@@ -184,20 +186,21 @@
 - «Nuevo esquema» `batch.schemaNew`
 - «Nuevo lote» `batch.newBatch`
 - «OCR» `batch.colOcrShort, batch.opOcr`
+- «OCRH local» `batch.opOcrLocalHigh`
 - «Omitidos» `batch.stateSkipped`
 - «Opcional. Un modelo de OpenRouter solo para este esquema, por ejemplo anthropic/claude-sonnet-4.5.» `batch.schemaModelHint`
 - «Operaciones» `batch.operations`
 - «Operación» `batch.colOperation`
 - «Paginación de tareas» `batch.pagination`
+
+### Varios (3/4)
+
 - «Pasa por OCR también las páginas que solo tienen el texto nativo del PDF y reemplaza ese texto. Las páginas que ya pasaron por OCR se saltean igual.» `batch.opOcrIncludeNativeHint`
 - «Pausado» `batch.batchStatePaused, batch.paused`
 - «Pausando» `batch.batchStatePausing`
 - «Pausando…» `batch.pausing`
 - «Pausar» `batch.pause`
 - «Pendientes» `batch.statePending, batch.summaryPending`
-
-### Varios (3/4)
-
 - «Preparando» `batch.batchStatePreparing`
 - «Primera página» `batch.firstPage`
 - «Primero cargá tu API key de OpenRouter, en Ajustes → OpenRouter. Sin ella no se pueden pedir embeddings, entidades, tripletes ni esquemas.» `batch.needsOpenrouterKey`
@@ -237,14 +240,14 @@
 - «{count} checkpoints» `batch.checkpointCount`
 - «{count} documentos pasan por el esquema propio.» `batch.schemaCount`
 - «{count} documentos pasan por la búsqueda de entidades.» `batch.nerCount`
+
+### Varios (4/4)
+
 - «{count} documentos pasan por la extracción de tripletes.» `batch.triplesCount`
 - «{count} filas» `batch.schemaResultCount`
 - «{count} intentos» `batch.attempts`
 - «{count} páginas reciben un resumen. Las que ya tienen uno se saltean.» `batch.summaryCount`
 - «{count} páginas se corrigen con el modelo de Prompts. Las que ya están corregidas se saltean.» `batch.ocrCorrectionCount`
-
-### Varios (4/4)
-
 - «{count} requieren atención» `batch.statusAttention`
 - «{count} resultados» `batch.resultCount`
 - «{count} seleccionadas» `batch.selectedCount`
@@ -1722,14 +1725,15 @@
 - «Corrección OCR» `item.ocrCorrectTitle, item.pdfCorrectTitle`
 - «Corrección, resumen y triples requieren OpenRouter. Configuralo en Configuración.» `item.llmUnavailableHint`
 - «Corregir caja» `item.layoutBoxEditTitle`
+- «Correr OCRH igual» `item.ocrhCpuContinue`
 - «Corresponde al layout» `item.imageVersionMatchesLayout`
 - «Corresponde al texto» `item.imageVersionMatchesText`
 - «Descargar» `item.downloadExtractedText`
 - «Descargar texto extraído» `item.downloadExtractedTextAria`
-- «Descartar la nueva entidad» `item.newEntityCancelAria`
 
 ### Varios (2/6)
 
+- «Descartar la nueva entidad» `item.newEntityCancelAria`
 - «Descartar la nueva tripleta» `item.newTripleCancelAria`
 - «Disponible después de corregir el OCR» `item.restoreOriginalOcrUnavailable`
 - «Documento» `item.documentTab, item.viewerImageAlt`
@@ -1759,6 +1763,7 @@
 - «Escribí una nota...» `item.writeNote`
 - «Esta imagen tiene anotaciones. Pueden no coincidir con la versión que elegiste. ¿Continuar?» `item.imageVersionAnnotationsWarning`
 - «Esta página todavía no tiene layout persistido.» `item.layoutMissing`
+- «Este equipo no tiene GPU NVIDIA: OCRH local corre en el procesador y tarda unos 15 minutos por página. OCRL tarda segundos.» `item.ocrhCpuWarning`
 - «Este layout corresponde a otra versión de la imagen ({width}×{height}); la actual mide {currentWidth}×{currentHeight}.» `item.layoutOtherVersionSized`
 - «Este layout corresponde a otra versión de la imagen.» `item.layoutOtherVersion`
 - «Este texto se extrajo de otra versión de la imagen. Puede no coincidir con lo que ves.» `item.textOtherVersion`
@@ -1771,14 +1776,14 @@
 - «Extraé texto primero» `item.ocrCorrectNeedsText`
 - «FTS Debug (solo dev)» `item.ftsDebugTitle`
 - «Filtrar bloques por tipo» `item.layoutFilterGroup`
+
+### Varios (3/6)
+
 - «Formatos de descarga del texto extraído» `item.downloadExtractedTextMenu`
 - «Generando exportación…» `item.exportExtractedTextWorking`
 - «Generando resumen…» `item.generatingSummary`
 - «Generar resumen» `item.summaryTitle`
 - «Grupo» `item.layoutGroup`
-
-### Varios (3/6)
-
 - «Guardando...» `item.saving`
 - «Guardar cambios» `item.entitySaveTitle, item.tripleSaveTitle`
 - «Guardar entidad» `item.entitySaveAria`
@@ -1822,15 +1827,16 @@
 - «No hay resultados para esa búsqueda.» `item.ftsNoResults`
 - «Nota vacía» `item.noteEmptyPreview`
 - «Notas» `item.notes, item.notesTab`
+
+### Varios (4/6)
+
 - «Nueva caja a continuación» `item.layoutBoxEditInsert`
 - «Nuevo tipo de entidad» `item.newEntityType`
 - «Nuevo valor de entidad» `item.newEntityValue`
 - «OCR de alta precisión» `item.ocrHighTitle`
 - «OCRC» `item.ocrCorrectAction, item.pdfCorrectAction`
 - «OCRH» `item.ocrHighAction`
-
-### Varios (4/6)
-
+- «OCRH local sin GPU» `item.ocrhCpuTitle`
 - «OCRL» `item.ocrFastAction`
 - «OCRR» `item.summaryAction, item.summaryPdfAction`
 - «Objeto de la nueva tripleta» `item.newTripleObjectAria`
@@ -1875,6 +1881,9 @@
 - «Restaurando OCR original…» `item.restoreOriginalOcrWorking`
 - «Restaurar OCR original» `item.restoreOriginalOcr`
 - «Restaurar versión original del OCR» `item.restoreOriginalOcrAria`
+
+### Varios (5/6)
+
 - «Resumen» `item.summary, item.summaryAudioAction`
 - «Retroceder 5 segundos» `item.audioSkipBack`
 - «STT» `item.transcribeShortAction`
@@ -1882,9 +1891,6 @@
 - «Salida (SHA-256)» `item.processHistoryOutput`
 - «Seleccionar anotación {id}» `item.viewerAnnotation`
 - «Seleccionar página del layout» `item.layoutPageSelect`
-
-### Varios (5/6)
-
 - «Seleccioná un bloque para ver label, orden, página, bbox, source y texto completo.» `item.layoutEmptyInspector`
 - «Seleccioná una página antes de generar embeddings y similitud a nivel página.» `item.analysisNeedAsset`
 - «Seleccioná una página para ver resultados de similitud por página.» `item.similarAssetsNeedSelection`
@@ -1916,16 +1922,17 @@
 - «Transcribiendo… {progress}%» `item.transcriptionRunning`
 - «Transcribir» `item.transcribeAction`
 - «Transcribir de nuevo» `item.retranscribeAction`
+
+### Varios (6/6)
+
 - «Transcribir este archivo de audio» `item.transcribeTitle`
 - «Transcripción» `item.transcription`
 - «Transcripción de audio» `item.audioTranscription`
 - «Transcripción en progreso…» `item.transcribeBusyTitle`
 - «Tripletas semánticas» `item.semanticTriples`
 - «Tópicos» `item.topics`
+- «Usar OCRL» `item.ocrhCpuUseOcrl`
 - «Usar esta versión» `item.imageVersionUse`
-
-### Varios (6/6)
-
 - «Valor» `item.metadataValueLabel, item.metadataValuePlaceholder`
 - «Versiones de la imagen» `item.imageVersions`
 - «Versión {n}» `item.imageVersionNumber`

@@ -538,6 +538,10 @@ pub async fn processing_sync_bibliography_library(
 /// Batch OCR modifier: pages whose only text is the native PDF layer are
 /// OCR'd too, replacing that text. Off unless the request names it.
 pub const OCR_INCLUDE_NATIVE: &str = "ocr_include_native";
+/// Batch OCR modifier: with the OCRH mode set to local, the batch runs the
+/// local OCRH pipeline (layout + PaddleOCR-VL or GLM-OCR) instead of OCRL
+/// (layout + PaddleOCR). Remote and auto modes already run OCRH.
+pub const OCR_LOCAL_HIGH: &str = "ocr_local_high";
 
 pub fn prepare_batch(
     conn: &Connection,
@@ -562,9 +566,13 @@ pub fn prepare_batch(
         })
         .cloned()
         .collect();
-    // Including native-text pages only refines OCR; alone it selects nothing.
-    if ops.iter().any(|op| op == "ocr") && operations.iter().any(|op| op == OCR_INCLUDE_NATIVE) {
-        ops.push(OCR_INCLUDE_NATIVE.to_string());
+    // Both OCR modifiers only refine OCR; alone they select nothing.
+    if ops.iter().any(|op| op == "ocr") {
+        for modifier in [OCR_INCLUDE_NATIVE, OCR_LOCAL_HIGH] {
+            if operations.iter().any(|op| op == modifier) {
+                ops.push(modifier.to_string());
+            }
+        }
     }
     ops.sort();
     ops.dedup();
@@ -1448,10 +1456,22 @@ mod tests {
             "req-3",
             &[ALFA.to_string()],
             &[],
-            &ops(&["ocr_include_native"]),
+            &ops(&["ocr_include_native", "ocr_local_high"]),
         )
-        .expect_err("the option alone selects nothing");
+        .expect_err("the modifiers alone select nothing");
         assert!(alone.starts_with("invalid_selection"), "{alone}");
+        let high = prepare_batch(
+            &conn,
+            "req-4",
+            &[ALFA.to_string()],
+            &[],
+            &ops(&["ocr", "ocr_local_high"]),
+        )
+        .expect("prepare with local OCRH");
+        assert_eq!(
+            batch_snapshot(&conn, &high.batch_id).unwrap().operations,
+            vec!["ocr".to_string(), "ocr_local_high".to_string()]
+        );
     }
 
     fn snapshot_collection_ids(conn: &Connection, batch_id: &str) -> Vec<String> {

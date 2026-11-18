@@ -107,7 +107,13 @@
   import { assetHasImageVersions, type ImageVersion } from '$lib/image-versions'
   import { runPendingAssetJob } from '$lib/item-view-media-jobs'
   import { recordAssetProcess, type RendererProcess } from '$lib/asset-history'
-  import { OcrStore, extractText, extractionIsEditedByHand, type OcrMode } from '$lib/ocr'
+  import {
+    OcrStore,
+    extractText,
+    extractionIsEditedByHand,
+    localOcrhInfo,
+    type OcrMode,
+  } from '$lib/ocr'
   import { TranscriptionStore, transcribeAudio, transcribeDictation } from '$lib/transcription'
   import {
     NlpStore,
@@ -137,6 +143,7 @@
   import { processingAssetActiveTask } from '$lib/batch-processing'
   import {
     ActionIcon,
+    Button,
     ConfirmDialog,
     IconButton,
     Panel,
@@ -302,6 +309,9 @@
   // A user-requested OCR waiting for the person to accept that it replaces
   // corrections made by hand.
   let pendingOcrRerun = $state<{ assetId: string; mode: OcrMode } | null>(null)
+  // A user-requested OCRH that would run on the CPU (~15 min per page),
+  // waiting for the person to accept the wait (R17).
+  let pendingCpuOcrh = $state<{ assetId: string; editedByHand: boolean } | null>(null)
   // A version chosen in the versions panel, waiting for the person to accept
   // that the annotations of the image may not match it.
   let pendingVersionSwitch = $state<{ assetId: string; version: ImageVersion } | null>(null)
@@ -2021,12 +2031,36 @@
     })
   }
 
-  function startOrConfirmOcr(asset: Asset, mode: OcrMode, editedByHand: boolean) {
+  async function startOrConfirmOcr(asset: Asset, mode: OcrMode, editedByHand: boolean) {
+    if (mode === 'high' && (await localOcrhInfo()).high_on_cpu) {
+      pendingCpuOcrh = { assetId: asset.id, editedByHand }
+      return
+    }
+    return confirmHandEditsOrRun(asset, mode, editedByHand)
+  }
+
+  function confirmHandEditsOrRun(asset: Asset, mode: OcrMode, editedByHand: boolean) {
     if (editedByHand) {
       pendingOcrRerun = { assetId: asset.id, mode }
       return
     }
     return handleExtractText(asset, mode)
+  }
+
+  async function confirmCpuOcrh() {
+    const pending = pendingCpuOcrh
+    pendingCpuOcrh = null
+    const asset = selectedAsset
+    if (!pending || !asset || asset.id !== pending.assetId) return
+    await confirmHandEditsOrRun(asset, 'high', pending.editedByHand)
+  }
+
+  async function useOcrlInstead() {
+    const pending = pendingCpuOcrh
+    pendingCpuOcrh = null
+    const asset = selectedAsset
+    if (!pending || !asset || asset.id !== pending.assetId) return
+    await confirmHandEditsOrRun(asset, 'light', pending.editedByHand)
   }
 
   async function confirmOcrRerun() {
@@ -4061,6 +4095,21 @@
       oncancel={() => (pendingOcrRerun = null)}
       onconfirm={confirmOcrRerun}
     />
+  {/if}
+
+  {#if pendingCpuOcrh && pendingCpuOcrh.assetId === selectedAssetId}
+    <ConfirmDialog
+      title={translate('item.ocrhCpuTitle')}
+      message={translate('item.ocrhCpuWarning')}
+      cancelLabel={translate('collections.cancel')}
+      confirmLabel={translate('item.ocrhCpuContinue')}
+      oncancel={() => (pendingCpuOcrh = null)}
+      onconfirm={confirmCpuOcrh}
+    >
+      <Button variant="secondary" size="sm" onclick={useOcrlInstead}>
+        {translate('item.ocrhCpuUseOcrl')}
+      </Button>
+    </ConfirmDialog>
   {/if}
 
   {#if pendingVersionSwitch && pendingVersionSwitch.assetId === selectedAssetId}

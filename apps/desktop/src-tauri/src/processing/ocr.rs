@@ -154,10 +154,11 @@ pub(crate) fn ocr_history_event(
 }
 
 /// Resolves the OCR mode a new batch pins for its tasks from the saved OCRH
-/// setting: `local` → light, `glm_ocr`/`auto` → high (auto tries GLM first
-/// and falls back, exactly like the previous worker). Frozen at admission —
-/// a later settings change does not rewrite running batches.
-pub(crate) fn resolve_batch_ocr_mode(conn: &Connection) -> String {
+/// setting: `glm_ocr`/`auto` → high (auto tries GLM first and falls back,
+/// exactly like the previous worker); `local` → light, or high when the batch
+/// asked for local OCRH (`ocr_local_high`). Frozen at admission — a later
+/// settings change does not rewrite running batches.
+pub(crate) fn resolve_batch_ocr_mode(conn: &Connection, local_high: bool) -> String {
     let mode: String = conn
         .query_row(
             "SELECT value FROM app_settings WHERE key = 'ocrh_mode'",
@@ -167,6 +168,7 @@ pub(crate) fn resolve_batch_ocr_mode(conn: &Connection) -> String {
         .unwrap_or_else(|_| "local".to_string());
     match mode.to_lowercase().as_str() {
         "glm_ocr" | "high" | "auto" => "high".to_string(),
+        _ if local_high => "high".to_string(),
         _ => "light".to_string(),
     }
 }
@@ -837,14 +839,15 @@ mod tests {
             "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )
         .expect("settings table");
-        // No row: legacy default is local → light.
-        assert_eq!(resolve_batch_ocr_mode(&conn), "light");
+        // No row: legacy default is local → light, unless the batch asked for OCRH.
+        assert_eq!(resolve_batch_ocr_mode(&conn, false), "light");
+        assert_eq!(resolve_batch_ocr_mode(&conn, true), "high");
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES ('ocrh_mode', 'glm_ocr')",
             [],
         )
         .expect("insert mode");
-        assert_eq!(resolve_batch_ocr_mode(&conn), "high");
+        assert_eq!(resolve_batch_ocr_mode(&conn, false), "high");
         assert_eq!(ocr_task_contract("high"), "ocr:high");
     }
     #[test]

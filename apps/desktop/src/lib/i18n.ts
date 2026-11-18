@@ -329,6 +329,11 @@ const es = {
   'batch.opOcrIncludeNative': 'Incluir texto nativo',
   'batch.opOcrIncludeNativeHint':
     'Pasa por OCR también las páginas que solo tienen el texto nativo del PDF y reemplaza ese texto. Las páginas que ya pasaron por OCR se saltean igual.',
+  'batch.opOcrLocalHigh': 'OCRH local',
+  'batch.opOcrLocalHighHint':
+    'Con el modo OCRH en local, el lote usa OCRL (layout + PaddleOCR, segundos por página). Marcado, usa layout + OCRH local (PaddleOCR-VL o GLM-OCR): más preciso y mucho más lento.',
+  'batch.ocrhCpuNotice':
+    'Este equipo no tiene GPU NVIDIA: OCRH local corre en el procesador y tarda unos 15 minutos por página.',
   'batch.opEmbeddingsHint':
     'Genera embeddings cuando el OCR produzca texto. Si lo destildás, esas páginas no se vectorizan solas y quedan fuera de la búsqueda semántica hasta que las vectorices.',
   'batch.opNer': 'Entidades',
@@ -2475,6 +2480,11 @@ const es = {
   'item.textRerun': 'Volver a correr el OCR',
   'item.reocrWarning':
     'El texto tiene correcciones hechas a mano. Si volvés a correr el OCR, se reemplazan. ¿Continuar?',
+  'item.ocrhCpuTitle': 'OCRH local sin GPU',
+  'item.ocrhCpuWarning':
+    'Este equipo no tiene GPU NVIDIA: OCRH local corre en el procesador y tarda unos 15 minutos por página. OCRL tarda segundos.',
+  'item.ocrhCpuContinue': 'Correr OCRH igual',
+  'item.ocrhCpuUseOcrl': 'Usar OCRL',
   'item.imageVersions': 'Versiones de la imagen',
   'item.imageVersionsHelp':
     'Los archivos que dejó cada edición de esta imagen. Elegí cuál mostrar: no se borra ninguno.',
@@ -4403,6 +4413,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.opOcrIncludeNative': 'Include native text',
   'batch.opOcrIncludeNativeHint':
     'Also runs OCR on pages that only have the native PDF text, replacing that text. Pages that already went through OCR are still skipped.',
+  'batch.opOcrLocalHigh': 'Local OCRH',
+  'batch.opOcrLocalHighHint':
+    'With the OCRH mode set to local, the batch uses OCRL (layout + PaddleOCR, seconds per page). Ticked, it uses layout + local OCRH (PaddleOCR-VL or GLM-OCR): more accurate and much slower.',
+  'batch.ocrhCpuNotice':
+    'This computer has no NVIDIA GPU: local OCRH runs on the processor and takes about 15 minutes per page.',
   'batch.opEmbeddingsHint':
     'Generate embeddings once OCR produces text. Unchecked, those pages are not embedded automatically and stay out of semantic search until you embed them.',
   'batch.opNer': 'Entities',
@@ -5994,6 +6009,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.textRerun': 'Run the OCR again',
   'item.reocrWarning':
     'The text has manual corrections. Running the OCR again will replace them. Continue?',
+  'item.ocrhCpuTitle': 'Local OCRH without a GPU',
+  'item.ocrhCpuWarning':
+    'This computer has no NVIDIA GPU: local OCRH runs on the processor and takes about 15 minutes per page. OCRL takes seconds.',
+  'item.ocrhCpuContinue': 'Run OCRH anyway',
+  'item.ocrhCpuUseOcrl': 'Use OCRL',
   'item.imageVersions': 'Image versions',
   'item.imageVersionsHelp':
     'The files each edit of this image left behind. Choose which one to show: none is deleted.',

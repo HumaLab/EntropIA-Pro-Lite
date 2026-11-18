@@ -7217,6 +7217,57 @@ describe('ItemView text of another version of the image', () => {
       expect(extractTextMock).not.toHaveBeenCalled()
     })
   })
+
+  describe('OCRH that would run on the CPU (R17)', () => {
+    function onCpu(highOnCpu: boolean) {
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'ocr_local_high_info') return { local_mode: true, high_on_cpu: highOnCpu }
+        if (command === 'extraction_is_edited_by_hand') return false
+        if (command === 'llm_get_results') return []
+        if (command === 'llm_is_available') return true
+        if (command === 'db_select') return []
+        return null
+      })
+    }
+
+    it('asks first, and can run OCRL instead', async () => {
+      onCpu(true)
+      await openTextTab(imageAsset, { textContent: 'Texto del OCR' })
+
+      await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog).toHaveTextContent(/unos 15 minutos por página/)
+      expect(extractTextMock).not.toHaveBeenCalled()
+
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Usar OCRL' }))
+      await waitFor(() => {
+        expect(extractTextMock).toHaveBeenCalledWith(
+          'asset-image-1',
+          'docs/photo-a.jpg',
+          'image',
+          'light'
+        )
+      })
+      expect(extractTextMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('runs OCRH once confirmed', async () => {
+      onCpu(true)
+      await openTextTab(imageAsset, { textContent: 'Texto del OCR' })
+
+      await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+      const dialog = await screen.findByRole('dialog')
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Correr OCRH igual' }))
+      await waitFor(() => {
+        expect(extractTextMock).toHaveBeenCalledWith(
+          'asset-image-1',
+          'docs/photo-a.jpg',
+          'image',
+          'high'
+        )
+      })
+    })
+  })
 })
 
 describe('ItemView on the same asset in two panes', () => {

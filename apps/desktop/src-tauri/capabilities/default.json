@@ -107,6 +107,7 @@
     "allow-qwen-correction-download-models",
     "allow-llama-server-download",
     "allow-local-modes-offer",
+    "allow-ocr-local-high-info",
     "allow-update-extraction-text-cmd",
     "allow-extraction-is-edited-by-hand",
     "allow-reocr-layout-block",

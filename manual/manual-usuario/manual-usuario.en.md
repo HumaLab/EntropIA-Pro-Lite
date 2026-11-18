@@ -1340,6 +1340,7 @@ Batches let you process several collections at once: **OCR** to recognise text, 
 
 1. Open **Settings → Batches** and select one or more collections. **Select all** ticks every available one.
 2. Choose **OCR** to recognise words in images or PDFs (with **Include native text** ticked, pages that only have the PDF's native text also go through OCR, and that text is replaced; pages that already went through OCR are still skipped), **Embeddings** to prepare a similarity comparison, **Entities**, **Triples**, **OCR correction**, **Summaries**, or several at once. Then click **Analyze selection**. If you ticked Embeddings, Entities, Triples, OCR correction, Summaries or a schema and have not saved the OpenRouter key yet, the button stays disabled and, on hover, says the key must first be loaded in **Settings → Remote APIs → OpenRouter**.
+   **In Pro**, with the **OCRH mode** set to **Local**, the batch uses OCRL (layout + PaddleOCR, seconds per page). Tick **Local OCRH** to use layout + local OCRH (PaddleOCR-VL or GLM-OCR): more accurate and much slower. Without an NVIDIA GPU, the form warns that local OCRH takes about 15 minutes per page. The **OCRH** button of a document does the same: before running it on the processor it asks, and offers **Use OCRL** or **Run OCRH anyway**.
 3. Review which documents and tasks the proposal includes. If the scope is wrong, discard it.
 4. When the analysis finishes, click **Start batch**.
 5. Follow the state in the tab or from the batch indicator on the status bar.
