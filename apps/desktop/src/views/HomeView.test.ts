@@ -7,6 +7,7 @@ import type { HomeSnapshot, HomeActivityEntry } from '$lib/home'
 import type { SyncStatus } from '$lib/sync'
 import type { BatchGlobalSummary, BatchSummary } from '$lib/batch-processing'
 import { CREATE_COLLECTION_EVENT } from '$lib/document-explorer'
+import { LOCAL_ML } from '$lib/capabilities'
 import HomeView from './HomeView.svelte'
 import { onSettingsTabRequest } from '$lib/settings-tab-request'
 
@@ -1275,7 +1276,8 @@ describe('HomeView', () => {
     })
   })
 
-  describe('local modes offer (R6)', () => {
+  // Pro only: Lite has no local engines to offer.
+  describe.runIf(LOCAL_ML)('local modes offer (R6)', () => {
     const offer = [
       { key: 'stt_mode', current: 'assemblyai', local: 'local' },
       { key: 'ocrh_mode', current: 'glm_ocr', local: 'local' },
