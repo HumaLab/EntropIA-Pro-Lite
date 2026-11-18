@@ -13,6 +13,7 @@ pub mod automation;
 mod backup;
 pub mod bibliography;
 pub mod corpus;
+mod crash_trace;
 mod db;
 mod dev_profile;
 pub mod fs_scope;
@@ -790,6 +791,7 @@ pub fn run() {
     // through it, and records emitted before an AppHandle is attached still
     // reach stderr.
     logging::init();
+    crash_trace::install_panic_hook();
 
     // Suppress Windows error dialogs and CRT debug assertions that block the
     // process when native libraries crash.
@@ -955,6 +957,7 @@ pub fn run() {
             app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
             // Now `warn`/`error` records also land in the app's own log.
             logging::attach_app(app.handle().clone());
+            crash_trace::begin_session(&cache_dir.join("logs"));
             app.manage(store_updates::StoreUpdateState::new());
             navegador::sweep_quarantine(&cache_dir);
             app_logs::info(&app.handle().clone(), "setup", "Registro de diagnóstico inicializado");
@@ -1547,6 +1550,9 @@ pub fn run() {
             });
             app.manage(exit_watchdog::ExitWatchdog::new());
             attach_close_orchestration(app.handle());
+            if let Some(window) = app.get_webview_window("main") {
+                crash_trace::watch_webview_processes(&window);
+            }
 
             // On Linux, WebKitGTK denies media-device permission requests by default.
             // We must explicitly enable media-stream and auto-approve permission
@@ -1912,6 +1918,9 @@ pub fn run() {
 /// What has to happen before the process ends, on the normal `Exit` and on the
 /// watchdog's forced one alike.
 fn stop_background_services(app_handle: &tauri::AppHandle) {
+    // An orderly exit, normal or forced by the watchdog: no "ended without
+    // closing" warning at the next start (crash_trace.rs).
+    crash_trace::end_session();
     // Signal the sync engine to tear down cleanly on app exit (DESIGN §3.1)
     // instead of being killed mid-cycle.
     if let Some(engine) = app_handle.try_state::<sync::engine::SyncEngine>() {
