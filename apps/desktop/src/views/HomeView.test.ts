@@ -1318,9 +1318,7 @@ describe('HomeView', () => {
       render(HomeView)
 
       await fireEvent.click(await screen.findByRole('button', { name: 'Seguir con la nube' }))
-      await waitFor(() =>
-        expect(settingsRef.values.get('pro_local_modes_offered')).toBe('1')
-      )
+      await waitFor(() => expect(settingsRef.values.get('pro_local_modes_offered')).toBe('1'))
       expect(settingsRef.values.has('stt_mode')).toBe(false)
     })
   })
