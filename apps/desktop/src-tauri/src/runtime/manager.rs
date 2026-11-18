@@ -26,6 +26,31 @@ const RUNTIME_PACK_ROOT_ENV: &str = "ENTROPIA_RUNTIME_PACK_ROOT";
 /// The last runtime status and progress lines written to the app log (R28).
 static LAST_STATUS_LINE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static LAST_PROGRESS_LINE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// Recent stage lines without a percentage (Checking, Blocked…) and when they
+/// were logged: a readiness check answers with an alternating pair, which a
+/// last-line comparison alone does not catch (R28).
+static RECENT_STAGE_LINES: std::sync::Mutex<Vec<(String, std::time::Instant)>> =
+    std::sync::Mutex::new(Vec::new());
+/// A stage line repeated within this window is not logged again.
+const STAGE_LINE_QUIET: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Whether a progress stage line (one without a percentage) is new within
+/// [`STAGE_LINE_QUIET`]; records it when it is.
+fn stage_line_is_new(
+    recent: &std::sync::Mutex<Vec<(String, std::time::Instant)>>,
+    line: &str,
+    now: std::time::Instant,
+) -> bool {
+    let Ok(mut recent) = recent.lock() else {
+        return true;
+    };
+    recent.retain(|(_, at)| now.duration_since(*at) < STAGE_LINE_QUIET);
+    if recent.iter().any(|(seen, _)| seen == line) {
+        return false;
+    }
+    recent.push((line.to_string(), now));
+    true
+}
 
 /// Remembers `line` (with its details) in `last` and says whether it differs
 /// from what was logged before: a repeated readiness check logs nothing.
@@ -447,7 +472,14 @@ impl RuntimeManager {
                 .map(|pct| format!(" ({pct}%)"))
                 .unwrap_or_default()
         );
-        if log_if_changed(&LAST_PROGRESS_LINE, &line, &[]) {
+        // Download percentages are compared with the previous line only;
+        // stage lines are deduplicated over a time window.
+        let new = if operation.progress_percent.is_some() {
+            log_if_changed(&LAST_PROGRESS_LINE, &line, &[])
+        } else {
+            stage_line_is_new(&RECENT_STAGE_LINES, &line, std::time::Instant::now())
+        };
+        if new {
             crate::app_logs::info(app_handle, "runtime", line);
         }
         app_handle
@@ -1982,6 +2014,26 @@ mod tests {
         assert!(
             log_if_changed(&last, healthy, &[]),
             "a return to healthy is a change"
+        );
+    }
+
+    #[test]
+    fn an_alternating_checking_blocked_pair_is_logged_once() {
+        let recent = std::sync::Mutex::new(Vec::new());
+        let start = std::time::Instant::now();
+        let checking = "Operación Bootstrap/Checking: Evaluando readiness del runtime";
+        let blocked =
+            "Operación Bootstrap/Blocked: Bootstrap bloqueado por falta de una fuente confiable";
+        // The sequence the dev log showed at 02:27:12.
+        let logged: Vec<bool> = [checking, blocked, checking, blocked, checking, blocked]
+            .iter()
+            .map(|line| stage_line_is_new(&recent, line, start))
+            .collect();
+        assert_eq!(logged, [true, true, false, false, false, false]);
+        let later = start + STAGE_LINE_QUIET + std::time::Duration::from_secs(1);
+        assert!(
+            stage_line_is_new(&recent, checking, later),
+            "after the quiet window the stage logs again"
         );
     }
 
