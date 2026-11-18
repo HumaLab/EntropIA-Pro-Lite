@@ -345,10 +345,7 @@ describe('SettingsView', () => {
     expect(tabs.at(-1)).toHaveAccessibleName('Apariencia')
     // The default tab does not move: Apariencia sits last, so it does not
     // become the one that opens first.
-    expect(screen.getByRole('tab', { name: DEFAULT_TAB })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
+    expect(screen.getByRole('tab', { name: DEFAULT_TAB })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('opens the Apariencia tab and renders the five preferences', async () => {
@@ -423,39 +420,34 @@ describe('SettingsView', () => {
 
   // R11: dictation no longer downloads Parakeet; Configuración says whether
   // the model is there and starts the download.
-  it.runIf(LOCAL_ML)(
-    'offers the Parakeet download while the model is missing',
-    async () => {
-      settingsGetMock.mockImplementation(async (key: string) => {
-        if (key === 'stt_mode') return 'local'
-        return null
-      })
-      invokeMock.mockImplementation(async (command: string) => {
-        if (command === 'stt_parakeet_model_info') {
-          return {
-            installed: false,
-            downloading: false,
-            missing_bytes: 2_552_491_649,
-            total_bytes: 2_552_491_649,
-            directory: 'C:/cache/models/parakeet-tdt-0.6b-v3',
-          }
+  it.runIf(LOCAL_ML)('offers the Parakeet download while the model is missing', async () => {
+    settingsGetMock.mockImplementation(async (key: string) => {
+      if (key === 'stt_mode') return 'local'
+      return null
+    })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'stt_parakeet_model_info') {
+        return {
+          installed: false,
+          downloading: false,
+          missing_bytes: 2_552_491_649,
+          total_bytes: 2_552_491_649,
+          directory: 'C:/cache/models/parakeet-tdt-0.6b-v3',
         }
-        if (command === 'stt_parakeet_download_model') return 'started'
-        return undefined
-      })
-      const { unmount } = render(SettingsView)
-      try {
-        await openTab('Modelos locales')
-        await fireEvent.click(await screen.findByRole('button', { name: /Descargar Parakeet/ }))
-        await waitFor(() =>
-          expect(invokeMock).toHaveBeenCalledWith('stt_parakeet_download_model')
-        )
-        expect(await screen.findByText(/Descargando Parakeet/)).toBeInTheDocument()
-      } finally {
-        unmount()
       }
+      if (command === 'stt_parakeet_download_model') return 'started'
+      return undefined
+    })
+    const { unmount } = render(SettingsView)
+    try {
+      await openTab('Modelos locales')
+      await fireEvent.click(await screen.findByRole('button', { name: /Descargar Parakeet/ }))
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('stt_parakeet_download_model'))
+      expect(await screen.findByText(/Descargando Parakeet/)).toBeInTheDocument()
+    } finally {
+      unmount()
     }
-  )
+  })
 
   it.runIf(LOCAL_ML)('shows the Parakeet model as ready once it is on disk', async () => {
     settingsGetMock.mockImplementation(async (key: string) => {
@@ -1887,6 +1879,41 @@ describe('SettingsView', () => {
     })
   })
 
+  describe('switching a provider off without deleting its key', () => {
+    it('writes only the switched provider and keeps the key', async () => {
+      render(SettingsView)
+
+      await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+      const switches = screen.getAllByRole('checkbox', { name: /Usar esta API/ })
+      // OpenRouter, Vercel, AssemblyAI, GLM-OCR and Zotero.
+      expect(switches).toHaveLength(5)
+      for (const box of switches) expect(box).toBeChecked()
+
+      await fireEvent.click(switches[0]!)
+      expect(
+        await screen.findByText(/Desactivada: EntropIA no envía nada a OpenRouter/)
+      ).toBeInTheDocument()
+      await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+      await waitFor(() =>
+        expect(settingsSetMock).toHaveBeenCalledWith('openrouter_api_key_disabled', '1')
+      )
+      const switched = settingsSetMock.mock.calls.filter(([key]) =>
+        String(key).endsWith('_disabled')
+      )
+      expect(switched).toEqual([['openrouter_api_key_disabled', '1']])
+      expect(settingsDeleteMock).not.toHaveBeenCalledWith('openrouter_api_key')
+    })
+
+    it('loads a switched-off provider unticked', async () => {
+      settingsGetAllMock.mockResolvedValue([{ key: 'assemblyai_api_key_disabled', value: '1' }])
+      render(SettingsView)
+
+      const box = await screen.findByRole('checkbox', { name: /Usar esta API.*AssemblyAI/ })
+      await waitFor(() => expect(box).not.toBeChecked())
+    })
+  })
+
   // Before this, the UI only wrote a key when the field was non-empty, so a
   // stored key could be replaced but never removed. Each service now carries
   // an icon-only clear button behind a destructive confirmation.
@@ -2121,6 +2148,7 @@ describe('settings dirty detection helpers', () => {
     assemblyAiCollectionSpeakerLabels: true,
     glmOcrApiKey: '',
     zoteroApiKey: '',
+    enabledApis: { openrouter: true, assemblyai: true, glmOcr: true, zotero: true },
     ocrCorrectionPrompt: 'Correct {text}',
     summaryPrompt: 'Summarize {text}',
     nerPrompt: 'NER {text}',

@@ -279,35 +279,38 @@ describe('BatchProcessingTab batch controls', () => {
     expect(sent[0]).toEqual(['ocr', 'ocr_include_native', 'embeddings'])
   })
 
-  it('runs local OCRH only when asked, and warns that it is slow on the CPU', async () => {
-    const sent: unknown[] = []
-    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
-      const args = rest[0] as Record<string, unknown> | undefined
-      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
-      if (command === 'ocr_local_high_info') return { local_mode: true, high_on_cpu: true }
-      if (command === 'processing_prepare') {
-        sent.push(args?.['operations'])
-        return { batchId: 'b-draft', created: true, members: 4 }
-      }
-      if (command === 'processing_get_batch')
-        return { ...draftSnapshot(), operations: ['embeddings', 'ocr', 'ocr_local_high'] }
-      return undefined
-    })
-    render(BatchProcessingTab)
+  it.runIf(LOCAL_ML)(
+    'runs local OCRH only when asked, and warns that it is slow on the CPU',
+    async () => {
+      const sent: unknown[] = []
+      mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+        const args = rest[0] as Record<string, unknown> | undefined
+        if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+        if (command === 'ocr_local_high_info') return { local_mode: true, high_on_cpu: true }
+        if (command === 'processing_prepare') {
+          sent.push(args?.['operations'])
+          return { batchId: 'b-draft', created: true, members: 4 }
+        }
+        if (command === 'processing_get_batch')
+          return { ...draftSnapshot(), operations: ['embeddings', 'ocr', 'ocr_local_high'] }
+        return undefined
+      })
+      render(BatchProcessingTab)
 
-    await screen.findByText('Legajo 1')
-    await fireEvent.click(screen.getByText('Legajo 1'))
-    const high = await screen.findByRole('checkbox', { name: 'OCRH local' })
-    expect(high).not.toBeChecked()
-    expect(screen.queryByText(/unos 15 minutos por página/)).not.toBeInTheDocument()
+      await screen.findByText('Legajo 1')
+      await fireEvent.click(screen.getByText('Legajo 1'))
+      const high = await screen.findByRole('checkbox', { name: 'OCRH local' })
+      expect(high).not.toBeChecked()
+      expect(screen.queryByText(/unos 15 minutos por página/)).not.toBeInTheDocument()
 
-    await fireEvent.click(high)
-    expect(screen.getByText(/unos 15 minutos por página/)).toBeInTheDocument()
-    await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
+      await fireEvent.click(high)
+      expect(screen.getByText(/unos 15 minutos por página/)).toBeInTheDocument()
+      await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
 
-    await vi.waitFor(() => expect(sent).toHaveLength(1))
-    expect(sent[0]).toEqual(['ocr', 'ocr_local_high', 'embeddings'])
-  })
+      await vi.waitFor(() => expect(sent).toHaveLength(1))
+      expect(sent[0]).toEqual(['ocr', 'ocr_local_high', 'embeddings'])
+    }
+  )
 
   it('sends triples when asked and says how many documents will go through it', async () => {
     mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {

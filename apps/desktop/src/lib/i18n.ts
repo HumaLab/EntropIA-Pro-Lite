@@ -249,6 +249,12 @@ const es = {
   'settings.localModels.glmOcrTitle': 'OCRH local (GLM-OCR)',
   'settings.localModels.glmOcrDescription':
     'Modelo de OCR de alta precisión que corre en la GPU NVIDIA de este equipo. Se usa cuando el Modo OCRH es Local.',
+  'settings.apiSwitch.label': 'Usar esta API',
+  'settings.apiSwitch.on': 'EntropIA usa {service} cuando una función lo necesita.',
+  'settings.apiSwitch.off':
+    'Desactivada: EntropIA no envía nada a {service}. La clave queda guardada; marcá la casilla y guardá para volver a usarla.',
+  'settings.apiSwitch.offNow':
+    'Desactivada: EntropIA no envía nada a {service}. La clave queda guardada; marcá la casilla para volver a usarla.',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sincronización',
   'settings.assistantsTab': 'Asistentes',
@@ -673,6 +679,8 @@ const es = {
   'batch.schemaNotReady': 'La base todavía está migrando. Reintentá en un momento.',
   'batch.needsOpenrouterKey':
     'Primero cargá tu API key de OpenRouter, en Ajustes → OpenRouter. Sin ella no se pueden pedir embeddings, entidades, tripletes ni esquemas.',
+  'batch.openrouterDisabled':
+    'OpenRouter está desactivada en Configuración → APIs remotas («Usar esta API»). Activala para pedir embeddings, entidades, tripletes, correcciones o esquemas.',
   'batch.statusIdle': 'Sin actividad',
   'batch.statusRunning': 'Procesando {count}',
   'batch.statusBibliography':
@@ -4340,6 +4348,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.localModels.glmOcrTitle': 'Local OCRH (GLM-OCR)',
   'settings.localModels.glmOcrDescription':
     "High-accuracy OCR model that runs on this computer's NVIDIA GPU. Used when the OCRH mode is Local.",
+  'settings.apiSwitch.label': 'Use this API',
+  'settings.apiSwitch.on': 'EntropIA uses {service} when a feature needs it.',
+  'settings.apiSwitch.off':
+    'Switched off: EntropIA sends nothing to {service}. The key stays stored; tick the box and save to use it again.',
+  'settings.apiSwitch.offNow':
+    'Switched off: EntropIA sends nothing to {service}. The key stays stored; tick the box to use it again.',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sync',
   'settings.assistantsTab': 'Assistants',
@@ -4763,6 +4777,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.schemaNotReady': 'The database is still migrating. Try again in a moment.',
   'batch.needsOpenrouterKey':
     'Load your OpenRouter API key first, under Settings → OpenRouter. Without it, embeddings, entities, triples and schemas cannot be requested.',
+  'batch.openrouterDisabled':
+    'OpenRouter is switched off in Settings → Remote APIs ("Use this API"). Switch it on to request embeddings, entities, triples, corrections or schemas.',
   'batch.statusIdle': 'Idle',
   'batch.statusRunning': 'Processing {count}',
   'batch.statusBibliography':

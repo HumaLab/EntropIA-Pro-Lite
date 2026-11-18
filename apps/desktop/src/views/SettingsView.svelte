@@ -25,6 +25,7 @@
     assemblyAiCollectionSpeakerLabels: boolean
     glmOcrApiKey: string
     zoteroApiKey: string
+    enabledApis: Record<string, boolean>
     ocrCorrectionPrompt: string
     summaryPrompt: string
     nerPrompt: string
@@ -420,6 +421,19 @@
     zotero: 'Zotero',
   }
   let pendingClearKey = $state<ClearableKey | null>(null)
+  // "Usar esta API": a switched-off provider keeps its key, but the backend
+  // reads it as absent (settings.rs `api_key_disabled`).
+  const allApisOn = (): Record<ClearableKey, boolean> => ({
+    openrouter: true,
+    assemblyai: true,
+    glmOcr: true,
+    zotero: true,
+  })
+  let enabledApis = $state(allApisOn())
+  // As loaded or last saved: only a change is written back.
+  let savedEnabledApis = allApisOn()
+  const disabledApiSetting = (provider: ClearableKey) =>
+    `${CLEARABLE_KEY_SETTINGS[provider]}_disabled`
   let clearingKey = $state(false)
   let clearKeyError = $state<string | null>(null)
 
@@ -614,6 +628,7 @@
       assemblyAiCollectionSpeakerLabels,
       glmOcrApiKey,
       zoteroApiKey,
+      enabledApis,
       ocrCorrectionPrompt,
       summaryPrompt,
       nerPrompt,
@@ -830,6 +845,10 @@
       helpParams = readHelpParamsFromSettings(settingsMap, effectiveGlobalModel)
       await loadAgentParameters(settingsMap)
       normalizeRemoteModesForCapabilities()
+      for (const provider of Object.keys(enabledApis) as ClearableKey[]) {
+        enabledApis[provider] = settingsMap.get(disabledApiSetting(provider)) !== '1'
+      }
+      savedEnabledApis = { ...enabledApis }
       savedSnapshot = currentSnapshot
     } catch (e) {
       loadSettingsError = e instanceof Error ? e.message : String(e)
@@ -1798,11 +1817,18 @@
         writes.push(settingsSet(SETTINGS_KEYS.GLM_OCR_API_KEY, glmOcrApiKey.trim()))
       if (zoteroApiKey.trim())
         writes.push(settingsSet(SETTINGS_KEYS.ZOTERO_API_KEY, zoteroApiKey.trim()))
+      const switchedApis = (Object.keys(enabledApis) as ClearableKey[]).filter(
+        (provider) => enabledApis[provider] !== savedEnabledApis[provider]
+      )
+      for (const provider of switchedApis) {
+        writes.push(settingsSet(disabledApiSetting(provider), enabledApis[provider] ? '0' : '1'))
+      }
       const savedZoteroKey = Boolean(zoteroApiKey.trim())
       const savedOpenRouterKey = Boolean(apiKey.trim())
       const savedAssemblyAiKey = Boolean(assemblyAiApiKey.trim())
       const savedGlmOcrKey = Boolean(glmOcrApiKey.trim())
       await Promise.all(writes)
+      savedEnabledApis = { ...enabledApis }
       if (savedOpenRouterKey) {
         apiKey = ''
         maskedApiKey = t('settings.keyStoredInCredentialManager')
@@ -2925,6 +2951,16 @@
           </Card>
         </div>
       {:else}
+        {#snippet apiSwitch(provider: ClearableKey)}
+          <Checkbox bind:checked={enabledApis[provider]}>
+            <strong>{t('settings.apiSwitch.label')}</strong>
+            <span class="settings__check-desc"
+              >{enabledApis[provider]
+                ? t('settings.apiSwitch.on', { service: CLEARABLE_KEY_SERVICES[provider] })
+                : t('settings.apiSwitch.off', { service: CLEARABLE_KEY_SERVICES[provider] })}</span
+            >
+          </Checkbox>
+        {/snippet}
         <div class="settings__provider-grid">
           <Card>
             <section class="settings-card-section">
@@ -2951,6 +2987,7 @@
                 </div>
                 <p>{t('settings.openrouter.description')}</p>
               </div>
+              {@render apiSwitch('openrouter')}
 
               <div class="settings__field settings__field--stacked">
                 <label class="settings__label" for="api-key-{paneId}">{t('settings.apiKey')}</label>
@@ -3108,6 +3145,7 @@
                 </div>
                 <p>{t('settings.assemblyai.description')}</p>
               </div>
+              {@render apiSwitch('assemblyai')}
 
               <div class="settings__field settings__field--stacked">
                 <label class="settings__label" for="assemblyai-api-key-{paneId}"
@@ -3241,6 +3279,7 @@
                 </div>
                 <p>{t('settings.glmOcr.description')}</p>
               </div>
+              {@render apiSwitch('glmOcr')}
 
               <div class="settings__field settings__field--stacked">
                 <label class="settings__label" for="glm-ocr-api-key-{paneId}"
@@ -3336,6 +3375,7 @@
                 </div>
                 <p>{t('settings.zotero.description')}</p>
               </div>
+              {@render apiSwitch('zotero')}
 
               <div class="settings__field settings__field--stacked">
                 <label class="settings__label" for="zotero-api-key-{paneId}"

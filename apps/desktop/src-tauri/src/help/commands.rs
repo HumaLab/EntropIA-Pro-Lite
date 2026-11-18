@@ -339,8 +339,8 @@ pub async fn help_status(
     let conn = db.ui_conn.clone();
     tokio::task::spawn_blocking(move || {
         let guard = conn.lock().map_err(|e| e.to_string())?;
-        let present = crate::settings::get_raw_setting(&guard, "openrouter_api_key")
-            .is_some_and(|value| !value.trim().is_empty());
+        let present =
+            crate::settings::api_key_configured(&guard, crate::settings::OPENROUTER_API_KEY);
         Ok(HelpStatus {
             has_openrouter_key: present,
         })

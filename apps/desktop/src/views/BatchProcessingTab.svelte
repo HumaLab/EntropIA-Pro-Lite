@@ -9,7 +9,7 @@
   import { getNavigation } from '$lib/pane-context'
   import { getAssetPathLabel } from '$lib/item-metadata'
   import { LOCAL_ML } from '$lib/capabilities'
-  import { settingsGet, SETTINGS_KEYS } from '$lib/settings'
+  import { apiKeyState, SETTINGS_KEYS, type ApiKeyState } from '$lib/settings'
   import { localOcrhInfo, type LocalOcrhInfo } from '$lib/ocr'
   import {
     batchProgress,
@@ -102,9 +102,9 @@
   // (`force_remote_ocr_correction`), so it is gated in both variants; a Pro
   // summary runs on the local engine like the per-page button.
   // Unknown until read (and when the read answers nothing) means not blocked.
-  let hasOpenrouterKey = $state(true)
+  let openrouterKey = $state<ApiKeyState>('usable')
   const missingOpenrouterKey = $derived(
-    !hasOpenrouterKey &&
+    openrouterKey !== 'usable' &&
       (runOcrCorrection ||
         (!LOCAL_ML && (runEmbeddings || runNer || runTriples || runSummary || Boolean(schemaId))))
   )
@@ -742,9 +742,9 @@
     void loadLists()
     // Read in Pro too: correction needs the key in both variants, and an
     // unread key must never be mistaken for a missing one.
-    settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY)
-      .then((key) => {
-        if (key !== undefined) hasOpenrouterKey = Boolean(key?.trim())
+    apiKeyState(SETTINGS_KEYS.OPENROUTER_API_KEY)
+      .then((state) => {
+        if (state !== undefined) openrouterKey = state
       })
       .catch(() => {})
     if (LOCAL_ML) void localOcrhInfo().then((info) => (ocrhInfo = info))
@@ -1341,7 +1341,13 @@
           <!-- The span carries the tooltip: a disabled button gets no pointer events. -->
           <span
             class="batch-ops__hinted batch-ops__action-slot"
-            use:tooltip={missingOpenrouterKey ? t('batch.needsOpenrouterKey') : undefined}
+            use:tooltip={missingOpenrouterKey
+              ? t(
+                  openrouterKey === 'disabled'
+                    ? 'batch.openrouterDisabled'
+                    : 'batch.needsOpenrouterKey'
+                )
+              : undefined}
           >
             <Button
               class="batch-ops__action"
