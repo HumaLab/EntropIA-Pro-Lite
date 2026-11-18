@@ -1247,7 +1247,10 @@ mod tests {
     fn ocrh_warns_only_when_it_would_run_locally_without_a_gpu() {
         let warn = |mode, key, gpu| local_ocrh_info(mode, key, gpu).high_on_cpu;
         assert!(warn("local", true, false));
-        assert!(warn("auto", false, false), "auto without a key falls back to local");
+        assert!(
+            warn("auto", false, false),
+            "auto without a key falls back to local"
+        );
         assert!(!warn("auto", true, false), "auto with a key runs remote");
         assert!(!warn("glm_ocr", false, false));
         assert!(!warn("local", false, true), "a GPU runs it in seconds");

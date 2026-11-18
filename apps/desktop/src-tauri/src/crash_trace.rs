@@ -148,7 +148,11 @@ mod tests {
     fn a_marker_left_behind_names_the_unclosed_session() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join(SESSION_MARKER);
-        assert_eq!(read_previous_session(&marker), None, "a clean start says nothing");
+        assert_eq!(
+            read_previous_session(&marker),
+            None,
+            "a clean start says nothing"
+        );
         std::fs::write(&marker, "pid 42").unwrap();
         assert_eq!(read_previous_session(&marker).as_deref(), Some("pid 42"));
     }

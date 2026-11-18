@@ -2050,9 +2050,9 @@ impl EngineProfileEmbedder {
             .lock()
             .map_err(|e| format!("Embedding engine lock poisoned: {e}"))?;
         let crate::processing::embedding::EngineCache { last_error } = &mut *guard;
-        crate::nlp::ensure_embed_engine_for_current_settings(&conn, last_error).ok_or_else(
-            || crate::nlp::embeddings::embedding_engine_unavailable_reason(last_error.as_deref()),
-        )
+        crate::nlp::ensure_embed_engine_for_current_settings(&conn, last_error).ok_or_else(|| {
+            crate::nlp::embeddings::embedding_engine_unavailable_reason(last_error.as_deref())
+        })
     }
 }
 

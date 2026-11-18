@@ -364,7 +364,10 @@ impl Executor for OcrExecutor {
                     crate::app_logs::info(
                         &self.app,
                         "ocr",
-                        format!("OCR detenido: asset_id={}, tras {seconds:.1}s", task.asset_id),
+                        format!(
+                            "OCR detenido: asset_id={}, tras {seconds:.1}s",
+                            task.asset_id
+                        ),
                     );
                 } else {
                     crate::app_logs::warn(

@@ -877,7 +877,13 @@ fn a_clean_delete_leaves_the_orphan_sweep_alone() {
     let item = item_id(ALFA, 1);
     f.write_file(&f.item_folder(ALFA, &item).join("uuid_acta.pdf"), b"%PDF");
 
-    delete_items(&f.conn, &f.data_dir, &f.cache_dir, std::slice::from_ref(&item)).unwrap();
+    delete_items(
+        &f.conn,
+        &f.data_dir,
+        &f.cache_dir,
+        std::slice::from_ref(&item),
+    )
+    .unwrap();
 
     assert!(!f.item_folder(ALFA, &item).exists());
     assert_eq!(sweep_setting(&f).as_deref(), Some("done"));
@@ -902,8 +908,18 @@ fn a_file_held_open_rearms_the_orphan_sweep() {
         .open(&held)
         .unwrap();
 
-    delete_items(&f.conn, &f.data_dir, &f.cache_dir, std::slice::from_ref(&item)).unwrap();
+    delete_items(
+        &f.conn,
+        &f.data_dir,
+        &f.cache_dir,
+        std::slice::from_ref(&item),
+    )
+    .unwrap();
 
     assert!(held.exists(), "the held file is still there");
-    assert_eq!(sweep_setting(&f), None, "the sweep runs again at the next start");
+    assert_eq!(
+        sweep_setting(&f),
+        None,
+        "the sweep runs again at the next start"
+    );
 }

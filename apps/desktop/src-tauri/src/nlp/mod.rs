@@ -1669,7 +1669,10 @@ mod tests {
             .expect("api engine should initialize");
         assert_eq!(batch.provider_name(), "api");
         // A local engine is ~2.5 GB: one per consumer multiplied it (R7).
-        assert!(Arc::ptr_eq(&batch, &library), "consumers must share the engine");
+        assert!(
+            Arc::ptr_eq(&batch, &library),
+            "consumers must share the engine"
+        );
 
         conn.execute(
             "INSERT INTO app_settings(key, value) VALUES ('openrouter_embedding_model', 'custom/model')",
@@ -1718,8 +1721,7 @@ mod tests {
         )
         .expect("provider update should succeed");
 
-        let switched =
-            ensure_embed_engine_for_current_settings(&conn, &mut last_error);
+        let switched = ensure_embed_engine_for_current_settings(&conn, &mut last_error);
 
         assert!(
             switched.is_none(),
