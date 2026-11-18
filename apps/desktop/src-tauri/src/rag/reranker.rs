@@ -816,8 +816,12 @@ fn download_artifact(
             ));
         }
 
-        let mut file = std::fs::File::create(&temporary)
-            .map_err(|_| "Failed to create reranker download file".to_string())?;
+        // Batched writes (R8): one read is about one TLS record.
+        let mut file = std::io::BufWriter::with_capacity(
+            1 << 20,
+            std::fs::File::create(&temporary)
+                .map_err(|_| "Failed to create reranker download file".to_string())?,
+        );
         let mut hasher = Sha256::new();
         let mut downloaded_bytes = 0_u64;
         let mut last_reported_pct = 0_u8;

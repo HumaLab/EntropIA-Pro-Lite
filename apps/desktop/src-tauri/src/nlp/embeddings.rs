@@ -1773,12 +1773,16 @@ fn download_local_embedding_file(
 
     let total_bytes = response.content_length();
     let mut reader = response;
-    let mut file = std::fs::File::create(&tmp_path).map_err(|e| {
-        format!(
-            "Failed to create temp BGE-M3 asset {}: {e}",
-            tmp_path.display()
-        )
-    })?;
+    // Batched writes (R8): one read is about one TLS record.
+    let mut file = std::io::BufWriter::with_capacity(
+        1 << 20,
+        std::fs::File::create(&tmp_path).map_err(|e| {
+            format!(
+                "Failed to create temp BGE-M3 asset {}: {e}",
+                tmp_path.display()
+            )
+        })?,
+    );
     let mut downloaded_bytes = 0_u64;
     let mut buffer = vec![0_u8; DOWNLOAD_CHUNK_SIZE];
     let mut last_reported_pct = 0_u8;
@@ -1810,6 +1814,8 @@ fn download_local_embedding_file(
         }
     }
 
+    file.flush()
+        .map_err(|e| format!("Failed while writing BGE-M3 asset {filename}: {e}"))?;
     drop(file);
     let downloaded_size = std::fs::metadata(&tmp_path)
         .map_err(|e| format!("Failed to inspect downloaded BGE-M3 asset {filename}: {e}"))?
@@ -2857,9 +2863,19 @@ mod tests {
     fn only_an_idle_local_engine_nobody_holds_is_released() {
         let idle = LOCAL_ENGINE_IDLE;
         assert!(should_release(true, idle, 1));
-        assert!(!should_release(true, idle, 2), "a running batch still holds it");
-        assert!(!should_release(true, idle - std::time::Duration::from_secs(1), 1));
-        assert!(!should_release(false, idle, 1), "the API engine costs no memory");
+        assert!(
+            !should_release(true, idle, 2),
+            "a running batch still holds it"
+        );
+        assert!(!should_release(
+            true,
+            idle - std::time::Duration::from_secs(1),
+            1
+        ));
+        assert!(
+            !should_release(false, idle, 1),
+            "the API engine costs no memory"
+        );
     }
 
     #[test]

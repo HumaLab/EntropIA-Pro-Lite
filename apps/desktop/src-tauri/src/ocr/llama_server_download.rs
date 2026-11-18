@@ -170,7 +170,9 @@ fn download_and_stage(work: &Path, app_handle: &AppHandle) -> Result<PathBuf, St
         let archive_path = work.join(asset.name);
         let mut archive = std::fs::File::create(&archive_path)
             .map_err(|e| format!("Cannot create {}: {e}", archive_path.display()))?;
-        copy_verified(&mut response, &mut archive, asset, |bytes| {
+        // Batched writes (R8): one read is about one TLS record.
+        let mut buffered = std::io::BufWriter::with_capacity(1 << 20, &mut archive);
+        copy_verified(&mut response, &mut buffered, asset, |bytes| {
             done += bytes;
             let pct = (done.saturating_mul(100) / total).min(100) as u8;
             if pct >= last_pct.saturating_add(5) || pct == 100 {
@@ -185,11 +187,11 @@ fn download_and_stage(work: &Path, app_handle: &AppHandle) -> Result<PathBuf, St
                 );
             }
         })?;
+        drop(buffered);
         archive
             .rewind()
             .map_err(|e| format!("Cannot reread {}: {e}", archive_path.display()))?;
-        extract_server_files(archive, &staging)
-            .map_err(|e| format!("{}: {e}", asset.name))?;
+        extract_server_files(archive, &staging).map_err(|e| format!("{}: {e}", asset.name))?;
         let _ = std::fs::remove_file(&archive_path);
     }
     if !staging.join(server_binary_name()).is_file() {
@@ -218,7 +220,10 @@ fn copy_verified<R: Read, W: Write>(
         }
         received += read as u64;
         if received > asset.size {
-            return Err(format!("{} is larger than {} bytes", asset.name, asset.size));
+            return Err(format!(
+                "{} is larger than {} bytes",
+                asset.name, asset.size
+            ));
         }
         hasher.update(&buffer[..read]);
         writer
@@ -271,8 +276,7 @@ fn extract_server_files<R: Read + Seek>(archive: R, dest: &Path) -> Result<Vec<S
         let path = dest.join(&name);
         let mut file = std::fs::File::create(&path)
             .map_err(|e| format!("Cannot create {}: {e}", path.display()))?;
-        std::io::copy(&mut entry, &mut file)
-            .map_err(|e| format!("Cannot extract {name}: {e}"))?;
+        std::io::copy(&mut entry, &mut file).map_err(|e| format!("Cannot extract {name}: {e}"))?;
         extracted.push(name);
     }
     Ok(extracted)
