@@ -262,6 +262,17 @@ impl Executor for OcrExecutor {
     }
 
     fn run(&self, ctx: &ExecCtx, task: &ClaimedTask, stop: &StopFlag) -> ExecResult {
+        let started = std::time::Instant::now();
+        let high = task.contract_hash == ocr_task_contract("high");
+        crate::app_logs::info(
+            &self.app,
+            "ocr",
+            format!(
+                "OCR iniciado: asset_id={}, modo={}",
+                task.asset_id,
+                if high { "high" } else { "light" }
+            ),
+        );
         let computed = (|| -> Result<OcrComputeOutput, String> {
             let (stored_path, asset_type) = self.read_asset(&task.asset_id)?;
             let asset_path =
@@ -320,8 +331,21 @@ impl Executor for OcrExecutor {
             }
             merge_pages(outputs)
         })();
+        let seconds = started.elapsed().as_secs_f32();
         match computed {
             Ok(output) => {
+                // R17: a 14-minute PaddleOCR-VL run on CPU left no trace at all.
+                crate::app_logs::info(
+                    &self.app,
+                    "ocr",
+                    format!(
+                        "OCR terminado: asset_id={}, método={}, páginas={}, caracteres={}, duración={seconds:.1}s",
+                        task.asset_id,
+                        output.method,
+                        output.page_count,
+                        output.text.chars().count(),
+                    ),
+                );
                 let outcome = output.outcome.clone();
                 ExecResult {
                     checkpoints: Vec::new(),
@@ -333,16 +357,34 @@ impl Executor for OcrExecutor {
                     },
                 }
             }
-            Err(error) => ExecResult {
-                checkpoints: Vec::new(),
-                progress_total: None,
-                engine_output: None,
-                output: if error == "stopped" {
-                    ExecOutput::Stopped
+            Err(error) => {
+                if error == "stopped" {
+                    crate::app_logs::info(
+                        &self.app,
+                        "ocr",
+                        format!("OCR detenido: asset_id={}, tras {seconds:.1}s", task.asset_id),
+                    );
                 } else {
-                    map_ocr_error(&error)
-                },
-            },
+                    crate::app_logs::warn(
+                        &self.app,
+                        "ocr",
+                        format!(
+                            "OCR falló: asset_id={}, tras {seconds:.1}s: {error}",
+                            task.asset_id
+                        ),
+                    );
+                }
+                ExecResult {
+                    checkpoints: Vec::new(),
+                    progress_total: None,
+                    engine_output: None,
+                    output: if error == "stopped" {
+                        ExecOutput::Stopped
+                    } else {
+                        map_ocr_error(&error)
+                    },
+                }
+            }
         }
     }
 }
