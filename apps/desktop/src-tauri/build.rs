@@ -115,6 +115,8 @@ const APP_COMMANDS: &[&str] = &[
     "llama_server_download",
     "local_modes_offer",
     "ocr_local_high_info",
+    "local_setup_status",
+    "local_setup_install",
     "stt_parakeet_model_info",
     "stt_parakeet_download_model",
     "update_extraction_text_cmd",

@@ -150,7 +150,8 @@ const es = {
   'app.startupTitle': 'Preparando tu espacio de trabajo',
   'app.initializing': 'Inicializando...',
   'app.initError': 'No se pudo inicializar la base de datos',
-  'app.initErrorUnknown': 'Reintentá. Si vuelve a fallar, el detalle queda en el registro de diagnóstico.',
+  'app.initErrorUnknown':
+    'Reintentá. Si vuelve a fallar, el detalle queda en el registro de diagnóstico.',
   'app.retryInit': 'Reintentar',
   'app.compactingTitle': 'Optimizando el archivo…',
   'app.compactingBody': 'No apagues el equipo. La ventana se cierra sola al terminar.',
@@ -255,6 +256,90 @@ const es = {
     'Desactivada: EntropIA no envía nada a {service}. La clave queda guardada; marcá la casilla y guardá para volver a usarla.',
   'settings.apiSwitch.offNow':
     'Desactivada: EntropIA no envía nada a {service}. La clave queda guardada; marcá la casilla para volver a usarla.',
+  'deps.prepare.title': 'Prepará EntropIA Pro para trabajar en este equipo',
+  'deps.prepare.description':
+    'Descarga la base de IA, instala los paquetes de Python y baja todos los modelos que este equipo puede usar. Las descargas siguen en segundo plano; cada fila muestra su avance.',
+  'deps.prepare.action': 'Preparar EntropIA Pro',
+  'deps.prepare.stepRuntime': 'Preparando la base de IA…',
+  'deps.prepare.stepPython': 'Instalando los paquetes de Python…',
+  'deps.prepare.stepModels': 'Iniciando las descargas de modelos…',
+  'deps.prepare.noRuntimeForPython':
+    'No se pueden instalar los paquetes de Python: la base de IA todavía no está lista.',
+  'deps.models.title': 'Modelos y servidores locales',
+  'deps.models.hint':
+    'Lo que usan los motores locales. Los que necesitan GPU NVIDIA se indican y no se descargan en equipos sin ella.',
+  'deps.models.ready': 'Listo',
+  'deps.models.missing': 'Falta',
+  'deps.models.notForThisMachine': 'No aplica en este equipo',
+  'deps.models.downloading': 'Descargando {name}',
+  'deps.models.install': 'Descargar',
+  'deps.models.retry': 'Reintentar',
+  'deps.models.checking': 'Revisando los modelos instalados…',
+  'deps.runtime.fixture':
+    'Esta compilación trae una base de IA de prueba, no la publicada. Las funciones locales que la necesitan no van a funcionar.',
+  'deps.runtime.devFallbackAvailable':
+    'Hay un entorno de desarrollo disponible para instalar los paquetes de Python en este equipo.',
+  'deps.runtime.noFallback': 'Tampoco hay un entorno de desarrollo que la reemplace.',
+  'deps.runtime.affected': 'Capacidades afectadas: {list}',
+  'deps.runtime.unavailableAria': 'Base de IA no disponible',
+  'deps.runtime.offlineTitle':
+    'No pudimos llegar a la fuente de la base de IA: parece que estás sin conexión.',
+  'deps.runtime.offlineBody':
+    'EntropIA Pro necesita descargarla y verificarla la primera vez. Conectate a internet y volvé a verificar. Mientras tanto, el OCR, la transcripción y el NLP locales quedan en pausa.',
+  'deps.runtime.noReleaseTitle':
+    'Esta versión de EntropIA Pro todavía no tiene su runtime publicado.',
+  'deps.runtime.noReleaseBody':
+    'La lista firmada existe, pero no incluye la base de IA para esta versión y sistema. No es un problema de tu equipo: actualizá EntropIA Pro o volvé a verificar más tarde.',
+  'deps.runtime.noSourceTitle':
+    'Todavía no hay una fuente de descarga confiable para la base de IA.',
+  'deps.runtime.noSourceBody':
+    'La lista firmada aún no está publicada, así que no se puede descargar ni verificar de forma segura. No es un problema de tu equipo; la app la toma sola apenas se publique.',
+  'deps.runtime.willBootstrap':
+    'EntropIA Pro la prepara sola apenas haya una fuente válida disponible.',
+  'deps.runtime.repair': 'Reparar runtime',
+  'deps.runtime.retryConnection': 'Reintentar conexión',
+  'deps.runtime.recheck': 'Volver a verificar',
+  'deps.closeError': 'Cerrar error',
+  'deps.uv.venvAt': 'entorno virtual en {path}',
+  'deps.uv.embeddedRuntime': 'runtime embebido · sin venv administrado',
+  'deps.uv.noVenv': 'sin entorno virtual',
+  'deps.uv.devFallback': 'Fallback dev disponible',
+  'deps.uv.localVenvAt': 'entorno virtual local en {path}',
+  'deps.uv.noLocalVenv': 'sin entorno virtual local',
+  'deps.uv.noFallback':
+    'No se pueden instalar paquetes automáticamente: faltan herramientas en este equipo.',
+  'deps.uv.paused': 'Gestión automática pausada hasta que la base de IA esté lista.',
+  'deps.uv.allDetected': 'Paquetes de Python detectados; no hace falta hacer nada.',
+  'deps.uv.devNotRelease':
+    'La base de IA publicada no está lista ({summary}). El entorno de desarrollo no la reemplaza ni la verifica.',
+  'deps.uv.detected': 'Detectado: uv {version} en {path}',
+  'deps.uv.checking': 'Revisando uv…',
+  'deps.installAll': 'Instalar todo',
+  'deps.installAllNeedsRuntime':
+    'Primero tiene que estar lista la base de IA (o un entorno de desarrollo en este equipo).',
+  'deps.installedPct': '{pct}% instalado',
+  'deps.allInstalled': 'Todas las dependencias están instaladas y listas para usar.',
+  'deps.installedButRuntime':
+    'Los paquetes de Python están instalados, pero el runtime de EntropIA Pro necesita atención antes de habilitar OCR, transcripción y NLP.',
+  'deps.checkFailed': 'No se pudieron revisar las dependencias: {error}',
+  'deps.listenersFailed': 'Error al registrar listeners: {error}',
+  'deps.managedByPro': 'Paquete que administra EntropIA Pro.',
+  'deps.required': 'Requerido',
+  'deps.installing': 'Instalando {name}',
+  'deps.hideDetail': 'Ocultar detalle',
+  'deps.showDetail': 'Ver detalle del error',
+  'deps.install': 'Instalar',
+  'deps.retry': 'Reintentar',
+  'deps.checking': 'Revisando dependencias…',
+  'deps.reset.action': 'Resetear entorno',
+  'deps.reset.hint':
+    'Borra el entorno de IA administrado y su configuración. Después hay que volver a preparar EntropIA Pro.',
+  'deps.reset.title': 'Confirmar reseteo del entorno',
+  'deps.reset.description':
+    'Esta acción borra el entorno de IA administrado y las rutas de Python que usan el OCR, la transcripción y el NLP.',
+  'deps.reset.typeToConfirm': 'Para confirmar, escribí',
+  'deps.reset.confirmationLabel': 'Confirmación requerida',
+  'deps.reset.confirm': 'Confirmar reseteo',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sincronización',
   'settings.assistantsTab': 'Asistentes',
@@ -4354,6 +4439,87 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Switched off: EntropIA sends nothing to {service}. The key stays stored; tick the box and save to use it again.',
   'settings.apiSwitch.offNow':
     'Switched off: EntropIA sends nothing to {service}. The key stays stored; tick the box to use it again.',
+  'deps.prepare.title': 'Get EntropIA Pro ready to work on this computer',
+  'deps.prepare.description':
+    'Downloads the AI base, installs the Python packages and fetches every model this computer can use. Downloads continue in the background; each row shows its progress.',
+  'deps.prepare.action': 'Prepare EntropIA Pro',
+  'deps.prepare.stepRuntime': 'Preparing the AI base…',
+  'deps.prepare.stepPython': 'Installing the Python packages…',
+  'deps.prepare.stepModels': 'Starting the model downloads…',
+  'deps.prepare.noRuntimeForPython':
+    'The Python packages cannot be installed: the AI base is not ready yet.',
+  'deps.models.title': 'Local models and servers',
+  'deps.models.hint':
+    'What the local engines use. The ones that need an NVIDIA GPU are marked and are not downloaded on computers without one.',
+  'deps.models.ready': 'Ready',
+  'deps.models.missing': 'Missing',
+  'deps.models.notForThisMachine': 'Not for this computer',
+  'deps.models.downloading': 'Downloading {name}',
+  'deps.models.install': 'Download',
+  'deps.models.retry': 'Retry',
+  'deps.models.checking': 'Checking the installed models…',
+  'deps.runtime.fixture':
+    'This build carries a test AI base, not the published one. The local features that need it will not work.',
+  'deps.runtime.devFallbackAvailable':
+    'A development environment is available to install the Python packages on this computer.',
+  'deps.runtime.noFallback': 'There is no development environment to stand in for it either.',
+  'deps.runtime.affected': 'Affected capabilities: {list}',
+  'deps.runtime.unavailableAria': 'AI base unavailable',
+  'deps.runtime.offlineTitle': 'We could not reach the AI base source: you seem to be offline.',
+  'deps.runtime.offlineBody':
+    'EntropIA Pro needs to download and verify it the first time. Connect to the internet and check again. Meanwhile, local OCR, transcription and NLP are paused.',
+  'deps.runtime.noReleaseTitle': 'This version of EntropIA Pro has no published runtime yet.',
+  'deps.runtime.noReleaseBody':
+    'The signed list exists but does not include the AI base for this version and system. It is not a problem with your computer: update EntropIA Pro or check again later.',
+  'deps.runtime.noSourceTitle': 'There is no trusted download source for the AI base yet.',
+  'deps.runtime.noSourceBody':
+    'The signed list is not published yet, so it cannot be downloaded or verified safely. It is not a problem with your computer; the app picks it up as soon as it is published.',
+  'deps.runtime.willBootstrap':
+    'EntropIA Pro prepares it by itself as soon as a valid source is available.',
+  'deps.runtime.repair': 'Repair runtime',
+  'deps.runtime.retryConnection': 'Retry connection',
+  'deps.runtime.recheck': 'Check again',
+  'deps.closeError': 'Close error',
+  'deps.uv.venvAt': 'virtual environment at {path}',
+  'deps.uv.embeddedRuntime': 'embedded runtime · no managed venv',
+  'deps.uv.noVenv': 'no virtual environment',
+  'deps.uv.devFallback': 'Dev fallback available',
+  'deps.uv.localVenvAt': 'local virtual environment at {path}',
+  'deps.uv.noLocalVenv': 'no local virtual environment',
+  'deps.uv.noFallback':
+    'Packages cannot be installed automatically: tools are missing on this computer.',
+  'deps.uv.paused': 'Automatic management paused until the AI base is ready.',
+  'deps.uv.allDetected': 'Python packages detected; nothing to do.',
+  'deps.uv.devNotRelease':
+    'The published AI base is not ready ({summary}). The development environment neither replaces nor verifies it.',
+  'deps.uv.detected': 'Detected: uv {version} at {path}',
+  'deps.uv.checking': 'Checking uv…',
+  'deps.installAll': 'Install all',
+  'deps.installAllNeedsRuntime':
+    'The AI base must be ready first (or a development environment on this computer).',
+  'deps.installedPct': '{pct}% installed',
+  'deps.allInstalled': 'Every dependency is installed and ready to use.',
+  'deps.installedButRuntime':
+    'The Python packages are installed, but the EntropIA Pro runtime needs attention before OCR, transcription and NLP can run.',
+  'deps.checkFailed': 'The dependencies could not be checked: {error}',
+  'deps.listenersFailed': 'Could not register listeners: {error}',
+  'deps.managedByPro': 'Package managed by EntropIA Pro.',
+  'deps.required': 'Required',
+  'deps.installing': 'Installing {name}',
+  'deps.hideDetail': 'Hide detail',
+  'deps.showDetail': 'Show error detail',
+  'deps.install': 'Install',
+  'deps.retry': 'Retry',
+  'deps.checking': 'Checking dependencies…',
+  'deps.reset.action': 'Reset environment',
+  'deps.reset.hint':
+    'Deletes the managed AI environment and its settings. EntropIA Pro must be prepared again afterwards.',
+  'deps.reset.title': 'Confirm environment reset',
+  'deps.reset.description':
+    'This deletes the managed AI environment and the Python paths OCR, transcription and NLP use.',
+  'deps.reset.typeToConfirm': 'To confirm, type',
+  'deps.reset.confirmationLabel': 'Confirmation required',
+  'deps.reset.confirm': 'Confirm reset',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sync',
   'settings.assistantsTab': 'Assistants',

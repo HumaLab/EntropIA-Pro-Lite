@@ -1692,6 +1692,8 @@ pub fn run() {
             ocr::commands::llama_server_download,
             local_modes_offer::local_modes_offer,
             ocr::commands::ocr_local_high_info,
+            automation::models_setup::local_setup_status,
+            automation::models_setup::local_setup_install,
             ocr::commands::update_extraction_text_cmd,
             ocr::commands::extraction_is_edited_by_hand,
             ocr::block_reocr::reocr_layout_block,

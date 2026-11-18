@@ -108,6 +108,8 @@
     "allow-llama-server-download",
     "allow-local-modes-offer",
     "allow-ocr-local-high-info",
+    "allow-local-setup-status",
+    "allow-local-setup-install",
     "allow-update-extraction-text-cmd",
     "allow-extraction-is-edited-by-hand",
     "allow-reocr-layout-block",

@@ -265,19 +265,23 @@ pub async fn stt_parakeet_model_info(
     db: State<'_, AppDbState>,
 ) -> Result<ParakeetModelInfo, String> {
     let db_path = db.db_path.clone();
-    tokio::task::spawn_blocking(move || {
-        let dir = super::parakeet::parakeet_model_dir(&db_path);
-        let (missing_bytes, total_bytes) = super::parakeet::parakeet_download_size(&dir);
-        ParakeetModelInfo {
-            installed: missing_bytes == 0,
-            downloading: PARAKEET_DOWNLOADING.load(std::sync::atomic::Ordering::SeqCst),
-            missing_bytes,
-            total_bytes,
-            directory: dir.display().to_string(),
-        }
-    })
-    .await
-    .map_err(|e| format!("Parakeet model check failed: {e}"))
+    tokio::task::spawn_blocking(move || parakeet_info(&db_path))
+        .await
+        .map_err(|e| format!("Parakeet model check failed: {e}"))
+}
+
+/// [`stt_parakeet_model_info`] for blocking callers (`models_setup`).
+#[cfg(feature = "local-ml")]
+pub(crate) fn parakeet_info(db_path: &std::path::Path) -> ParakeetModelInfo {
+    let dir = super::parakeet::parakeet_model_dir(db_path);
+    let (missing_bytes, total_bytes) = super::parakeet::parakeet_download_size(&dir);
+    ParakeetModelInfo {
+        installed: missing_bytes == 0,
+        downloading: PARAKEET_DOWNLOADING.load(std::sync::atomic::Ordering::SeqCst),
+        missing_bytes,
+        total_bytes,
+        directory: dir.display().to_string(),
+    }
 }
 
 /// Start the Parakeet download in the background: `parakeet:download_progress`
@@ -289,6 +293,16 @@ pub async fn stt_parakeet_download_model(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
+    start_parakeet_download(&db.db_path, app_handle)
+}
+
+/// Shared starter behind the Settings button, Preparar EntropIA Pro and the
+/// assistant `models_setup` tool.
+#[cfg(feature = "local-ml")]
+pub(crate) fn start_parakeet_download(
+    db_path: &std::path::Path,
+    app_handle: AppHandle,
+) -> Result<String, String> {
     use crate::llm::download::{
         ModelDownloadCompletePayload, ModelDownloadErrorPayload, ModelDownloadProgressPayload,
     };
@@ -298,7 +312,7 @@ pub async fn stt_parakeet_download_model(
     if PARAKEET_DOWNLOADING.swap(true, Ordering::SeqCst) {
         return Ok("in_progress".to_string());
     }
-    let db_path = db.db_path.clone();
+    let db_path = db_path.to_path_buf();
     crate::app_logs::info(
         &app_handle,
         "parakeet/download",
