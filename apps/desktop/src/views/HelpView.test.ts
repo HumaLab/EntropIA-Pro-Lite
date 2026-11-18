@@ -35,6 +35,8 @@ function answer(
 /** Answers each command on its own, as the real backend does. */
 function backend(options: {
   hasKey: boolean
+  /** Extra `help_status` fields (R22: localEngine, localModelReady, model). */
+  status?: Record<string, unknown>
   ask?: unknown
   preview?: string
   faq?: unknown
@@ -51,7 +53,7 @@ function backend(options: {
     ? [...(options.list as Array<{ id: string }>)]
     : []
   mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
-    if (command === 'help_status') return { hasOpenrouterKey: options.hasKey }
+    if (command === 'help_status') return { hasOpenrouterKey: options.hasKey, ...options.status }
     if (command === 'help_diagnostics_preview') return options.preview ?? PREVIEW_TEXT
     if (command === 'help_history_list') return liveList
     if (command === 'help_history_get') {
@@ -113,6 +115,82 @@ describe('HelpView', () => {
     navigationRef.navigate.mockReset()
     navigationRef.openRootSection.mockReset()
     mockInvoke.mockReset()
+  })
+
+  // R22: `llm_mode = local` in Pro answers with the local Gemma, from the
+  // manual only, so the panel needs no key and does not offer documents.
+  it('answers with the local Gemma without a key and keeps documents off', async () => {
+    const askCalls = backend({
+      hasKey: false,
+      status: { localEngine: true, localModelReady: true, model: 'openai/gpt-5.6-luna' },
+      ask: { ...answer('Desde el manual'), localModel: true },
+    })
+    render(HelpView)
+
+    expect(
+      await screen.findByText(/Responde Gemma local, en este equipo y solo con el manual/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText('La ayuda usa tu cuenta de OpenRouter')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Usar OpenRouter/)).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })).toBeDisabled()
+
+    await sendQuestion('¿Cómo cambio el idioma?')
+
+    expect(
+      await screen.findByText('Respuesta de Gemma local, solo con el manual')
+    ).toBeInTheDocument()
+    expect(askCalls[0]).not.toHaveProperty('remote')
+    expect(askCalls[0]).not.toHaveProperty('documents')
+  })
+
+  it('sends one question to OpenRouter when asked, documents included', async () => {
+    const askCalls = backend({
+      hasKey: true,
+      status: { localEngine: true, localModelReady: true, model: 'openai/gpt-5.6-luna' },
+    })
+    render(HelpView)
+
+    await fireEvent.click(
+      await screen.findByRole('checkbox', {
+        name: 'Usar OpenRouter (openai/gpt-5.6-luna) para esta pregunta',
+      })
+    )
+    const documents = screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })
+    expect(documents).toBeEnabled()
+    await fireEvent.click(documents)
+    await sendQuestion('¿Qué dice el acta?')
+
+    await waitFor(() => expect(askCalls).toHaveLength(1))
+    expect(askCalls[0]).toMatchObject({ remote: true, documents: true })
+    // One question only: the next one goes back to the local Gemma.
+    await screen.findByText('Respuesta de ayuda')
+    await sendQuestion('¿Y la fecha?')
+    await waitFor(() => expect(askCalls).toHaveLength(2))
+    expect(askCalls[1]).not.toHaveProperty('remote')
+  })
+
+  it('says the local Gemma is missing instead of a generic error', async () => {
+    backend({
+      hasKey: false,
+      status: { localEngine: true, localModelReady: true },
+      ask: new Error('help_local_model_missing'),
+    })
+    render(HelpView)
+
+    await sendQuestion('¿Cómo cambio el idioma?')
+
+    expect(await screen.findAllByText(/Falta el modelo de texto local \(Gemma\)/)).not.toHaveLength(
+      0
+    )
+  })
+
+  it('names the OpenRouter model when the agent answers remotely', async () => {
+    backend({ hasKey: true, status: { localEngine: false, model: 'openai/gpt-5.6-luna' } })
+    render(HelpView)
+
+    expect(
+      await screen.findByText('Responde openai/gpt-5.6-luna vía OpenRouter.')
+    ).toBeInTheDocument()
   })
 
   it('checks for an OpenRouter key and loads the faq starters on mount', async () => {

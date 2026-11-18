@@ -245,7 +245,7 @@ Automatic answers and summaries are aids for your work. Always check quotations,
 | Generate embeddings and find similar material | Internet and OpenRouter (`baai/bge-m3`). | Local BGE-M3 (ONNX) or OpenRouter, according to **BGE-M3 embeddings**. |
 | Use the Research chat | Internet and OpenRouter. | The local model or OpenRouter according to **LLM mode**; local passage reranking with the BGE reranker. |
 | Use Investigate and the Writing agent | Internet and OpenRouter. | Same as Lite: these two tools always use OpenRouter. |
-| Use the [help chat](#ayuda-en-la-app) | Frequent questions, nothing else; everything else, the OpenRouter key with credit. | Same as Lite. |
+| Use the [help chat](#ayuda-en-la-app) | Frequent questions, nothing else; everything else, the OpenRouter key with credit. | With **LLM mode** set to **Local**, Gemma answers on the computer from the manual, with no key; to take actions or read your documents, the OpenRouter key. In the other modes, same as Lite. |
 | Import from Internet Archive | Internet; no account or key needed. | Same as Lite. |
 | Sync and search your Zotero library (**Library**) | Zotero open with local communication; OpenRouter to search by meaning and GLM-OCR to read scanned PDFs. | Zotero open; the OCR and embedding engines you chose (local or remote). |
 | Cite from Zotero | Zotero open on this computer with local communication enabled. | Same as Lite. |
@@ -294,7 +294,7 @@ Both variants have the same screens, the same archive and the same workflows: co
 | Installation | Small installer, no models. Windows, macOS and Linux. | Light installer; the AI base (about 2.2 GB) downloads by itself at start-up. Windows and Linux. |
 | Privacy | Every AI task sends the necessary content to the provider. | With the local modes, content never leaves the computer. |
 
-In both, layout box correction uses remote GLM-OCR, Investigate and the Writing agent use OpenRouter, and the help chat uses OpenRouter for whatever it cannot answer on the computer.
+In both, layout box correction uses remote GLM-OCR, Investigate and the Writing agent use OpenRouter, and the help chat uses OpenRouter for whatever it cannot answer on the computer (in Pro with **LLM mode** set to **Local**, Gemma answers on the computer).
 
 **Which one suits me?** Lite if you want to start quickly, on any system, and do not mind paying for provider usage. Pro if you work with sensitive material that must not leave the computer, process large volumes or are not always online; in exchange it needs more disk, a long first download and a more powerful computer.
 
@@ -1261,6 +1261,8 @@ An action request ("Delete…", "Create…", "Import…") never gets a fixed ans
 
 **Without a key.** If you have not loaded the OpenRouter key, the help still answers frequent questions, first steps and greetings; for the rest it shows **Help runs on your OpenRouter account** with **Open Settings** (to load it in **Remote APIs → OpenRouter**, with credit in the account) and **View the online manual**.
 
+**Local help (Pro).** With **LLM mode** set to **Local** (Settings → Engines), Gemma answers on the computer: it needs no key and no connection, and the diagnostics do not leave the computer either, but it only uses the manual, takes no actions and does not read your documents. The line above the text box says so. If you have the OpenRouter key, **Use OpenRouter for this question** sends just that question to the full agent (and enables **Search my documents**). If the model is missing, the help tells you: download it in **Settings → Local models**. In the other modes, the line names the OpenRouter model that answers.
+
 #### When something fails: "Include diagnostics"
 
 For the help to understand an error, tick **Include diagnostics** before sending. Added to your question:
@@ -1861,7 +1863,7 @@ Before asking for help, note the screen name, the step, the exact message, the f
 
 > **Important**
 >
-> In Lite, OCR, transcription, the Chat and many AI actions send content to the external provider doing the task. In Pro, choose the **Local** modes so content does not leave the computer; Investigate, the Writing agent, box correction and the help chat use remote services in both variants. Syncing a Zotero library into the Library also sends its works' text to OpenRouter and the scanned pages to GLM-OCR. Sync sends data to the cloud service only when you set up an account and turn it on. Review the provider's terms before using confidential material.
+> In Lite, OCR, transcription, the Chat and many AI actions send content to the external provider doing the task. In Pro, choose the **Local** modes so content does not leave the computer; Investigate, the Writing agent and box correction use remote services in both variants, and so does the help chat, except in Pro with **LLM mode** set to **Local**. Syncing a Zotero library into the Library also sends its works' text to OpenRouter and the scanned pages to GLM-OCR. Sync sends data to the cloud service only when you set up an account and turn it on. Review the provider's terms before using confidential material.
 
 > **Important**
 >

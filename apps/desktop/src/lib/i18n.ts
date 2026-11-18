@@ -1313,6 +1313,17 @@ const es = {
     'Llegó al límite de rondas de herramientas; la respuesta puede estar incompleta.',
   'help.toolsUnavailable':
     'El modelo no pudo usar herramientas en este turno; respondió sin usar herramientas.',
+  'help.engineLocal':
+    'Responde Gemma local, en este equipo y solo con el manual: no hace acciones ni lee tus documentos.',
+  'help.engineLocalMissing':
+    'Falta el modelo de texto local (Gemma): descargalo en Configuración › Modelos locales.',
+  'help.engineRemote': 'Responde {model} vía OpenRouter.',
+  'help.useRemote': 'Usar OpenRouter ({model}) para esta pregunta',
+  'help.localModelAnswer': 'Respuesta de Gemma local, solo con el manual',
+  'help.diagnosticsHintLocal':
+    'Lo lee Gemma local en este equipo: no viaja a ningún servicio. No incluye claves.',
+  'help.documentsNeedRemote':
+    'Gemma local no puede leer tus documentos. Marcá «Usar OpenRouter» para esta pregunta.',
   'help.suggestionsLabel': 'Probá con:',
   'help.suggestion1': '¿Cómo importo un PDF?',
   'help.suggestion2': '¿Cómo cargo mi clave de OpenRouter?',
@@ -5488,6 +5499,17 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'help.roundLimitReached': 'Reached the tool round limit; the answer may be incomplete.',
   'help.toolsUnavailable':
     'The model could not use tools for this turn; it answered without using tools.',
+  'help.engineLocal':
+    'Local Gemma answers, on this computer and from the manual only: it takes no actions and does not read your documents.',
+  'help.engineLocalMissing':
+    'The local text model (Gemma) is missing: download it in Settings › Local models.',
+  'help.engineRemote': '{model} answers through OpenRouter.',
+  'help.useRemote': 'Use OpenRouter ({model}) for this question',
+  'help.localModelAnswer': 'Answer from local Gemma, from the manual only',
+  'help.diagnosticsHintLocal':
+    'Local Gemma reads it on this computer: it goes to no service. It includes no keys.',
+  'help.documentsNeedRemote':
+    'Local Gemma cannot read your documents. Tick «Use OpenRouter» for this question.',
   'help.suggestionsLabel': 'Try:',
   'help.suggestion1': 'How do I import a PDF?',
   'help.suggestion2': 'How do I load my OpenRouter key?',

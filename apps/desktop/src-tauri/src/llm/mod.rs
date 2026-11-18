@@ -349,6 +349,22 @@ pub(crate) fn get_or_init_local_gemma_engine(
     Ok(engine)
 }
 
+/// Whether the local Gemma file is already on disk. Unlike
+/// [`get_or_init_local_gemma_engine`] this never starts a download, so an
+/// interactive caller (the help chat) can send the person to Modelos locales
+/// instead of blocking on several GB.
+#[cfg(feature = "local-ml")]
+pub(crate) fn local_gemma_model_present(
+    conn: &rusqlite::Connection,
+    db_path: &std::path::Path,
+) -> bool {
+    let filename = resolve_local_model_filename(Some(conn));
+    matches!(
+        existing_supported_local_model_path(db_path, &filename),
+        Ok(Some(_))
+    )
+}
+
 /// Resolved status of the local LLM model on disk.
 #[derive(Clone, serde::Serialize)]
 pub struct LocalModelInfo {

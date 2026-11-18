@@ -40,6 +40,79 @@ use crate::automation::server::AgentEndpointState;
 /// source of truth at the end.
 pub(crate) const HELP_STEP_EVENT: &str = "help://step";
 
+/// `help_ask` fails with exactly this when `llm_mode = local` but the local
+/// Gemma file is not on disk (R22): the frontend points to Modelos locales
+/// and offers OpenRouter for the question.
+pub(crate) const HELP_LOCAL_MODEL_MISSING: &str = "help_local_model_missing";
+
+/// `help_ask` fails with exactly this when a local-Gemma question asks for
+/// documents (R22): only the OpenRouter agent can read them.
+pub(crate) const HELP_LOCAL_NO_DOCUMENTS: &str = "help_local_no_documents";
+
+/// Context ceiling of a local help answer: the prompt is the question, the
+/// manual excerpts (`help_context_chars`), the capped history and the
+/// diagnostics; the engine fits the window down to the actual prompt.
+#[cfg(feature = "local-ml")]
+const HELP_LOCAL_N_CTX: u32 = 16_384;
+
+/// The picked excerpts as answer sources, in picked order.
+fn sources_of(picked: &[Hit]) -> Vec<HelpSource> {
+    picked
+        .iter()
+        .map(|section| HelpSource {
+            chapter: section.chapter.clone(),
+            title: section.title.clone(),
+            kind: section.source.wire_kind().to_string(),
+        })
+        .collect()
+}
+
+/// A plain answer from the local Gemma (R22). Checks the file first, so a
+/// missing model fails at once with [`HELP_LOCAL_MODEL_MISSING`] instead of
+/// starting a multi-GB download inside the question.
+#[cfg(feature = "local-ml")]
+async fn local_help_answer(
+    app: &tauri::AppHandle,
+    db_path: &std::path::Path,
+    prompt: String,
+    max_tokens: i32,
+    temperature: f32,
+) -> Result<String, String> {
+    let app = app.clone();
+    let db_path = db_path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let conn = crate::db::open::open_archive_connection(&db_path)?;
+        if !crate::llm::local_gemma_model_present(&conn, &db_path) {
+            return Err(HELP_LOCAL_MODEL_MISSING.to_string());
+        }
+        let engine = crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app)?;
+        let engine = engine
+            .lock()
+            .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
+        engine.generate_chat_with_ctx(
+            &prompt,
+            max_tokens,
+            HELP_LOCAL_N_CTX,
+            temperature,
+            "[help][local]",
+        )
+    })
+    .await
+    .map_err(|error| format!("local help task panicked: {error}"))?
+}
+
+/// Lite has no local engine: `HelpSettings::local_engine` is always off.
+#[cfg(not(feature = "local-ml"))]
+async fn local_help_answer(
+    _app: &tauri::AppHandle,
+    _db_path: &std::path::Path,
+    _prompt: String,
+    _max_tokens: i32,
+    _temperature: f32,
+) -> Result<String, String> {
+    Err(HELP_LOCAL_MODEL_MISSING.to_string())
+}
+
 /// One live step emitted over [`HELP_STEP_EVENT`] (T24, T26): which run
 /// it belongs to, the tool, the compact JSON args and the outcome on the
 /// wire as `"ok"`, `"pending"`, `"denied"`, `"failed"` or
@@ -329,24 +402,46 @@ fn help_index_shared(app: &tauri::AppHandle) -> Result<Arc<Mutex<HelpIndex>>, St
         .ok_or_else(|| "help index unavailable".to_string())
 }
 
-/// Whether the assistant can run on the user's own OpenRouter key (S3, S6).
-/// The raw row only: resolving the keyring value here would be pointless, the
-/// key itself never leaves through this command.
+/// Whether the assistant can run on the user's own OpenRouter key (S3, S6),
+/// on which model, and whether `llm_mode = local` sends it to the local
+/// Gemma instead (R22). The raw rows only: resolving the keyring value here
+/// would be pointless, the key itself never leaves through this command.
 #[tauri::command]
 pub async fn help_status(
     db: tauri::State<'_, crate::db::state::AppDbState>,
 ) -> Result<HelpStatus, String> {
     let conn = db.ui_conn.clone();
+    let db_path = db.db_path.clone();
     tokio::task::spawn_blocking(move || {
         let guard = conn.lock().map_err(|e| e.to_string())?;
         let present =
             crate::settings::api_key_configured(&guard, crate::settings::OPENROUTER_API_KEY);
+        let help = super::settings::resolve_help_settings(&|key| {
+            crate::settings::get_setting(&guard, key)
+        });
         Ok(HelpStatus {
             has_openrouter_key: present,
+            model: help.model,
+            local_engine: help.local_engine,
+            local_model_ready: local_model_ready(&guard, &db_path),
         })
     })
     .await
     .map_err(|e| format!("help status task panicked: {e}"))?
+}
+
+/// Whether the local Gemma file is on disk (never downloads it). Lite has no
+/// local engine.
+fn local_model_ready(conn: &rusqlite::Connection, db_path: &std::path::Path) -> bool {
+    #[cfg(feature = "local-ml")]
+    {
+        crate::llm::local_gemma_model_present(conn, db_path)
+    }
+    #[cfg(not(feature = "local-ml"))]
+    {
+        let _ = (conn, db_path);
+        false
+    }
 }
 
 /// The exact diagnostic text `help_ask` would send (D3, S5): the user previews
@@ -414,6 +509,13 @@ pub async fn help_diagnostics_preview(
 /// (S19) is the stored conversation the question and the final answer are
 /// appended to, creating it when missing; the id is echoed back in
 /// `HelpAnswer.conversationId`. Absent means nothing is stored.
+///
+/// With `llm_mode = local` in Pro (R22) the question is answered by the local
+/// Gemma from the manual excerpts (and the diagnostics, which then never leave
+/// the computer): no key, no network, no actions and no documents, since the
+/// local engine has no tool use. `remote` sends this one question to
+/// OpenRouter anyway. A missing Gemma file fails with
+/// [`HELP_LOCAL_MODEL_MISSING`] instead of downloading it inside the question.
 // A Tauri command: one State per shared service it touches.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -425,6 +527,7 @@ pub async fn help_ask(
     documents: Option<bool>,
     request_id: Option<String>,
     conversation_id: Option<String>,
+    remote: Option<bool>,
     db: tauri::State<'_, crate::db::state::AppDbState>,
     endpoint: tauri::State<'_, Arc<AgentEndpointState>>,
     access: tauri::State<'_, Arc<AgentAccess>>,
@@ -465,6 +568,7 @@ pub async fn help_ask(
                     steps: Vec::new(),
                     round_limit_reached: false,
                     tools_unavailable: false,
+                    local_model: false,
                     conversation_id: None,
                 },
             ));
@@ -510,15 +614,15 @@ pub async fn help_ask(
                 steps: Vec::new(),
                 round_limit_reached: false,
                 tools_unavailable: false,
+                local_model: false,
                 conversation_id: None,
             },
         ));
     }
-    let api_key = key_result?;
     let history = normalize_history_capped(history, help.history_turns)?;
-    // Excerpts for the no-tools fallback only (D19): when the provider
-    // rejects tool use, the plain prompt injects these as before. The
-    // agent path consults the same index on demand through `manual_search`.
+    // Excerpts for the no-tools fallback and the local Gemma (D19, R22):
+    // both inject these into a plain prompt. The agent path consults the
+    // same index on demand through `manual_search`.
     let picked: Vec<Hit> = {
         // The guard drops before the network calls below: the index is only
         // borrowed to rank, never across an await.
@@ -528,6 +632,35 @@ pub async fn help_ask(
             .map_err(|error| format!("help index lock poisoned: {error}"))?;
         pick_sections_with_budget(&index, &question, with_diagnostics, help.context_chars)
     };
+    // R22: before the key gate, so the local Gemma needs no key at all.
+    if help.local_engine && !remote.unwrap_or(false) {
+        // Documents reach the model only through the CONTENT tools (D16),
+        // which the local engine cannot drive. The UI does not offer the
+        // box here; this guards older clients.
+        if with_documents {
+            return Err(HELP_LOCAL_NO_DOCUMENTS.to_string());
+        }
+        let prompt = build_help_prompt(&question, &history, &picked, diagnostics.as_deref());
+        let answer =
+            local_help_answer(&app, &db.db_path, prompt, help.max_tokens, help.temperature).await?;
+        return Ok(super::history::attach_history(
+            &app,
+            conversation_id,
+            &question,
+            HelpAnswer {
+                answer,
+                sources: sources_of(&picked),
+                local: false,
+                documents: Vec::new(),
+                steps: Vec::new(),
+                round_limit_reached: false,
+                tools_unavailable: false,
+                local_model: true,
+                conversation_id: None,
+            },
+        ));
+    }
+    let api_key = key_result?;
     // The agent system prompt (T22, S22): the local date and time plus
     // diagnostics when opted in. Manual excerpts travel only through
     // `manual_search` (D19). Document text is never injected here (D16):
@@ -535,14 +668,7 @@ pub async fn help_ask(
     let system = build_agent_system(&now, diagnostics.as_deref());
     // The fallback's sources: the excerpts the plain prompt injects. The
     // agent path reports only what `manual_search` returned instead.
-    let fallback_sources = picked
-        .iter()
-        .map(|section| HelpSource {
-            chapter: section.chapter.clone(),
-            title: section.title.clone(),
-            kind: section.source.wire_kind().to_string(),
-        })
-        .collect();
+    let fallback_sources = sources_of(&picked);
     // The SAME agent MCP the app serves, in-process (D11, T21), behind the
     // help gate (D12, T22).
     let bridge = HelpMcpBridge::start(
@@ -697,6 +823,7 @@ pub async fn help_ask(
             steps: outcome.steps,
             round_limit_reached: outcome.round_limit_reached,
             tools_unavailable: false,
+            local_model: false,
             conversation_id: None,
         }),
         Err(error) if is_stop_error(&error) => {
@@ -715,6 +842,7 @@ pub async fn help_ask(
                 steps: stopped.steps,
                 round_limit_reached: false,
                 tools_unavailable: false,
+                local_model: false,
                 conversation_id: None,
             })
         }
@@ -739,6 +867,7 @@ pub async fn help_ask(
                 steps: Vec::new(),
                 round_limit_reached: false,
                 tools_unavailable: true,
+                local_model: false,
                 conversation_id: None,
             })
         }
