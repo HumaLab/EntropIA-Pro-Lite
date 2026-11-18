@@ -9,7 +9,8 @@
   import { getNavigation } from '$lib/pane-context'
   import { getAssetPathLabel } from '$lib/item-metadata'
   import { LOCAL_ML } from '$lib/capabilities'
-  import { settingsGet, SETTINGS_KEYS } from '$lib/settings'
+  import { apiKeyState, SETTINGS_KEYS, type ApiKeyState } from '$lib/settings'
+  import { localOcrhInfo, type LocalOcrhInfo } from '$lib/ocr'
   import {
     batchProgress,
     batchStore,
@@ -77,6 +78,15 @@
   let runOcr = $state(true)
   // Off by default: OCR over a page with native PDF text replaces that text.
   let ocrIncludeNative = $state(false)
+  // Off by default: with OCRH in local mode a batch runs OCRL (layout +
+  // PaddleOCR, seconds per page); this asks for local OCRH instead (R17).
+  let ocrLocalHigh = $state(false)
+  let ocrhInfo = $state<LocalOcrhInfo>({ local_mode: false, high_on_cpu: false })
+  // OCRH on the CPU takes ~15 min per page: warn, never block. A local-mode
+  // batch only runs OCRH when asked; auto without a GLM key always does.
+  const slowLocalOcrh = $derived(
+    runOcr && ocrhInfo.high_on_cpu && (ocrLocalHigh || !ocrhInfo.local_mode)
+  )
   let runEmbeddings = $state(true)
   // Off by default: under Lite every document is a paid OpenRouter call.
   let runNer = $state(false)
@@ -92,9 +102,9 @@
   // (`force_remote_ocr_correction`), so it is gated in both variants; a Pro
   // summary runs on the local engine like the per-page button.
   // Unknown until read (and when the read answers nothing) means not blocked.
-  let hasOpenrouterKey = $state(true)
+  let openrouterKey = $state<ApiKeyState>('usable')
   const missingOpenrouterKey = $derived(
-    !hasOpenrouterKey &&
+    openrouterKey !== 'usable' &&
       (runOcrCorrection ||
         (!LOCAL_ML && (runEmbeddings || runNer || runTriples || runSummary || Boolean(schemaId))))
   )
@@ -102,6 +112,7 @@
   const flowSteps = $derived<BatchFlowSteps>({
     ocr: runOcr,
     ocrIncludeNative,
+    ocrLocalHigh,
     embeddings: runEmbeddings,
     ner: runNer,
     triples: runTriples,
@@ -112,6 +123,7 @@
   function applyFlow(steps: BatchFlowSteps) {
     runOcr = steps.ocr
     ocrIncludeNative = steps.ocrIncludeNative
+    ocrLocalHigh = steps.ocrLocalHigh
     runEmbeddings = steps.embeddings
     runNer = steps.ner
     runTriples = steps.triples
@@ -425,6 +437,7 @@
       const operations = [
         ...(runOcr ? ['ocr'] : []),
         ...(runOcr && ocrIncludeNative ? ['ocr_include_native'] : []),
+        ...(runOcr && ocrhInfo.local_mode && ocrLocalHigh ? ['ocr_local_high'] : []),
         ...(runEmbeddings ? ['embeddings'] : []),
         ...(runNer ? ['ner'] : []),
         ...(runTriples ? ['triples'] : []),
@@ -729,11 +742,12 @@
     void loadLists()
     // Read in Pro too: correction needs the key in both variants, and an
     // unread key must never be mistaken for a missing one.
-    settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY)
-      .then((key) => {
-        if (key !== undefined) hasOpenrouterKey = Boolean(key?.trim())
+    apiKeyState(SETTINGS_KEYS.OPENROUTER_API_KEY)
+      .then((state) => {
+        if (state !== undefined) openrouterKey = state
       })
       .catch(() => {})
+    if (LOCAL_ML) void localOcrhInfo().then((info) => (ocrhInfo = info))
     const unsubscribeStore = batchStore.subscribe((summary) => {
       const init = summary.init
       if (init?.recovered && !recoveryDismissed) {
@@ -1290,6 +1304,13 @@
               >{t('batch.opOcrIncludeNative')}</Checkbox
             >
           </span>
+          {#if LOCAL_ML && ocrhInfo.local_mode}
+            <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrLocalHighHint')}>
+              <Checkbox variant="card" size="sm" bind:checked={ocrLocalHigh} disabled={!runOcr}
+                >{t('batch.opOcrLocalHigh')}</Checkbox
+              >
+            </span>
+          {/if}
           <!-- The hint used to be a paragraph under the row, which is the one
                place a single-line control strip cannot afford. The tooltip
                action also wires `aria-describedby`, so the sentence still
@@ -1320,7 +1341,13 @@
           <!-- The span carries the tooltip: a disabled button gets no pointer events. -->
           <span
             class="batch-ops__hinted batch-ops__action-slot"
-            use:tooltip={missingOpenrouterKey ? t('batch.needsOpenrouterKey') : undefined}
+            use:tooltip={missingOpenrouterKey
+              ? t(
+                  openrouterKey === 'disabled'
+                    ? 'batch.openrouterDisabled'
+                    : 'batch.needsOpenrouterKey'
+                )
+              : undefined}
           >
             <Button
               class="batch-ops__action"
@@ -1342,6 +1369,9 @@
             </Button>
           </span>
         </div>
+        {#if slowLocalOcrh}
+          <p class="surface-message" role="status">{t('batch.ocrhCpuNotice')}</p>
+        {/if}
         <BatchSchemaPanel bind:schemaId />
         {#if draft && draftId}
           <div class="batch-tab__draft">

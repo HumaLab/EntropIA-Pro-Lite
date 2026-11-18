@@ -82,6 +82,63 @@ pub(crate) fn server_binary_name() -> &'static str {
     }
 }
 
+/// The `ENTROPIA_LLAMA_SERVER` override, when set to a non-empty path.
+pub(crate) fn env_server_override() -> Option<PathBuf> {
+    std::env::var_os(SERVER_BINARY_ENV)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+/// The server binary to run: the override, else the managed
+/// `<data>/tools/llama-server` install, else the installer-bundled build.
+/// When none exists it returns the managed path, so "missing" errors name
+/// the place a download would fill.
+pub(crate) fn resolve_server(
+    db_path: &Path,
+    env_server: Option<PathBuf>,
+    resource_dir: Option<&Path>,
+) -> PathBuf {
+    env_server.unwrap_or_else(|| {
+        let managed = server_dir(db_path).join(server_binary_name());
+        if managed.is_file() {
+            return managed;
+        }
+        if let Some(root) = resource_dir {
+            let bundled = root.join(BUNDLED_SERVER_SUBDIR).join(server_binary_name());
+            if bundled.is_file() {
+                return bundled;
+            }
+        }
+        managed
+    })
+}
+
+/// Where this build gets its `llama-server` from, for the Settings cards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerSource {
+    /// The installer ships it (Linux `.deb`, scripts/fetch-llama-server.sh).
+    Bundled,
+    /// Downloaded on demand (Windows), and this machine can run it.
+    Download,
+    /// Downloaded on demand, but there is no NVIDIA GPU: both local engines
+    /// are GPU-only, so the ~610 MB CUDA build is not offered.
+    RequiresNvidiaGpu,
+}
+
+/// Platforms whose installers ship no server (see `llama_server_download`).
+pub(crate) const SERVER_DOWNLOADED: bool = cfg!(all(windows, target_arch = "x86_64"));
+
+pub(crate) fn server_source() -> ServerSource {
+    if !SERVER_DOWNLOADED {
+        ServerSource::Bundled
+    } else if crate::llm::has_nvidia_gpu() {
+        ServerSource::Download
+    } else {
+        ServerSource::RequiresNvidiaGpu
+    }
+}
+
 struct RunningServer {
     child: Child,
     kind: ServerKind,
@@ -174,6 +231,13 @@ fn start(
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_err));
+    // llama-server reads these as its own flags. A user's `LLAMA_API_KEY`
+    // (set for some other Llama tool) made it demand a key the app never
+    // sends: every local correction answered HTTP 401. The app owns this
+    // server's configuration, so none of them may reach it.
+    for name in llama_server_env_overrides(std::env::vars_os().map(|(name, _)| name)) {
+        cmd.env_remove(name);
+    }
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -220,6 +284,19 @@ fn start(
         STARTUP_TIMEOUT.as_secs(),
         log_tail(&log_path)
     ))
+}
+
+/// The inherited variables llama-server would read as configuration:
+/// `LLAMA_API_KEY` and every `LLAMA_ARG_*` (port, context, host...).
+fn llama_server_env_overrides(
+    names: impl Iterator<Item = std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    names
+        .filter(|name| {
+            let name = name.to_string_lossy().to_ascii_uppercase();
+            name == "LLAMA_API_KEY" || name.starts_with("LLAMA_ARG_")
+        })
+        .collect()
 }
 
 fn stop(running: &mut RunningServer) {
@@ -310,6 +387,23 @@ fn kill_stale_server(db_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn llama_server_never_inherits_its_own_configuration_variables() {
+        let names = [
+            "LLAMA_API_KEY",
+            "LLAMA_ARG_PORT",
+            "llama_arg_ctx_size",
+            "LLAMA_BASE_URL",
+            "OPENROUTER_API_KEY",
+            "PATH",
+        ]
+        .map(std::ffi::OsString::from);
+        assert_eq!(
+            llama_server_env_overrides(names.into_iter()),
+            ["LLAMA_API_KEY", "LLAMA_ARG_PORT", "llama_arg_ctx_size"].map(std::ffi::OsString::from)
+        );
+    }
 
     #[test]
     fn only_a_200_status_line_is_healthy() {

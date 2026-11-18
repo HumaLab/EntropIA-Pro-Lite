@@ -160,6 +160,8 @@ pub struct BatchOperations {
     pub ocr: bool,
     /// OCR also admits pages whose only extraction is native PDF text.
     pub ocr_include_native: bool,
+    /// With OCRH in local mode, run local OCRH instead of OCRL.
+    pub ocr_local_high: bool,
     pub embeddings: bool,
     pub ner: bool,
     pub triples: bool,
@@ -184,6 +186,7 @@ pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperat
             match entry.as_str() {
                 "ocr" => ops.ocr = true,
                 super::commands::OCR_INCLUDE_NATIVE => ops.ocr_include_native = true,
+                super::commands::OCR_LOCAL_HIGH => ops.ocr_local_high = true,
                 "embeddings" => ops.embeddings = true,
                 "ner" => ops.ner = true,
                 "triples" => ops.triples = true,
@@ -2141,6 +2144,55 @@ pub fn admit_repair_or_attach(
         input_fingerprint,
         contract_hash,
     )
+}
+
+/// R29: whether a finished OCR unit was asked for only by user or manual
+/// batches that left `embeddings` out. Its new text is then not embedded
+/// automatically. Any linked batch that asks for embeddings, or a system
+/// batch (repair, bibliography), keeps the automatic follow-up.
+pub fn ocr_excludes_embeddings(conn: &Connection, ocr_task_id: &str) -> Result<bool, String> {
+    let batches = conn
+        .prepare(
+            "SELECT b.id, b.origin FROM processing_batch_tasks l
+             JOIN processing_batches b ON b.id = l.batch_id
+             WHERE l.task_id = ?1",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map([ocr_task_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("Failed to read the batches of task {ocr_task_id}: {e}"))?;
+    let mut excluded = false;
+    for (batch_id, origin) in batches {
+        if !matches!(origin.as_str(), "user" | "manual")
+            || batch_operations(conn, &batch_id)?.embeddings
+        {
+            return Ok(false);
+        }
+        excluded = true;
+    }
+    Ok(excluded)
+}
+
+/// Keeps automatic embedding (the OCR follow-up and the periodic repair
+/// sweep) away from this source revision of an asset. An explicit embedding
+/// request clears it ([`admit_subject_or_attach`]), and a new revision of the
+/// text is not covered.
+pub fn suppress_auto_embedding(
+    conn: &Connection,
+    asset_id: &str,
+    revision: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO processing_asset_revisions (asset_id, source_revision, auto_suppressed_revision)
+         VALUES (?1, ?2, ?2)
+         ON CONFLICT(asset_id) DO UPDATE SET auto_suppressed_revision = excluded.auto_suppressed_revision",
+        rusqlite::params![asset_id, revision],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("Failed to suppress automatic embedding of {asset_id}: {e}"))
 }
 
 /// Cheap identity of the OCR input: asset id, stored path, and byte size.
@@ -5675,6 +5727,58 @@ pub fn execution_wanted(conn: &Connection, task_id: &str) -> Result<bool, String
     Ok(count > 0)
 }
 
+/// R14: true when a unit of a higher priority level than this running task
+/// is waiting to be claimed. The supervisor runs one unit at a time, so a
+/// long background unit (a 371-chunk embedding) used to hold the slot for
+/// minutes while the OCR a person had just asked for sat `pending`. The
+/// running unit's level is the highest priority among the running batches
+/// that want it, the same rule [`claim_next`] orders by; only units of a
+/// claimable kind, with no unfinished dependency, count.
+pub fn preempting_work_exists(
+    conn: &Connection,
+    task_id: &str,
+    kinds: &[&str],
+    now_ms: i64,
+) -> Result<bool, String> {
+    if kinds.is_empty() {
+        return Ok(false);
+    }
+    let kind_list = kinds
+        .iter()
+        .map(|kind| format!("'{kind}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    conn.query_row(
+        &format!(
+            "SELECT EXISTS(
+               SELECT 1 FROM processing_batches pb
+               JOIN processing_batch_tasks pl ON pl.batch_id = pb.id
+               JOIN processing_tasks t ON t.id = pl.task_id
+               WHERE pb.state = 'running' AND pb.desired_state = 'run'
+                 AND pl.request_state = 'active'
+                 AND pb.priority > (
+                   SELECT COALESCE(MAX(cb.priority), 0)
+                   FROM processing_batch_tasks cl
+                   JOIN processing_batches cb ON cb.id = cl.batch_id
+                   WHERE cl.task_id = ?1 AND cl.request_state = 'active'
+                     AND cb.state = 'running' AND cb.desired_state = 'run')
+                 AND t.id != ?1
+                 AND t.kind IN ({kind_list})
+                 AND (t.state = 'pending'
+                      OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL
+                          AND t.next_retry_at <= ?2))
+                 AND NOT EXISTS (
+                   SELECT 1 FROM processing_batch_tasks l2
+                   WHERE l2.task_id = t.id AND l2.dependency_task_id IS NOT NULL
+                     AND (SELECT state FROM processing_tasks d WHERE d.id = l2.dependency_task_id)
+                         NOT IN ('succeeded', 'skipped')))"
+        ),
+        rusqlite::params![task_id, now_ms],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("Failed to check for higher-priority work: {e}"))
+}
+
 /// Final publish of one task: validates lease, domain/subject/kind route,
 /// source pin, contract, and demand, runs the engine-specific `publish`
 /// (canonical rows + receipt), marks `succeeded`, closes the attempt, stamps
@@ -6151,7 +6255,7 @@ pub fn classify_batch_page(
     }
     // Read phase: eligibility verdicts for every member, no write lock held.
     // The OCR mode pins once per page from the saved setting (frozen scope).
-    let ocr_mode = super::ocr::resolve_batch_ocr_mode(conn);
+    let ocr_mode = super::ocr::resolve_batch_ocr_mode(conn, ops.ocr_local_high);
     let mut works = Vec::with_capacity(page.len());
     for (ordinal, asset_id) in &page {
         works.push(plan_member(conn, *ordinal, asset_id, &ops, &ocr_mode)?);
@@ -8524,6 +8628,7 @@ mod tests {
                     &super::super::ocr_correction::CorrectionComputeOutput {
                         expected_extraction: original.clone(),
                         corrected: "Texto nativo corregido.".to_string(),
+                        engine: None,
                     },
                 )
             },
@@ -10145,6 +10250,109 @@ mod tests {
         )
         .unwrap()
         .is_some());
+    }
+
+    /// R14: a background unit yields only to waiting work of a strictly
+    /// higher level that this build can claim.
+    #[test]
+    fn background_work_yields_only_to_claimable_higher_priority_units() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "bg", "req-bg", r#"["embeddings"]"#);
+        insert_batch(&conn, "user", "req-user", r#"["ocr"]"#);
+        conn.execute_batch(
+            "UPDATE processing_batches SET state = 'running';
+             UPDATE processing_batches SET priority = 2 WHERE id = 'user';",
+        )
+        .unwrap();
+        let background = admit_or_attach(&conn, "bg", "embedding", "a7", 0, "fp", "c", None)
+            .unwrap()
+            .task_id;
+        let user = admit_or_attach(&conn, "user", "ocr", "a1", 0, "fp", "c", None)
+            .unwrap()
+            .task_id;
+        let kinds = ["ocr", "embedding"];
+
+        assert!(preempting_work_exists(&conn, &background, &kinds, 0).unwrap());
+        assert!(
+            !preempting_work_exists(&conn, &user, &kinds, 0).unwrap(),
+            "the top level never yields"
+        );
+        assert!(
+            !preempting_work_exists(&conn, &background, &["embedding"], 0).unwrap(),
+            "a kind this build cannot claim does not count"
+        );
+
+        conn.execute(
+            "UPDATE processing_batches SET desired_state = 'pause' WHERE id = 'user'",
+            [],
+        )
+        .unwrap();
+        assert!(
+            !preempting_work_exists(&conn, &background, &kinds, 0).unwrap(),
+            "a paused batch does not take the slot"
+        );
+    }
+
+    /// R29: an OCR batch that left embeddings out keeps its pages away from
+    /// automatic embedding (follow-up and repair sweep) until an explicit
+    /// embedding request asks for them.
+    #[test]
+    fn an_ocr_only_batch_keeps_its_pages_out_of_automatic_embedding() {
+        let (_dir, conn) = batch_db();
+        let contract = super::super::eligibility::current_embedding_contract_hash();
+        insert_batch(&conn, "ocr-only", "req-ocr", r#"["ocr"]"#);
+        insert_batch(&conn, "both", "req-both", r#"["ocr","embeddings"]"#);
+        let revision = source_revision(&conn, "a7").unwrap();
+        let fingerprint =
+            super::super::eligibility::embedding_input_fingerprint(&conn, "a7").unwrap();
+        let ocr = admit_or_attach(&conn, "ocr-only", "ocr", "a7", revision, "fp", "c", None)
+            .unwrap()
+            .task_id;
+        assert!(ocr_excludes_embeddings(&conn, &ocr).unwrap());
+
+        suppress_auto_embedding(&conn, "a7", revision).unwrap();
+        let automatic: Vec<String> =
+            crate::nlp::embeddings::scan_auto_embedding_candidates(&conn, 16)
+                .unwrap()
+                .into_iter()
+                .map(|candidate| candidate.asset_id)
+                .collect();
+        assert!(!automatic.contains(&"a7".to_string()), "{automatic:?}");
+        assert!(
+            automatic.contains(&"a6".to_string()),
+            "other stale pages still repair"
+        );
+        let repair = ensure_system_batch(&conn, "repair").unwrap();
+        assert!(
+            admit_repair_or_attach(&conn, &repair, "a7", revision, &fingerprint, &contract)
+                .unwrap()
+                .is_none()
+        );
+
+        // The same OCR unit also asked for by a batch that wants embeddings.
+        admit_or_attach(&conn, "both", "ocr", "a7", revision, "fp", "c", None).unwrap();
+        assert!(!ocr_excludes_embeddings(&conn, &ocr).unwrap());
+
+        // An explicit embedding request lifts the suppression.
+        admit_or_attach(
+            &conn,
+            "both",
+            "embedding",
+            "a7",
+            revision,
+            &fingerprint,
+            &contract,
+            None,
+        )
+        .unwrap();
+        let suppressed: Option<i64> = conn
+            .query_row(
+                "SELECT auto_suppressed_revision FROM processing_asset_revisions WHERE asset_id='a7'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(suppressed, None);
     }
 
     #[test]

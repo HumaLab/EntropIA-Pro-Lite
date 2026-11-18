@@ -1,6 +1,6 @@
 //! The one place that knows how to open a connection to the archive.
 //!
-//! Every connection to `entropia.sqlite` carries the same four settings, and
+//! Every connection to `entropia.sqlite` carries the same five settings, and
 //! they are not decorations:
 //!
 //! - **WAL** lets a reader work while a writer writes. Without it every read
@@ -16,8 +16,11 @@
 //!   SQLite default, but it is spelled out here because the processing queue
 //!   depends on it: never assume it is inherited, and never lower it for a
 //!   connection that writes queue state, invalidations, or results.
+//! - **`IMMEDIATE` transactions** take the write lock at `BEGIN`. A DEFERRED
+//!   transaction that reads and then writes fails at once when another
+//!   connection committed in between: busy_timeout cannot help it.
 //!
-//! That last one is why this module exists. The settings used to be repeated at
+//! The `busy_timeout` one is why this module exists. The settings used to be repeated at
 //! nine call sites, and the repetitions had drifted: `sync` and `geo` waited,
 //! while the UI connection, both OCR workers, transcription, the LLM worker and
 //! the embedding scheduler did not. Twenty-four further sites opened the archive
@@ -41,7 +44,7 @@ pub const BUSY_TIMEOUT_MS: u32 = 15_000;
 
 /// Opens a connection to the archive with the settings every caller needs.
 pub fn open_archive_connection(db_path: &Path) -> Result<Connection, String> {
-    let conn = Connection::open(db_path)
+    let mut conn = Connection::open(db_path)
         .map_err(|e| format!("Failed to open {}: {e}", db_path.display()))?;
     conn.execute_batch(&format!(
         "PRAGMA journal_mode=WAL;
@@ -50,6 +53,13 @@ pub fn open_archive_connection(db_path: &Path) -> Result<Connection, String> {
          PRAGMA synchronous=FULL;"
     ))
     .map_err(|e| format!("Failed to configure {}: {e}", db_path.display()))?;
+    // Every transaction opened on the archive takes the write lock at BEGIN
+    // (R20/R30). A DEFERRED one reads under a snapshot first, and when another
+    // connection commits before its first write, SQLite cannot upgrade it:
+    // `database is locked` at once, busy_timeout notwithstanding. IMMEDIATE
+    // waits for the lock up front instead. No transaction here is read-only or
+    // spans network or model work, so taking the lock early costs nothing.
+    conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
     Ok(conn)
 }
 
@@ -139,6 +149,50 @@ mod tests {
             elapsed >= std::time::Duration::from_millis(300),
             "it gave up after {elapsed:?} instead of waiting for the lock"
         );
+    }
+
+    /// R20/R30: a transaction that reads first and writes later must not fail
+    /// because another connection committed in between. Under DEFERRED it took
+    /// a read snapshot, the other writer committed, and the later write could
+    /// not upgrade: `database is locked` at once, busy_timeout or not. That is
+    /// how the OCR correction lost the model's answer while an embedding sweep
+    /// wrote, and how the research pull lost its cursor.
+    #[test]
+    fn a_read_then_write_transaction_survives_a_concurrent_commit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("entropia.sqlite");
+        open_archive_connection(&db_path)
+            .expect("open")
+            .execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);")
+            .expect("create table");
+
+        let other_path = db_path.clone();
+        let (holding_tx, holding_rx) = std::sync::mpsc::channel();
+        let other_writer = std::thread::spawn(move || {
+            let conn = open_archive_connection(&other_path).expect("open other writer");
+            conn.execute_batch("BEGIN IMMEDIATE; INSERT INTO t(v) VALUES ('sweep');")
+                .expect("other writer holds the lock");
+            holding_tx.send(()).expect("signal");
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            conn.execute_batch("COMMIT").expect("other writer commits");
+        });
+        holding_rx.recv().expect("other writer started");
+
+        let conn = open_archive_connection(&db_path).expect("open corrector");
+        let tx = conn.unchecked_transaction().expect("begin");
+        let before: i64 = tx
+            .query_row("SELECT COUNT(*) FROM t", [], |row| row.get(0))
+            .expect("read first");
+        tx.execute("INSERT INTO t(v) VALUES ('backup')", [])
+            .expect("the write after the read waits for the lock instead of failing");
+        tx.commit().expect("commit");
+        other_writer.join().expect("other writer");
+
+        assert_eq!(before, 1, "the transaction began after the other commit");
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM t", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(total, 2);
     }
 
     #[test]

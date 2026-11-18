@@ -121,7 +121,7 @@ fn exe_directory() -> Option<PathBuf> {
 /// that reader is Lite-only and needs the package family name; the recipes only
 /// need this one bit, so the check stays here, in both variants.
 #[cfg(windows)]
-fn has_package_identity() -> bool {
+pub(crate) fn has_package_identity() -> bool {
     use windows::core::HRESULT;
     use windows::ApplicationModel::Package;
 
@@ -143,7 +143,7 @@ fn has_package_identity() -> bool {
 }
 
 #[cfg(not(windows))]
-fn has_package_identity() -> bool {
+pub(crate) fn has_package_identity() -> bool {
     false
 }
 

@@ -15,6 +15,21 @@ describe('dictation helpers', () => {
     ).toBe('pcm-wav')
   })
 
+  // Pro dev test: WebView2 recorded WebM/Opus and local Parakeet could not
+  // decode it, so the dictation failed on Windows.
+  it('records WAV in the Windows desktop app, where local engines cannot decode WebM', () => {
+    expect(
+      chooseDictationCaptureStrategy({
+        userAgent:
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36 Edg/157.0.0.0',
+        platform: 'Win32',
+        hasMediaRecorder: true,
+        hasAudioContext: true,
+        hasTauriRuntime: true,
+      })
+    ).toBe('pcm-wav')
+  })
+
   it('keeps using MediaRecorder outside the affected environment when available', () => {
     expect(
       chooseDictationCaptureStrategy({

@@ -19,26 +19,18 @@ pub async fn llm_is_available(llm_queue: State<'_, LlmQueue>) -> Result<bool, St
     Ok(llm_queue.is_available())
 }
 
-/// Returns `true` when OCR correction can run: remote provider configured, or
-/// local Qwen3-VL assets installed (managed or installer-bundled).
+/// The engine OCR correction would use right now (R21): the OCRC button
+/// enables itself from `available` and tells the user whether the text stays
+/// on this machine or goes to a remote model.
 #[tauri::command]
-#[cfg_attr(not(feature = "paddle-ocr"), allow(unused_variables))]
-pub async fn llm_ocr_correction_is_available(
-    llm_queue: State<'_, LlmQueue>,
+pub async fn llm_ocr_correction_engine(
+    db: State<'_, AppDbState>,
     app_handle: tauri::AppHandle,
-) -> Result<bool, String> {
-    if llm_queue.is_ocr_correction_available() {
-        return Ok(true);
-    }
-    #[cfg(feature = "paddle-ocr")]
-    {
-        Ok(super::qwen_correction::local_correction_available_for(
-            &app_handle,
-            &llm_queue.db_path,
-        ))
-    }
-    #[cfg(not(feature = "paddle-ocr"))]
-    Ok(false)
+) -> Result<super::OcrCorrectionEnginePreview, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || super::preview_ocr_correction_engine(&app_handle, &db_path))
+        .await
+        .map_err(|error| format!("OCR correction engine check failed: {error}"))?
 }
 
 /// Return the current status of the local Gemma GGUF model file.
@@ -54,7 +46,7 @@ pub async fn llm_open_models_dir(db: State<'_, AppDbState>) -> Result<(), String
     let models_dir = resolve_model_path(db_path)
         .parent()
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| db_path.parent().unwrap_or(db_path).join("models"));
+        .unwrap_or_else(|| crate::path_utils::models_dir(db_path));
     std::fs::create_dir_all(&models_dir)
         .map_err(|e| format!("Failed to create models dir: {e}"))?;
 

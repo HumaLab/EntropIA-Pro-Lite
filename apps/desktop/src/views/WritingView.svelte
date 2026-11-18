@@ -15,7 +15,7 @@
   } from '@entropia/ui'
   import type { CanonicalDocument, StatusBadgeVariant } from '@entropia/ui'
   import type { SuggestionRow } from '$lib/writing-agent'
-  import { settingsGet, settingsSet, SETTINGS_KEYS } from '$lib/settings'
+  import { apiKeyState, settingsGet, settingsSet, SETTINGS_KEYS } from '$lib/settings'
   // Shared with the exporter on purpose: two copies of this mapping would let
   // the manuscript on screen and the exported file cite the same works
   // differently, with nothing reporting it.
@@ -269,7 +269,8 @@
     if (await store.init()) await store.listDocuments()
     await Promise.all([loadPanelWidths(), loadExportPreferences(), refreshSyncNotices()])
     try {
-      hasChatModel = Boolean((await settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY))?.trim())
+      // A key switched off in Configuración counts as none.
+      hasChatModel = (await apiKeyState(SETTINGS_KEYS.OPENROUTER_API_KEY)) === 'usable'
     } catch {
       // A settings read that failed is not a credential. The panel says the
       // agent is unavailable, and writing by hand carries on untouched.

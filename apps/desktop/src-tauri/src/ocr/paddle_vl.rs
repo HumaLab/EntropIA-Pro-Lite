@@ -872,7 +872,7 @@ pub fn create_paddle_vl_engine_result(
     if runtime_root.is_some() && !offline_mode {
         crate::app_logs::warn(
             app_handle,
-            "ocrh",
+            "OCRH",
             "Cache PaddleOCR-VL incompleta; OCRH permitirá descarga online administrada",
         );
     }
@@ -891,7 +891,7 @@ pub fn create_paddle_vl_engine_result(
         {
             crate::app_logs::info(
                 app_handle,
-                "ocrh",
+                "OCRH",
                 format!(
                     "PaddleOCR-VL usará Python del runtime administrado: {}",
                     candidate.display()
@@ -925,7 +925,7 @@ pub fn create_paddle_vl_engine_result(
     if let Some(assets) = glm_assets {
         crate::app_logs::info(
             app_handle,
-            "ocrh",
+            "OCRH",
             format!(
                 "OCRH local usará GLM-OCR (llama-server: {})",
                 assets.server.display()

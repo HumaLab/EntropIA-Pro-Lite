@@ -245,7 +245,7 @@ Las respuestas y resúmenes automáticos son ayudas para el trabajo. Comprobá s
 | Generar embeddings y buscar materiales parecidos | Internet y OpenRouter (`baai/bge-m3`). | BGE-M3 local (ONNX) u OpenRouter, según **Embeddings BGE-M3**. |
 | Usar el Chat de investigación | Internet y OpenRouter. | El modelo local u OpenRouter según **Modo LLM**; reordenamiento local de pasajes con el reranker BGE. |
 | Usar Investigar y el agente de Escritura | Internet y OpenRouter. | Igual que Lite: estas dos herramientas usan siempre OpenRouter. |
-| Usar el [chat de ayuda](#ayuda-en-la-app) | Las preguntas frecuentes, nada más; el resto, la clave de OpenRouter con crédito. | Igual que Lite. |
+| Usar el [chat de ayuda](#ayuda-en-la-app) | Las preguntas frecuentes, nada más; el resto, la clave de OpenRouter con crédito. | Con el **Modo LLM** en **Local**, Gemma responde en el equipo con el manual, sin clave; para que haga acciones o lea tus documentos, la clave de OpenRouter. En los otros modos, igual que Lite. |
 | Importar desde Internet Archive | Internet; no hace falta cuenta ni clave. | Igual que Lite. |
 | Sincronizar y buscar en tu biblioteca de Zotero (**Biblioteca**) | Zotero abierto con comunicación local; OpenRouter para buscar por significado y GLM-OCR para leer PDF escaneados. | Zotero abierto; los motores de OCR y embeddings que elegiste (locales o remotos). |
 | Citar desde Zotero | Zotero abierto en este equipo y comunicación local habilitada. | Igual que Lite. |
@@ -264,7 +264,7 @@ Las cuentas de proveedores y la cuenta de sincronización son independientes. El
 - **Linux:** las claves se guardan en el llavero del sistema (gnome-keyring o KWallet); en instalaciones mínimas, instalá `gnome-keyring` y creá un llavero predeterminado.
 - **Windows:** los instaladores de GitHub no están firmados; SmartScreen muestra «Windows protegió tu PC» y se continúa con **Más información → Ejecutar de todos modos**. La versión de Microsoft Store (Lite) sí está firmada.
 
-Lite y Pro abren **el mismo archivo** de trabajo (la carpeta `com.entropia.shared`, ver [17.3](#copias-de-seguridad)): si instalás las dos en el mismo equipo, o pasás de una a otra, ves las mismas colecciones, documentos y manuscritos. Cerrá una antes de abrir la otra.
+Lite y Pro abren **el mismo archivo** de trabajo (la carpeta `com.entropia.shared`, ver [17.3](#copias-de-seguridad)): si instalás las dos en el mismo equipo, o pasás de una a otra, ves las mismas colecciones, documentos y manuscritos. Cerrá una antes de abrir la otra. También comparten los ajustes: si abrís Pro sobre un archivo que configuró Lite, **Inicio** muestra una vez **Este archivo usa servicios en la nube** y ofrece pasar a local el dictado y, con GPU NVIDIA, el OCRH y la IA de texto. **Usar los motores locales** los cambia; **Seguir con la nube** los deja como están. Los embeddings no se ofrecen: cambiar de proveedor recalcula todo el archivo. Cualquier modo se puede cambiar después en **Configuración → APIs remotas**.
 
 ### 2.2. Preparar una sesión de trabajo segura
 
@@ -294,7 +294,7 @@ Las dos variantes tienen las mismas pantallas, el mismo archivo y los mismos flu
 | Instalación | Instalador chico, sin modelos. Windows, macOS y Linux. | Instalador liviano; la base de IA (unos 2,2 GB) se descarga sola al iniciar. Windows y Linux. |
 | Privacidad | Cada tarea de IA envía el contenido necesario al proveedor. | Con los modos locales, el contenido no sale del equipo. |
 
-En las dos, la corrección de cajas del layout usa GLM-OCR remoto, Investigar y el agente de Escritura usan OpenRouter, y el chat de ayuda usa OpenRouter para lo que no responde en el equipo.
+En las dos, la corrección de cajas del layout usa GLM-OCR remoto, Investigar y el agente de Escritura usan OpenRouter, y el chat de ayuda usa OpenRouter para lo que no responde en el equipo (en Pro con el **Modo LLM** en **Local**, responde Gemma en el equipo).
 
 **¿Cuál me conviene?** Lite si querés empezar rápido, en cualquier sistema, y no te molesta pagar el uso de los proveedores. Pro si trabajás con material sensible que no puede salir del equipo, procesás mucho volumen o no siempre tenés conexión; a cambio necesita más disco, una primera descarga larga y un equipo más potente.
 
@@ -1199,8 +1199,8 @@ Un asistente recién conectado **solo puede leer**. Debajo de cada uno hay dos p
 
 | Permiso | Herramientas MCP | Qué permite |
 |---|---|---|
-| *(siempre)* Lectura | `entropia_status`, `collections_list`, `items_list`, `items_get`, `search_items`, `documents_get_text`, `search_passages`, `jobs_list`, `jobs_get`, `approvals_status`, `models_setup` (estado) | Ver el estado del archivo y la versión; listar colecciones y documentos; buscar; leer el texto de un documento página por página; encontrar pasajes con su página y posición para citar con precisión (solo en documentos con embeddings); seguir lotes y aprobaciones; en Pro, ver qué modelos locales están instalados. |
-| **Preparar procesamiento y editar el corpus** | `processing_prepare`, `processing_control` (pausar, cancelar), `collections_create`, `collections_update`, `items_update`, `documents_index`, `documents_text_update`, `import_sources_list`, `documents_import`, `documents_delete`, `collections_delete`, `models_setup` (instalar) | Armar, pausar y cancelar lotes (OCR, embeddings, entidades, tripletes, corrección OCR, resúmenes y esquemas propios); crear y renombrar colecciones; editar títulos y metadatos; reindexar un documento; proponer correcciones del texto, importaciones desde las carpetas de entrada y borrados; en Pro, iniciar la descarga de modelos locales. No gasta. |
+| *(siempre)* Lectura | `entropia_status`, `collections_list`, `items_list`, `items_get`, `search_items`, `documents_get_text`, `search_passages`, `jobs_list`, `jobs_get`, `approvals_status`, `models_setup` (estado), `engines_setup` (estado) | Ver el estado del archivo y la versión; listar colecciones y documentos; buscar; leer el texto de un documento página por página; encontrar pasajes con su página y posición para citar con precisión (solo en documentos con embeddings); seguir lotes y aprobaciones; en Pro, ver qué modelos locales están instalados; ver dónde corre cada función y qué APIs están encendidas (nunca las claves). |
+| **Preparar procesamiento y editar el corpus** | `processing_prepare`, `processing_control` (pausar, cancelar), `collections_create`, `collections_update`, `items_update`, `documents_index`, `documents_text_update`, `import_sources_list`, `documents_import`, `documents_delete`, `collections_delete`, `models_setup` (instalar), `engines_setup` (cambiar) | Armar, pausar y cancelar lotes (OCR, embeddings, entidades, tripletes, corrección OCR, resúmenes y esquemas propios); crear y renombrar colecciones; editar títulos y metadatos; reindexar un documento; proponer correcciones del texto, importaciones desde las carpetas de entrada y borrados; en Pro, iniciar la descarga de modelos locales y elegir el motor de cada función; encender o apagar una API (apagarla no borra su clave). No gasta. |
 | **Pedir procesamiento pago** | `processing_start`, `processing_control` (reanudar, reintentar) | Pedir que un lote empiece, se reanude o se reintente. Cada pedido se aprueba en EntropIA antes de gastar. |
 
 No hay ninguna herramienta para ejecutar SQL, comandos del sistema ni nada fuera de esta lista, y ninguna sale a Internet por sí misma.
@@ -1258,6 +1258,8 @@ La ayuda responde de tres maneras, según la pregunta:
 Un pedido de acción («Borrá…», «Creá…», «Importá…») nunca recibe una respuesta fija: siempre pasa al agente, que lo puede hacer.
 
 **Sin clave.** Si no cargaste la clave de OpenRouter, la ayuda sigue respondiendo las preguntas frecuentes, los primeros pasos y los saludos; para el resto muestra **La ayuda usa tu cuenta de OpenRouter** con **Abrir Configuración** (para cargarla en **APIs remotas → OpenRouter**, con crédito disponible en la cuenta) y **Ver el manual en línea**.
+
+**Ayuda local (Pro).** Con el **Modo LLM** en **Local** (Configuración → Motores), responde Gemma en el equipo: no necesita clave ni conexión y el diagnóstico tampoco sale del equipo, pero solo usa el manual, no hace acciones y no lee tus documentos. Arriba de la caja de texto lo dice. Si tenés la clave de OpenRouter, **Usar OpenRouter para esta pregunta** manda solo esa pregunta al agente completo (y habilita **Buscar en mis documentos**). Si falta el modelo, la ayuda te lo indica: descargalo en **Configuración → Modelos locales**. En los demás modos, la línea dice qué modelo de OpenRouter responde.
 
 #### Cuando algo falla: «Incluir diagnóstico»
 
@@ -1338,6 +1340,7 @@ Los lotes permiten procesar varias colecciones a la vez: **OCR** para reconocer 
 
 1. Abrí **Configuración → Lotes** y seleccioná una o varias colecciones. **Seleccionar todas** marca todas las disponibles.
 2. Elegí **OCR** para reconocer palabras en imágenes o PDF (con **Incluir texto nativo** marcado, también pasan por OCR las páginas que solo tienen el texto nativo del PDF, que se reemplaza; las que ya pasaron por OCR se saltean igual), **Embeddings** para preparar una comparación por semejanza, **Entidades**, **Tripletes**, **Corrección OCR**, **Resúmenes**, o varias a la vez. Después, pulsá **Analizar selección**. Si marcaste Embeddings, Entidades, Tripletes, Corrección OCR, Resúmenes o un esquema y todavía no guardaste la clave de OpenRouter, el botón queda deshabilitado y, al pasar el cursor, indica que primero hay que cargarla en **Configuración → APIs remotas → OpenRouter**.
+   **En Pro**, con el **Modo OCRH** en **Local**, el lote usa OCRL (layout + PaddleOCR, segundos por página). Marcá **OCRH local** para que use layout + OCRH local (PaddleOCR-VL o GLM-OCR): más preciso y mucho más lento. Sin GPU NVIDIA, el formulario avisa que OCRH local tarda unos 15 minutos por página. Lo mismo pasa con el botón **OCRH** de un documento: antes de correrlo en el procesador pregunta, y ofrece **Usar OCRL** o **Correr OCRH igual**.
 3. Revisá qué documentos y tareas incluye la propuesta. Si el alcance no es correcto, descartala.
 4. Cuando termine el análisis, pulsá **Iniciar lote**.
 5. Seguí el estado en la pestaña o desde el indicador de lotes de la barra inferior.
@@ -1584,7 +1587,7 @@ EntropIA Pro trae motores de IA que corren en tu equipo. La primera vez que se a
 | **Modo OCRH** | **Local**, **GLM-OCR (z.ai)**, **Automático** | **Motor OCRH local**: **Automático** (GLM-OCR local con GPU NVIDIA si está instalado; si no, PaddleOCR-VL), **GLM-OCR local** (requiere sus modelos, unos 1,4 GB, y GPU NVIDIA) o **PaddleOCR-VL**. El motor se cambia sin reiniciar. |
 | **Corrector local (Qwen3-VL)** | Instalado o no | Modelo de 4B (unos 2,9 GB) que corrige el OCR cuando no hay clave remota. |
 
-Cada tarjeta muestra si sus modelos están instalados (**Modelos GLM-OCR instalados**, **Faltan modelos:**), con **Descargar modelos** y **Reintentar descarga**. GLM-OCR local y el corrector Qwen3-VL corren sobre un servidor local (`llama-server`) que, por ahora, solo trae el instalador de Pro para Linux; si falta, la tarjeta dice **Falta llama-server (se instala con la app)** y conviene usar PaddleOCR-VL y la corrección por OpenRouter. Los modelos quedan en la carpeta de datos de la app y no entran en las copias de seguridad: se vuelven a descargar.
+Cada tarjeta muestra si sus modelos están instalados (**Modelos GLM-OCR instalados**, **Faltan modelos:**), con **Descargar modelos** y **Reintentar descarga**. GLM-OCR local y el corrector Qwen3-VL corren sobre un servidor local (`llama-server`) que comparten. El instalador de Pro para Linux lo trae; en Windows se descarga aparte con **Descargar llama-server (~610 MB)**, que ocupa ~1,1 GB en disco, y solo se ofrece en equipos con GPU NVIDIA: sin ella, la tarjeta dice que se descarga solo con GPU NVIDIA y conviene usar PaddleOCR-VL y la corrección por OpenRouter. Los modelos y el servidor quedan en las carpetas de la app y no entran en las copias de seguridad: se vuelven a descargar.
 
 **Dependencias de IA.** Esta pestaña lista el estado de la base de IA y de cada componente (Python, PaddleOCR, Faster Whisper, spaCy y su modelo español), con **Instalar** por componente o todos juntos. Si la base de IA no se pudo preparar, explica por qué (sin conexión, versión sin base publicada, fuente no confiable) y ofrece **Reparar runtime**. **Confirmar reseteo del entorno** borra el entorno local para reinstalarlo desde cero. Una insignia en la pestaña avisa cuando algo necesita atención.
 
@@ -1859,7 +1862,7 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 
 > **Importante**
 >
-> En Lite, OCR, transcripción, Chat y muchas acciones de IA envían contenido al proveedor externo que realiza la tarea. En Pro, elegí los modos **Local** para que el contenido no salga del equipo; Investigar, el agente de Escritura, la corrección de cajas y el chat de ayuda usan servicios remotos en las dos variantes. Sincronizar una biblioteca de Zotero en la Biblioteca también envía el texto de sus obras a OpenRouter y las páginas escaneadas a GLM-OCR. La sincronización envía datos al servicio de nube solo cuando configurás una cuenta y la activás. Revisá las condiciones del proveedor antes de usar material confidencial.
+> En Lite, OCR, transcripción, Chat y muchas acciones de IA envían contenido al proveedor externo que realiza la tarea. En Pro, elegí los modos **Local** para que el contenido no salga del equipo; Investigar, el agente de Escritura y la corrección de cajas usan servicios remotos en las dos variantes, y el chat de ayuda también, salvo en Pro con el **Modo LLM** en **Local**. Sincronizar una biblioteca de Zotero en la Biblioteca también envía el texto de sus obras a OpenRouter y las páginas escaneadas a GLM-OCR. La sincronización envía datos al servicio de nube solo cuando configurás una cuenta y la activás. Revisá las condiciones del proveedor antes de usar material confidencial.
 
 > **Importante**
 >

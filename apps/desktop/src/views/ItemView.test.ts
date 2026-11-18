@@ -9,6 +9,7 @@ import { workspace } from '$lib/workspace'
 import type { View } from '$lib/navigation'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
 import { DOCUMENT_ASSET_DELETED_EVENT } from '$lib/document-explorer'
+import type { OcrCorrectionEngine } from '$lib/llm'
 
 const {
   nlpEventHandlers,
@@ -30,7 +31,7 @@ const {
   assetFileFactsMock,
   clipboardWriteTextMock,
   llmIsAvailableMock,
-  llmOcrCorrectionIsAvailableMock,
+  llmOcrCorrectionEngineMock,
   invokeMock,
   emitMock,
   duplicateAssetFileMock,
@@ -76,7 +77,7 @@ const {
   ),
   clipboardWriteTextMock: vi.fn<(_: string) => Promise<void>>(),
   llmIsAvailableMock: vi.fn<() => Promise<boolean>>(),
-  llmOcrCorrectionIsAvailableMock: vi.fn<() => Promise<boolean>>(),
+  llmOcrCorrectionEngineMock: vi.fn<() => Promise<OcrCorrectionEngine>>(),
   invokeMock: vi.fn<(_: string, __?: unknown) => Promise<unknown>>(async (command: string) => {
     if (command === 'llm_get_results') return []
     if (command === 'llm_get_result') return null
@@ -404,7 +405,7 @@ vi.mock('$lib/llm', async () => {
   return {
     ...actual,
     llmIsAvailable: llmIsAvailableMock,
-    llmOcrCorrectionIsAvailable: llmOcrCorrectionIsAvailableMock,
+    llmOcrCorrectionEngine: llmOcrCorrectionEngineMock,
     llmGetResults: llmGetResultsMock,
     llmSummarize: vi.fn().mockResolvedValue(undefined),
     llmExtractTriples: llmExtractTriplesMock,
@@ -585,7 +586,12 @@ beforeEach(() => {
   })
   clipboardWriteTextMock.mockReset().mockResolvedValue(undefined)
   llmIsAvailableMock.mockReset().mockResolvedValue(true)
-  llmOcrCorrectionIsAvailableMock.mockReset().mockResolvedValue(true)
+  llmOcrCorrectionEngineMock.mockReset().mockResolvedValue({
+    available: true,
+    local: false,
+    tool: 'OpenRouter API',
+    model: 'google/gemini-2.5-flash-lite',
+  })
   llmCorrectOcrAssetMock.mockReset().mockResolvedValue(undefined)
   llmGetResultsMock.mockReset().mockResolvedValue([])
   llmCanRestoreOriginalOcrAssetMock.mockReset().mockResolvedValue(false)
@@ -5944,12 +5950,56 @@ describe('ItemView processing labels by asset type', () => {
     expect(screen.queryByRole('button', { name: 'PDFR' })).not.toBeInTheDocument()
   })
 
-  it('shows OCRC disabled when the remote correction provider is unavailable', async () => {
-    llmOcrCorrectionIsAvailableMock.mockResolvedValue(false)
+  it('shows OCRC disabled when no correction engine is available', async () => {
+    llmOcrCorrectionEngineMock.mockResolvedValue({
+      available: false,
+      local: false,
+      tool: null,
+      model: null,
+    })
     await renderTextTabForAsset('image')
 
     expect(screen.getByRole('button', { name: 'OCRC' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'OCRR' })).toBeInTheDocument()
+  })
+
+  // R16: an OCR still running in the queue survives leaving and returning to
+  // the document; the panel no longer shows the previous text as DONE.
+  it('shows an OCR the queue is still running when the document is opened', async () => {
+    const fallback = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation(async (command: string, args?: unknown) =>
+      command === 'processing_asset_active_task'
+        ? {
+            taskId: 'ocr-1',
+            state: 'running',
+            progressDone: 2,
+            progressTotal: 5,
+            queuedAt: 1,
+          }
+        : fallback?.(command, args)
+    )
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-image-1',
+          itemId: 'item-1',
+          path: 'docs/sample.jpg',
+          type: 'image',
+          createdAt: 1,
+        },
+      ],
+      extractionsByAsset: { 'asset-image-1': { textContent: 'texto anterior', method: 'paddle' } },
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(await screen.findByRole('tab', { name: 'Texto' }))
+
+    const bar = await screen.findByRole('progressbar', { name: 'Extracción de texto' })
+    expect(bar).toHaveAttribute('aria-valuenow', '40')
+    expect(invokeMock).toHaveBeenCalledWith('processing_asset_active_task', {
+      assetId: 'asset-image-1',
+      kind: 'ocr',
+    })
   })
 
   // Following a citation opens this view with the quoted fragment. Moving on to
@@ -7165,6 +7215,57 @@ describe('ItemView text of another version of the image', () => {
 
       expect(await screen.findByRole('dialog')).toHaveTextContent(CONFIRMATION)
       expect(extractTextMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('OCRH that would run on the CPU (R17)', () => {
+    function onCpu(highOnCpu: boolean) {
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'ocr_local_high_info') return { local_mode: true, high_on_cpu: highOnCpu }
+        if (command === 'extraction_is_edited_by_hand') return false
+        if (command === 'llm_get_results') return []
+        if (command === 'llm_is_available') return true
+        if (command === 'db_select') return []
+        return null
+      })
+    }
+
+    it('asks first, and can run OCRL instead', async () => {
+      onCpu(true)
+      await openTextTab(imageAsset, { textContent: 'Texto del OCR' })
+
+      await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog).toHaveTextContent(/unos 15 minutos por página/)
+      expect(extractTextMock).not.toHaveBeenCalled()
+
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Usar OCRL' }))
+      await waitFor(() => {
+        expect(extractTextMock).toHaveBeenCalledWith(
+          'asset-image-1',
+          'docs/photo-a.jpg',
+          'image',
+          'light'
+        )
+      })
+      expect(extractTextMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('runs OCRH once confirmed', async () => {
+      onCpu(true)
+      await openTextTab(imageAsset, { textContent: 'Texto del OCR' })
+
+      await fireEvent.click(screen.getByRole('button', { name: 'OCRH' }))
+      const dialog = await screen.findByRole('dialog')
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Correr OCRH igual' }))
+      await waitFor(() => {
+        expect(extractTextMock).toHaveBeenCalledWith(
+          'asset-image-1',
+          'docs/photo-a.jpg',
+          'image',
+          'high'
+        )
+      })
     })
   })
 })

@@ -10,10 +10,18 @@ import { invoke } from '@tauri-apps/api/core'
 // variant these wrappers stay inert like the llm.ts download surface.
 const OFF = import.meta.env.VITE_LOCAL_ML !== '1'
 
+/**
+ * Where the build gets llama-server: shipped by the installer (Linux),
+ * downloaded on demand (Windows), or not offered (Windows without an NVIDIA
+ * GPU, where neither local engine runs).
+ */
+export type LlamaServerSource = 'bundled' | 'download' | 'requires_nvidia_gpu'
+
 export interface GlmOcrLocalInfo {
   model_present: boolean
   mmproj_present: boolean
   server_present: boolean
+  server_source: LlamaServerSource
   models_dir: string
   repo_url: string
 }
@@ -42,4 +50,13 @@ export function glmOcrLocalInfo(): Promise<GlmOcrLocalInfo | null> {
 export function glmOcrDownloadModels(): Promise<string> {
   if (OFF) return Promise.resolve('')
   return invoke<string>('glm_ocr_download_models')
+}
+
+/**
+ * Start downloading llama-server, shared by GLM-OCR and the Qwen corrector.
+ * Progress arrives as `llama-server:download_*` events.
+ */
+export function llamaServerDownload(): Promise<string> {
+  if (OFF) return Promise.resolve('')
+  return invoke<string>('llama_server_download')
 }

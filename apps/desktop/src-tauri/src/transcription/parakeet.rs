@@ -132,16 +132,14 @@ pub struct ParakeetEngine {
 
 #[cfg(feature = "local-ml")]
 impl ParakeetEngine {
-    /// Download (if needed) + verify + load. Blocking; call on the worker.
+    /// Verify + load. Blocking; call on the worker. The model must already be
+    /// on disk ([`download_model_files`]): loading never downloads, so a
+    /// dictation can no longer hang on a silent 2.5 GB transfer (R11).
     /// `on_progress` receives 0-100 for the whole operation.
     pub fn init(config: ParakeetConfig, on_progress: impl Fn(u8, &str)) -> Result<Self, String> {
-        std::fs::create_dir_all(&config.model_dir).map_err(|e| {
-            format!(
-                "Failed to create Parakeet model dir {}: {e}",
-                config.model_dir.display()
-            )
-        })?;
-        ensure_model_files(&config.model_dir, PARAKEET_FILES, &on_progress)?;
+        if !missing_model_files(&config.model_dir, PARAKEET_FILES).is_empty() {
+            return Err(PARAKEET_NOT_DOWNLOADED.to_string());
+        }
         on_progress(85, "loading");
 
         // Global ORT env is shared with embeddings/layout (idempotent).
@@ -311,7 +309,7 @@ impl ParakeetEngine {
                     dir.display()
                 )
             })?;
-            ensure_model_files(&dir, DIAR_FILES, &|_, _| {})?;
+            download_model_files(&dir, DIAR_FILES, &mut |_, _| {})?;
             let diarizer = Sortformer::new(dir.join("nemotron3_diar_v3.onnx"))
                 .map_err(|e| format!("Failed to load diarization model: {e}"))?;
             self.diarizer = Some(diarizer);
@@ -515,45 +513,6 @@ fn merge_labeled(mut words: Vec<WordToken>) -> Vec<Segment> {
     segments
 }
 
-/// Download any missing model file (resume-less, whole-file) and verify
-/// size + sha256 of every file.
-#[cfg(feature = "local-ml")]
-fn ensure_model_files(
-    model_dir: &std::path::Path,
-    files: &[(&str, u64, &str)],
-    on_progress: &dyn Fn(u8, &str),
-) -> Result<(), String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to build Parakeet download client: {e}"))?;
-    let subdir = model_dir
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    for (index, (name, size, sha)) in files.iter().enumerate() {
-        let dest = model_dir.join(name);
-        let ok = std::fs::metadata(&dest)
-            .map(|m| m.len() == *size)
-            .unwrap_or(false)
-            && verify_sha256(&dest, sha).unwrap_or(false);
-        if !ok {
-            on_progress(download_progress(index, files.len()), "downloading");
-            download_file(&client, &subdir, name, &dest)?;
-        }
-        verify_size_and_hash(&dest, name, *size, sha)?;
-        on_progress(download_progress(index + 1, files.len()), "downloading");
-    }
-    Ok(())
-}
-
-/// Download-phase progress (0-80): usize math then clamp, so the last file
-/// (index + 1 == len) can never overflow u8 in debug builds.
-#[cfg(feature = "local-ml")]
-fn download_progress(done: usize, total: usize) -> u8 {
-    stage_progress(done, total, 0, 80)
-}
-
 /// Progress within a stage band: `base + span * done/total`, clamped.
 /// usize math throughout: stage counts (windows, files) can exceed u8.
 #[cfg(feature = "local-ml")]
@@ -561,66 +520,291 @@ fn stage_progress(done: usize, total: usize, base: u8, span: u8) -> u8 {
     base.saturating_add(((done * span as usize / total.max(1)).min(span as usize)) as u8)
 }
 
+/// What every local transcription path says while the model is missing.
 #[cfg(feature = "local-ml")]
-fn download_file(
-    client: &reqwest::blocking::Client,
-    subdir: &str,
-    name: &str,
-    dest: &std::path::Path,
-) -> Result<(), String> {
-    let url = format!(
-        "https://huggingface.co/{PARAKEET_HF_REPO}/resolve/{PARAKEET_HF_REV}/{subdir}/{name}"
-    );
-    log::info!(target: "transcription", "Downloading Parakeet model file: {name}");
-    let mut response = client
-        .get(&url)
-        .send()
-        .map_err(|e| format!("Failed to download Parakeet model file {name}: {e}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "Failed to download Parakeet model file {name}: HTTP {}",
-            response.status()
-        ));
+pub(crate) const PARAKEET_NOT_DOWNLOADED: &str =
+    "El modelo Parakeet no está descargado. Descargalo en Configuración > Transcripción local (~2,5 GB).";
+
+/// `<cache>/models/parakeet-tdt-0.6b-v3`, with the other downloaded models
+/// (R26). A copy an earlier build left in a runtime's Hugging Face cache is
+/// adopted first, so it is not downloaded again.
+#[cfg(feature = "local-ml")]
+pub(crate) fn parakeet_model_dir(db_path: &std::path::Path) -> std::path::PathBuf {
+    let dir = crate::path_utils::models_dir(db_path).join(PARAKEET_MODEL_SUBDIR);
+    let legacy = legacy_parakeet_dirs(&crate::path_utils::model_root(db_path));
+    adopt_legacy_model_files(&dir, &legacy, PARAKEET_FILES);
+    dir
+}
+
+/// Where earlier builds kept the model: the Hugging Face cache of each
+/// runtime version (`runtime/<ver>/caches/hf`), which a runtime update
+/// abandoned, or the dev fallback `hf_cache`.
+#[cfg(feature = "local-ml")]
+fn legacy_parakeet_dirs(cache_root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![cache_root.join("hf_cache").join(PARAKEET_MODEL_SUBDIR)];
+    if let Ok(entries) = std::fs::read_dir(cache_root.join("runtime")) {
+        dirs.extend(entries.flatten().map(|entry| {
+            entry
+                .path()
+                .join("caches")
+                .join("hf")
+                .join(PARAKEET_MODEL_SUBDIR)
+        }));
     }
-    let tmp = dest.with_extension("part");
-    let mut file =
-        std::fs::File::create(&tmp).map_err(|e| format!("Failed to write {name}: {e}"))?;
-    std::io::copy(&mut response, &mut file).map_err(|e| format!("Failed to write {name}: {e}"))?;
-    std::fs::rename(&tmp, dest).map_err(|e| format!("Failed to store {name}: {e}"))?;
-    Ok(())
+    dirs
+}
+
+/// Move finished files (exact size) and the diarizer folder from `legacy`
+/// into `target`. Same volume: a rename, never a 2.5 GB copy.
+#[cfg(feature = "local-ml")]
+fn adopt_legacy_model_files(
+    target: &std::path::Path,
+    legacy: &[std::path::PathBuf],
+    files: &[(&str, u64, &str)],
+) {
+    for source in legacy.iter().filter(|source| source.is_dir()) {
+        if source == target {
+            continue;
+        }
+        let mut moves: Vec<(std::path::PathBuf, std::path::PathBuf)> = files
+            .iter()
+            .filter(|(name, size, _)| {
+                !has_size(&target.join(name), *size) && has_size(&source.join(name), *size)
+            })
+            .map(|(name, _, _)| (source.join(name), target.join(name)))
+            .collect();
+        let diarizer = source.join(DIAR_MODEL_SUBDIR);
+        if diarizer.is_dir() && !target.join(DIAR_MODEL_SUBDIR).exists() {
+            moves.push((diarizer, target.join(DIAR_MODEL_SUBDIR)));
+        }
+        if moves.is_empty() || std::fs::create_dir_all(target).is_err() {
+            continue;
+        }
+        for (from, to) in moves {
+            match std::fs::rename(&from, &to) {
+                Ok(()) => log::info!(
+                    target: "transcription",
+                    "Parakeet: adopted {} from {}",
+                    to.display(),
+                    from.display()
+                ),
+                Err(error) => log::warn!(
+                    target: "transcription",
+                    "Parakeet: could not adopt {}: {error}",
+                    from.display()
+                ),
+            }
+        }
+    }
 }
 
 #[cfg(feature = "local-ml")]
-fn verify_size_and_hash(
-    dest: &std::path::Path,
-    name: &str,
-    size: u64,
-    sha: &str,
+fn has_size(path: &std::path::Path, size: u64) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.len() == size)
+}
+
+/// The files of `files` not finished in `model_dir`. A file is renamed into
+/// place only after its sha256 matched, so its size alone tells finished
+/// from missing: the old check read the 2.5 GB file into memory, twice, on
+/// every engine start (R23).
+#[cfg(feature = "local-ml")]
+pub(crate) fn missing_model_files<'a>(
+    model_dir: &std::path::Path,
+    files: &[(&'a str, u64, &'a str)],
+) -> Vec<(&'a str, u64, &'a str)> {
+    files
+        .iter()
+        .copied()
+        .filter(|(name, size, _)| !has_size(&model_dir.join(name), *size))
+        .collect()
+}
+
+/// Whether the Parakeet transcription model is ready to load.
+#[cfg(feature = "local-ml")]
+pub(crate) fn parakeet_installed(model_dir: &std::path::Path) -> bool {
+    missing_model_files(model_dir, PARAKEET_FILES).is_empty()
+}
+
+/// Bytes still to download for Parakeet, and the model's total size.
+#[cfg(feature = "local-ml")]
+pub(crate) fn parakeet_download_size(model_dir: &std::path::Path) -> (u64, u64) {
+    let total = PARAKEET_FILES.iter().map(|(_, size, _)| size).sum();
+    let missing = missing_model_files(model_dir, PARAKEET_FILES)
+        .iter()
+        .map(|(_, size, _)| size)
+        .sum();
+    (missing, total)
+}
+
+/// Download the Parakeet transcription model. `on_progress(done, total)`
+/// counts bytes over the files still missing.
+#[cfg(feature = "local-ml")]
+pub(crate) fn download_parakeet_model(
+    model_dir: &std::path::Path,
+    on_progress: &mut dyn FnMut(u64, u64),
 ) -> Result<(), String> {
-    let len = std::fs::metadata(dest)
-        .map_err(|e| format!("Parakeet model file {name} missing: {e}"))?
-        .len();
-    if len != size {
+    download_model_files(model_dir, PARAKEET_FILES, on_progress)
+}
+
+/// Download every missing file of `files`, resuming a partial one, and verify
+/// size and sha256 while the bytes stream to disk.
+#[cfg(feature = "local-ml")]
+fn download_model_files(
+    model_dir: &std::path::Path,
+    files: &[(&str, u64, &str)],
+    on_progress: &mut dyn FnMut(u64, u64),
+) -> Result<(), String> {
+    let missing = missing_model_files(model_dir, files);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(model_dir)
+        .map_err(|e| format!("Failed to create model dir {}: {e}", model_dir.display()))?;
+    let subdir = model_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let client = crate::llm::download::build_model_download_client()?;
+    let total: u64 = missing.iter().map(|(_, size, _)| size).sum();
+    let mut done_before = 0_u64;
+    for (name, size, sha) in missing {
+        let url = format!(
+            "https://huggingface.co/{PARAKEET_HF_REPO}/resolve/{PARAKEET_HF_REV}/{subdir}/{name}"
+        );
+        download_file(
+            &client,
+            &url,
+            &model_dir.join(name),
+            size,
+            sha,
+            &mut |bytes| on_progress(done_before + bytes, total),
+        )?;
+        done_before += size;
+    }
+    Ok(())
+}
+
+/// `name.part` beside the destination. `with_extension("part")` turned
+/// `encoder-model.onnx.data` into `encoder-model.onnx.part`, the stem of a
+/// different file.
+#[cfg(feature = "local-ml")]
+fn partial_path(dest: &std::path::Path) -> std::path::PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    dest.with_file_name(format!("{name}.part"))
+}
+
+/// Stream one file to `dest`. A `.part` left by an interrupted run resumes
+/// with an HTTP range instead of starting over: closing the app at 85% of a
+/// 2.5 GB file used to cost the whole download (R23). The sha256 is computed
+/// as the bytes arrive; the file is renamed into place only if it matches.
+#[cfg(feature = "local-ml")]
+fn download_file(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    dest: &std::path::Path,
+    size: u64,
+    expected_sha: &str,
+    on_bytes: &mut dyn FnMut(u64),
+) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Write};
+
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let part = partial_path(dest);
+    let mut have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    if have > size {
+        let _ = std::fs::remove_file(&part);
+        have = 0;
+    }
+    let mut hasher = Sha256::new();
+    if have > 0 {
+        let mut existing = std::fs::File::open(&part)
+            .map_err(|e| format!("Failed to reopen partial {name}: {e}"))?;
+        let mut buffer = vec![0_u8; 1 << 20];
+        loop {
+            let read = existing
+                .read(&mut buffer)
+                .map_err(|e| format!("Failed to read partial {name}: {e}"))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        on_bytes(have);
+    }
+
+    if have < size {
+        log::info!(
+            target: "transcription",
+            "Downloading Parakeet model file: {name} (from byte {have} of {size})"
+        );
+        let mut request = client.get(url);
+        if have > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={have}-"));
+        }
+        let mut response = request
+            .send()
+            .map_err(|e| format!("Failed to download Parakeet model file {name}: {e}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!(
+                "Failed to download Parakeet model file {name}: HTTP {status}"
+            ));
+        }
+        let resumed = have > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT;
+        if have > 0 && !resumed {
+            // The server ignored the range: the body is the whole file.
+            have = 0;
+            hasher = Sha256::new();
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(resumed)
+            .truncate(!resumed)
+            .open(&part)
+            .map_err(|e| format!("Failed to write {name}: {e}"))?;
+        let mut writer = std::io::BufWriter::with_capacity(4 << 20, file);
+        let mut buffer = vec![0_u8; 1 << 20];
+        loop {
+            let read = response
+                .read(&mut buffer)
+                .map_err(|e| format!("Failed while downloading {name}: {e}"))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            writer
+                .write_all(&buffer[..read])
+                .map_err(|e| format!("Failed to write {name}: {e}"))?;
+            have += read as u64;
+            on_bytes(have);
+        }
+        writer
+            .flush()
+            .map_err(|e| format!("Failed to write {name}: {e}"))?;
+    }
+
+    if have != size {
+        // Short body: keep the partial file, the next attempt resumes it.
         return Err(format!(
-            "Parakeet model file {name} has {len} bytes, expected {size}"
+            "Parakeet model file {name}: got {have} of {size} bytes; the download resumes on the next attempt"
         ));
     }
-    if !verify_sha256(dest, sha).map_err(|e| format!("Failed to hash {name}: {e}"))? {
+    if hex::encode(hasher.finalize()) != expected_sha {
+        let _ = std::fs::remove_file(&part);
         return Err(format!(
             "Parakeet model file {name} failed sha256 verification"
         ));
     }
+    std::fs::rename(&part, dest).map_err(|e| format!("Failed to store {name}: {e}"))?;
     Ok(())
-}
-
-#[cfg(feature = "local-ml")]
-fn verify_sha256(path: &std::path::Path, expected_hex: &str) -> Result<bool, String> {
-    use sha2::{Digest, Sha256};
-    let bytes =
-        std::fs::read(path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok(hex::encode(hasher.finalize()) == expected_hex)
 }
 
 #[cfg(all(test, feature = "local-ml"))]
@@ -639,13 +823,45 @@ mod tests {
     }
 
     #[test]
-    fn download_progress_never_overflows_u8() {
-        // Regression: `(index + 1) as u8 * 80` panicked with overflow on the
-        // last file in debug builds. usize math then clamp instead.
-        assert_eq!(download_progress(0, 4), 0);
-        assert_eq!(download_progress(3, 4), 60);
-        assert_eq!(download_progress(4, 4), 80);
-        assert_eq!(download_progress(100, 4), 80);
+    fn partial_download_names_keep_the_full_file_name() {
+        let dest = std::path::Path::new("m").join("encoder-model.onnx.data");
+        assert_eq!(
+            partial_path(&dest),
+            std::path::Path::new("m").join("encoder-model.onnx.data.part")
+        );
+    }
+
+    /// R23: a model downloaded into a runtime's HF cache is adopted, not
+    /// downloaded again; a file of the wrong size stays where it was.
+    #[test]
+    fn legacy_model_files_of_the_right_size_are_adopted() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let legacy = root
+            .path()
+            .join("runtime")
+            .join("2026.11.4")
+            .join("caches")
+            .join("hf")
+            .join(PARAKEET_MODEL_SUBDIR);
+        let target = root.path().join("models").join(PARAKEET_MODEL_SUBDIR);
+        std::fs::create_dir_all(legacy.join(DIAR_MODEL_SUBDIR)).expect("legacy dir");
+        std::fs::write(legacy.join("a.onnx"), b"1234").expect("file a");
+        std::fs::write(legacy.join("b.onnx"), b"12").expect("file b");
+        let files: &[(&str, u64, &str)] = &[("a.onnx", 4, ""), ("b.onnx", 3, "")];
+
+        adopt_legacy_model_files(&target, &legacy_parakeet_dirs(root.path()), files);
+
+        assert!(has_size(&target.join("a.onnx"), 4), "finished file moved");
+        assert!(!legacy.join("a.onnx").exists());
+        assert!(
+            legacy.join("b.onnx").exists(),
+            "a wrong-size file is not adopted"
+        );
+        assert!(
+            target.join(DIAR_MODEL_SUBDIR).is_dir(),
+            "the diarizer folder moves too"
+        );
+        assert_eq!(missing_model_files(&target, files), vec![("b.onnx", 3, "")]);
     }
 
     #[test]

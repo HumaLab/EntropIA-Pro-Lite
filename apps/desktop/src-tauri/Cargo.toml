@@ -137,6 +137,8 @@ keyring = { version = "3", default-features = false, features = ["windows-native
 windows = { version = "0.62", features = [
     "ApplicationModel",
     "Foundation",
+    # runtime/manager.rs: no automatic multi-GB download on a metered connection.
+    "Networking_Connectivity",
     "Services_Store",
     "Win32_Foundation",
     # automation/private_acl.rs: owner-only access lists for the assistant's

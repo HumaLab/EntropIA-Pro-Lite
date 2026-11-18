@@ -108,7 +108,7 @@ fn rag_trace_from_settings(conn: &Connection) -> bool {
 }
 
 fn local_reranker_model_dir(db: &crate::db::state::AppDbState) -> std::path::PathBuf {
-    super::reranker::resolve_local_reranker_model_dir(db.db_path.parent())
+    super::reranker::resolve_local_reranker_model_dir(&crate::path_utils::model_root(&db.db_path))
 }
 
 #[tauri::command]
@@ -170,7 +170,8 @@ pub(crate) fn start_reranker_download(
     db_path: &std::path::Path,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    let model_dir = super::reranker::resolve_local_reranker_model_dir(db_path.parent());
+    let model_dir =
+        super::reranker::resolve_local_reranker_model_dir(&crate::path_utils::model_root(db_path));
 
     #[cfg(not(feature = "local-ml"))]
     return super::reranker::download_local_reranker_model_files(&model_dir, &app_handle)
@@ -615,7 +616,9 @@ pub async fn rag_ask(
     } else {
         let fallback = phase.candidates.clone();
         let rerank_question = retrieval_question.clone();
-        let model_dir = super::reranker::resolve_local_reranker_model_dir(db_path.parent());
+        let model_dir = super::reranker::resolve_local_reranker_model_dir(
+            &crate::path_utils::model_root(&db_path),
+        );
         match tokio::task::spawn_blocking(move || {
             super::reranker::rerank_candidates_local(
                 &rerank_question,

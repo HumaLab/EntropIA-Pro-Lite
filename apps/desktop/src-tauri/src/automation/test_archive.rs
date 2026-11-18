@@ -1,7 +1,8 @@
 //! A migrated archive for the endpoint tests.
 //!
-//! The schema is the real one — [`crate::db::migrations::apply_migrations`] runs
-//! the same registry production runs — so a test can never assert against a
+//! The schema is the real one — [`crate::db::repairs::migrate_archive`] runs
+//! the same startup pipeline production runs (repairs, migrations, repairs,
+//! which is what creates `app_settings`) — so a test can never assert against a
 //! hand-written table that has drifted from the shipped schema. The dataset is
 //! small and known: two collections, five items in one and two in the other, two
 //! assets on the first item, and every item indexed for full-text search.
@@ -33,7 +34,7 @@ pub(crate) fn seeded_archive(dir: &Path) -> PathBuf {
     let db_path = dir.join("entropia.sqlite");
     let mut conn =
         crate::db::open::open_archive_connection(&db_path).expect("open the fixture archive");
-    crate::db::migrations::apply_migrations(&mut conn).expect("apply the real migrations");
+    crate::db::repairs::migrate_archive(&mut conn).expect("run the real startup migration");
 
     conn.execute(
         "INSERT INTO collections (id, name, description, created_at, updated_at)

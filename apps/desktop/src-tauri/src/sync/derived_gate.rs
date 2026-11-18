@@ -124,6 +124,9 @@ pub enum ProceedReason {
     Unsupported,
     /// The last pull is later than the admission and younger than `F`.
     Fresh,
+    /// The unit's input text was produced on this device after the last pull
+    /// (R27): no other device can hold a result for it yet.
+    LocalInput,
     /// This wait episode's bounded wait is over (D5): pay as before.
     WaitCapReached,
     /// A read the answer depends on failed. Fails open: paying once is better
@@ -150,6 +153,7 @@ impl ProceedReason {
             ProceedReason::NoSession => "no session",
             ProceedReason::Unsupported => "unsupported",
             ProceedReason::Fresh => "fresh",
+            ProceedReason::LocalInput => "local input",
             ProceedReason::WaitCapReached => "wait cap reached",
             ProceedReason::Unreadable => "unreadable",
         }
@@ -189,6 +193,28 @@ fn cache_is_fresh(conn: &Connection, admission: i64) -> bool {
     last_pull_started_at(conn).is_some_and(|started| started > admission)
 }
 
+/// R27: whether this device's own OCR of the unit's asset finished after the
+/// last pull started. That text was produced here a moment ago, so no other
+/// device can have uploaded a result for it, and a pull cannot answer the
+/// miss: waiting for one only delayed every fresh OCR → embedding by a full
+/// recheck tick (62 s measured on a one-page batch). The queue tables are
+/// local, so a succeeded OCR row is this device's own work.
+fn input_produced_locally_since_last_pull(conn: &Connection, task_id: &str) -> bool {
+    let since = last_pull_started_at(conn).unwrap_or(i64::MIN);
+    conn.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM processing_tasks unit
+           JOIN processing_tasks ocr
+             ON ocr.domain = 'corpus' AND ocr.subject_kind = 'asset'
+            AND ocr.subject_id = unit.subject_id AND ocr.kind = 'ocr'
+           WHERE unit.id = ?1 AND unit.domain = 'corpus' AND unit.subject_kind = 'asset'
+             AND ocr.state = 'succeeded' AND ocr.updated_at > ?2)",
+        rusqlite::params![task_id, since],
+        |row| row.get(0),
+    )
+    .unwrap_or(false)
+}
+
 /// The gate itself: what may this unit do right now, at `now_ms`?
 ///
 /// `now_ms` is a parameter, not a clock read, so the bounded wait is testable
@@ -223,6 +249,9 @@ pub fn evaluate(conn: &Connection, task_id: &str, now_ms: i64) -> GateVerdict {
             };
             if cache_is_fresh(conn, admission) {
                 return GateVerdict::Proceed(ProceedReason::Fresh);
+            }
+            if input_produced_locally_since_last_pull(conn, task_id) {
+                return GateVerdict::Proceed(ProceedReason::LocalInput);
             }
             // Not fresh for this unit: one coalesced incremental pull, then wait
             // for it — bounded per unit, so work admitted long after the epoch's
@@ -592,6 +621,38 @@ mod tests {
             proceed(evaluate(&conn, TASK, deadline + 1)),
             ProceedReason::WaitCapReached,
             "the unit does not get a second wait for the same admission"
+        );
+    }
+
+    /// R27: the embedding of text this device's OCR produced after the last
+    /// pull pays at once; a pull cannot hold a result for it. Text that is
+    /// older than the pull still waits for one, as before.
+    #[test]
+    fn an_embedding_of_text_ocred_here_since_the_last_pull_does_not_wait() {
+        let conn = archive(1_000);
+        supported_and_caught_up(&conn);
+        record_pull_started_at(&conn, EPOCH, 900).expect("pull older than the admission");
+        let insert = |id: &str, kind: &str, state: &str, updated_at: i64| {
+            conn.execute(
+                "INSERT INTO processing_tasks
+                   (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+                 VALUES (?1, ?2, 'a1', 'corpus', 'asset', 'a1', ?3, ?4, ?4)",
+                rusqlite::params![id, kind, state, updated_at],
+            )
+            .expect("task");
+        };
+        insert("emb", "embedding", "running", 1_000);
+        insert("ocr-old", "ocr", "succeeded", 800);
+        assert_eq!(
+            deferral(evaluate(&conn, "emb", 1_000)).1,
+            DeferReason::StalePull,
+            "text older than the last pull may have a remote result"
+        );
+
+        insert("ocr-new", "ocr", "succeeded", 990);
+        assert_eq!(
+            proceed(evaluate(&conn, "emb", 1_000)),
+            ProceedReason::LocalInput
         );
     }
 

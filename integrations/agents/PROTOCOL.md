@@ -600,6 +600,20 @@ spends nothing paid, so it has no approval of its own, but it downloads
 several GB. In Lite (no `local-ml` feature) `status` reports no components
 and `install` starts nothing.
 
+### Engines and APIs (`engines_setup`)
+
+`engines_setup` takes `action: "status" | "set"`. `status` (read scope)
+reports where each feature runs (`llm_mode`, `embedding_provider`,
+`stt_mode`, `stt_local_engine`, `ocrh_mode`, `ocrh_local_engine`) with its
+valid values, and for each provider API (`openrouter`, `vercel`,
+`assemblyai`, `glm_ocr`, `zotero`) whether a key is stored and whether its
+«Usar esta API» switch is on. `set` (needs `local_write`) takes `engines`
+(setting → value) and/or `apis` (id → on/off) and writes the same
+`app_settings` keys Settings writes; every value is checked first, so one bad
+name or value changes nothing. Switching an API off keeps its key. Keys are
+never read or written through this tool. In Lite `engines` is empty and only
+`apis` can be set.
+
 ### The in-app help principal
 
 The in-app help chat (`src-tauri/src/help/`) drives this same

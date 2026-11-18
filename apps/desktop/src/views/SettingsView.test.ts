@@ -129,6 +129,22 @@ function applyDefaultSettingsBackend() {
   })
 }
 
+// Most of these tests exercise the provider cards. Pro opens on Motores and
+// keeps those cards on APIs remotas, so the first mount of every test lands
+// there; the tests about the default tab, the modes and the local models
+// choose their tab themselves.
+beforeEach(() => {
+  requestSettingsTab('api')
+})
+
+/** Opens a Configuración tab by its visible name. */
+async function openTab(name: string) {
+  await fireEvent.click(await screen.findByRole('tab', { name }))
+}
+
+/** The tab a plain visit opens on. */
+const DEFAULT_TAB = LOCAL_ML ? 'Motores' : 'APIs remotas'
+
 describe('SettingsView', () => {
   beforeEach(() => {
     locale.set('es')
@@ -295,7 +311,7 @@ describe('SettingsView', () => {
     first.unmount()
 
     render(SettingsView)
-    expect(await screen.findByRole('tab', { name: 'APIs remotas' })).toHaveAttribute(
+    expect(await screen.findByRole('tab', { name: DEFAULT_TAB })).toHaveAttribute(
       'aria-selected',
       'true'
     )
@@ -314,23 +330,22 @@ describe('SettingsView', () => {
     first.unmount()
 
     render(SettingsView)
-    expect(await screen.findByRole('tab', { name: 'APIs remotas' })).toHaveAttribute(
+    expect(await screen.findByRole('tab', { name: DEFAULT_TAB })).toHaveAttribute(
       'aria-selected',
       'true'
     )
   })
 
   it('lists Apariencia last, after Logs, without changing the default tab', async () => {
+    // The first mount takes the file-level request; a plain visit follows.
+    render(SettingsView).unmount()
     render(SettingsView)
 
     const tabs = await screen.findAllByRole('tab')
     expect(tabs.at(-1)).toHaveAccessibleName('Apariencia')
     // The default tab does not move: Apariencia sits last, so it does not
     // become the one that opens first.
-    expect(screen.getByRole('tab', { name: 'APIs remotas' })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
+    expect(screen.getByRole('tab', { name: DEFAULT_TAB })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('opens the Apariencia tab and renders the five preferences', async () => {
@@ -388,6 +403,7 @@ describe('SettingsView', () => {
       })
       const { unmount } = render(SettingsView)
       try {
+        await openTab('Motores')
         const name = { name: /Detectar hablantes/i }
         expect(await screen.findByRole('checkbox', name)).not.toBeChecked()
         await fireEvent.click(await screen.findByRole('checkbox', name))
@@ -401,6 +417,63 @@ describe('SettingsView', () => {
       }
     }
   )
+
+  // R11: dictation no longer downloads Parakeet; Configuración says whether
+  // the model is there and starts the download.
+  it.runIf(LOCAL_ML)('offers the Parakeet download while the model is missing', async () => {
+    settingsGetMock.mockImplementation(async (key: string) => {
+      if (key === 'stt_mode') return 'local'
+      return null
+    })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'stt_parakeet_model_info') {
+        return {
+          installed: false,
+          downloading: false,
+          missing_bytes: 2_552_491_649,
+          total_bytes: 2_552_491_649,
+          directory: 'C:/cache/models/parakeet-tdt-0.6b-v3',
+        }
+      }
+      if (command === 'stt_parakeet_download_model') return 'started'
+      return undefined
+    })
+    const { unmount } = render(SettingsView)
+    try {
+      await openTab('Modelos locales')
+      await fireEvent.click(await screen.findByRole('button', { name: /Descargar Parakeet/ }))
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('stt_parakeet_download_model'))
+      expect(await screen.findByText(/Descargando Parakeet/)).toBeInTheDocument()
+    } finally {
+      unmount()
+    }
+  })
+
+  it.runIf(LOCAL_ML)('shows the Parakeet model as ready once it is on disk', async () => {
+    settingsGetMock.mockImplementation(async (key: string) => {
+      if (key === 'stt_mode') return 'local'
+      return null
+    })
+    invokeMock.mockImplementation(async (command: string) =>
+      command === 'stt_parakeet_model_info'
+        ? {
+            installed: true,
+            downloading: false,
+            missing_bytes: 0,
+            total_bytes: 2_552_491_649,
+            directory: 'C:/cache/models/parakeet-tdt-0.6b-v3',
+          }
+        : undefined
+    )
+    const { unmount } = render(SettingsView)
+    try {
+      await openTab('Modelos locales')
+      expect(await screen.findByText('Modelo Parakeet descargado.')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Descargar Parakeet/ })).toBeNull()
+    } finally {
+      unmount()
+    }
+  })
 
   it('saves a custom OpenAI-compatible base URL for remote generation', async () => {
     settingsGetMock.mockImplementation(async () => null)
@@ -424,6 +497,7 @@ describe('SettingsView', () => {
     'exposes the LLM mode, embedding provider, STT and OCR-H local selectors',
     async () => {
       render(SettingsView)
+      await openTab('Motores')
 
       // LLM mode (3) + embedding provider (2) + STT (3) + OCR-H (3) = 11 radios.
       await waitFor(() => {
@@ -531,6 +605,7 @@ describe('SettingsView', () => {
 
   it.runIf(LOCAL_ML)('shows and starts installation of the Pro local RAG reranker', async () => {
     render(SettingsView)
+    await openTab('Modelos locales')
 
     expect(await screen.findByRole('heading', { name: 'Reranker RAG local' })).toBeInTheDocument()
     expect(await screen.findByText('Modelo sin instalar')).toBeInTheDocument()
@@ -1456,9 +1531,11 @@ describe('SettingsView', () => {
     // Wait for the async settings load to settle before toggling: a
     // late-resolving load() would otherwise clobber the radio selection.
     await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+    await openTab('Motores')
     const localEmbeddingOption = await screen.findByRole('radio', { name: /Local ONNX/i })
     await fireEvent.click(localEmbeddingOption)
 
+    await openTab('Modelos locales')
     const localPathInput = await screen.findByLabelText('Carpeta del modelo local BGE-M3')
     await fireEvent.input(localPathInput, { target: { value: 'C:/models/bge-m3' } })
 
@@ -1472,13 +1549,12 @@ describe('SettingsView', () => {
   })
 
   it.runIf(LOCAL_ML)(
-    'shows local BGE-M3 install status and can start the embedding asset download',
+    'starts the local BGE-M3 download without switching the saved embedding provider',
     async () => {
       render(SettingsView)
 
       await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
-      const localEmbeddingOption = await screen.findByRole('radio', { name: /Local ONNX/i })
-      await fireEvent.click(localEmbeddingOption)
+      await openTab('Modelos locales')
 
       expect(await screen.findByText('Modelo BGE-M3 local incompleto')).toBeInTheDocument()
       expect(screen.getAllByText(/model\.onnx_data/).length).toBeGreaterThan(0)
@@ -1487,11 +1563,11 @@ describe('SettingsView', () => {
       await fireEvent.click(screen.getByRole('button', { name: 'Instalar BGE-M3 local' }))
 
       await waitFor(() => {
-        expect(settingsSetMock).toHaveBeenCalledWith('embedding_provider', 'local')
-        expect(settingsSetMock).toHaveBeenCalledWith('openrouter_embedding_model', 'baai/bge-m3')
         expect(settingsSetMock).toHaveBeenCalledWith('local_embedding_model_dir', '')
         expect(embeddingDownloadModelMock).toHaveBeenCalled()
       })
+      // R15: the provider changes only through "Guardar cambios".
+      expect(settingsSetMock).not.toHaveBeenCalledWith('embedding_provider', 'local')
     }
   )
 
@@ -1509,6 +1585,7 @@ describe('SettingsView', () => {
       })
 
       render(SettingsView)
+      await openTab('Modelos locales')
 
       const localPathInput = await screen.findByLabelText('Carpeta del modelo local BGE-M3')
       expect(localPathInput).toHaveValue('')
@@ -1530,8 +1607,7 @@ describe('SettingsView', () => {
     render(SettingsView)
 
     await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
-    const localEmbeddingOption = await screen.findByRole('radio', { name: /Local ONNX/i })
-    await fireEvent.click(localEmbeddingOption)
+    await openTab('Modelos locales')
     await fireEvent.click(screen.getByRole('button', { name: 'Abrir carpeta BGE-M3' }))
 
     await waitFor(() => {
@@ -1554,6 +1630,7 @@ describe('SettingsView', () => {
     })
 
     render(SettingsView)
+    await openTab('Modelos locales')
 
     const sourceInput = await screen.findByLabelText('Fuente de descarga')
     expect(await screen.findByText('Listo para descargar desde la app')).toBeInTheDocument()
@@ -1594,6 +1671,7 @@ describe('SettingsView', () => {
         source_url: 'https://example.com/models/gemma-model.gguf',
       })
       render(SettingsView)
+      await openTab('Modelos locales')
 
       await fireEvent.input(await screen.findByLabelText('Nombre de archivo esperado'), {
         target: { value: '../payload.gguf' },
@@ -1621,6 +1699,7 @@ describe('SettingsView', () => {
         source_url: 'https://example.com/models/gemma-model.gguf',
       })
       render(SettingsView)
+      await openTab('Modelos locales')
 
       await fireEvent.input(await screen.findByLabelText('Fuente de descarga'), {
         target: { value: 'http://example.com/models/gemma-model.gguf' },
@@ -1651,6 +1730,7 @@ describe('SettingsView', () => {
         source_url: 'https://example.com/models/gemma-model.gguf',
       })
       render(SettingsView)
+      await openTab('Modelos locales')
 
       await fireEvent.input(await screen.findByLabelText('Nombre de archivo esperado'), {
         target: { value: ' gemma-model.gguf ' },
@@ -1799,6 +1879,41 @@ describe('SettingsView', () => {
     })
   })
 
+  describe('switching a provider off without deleting its key', () => {
+    it('writes only the switched provider and keeps the key', async () => {
+      render(SettingsView)
+
+      await screen.findByText(/sk-o\*\*\*\*\.\.\.\*\*\*\*-key/)
+      const switches = screen.getAllByRole('checkbox', { name: /Usar esta API/ })
+      // OpenRouter, Vercel, AssemblyAI, GLM-OCR and Zotero.
+      expect(switches).toHaveLength(5)
+      for (const box of switches) expect(box).toBeChecked()
+
+      await fireEvent.click(switches[0]!)
+      expect(
+        await screen.findByText(/Desactivada: EntropIA no envía nada a OpenRouter/)
+      ).toBeInTheDocument()
+      await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+      await waitFor(() =>
+        expect(settingsSetMock).toHaveBeenCalledWith('openrouter_api_key_disabled', '1')
+      )
+      const switched = settingsSetMock.mock.calls.filter(([key]) =>
+        String(key).endsWith('_disabled')
+      )
+      expect(switched).toEqual([['openrouter_api_key_disabled', '1']])
+      expect(settingsDeleteMock).not.toHaveBeenCalledWith('openrouter_api_key')
+    })
+
+    it('loads a switched-off provider unticked', async () => {
+      settingsGetAllMock.mockResolvedValue([{ key: 'assemblyai_api_key_disabled', value: '1' }])
+      render(SettingsView)
+
+      const box = await screen.findByRole('checkbox', { name: /Usar esta API.*AssemblyAI/ })
+      await waitFor(() => expect(box).not.toBeChecked())
+    })
+  })
+
   // Before this, the UI only wrote a key when the field was non-empty, so a
   // stored key could be replaced but never removed. Each service now carries
   // an icon-only clear button behind a destructive confirmation.
@@ -1899,6 +2014,7 @@ describe('SettingsView', () => {
       ]
       for (const [buttonName, settingKey] of cases) {
         settingsDeleteMock.mockClear()
+        requestSettingsTab('api')
         const view = render(SettingsView)
         const clear = await screen.findByRole('button', { name: buttonName })
         await fireEvent.click(clear)
@@ -1967,6 +2083,7 @@ describe('SettingsView', () => {
 
     it.runIf(LOCAL_ML)('draws every mode choice as a RadioCard with its description', async () => {
       render(SettingsView)
+      await openTab('Motores')
 
       await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(11))
       for (const radio of screen.getAllByRole('radio')) {
@@ -2000,6 +2117,7 @@ describe('SettingsView', () => {
       })
       llmDownloadModelMock.mockReturnValue(new Promise(() => {}))
       render(SettingsView)
+      await openTab('Modelos locales')
 
       await screen.findByLabelText('Fuente de descarga')
       await fireEvent.click(screen.getByRole('button', { name: 'Descargar modelo' }))
@@ -2030,6 +2148,7 @@ describe('settings dirty detection helpers', () => {
     assemblyAiCollectionSpeakerLabels: true,
     glmOcrApiKey: '',
     zoteroApiKey: '',
+    enabledApis: { openrouter: true, assemblyai: true, glmOcr: true, zotero: true },
     ocrCorrectionPrompt: 'Correct {text}',
     summaryPrompt: 'Summarize {text}',
     nerPrompt: 'NER {text}',

@@ -373,8 +373,14 @@ pub struct GlmOcrDownloadErrorPayload {
 #[tauri::command]
 pub async fn glm_ocr_local_info(
     db: State<'_, AppDbState>,
+    app_handle: AppHandle,
 ) -> Result<super::glm_ocr_local::GlmOcrLocalInfo, String> {
-    Ok(super::glm_ocr_local::local_info(&db.db_path))
+    use tauri::Manager;
+    let resource_dir = app_handle.path().resource_dir().ok();
+    Ok(super::glm_ocr_local::local_info(
+        &db.db_path,
+        resource_dir.as_deref(),
+    ))
 }
 
 /// Without `local-ml` there is no local engine to feed, so the command stays
@@ -505,8 +511,14 @@ pub struct QwenCorrectionDownloadErrorPayload {
 #[tauri::command]
 pub async fn qwen_correction_local_info(
     db: State<'_, AppDbState>,
+    app_handle: AppHandle,
 ) -> Result<super::qwen_local::QwenLocalInfo, String> {
-    Ok(super::qwen_local::local_info(&db.db_path))
+    use tauri::Manager;
+    let resource_dir = app_handle.path().resource_dir().ok();
+    Ok(super::qwen_local::local_info(
+        &db.db_path,
+        resource_dir.as_deref(),
+    ))
 }
 
 /// Without `local-ml` there is no local engine to feed, so the command stays
@@ -624,6 +636,78 @@ pub async fn qwen_correction_download_models(
     _app_handle: AppHandle,
 ) -> Result<String, String> {
     Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
+/// Download the `llama-server` build both local engines run on, where the
+/// installer does not ship it (Windows; see `llama_server_download`). Emits
+/// `llama-server:download_progress`, `llama-server:download_complete` and
+/// `llama-server:download_error`. Returns immediately after queueing.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn llama_server_download(
+    db: State<'_, AppDbState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    super::llama_server_download::start_download(&db.db_path, app_handle)
+}
+
+/// Without `local-ml` there is no local engine to run.
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn llama_server_download(
+    _db: State<'_, AppDbState>,
+    _app_handle: AppHandle,
+) -> Result<String, String> {
+    Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
+/// How OCRH would run right now, for the warnings before a slow local run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct LocalOcrhInfo {
+    /// The OCRH mode is `local`: a batch runs OCRL unless it asks for OCRH.
+    pub local_mode: bool,
+    /// OCRH would run locally (local mode, or auto without a GLM-OCR key) on
+    /// the CPU: Pro without an NVIDIA GPU, where it falls back to PaddleOCR-VL
+    /// at ~15 min per page (R17).
+    pub high_on_cpu: bool,
+}
+
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
+fn local_ocrh_info(mode: &str, has_glm_key: bool, has_gpu: bool) -> LocalOcrhInfo {
+    let local_mode = mode == super::OCRH_MODE_LOCAL;
+    let runs_locally = local_mode || (mode == "auto" && !has_glm_key);
+    LocalOcrhInfo {
+        local_mode,
+        high_on_cpu: runs_locally && !has_gpu,
+    }
+}
+
+/// Always the default in Lite, which has no local OCRH.
+#[tauri::command]
+pub async fn ocr_local_high_info(db: State<'_, AppDbState>) -> Result<LocalOcrhInfo, String> {
+    #[cfg(feature = "local-ml")]
+    {
+        let db_path = db.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            // A connection of its own: the GLM key read may go to the keyring.
+            let conn = crate::db::open::open_archive_connection(&db_path)?;
+            let mode = super::get_ocrh_mode(&conn);
+            let has_glm_key = !super::get_glm_ocr_api_key(&conn).is_empty();
+            drop(conn);
+            Ok(local_ocrh_info(
+                &mode,
+                has_glm_key,
+                crate::llm::has_nvidia_gpu(),
+            ))
+        })
+        .await
+        .map_err(|e| format!("OCRH probe failed: {e}"))?
+    }
+    #[cfg(not(feature = "local-ml"))]
+    {
+        let _ = db;
+        Ok(LocalOcrhInfo::default())
+    }
 }
 
 /// Read the manual-edit signal of an asset's OCR text without changing it.
@@ -1158,6 +1242,21 @@ mod tests {
     use crate::ocr::pdf::{visit_rendered_pages, RenderedPageSource};
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn ocrh_warns_only_when_it_would_run_locally_without_a_gpu() {
+        let warn = |mode, key, gpu| local_ocrh_info(mode, key, gpu).high_on_cpu;
+        assert!(warn("local", true, false));
+        assert!(
+            warn("auto", false, false),
+            "auto without a key falls back to local"
+        );
+        assert!(!warn("auto", true, false), "auto with a key runs remote");
+        assert!(!warn("glm_ocr", false, false));
+        assert!(!warn("local", false, true), "a GPU runs it in seconds");
+        assert!(local_ocrh_info("local", false, true).local_mode);
+        assert!(!local_ocrh_info("auto", false, false).local_mode);
+    }
 
     /// Write a JPEG of the given size, roughly what a scanned page looks like.
     fn write_source_image(path: &std::path::Path, width: u32, height: u32) {

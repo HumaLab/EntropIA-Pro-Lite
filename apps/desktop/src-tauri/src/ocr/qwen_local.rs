@@ -8,9 +8,9 @@
 
 use std::path::{Path, PathBuf};
 
-use super::local_server::{
-    data_dir, server_binary_name, server_dir, BUNDLED_SERVER_SUBDIR, SERVER_BINARY_ENV,
-};
+use super::local_server::{env_server_override, resolve_server, ServerSource};
+#[cfg(test)]
+use super::local_server::{server_binary_name, server_dir, BUNDLED_SERVER_SUBDIR};
 
 /// Qwen3-VL-4B instruct, Q4_K_M: fits next to a 2 GB KV cache on an 8 GB card.
 /// The Q8_0 build needs ~2 GB more VRAM and measures no better on correction.
@@ -54,29 +54,27 @@ pub struct QwenLocalInfo {
     pub model_present: bool,
     pub mmproj_present: bool,
     pub server_present: bool,
+    pub server_source: ServerSource,
     pub models_dir: String,
     pub repo_url: String,
 }
 
 /// Inspect the install without starting anything.
-pub fn local_info(db_path: &Path) -> QwenLocalInfo {
+pub fn local_info(db_path: &Path, resource_dir: Option<&Path>) -> QwenLocalInfo {
     let models = models_dir(db_path);
-    let server = std::env::var_os(SERVER_BINARY_ENV)
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| server_dir(db_path).join(server_binary_name()));
     QwenLocalInfo {
         model_present: models.join(MODEL_FILENAME).is_file(),
         mmproj_present: models.join(MMPROJ_FILENAME).is_file(),
-        server_present: server.is_file(),
+        server_present: resolve_server(db_path, env_server_override(), resource_dir).is_file(),
+        server_source: super::local_server::server_source(),
         models_dir: models.display().to_string(),
         repo_url: MODELS_REPO_URL.to_string(),
     }
 }
 
-/// `<data>/models/qwen3vl-4b-correct`, next to the other local models.
+/// `<cache>/models/qwen3vl-4b-correct`, next to the other local models.
 pub fn models_dir(db_path: &Path) -> PathBuf {
-    data_dir(db_path).join("models").join(MODELS_SUBDIR)
+    crate::path_utils::models_dir(db_path).join(MODELS_SUBDIR)
 }
 
 /// Resolve every asset, or explain which ones are missing.
@@ -87,10 +85,7 @@ pub fn resolve_assets_with_resource_dir(
     db_path: &Path,
     resource_dir: Option<&Path>,
 ) -> Result<QwenLocalAssets, String> {
-    let env_server = std::env::var_os(SERVER_BINARY_ENV)
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty());
-    resolve_assets_from(db_path, env_server, resource_dir)
+    resolve_assets_from(db_path, env_server_override(), resource_dir)
 }
 
 fn resolve_assets_from(
@@ -98,19 +93,7 @@ fn resolve_assets_from(
     env_server: Option<PathBuf>,
     resource_dir: Option<&Path>,
 ) -> Result<QwenLocalAssets, String> {
-    let server = env_server.unwrap_or_else(|| {
-        let managed = server_dir(db_path).join(server_binary_name());
-        if managed.is_file() {
-            return managed;
-        }
-        if let Some(root) = resource_dir {
-            let bundled = root.join(BUNDLED_SERVER_SUBDIR).join(server_binary_name());
-            if bundled.is_file() {
-                return bundled;
-            }
-        }
-        managed
-    });
+    let server = resolve_server(db_path, env_server, resource_dir);
     let models = models_dir(db_path);
     let assets = QwenLocalAssets {
         server,

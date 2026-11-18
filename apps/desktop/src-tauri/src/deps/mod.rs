@@ -498,6 +498,57 @@ pub(crate) fn deps_auto_install_skip_reason(
 static DEPS_AUTO_INSTALL_ATTEMPTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// `app_settings` key holding the last automatic install that ended with
+/// dependencies still missing, as [`auto_install_signature`] (R4).
+const DEPS_AUTO_INSTALL_FAILED_KEY: &str = "deps_auto_install_failed";
+
+/// This build's version plus the dependencies still missing or failed,
+/// sorted: `None` when everything is installed. An automatic install that
+/// left the same set behind on this same version is not retried at every
+/// launch (R4); a new version, or a different set, tries again.
+pub(crate) fn auto_install_signature(
+    statuses: &HashMap<DependencyId, DependencyStatus>,
+) -> Option<String> {
+    let mut missing: Vec<String> = registry::all_deps_in_install_order()
+        .iter()
+        .filter(|dep| {
+            !matches!(
+                statuses.get(&dep.id),
+                Some(DependencyStatus::Installed { .. })
+            )
+        })
+        .map(|dep| format!("{:?}", dep.id))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    missing.sort();
+    Some(format!(
+        "{}|{}",
+        env!("CARGO_PKG_VERSION"),
+        missing.join(",")
+    ))
+}
+
+fn read_auto_install_failure(db_path: &std::path::Path) -> Option<String> {
+    let conn = crate::db::open::open_archive_connection(db_path).ok()?;
+    crate::settings::get_raw_setting(&conn, DEPS_AUTO_INSTALL_FAILED_KEY)
+}
+
+/// Records (or clears, with `None`) the set an automatic install left behind.
+fn write_auto_install_failure(db_path: &std::path::Path, signature: Option<&str>) {
+    let result = crate::db::open::open_archive_connection(db_path).and_then(|conn| {
+        match signature {
+            Some(value) => crate::settings::set_setting(&conn, DEPS_AUTO_INSTALL_FAILED_KEY, value),
+            None => crate::settings::delete_setting(&conn, DEPS_AUTO_INSTALL_FAILED_KEY),
+        }
+        .map_err(|error| error.to_string())
+    });
+    if let Err(error) = result {
+        log::warn!(target: "deps", "could not record the auto-install outcome: {error}");
+    }
+}
+
 /// Installs the AI dependencies on its own once the managed runtime is ready,
 /// so a fresh Pro install needs no trip to the Dependencias tab. Called after
 /// the startup probe and after a bootstrap download finishes; returns at once
@@ -516,6 +567,12 @@ pub fn trigger_deps_auto_install(app: tauri::AppHandle) {
                 return;
             }
         };
+        // A probe before the runtime is ready cannot pass (R4): the bootstrap
+        // completion triggers this again once it is.
+        if runtime_state != RuntimeState::Healthy {
+            log::debug!(target: "deps", "auto-install skipped: runtime not ready");
+            return;
+        }
         let db = app.state::<crate::db::state::AppDbState>();
         let state = app.state::<DepsState>();
         let statuses = match probe_all_once(state.inner(), db.inner()).await {
@@ -535,6 +592,23 @@ pub fn trigger_deps_auto_install(app: tauri::AppHandle) {
             log::debug!(target: "deps", "auto-install skipped: {reason:?}");
             return;
         }
+        let db_path = db.db_path.clone();
+        let signature = auto_install_signature(&statuses);
+        let previous = {
+            let db_path = db_path.clone();
+            tokio::task::spawn_blocking(move || read_auto_install_failure(&db_path))
+                .await
+                .ok()
+                .flatten()
+        };
+        if signature.is_some() && previous == signature {
+            crate::app_logs::info(
+                &app,
+                "deps",
+                "Instalación automática omitida: en el arranque anterior quedaron las mismas dependencias sin instalar. Reintentá desde Dependencias de IA.",
+            );
+            return;
+        }
         // Two triggers can race (startup probe and bootstrap completion):
         // only the one that flips the flag installs.
         if DEPS_AUTO_INSTALL_ATTEMPTED
@@ -545,15 +619,55 @@ pub fn trigger_deps_auto_install(app: tauri::AppHandle) {
         }
         crate::app_logs::info(&app, "deps", "Instalación automática de dependencias de IA");
         if let Err(error) =
-            run_install_all(&app, state.inner(), &db.db_path, "deps_auto_install").await
+            run_install_all(&app, state.inner(), &db_path, "deps_auto_install").await
         {
             log::warn!(target: "deps", "auto-install failed: {error}");
         }
+        let left = probe_all_once(state.inner(), db.inner())
+            .await
+            .ok()
+            .and_then(|statuses| auto_install_signature(&statuses));
+        let _ = tokio::task::spawn_blocking(move || {
+            write_auto_install_failure(&db_path, left.as_deref())
+        })
+        .await;
     });
 }
 
+/// Serializes "install everything" (R4): a request that arrives while one is
+/// running waits for it and reports its result instead of running a second
+/// full install right after it.
+static INSTALL_ALL_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static INSTALL_ALL_RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static INSTALL_ALL_LAST: std::sync::Mutex<Option<Result<(), String>>> = std::sync::Mutex::new(None);
+
 /// Shared body of the manual and automatic "install everything" paths.
 async fn run_install_all(
+    app: &tauri::AppHandle,
+    state: &DepsState,
+    db_path: &std::path::Path,
+    operation: &str,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+
+    let seen = INSTALL_ALL_RUNS.load(Ordering::SeqCst);
+    let _single = INSTALL_ALL_GATE.lock().await;
+    if INSTALL_ALL_RUNS.load(Ordering::SeqCst) != seen {
+        if let Some(result) = INSTALL_ALL_LAST.lock().ok().and_then(|last| last.clone()) {
+            log::info!(target: "deps", "{operation}: joined the install that just finished");
+            return result;
+        }
+    }
+    let result = run_install_all_now(app, state, db_path, operation).await;
+    if let Ok(mut last) = INSTALL_ALL_LAST.lock() {
+        *last = Some(result.clone());
+    }
+    INSTALL_ALL_RUNS.fetch_add(1, Ordering::SeqCst);
+    result
+}
+
+/// One full install, under the runtime ops lock.
+async fn run_install_all_now(
     app: &tauri::AppHandle,
     state: &DepsState,
     db_path: &std::path::Path,
@@ -1080,6 +1194,31 @@ mod auto_install_tests {
                 (id, status)
             })
             .collect()
+    }
+
+    #[test]
+    fn the_failure_signature_names_version_and_sorted_missing_set() {
+        assert_eq!(auto_install_signature(&statuses(&[])), None);
+        let one_order = auto_install_signature(&statuses(&[
+            DependencyId::Spacy,
+            DependencyId::FasterWhisper,
+        ]))
+        .expect("missing deps");
+        let other_order = auto_install_signature(&statuses(&[
+            DependencyId::FasterWhisper,
+            DependencyId::Spacy,
+        ]))
+        .expect("missing deps");
+        assert_eq!(one_order, other_order);
+        assert!(
+            one_order.starts_with(env!("CARGO_PKG_VERSION")),
+            "{one_order}"
+        );
+        assert_ne!(
+            one_order,
+            auto_install_signature(&statuses(&[DependencyId::Spacy])).unwrap(),
+            "a different set is a different failure and retries"
+        );
     }
 
     #[test]

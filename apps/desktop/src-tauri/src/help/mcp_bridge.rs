@@ -530,10 +530,10 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    /// The 23 tools D10 serves, in `tools/list` order (mirrors the HTTP
+    /// The 24 tools D10 serves, in `tools/list` order (mirrors the HTTP
     /// endpoint's list in `automation::server::tests`; `models_setup` came
     /// from main, 42c1bd4f).
-    const EXPECTED_TOOLS: [&str; 23] = [
+    const EXPECTED_TOOLS: [&str; 24] = [
         "approvals_status",
         "collections_create",
         "collections_delete",
@@ -544,6 +544,7 @@ mod tests {
         "documents_import",
         "documents_index",
         "documents_text_update",
+        "engines_setup",
         "entropia_status",
         "import_sources_list",
         "items_get",

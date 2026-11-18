@@ -16,11 +16,17 @@ pub(crate) const HISTORY_TURN_MAX_CHARS: usize = 4000;
 /// `manual_tool`: one `manual_search` call returns at most this many.
 pub(crate) const MAX_RANKED_SECTIONS: usize = 4;
 
-/// Whether the assistant can run: the user's own OpenRouter key (S3, S6).
+/// Whether the assistant can run, and on what (S3, S6, R22): the user's own
+/// OpenRouter key and the model it uses, or the local Gemma when
+/// `llm_mode = local` in Pro (`local_model_ready` says its file is on disk).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HelpStatus {
     pub has_openrouter_key: bool,
+    /// The OpenRouter model the agent runs on.
+    pub model: String,
+    pub local_engine: bool,
+    pub local_model_ready: bool,
 }
 
 /// One remembered turn of the help conversation (D4: memory only).
@@ -95,8 +101,9 @@ pub(crate) fn agent_step_status_wire(status: &super::agent_llm::AgentStepStatus)
 /// `steps` lists every tool call the agent made, in order (T22);
 /// `round_limit_reached` says the round cap forced the final answer;
 /// `tools_unavailable` says the provider rejected tool use and the answer
-/// is a plain one without actions. The last two default off so older
-/// payloads keep decoding. `conversation_id` (S19, D17) is the stored
+/// is a plain one without actions. `local_model` (R22) says the local Gemma
+/// wrote it from the manual only, with no network call. These default off so
+/// older payloads keep decoding. `conversation_id` (S19, D17) is the stored
 /// conversation the question and this answer were appended to, when the
 /// frontend sent one: absent on older payloads and when nothing was sent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +118,8 @@ pub(crate) struct HelpAnswer {
     pub round_limit_reached: bool,
     #[serde(default)]
     pub tools_unavailable: bool,
+    #[serde(default)]
+    pub local_model: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
 }

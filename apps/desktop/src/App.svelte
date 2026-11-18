@@ -13,6 +13,7 @@
   import { initZoom } from '$lib/zoom'
   import { initializeAppearance } from '$lib/appearance'
   import { initLocale, t } from '$lib/i18n'
+  import { appendLog } from '$lib/logs'
   import { resolveDesktopPlatform } from '$lib/platform'
   import { PRODUCT_NAME } from '$lib/product'
   import { checkMicrosoftStoreUpdate, type StoreUpdateStatus } from '$lib/store-updates'
@@ -80,7 +81,12 @@
       })
       .catch((e) => {
         console.error('[App] init ERROR:', e)
-        error = e instanceof Error ? e.message : t('app.initError')
+        // Tauri rejects with a string, not an Error (R25): reading only
+        // `Error.message` threw the real cause away and the card repeated its
+        // own title. The cause goes in the body and in entropia.log.
+        const detail = (typeof e === 'string' ? e : e instanceof Error ? e.message : '').trim()
+        error = detail || t('app.initErrorUnknown')
+        void appendLog('error', 'setup', `Inicio falló: ${detail || String(e)}`).catch(() => {})
       })
       .finally(() => {
         void dismissSplash().then(() => {

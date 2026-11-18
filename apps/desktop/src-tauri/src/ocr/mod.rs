@@ -12,6 +12,8 @@ pub mod paddle;
 pub mod glm_ocr_local;
 #[cfg(feature = "local-ml")]
 pub mod layout_onnx;
+#[cfg(feature = "local-ml")]
+pub(crate) mod llama_server_download;
 #[cfg(feature = "paddle-ocr")]
 pub(crate) mod local_server;
 #[cfg(feature = "paddle-ocr")]
@@ -1750,7 +1752,7 @@ async fn process_pdf(
                                     Err(e) => {
                                         crate::app_logs::warn(
                                             &app_handle_for_page,
-                                            "ocrh",
+                                            "OCRH",
                                             format!(
                                                 "PaddleOCR-VL falló/agotó timeout en PDF página {}; usando PaddleOCR liviano: {e}",
                                                 page_idx + 1
@@ -1765,7 +1767,7 @@ async fn process_pdf(
                             } else {
                                 crate::app_logs::warn(
                                     &app_handle_for_page,
-                                    "ocrh",
+                                    "OCRH",
                                     format!(
                                         "PaddleOCR-VL no disponible en PDF página {}; usando PaddleOCR liviano",
                                         page_idx + 1
@@ -1904,10 +1906,7 @@ async fn process_image_light(
                 });
             }
             Err(error) => {
-                log::warn!(
-                    target: "OCRH",
-                    "Layout unavailable for OCRL {asset}, using full-image heuristic: {error}"
-                );
+                log_layout_fallback(&format!("OCRL {asset}"), &error);
             }
         }
     }
@@ -1959,6 +1958,25 @@ async fn process_image_light(
         layout: None,
         degradation_reason: None,
     })
+}
+
+/// The `Err` of [`recognize_image_with_layout`] when the page has too few
+/// boxes for layout to help: an expected outcome, not a failure.
+#[cfg(feature = "paddle-ocr")]
+const LAYOUT_TOO_SPARSE: &str = "Layout too sparse; falling back to full-image OCR";
+
+/// Logs why a page fell back to full-image OCR: a sparse page is normal
+/// (info), anything else is a real layout failure (warn).
+#[cfg(feature = "paddle-ocr")]
+fn log_layout_fallback(context: &str, error: &str) {
+    if error == LAYOUT_TOO_SPARSE {
+        log::info!(target: "OCRH", "Sparse page {context}: full-image OCR, no layout");
+    } else {
+        log::warn!(
+            target: "OCRH",
+            "Layout unavailable for {context}, using full-image heuristic: {error}"
+        );
+    }
 }
 
 /// Segment-by-segment light OCR: crop each PP-DocLayoutV3 box and read it
@@ -2018,7 +2036,7 @@ fn assemble_layout_output(
         })
         .collect();
     if should_bypass_layout(&regions_for_check, image_width, image_height) {
-        return Err("Layout too sparse; falling back to full-image OCR".to_string());
+        return Err(LAYOUT_TOO_SPARSE.to_string());
     }
 
     let mut text_parts = Vec::new();
@@ -2240,7 +2258,7 @@ async fn process_image_high(
                 Err(e) => {
                     crate::app_logs::warn(
                         &app_handle_for_high,
-                        "ocrh",
+                        "OCRH",
                         format!(
                             "PaddleOCR-VL falló/agotó timeout en {asset_id_owned}; usando PaddleOCR liviano: {e}"
                         ),
@@ -2252,7 +2270,7 @@ async fn process_image_high(
                             degradation_reason: None,
                         }),
                         Err(layout_error) => {
-                            log::warn!(target: "OCRH", "Layout unavailable for High fallback {asset_id_owned}: {layout_error}");
+                            log_layout_fallback(&format!("High fallback {asset_id_owned}"), &layout_error);
                             provider_clone
                                 .recognize(&bytes_owned)
                                 .map(|ocr| ProcessedOcrOutput {
@@ -2275,7 +2293,7 @@ async fn process_image_high(
 
     crate::app_logs::warn(
         app_handle,
-        "ocrh",
+        "OCRH",
         format!("PaddleOCR-VL no disponible para {asset_id}; usando PaddleOCR liviano"),
     );
     process_image_light(provider, bytes, asset_id, app_handle, None).await

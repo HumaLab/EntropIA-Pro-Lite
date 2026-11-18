@@ -40,6 +40,11 @@ pub(crate) struct HelpSettings {
     pub history_turns: usize,
     pub max_rounds: usize,
     pub local_answers: bool,
+    /// Answer with the local Gemma instead of OpenRouter (R22): Pro with
+    /// `llm_mode = local` (also when unset, Pro's default), the same rule the
+    /// Chat follows. The local engine has no tool use, so these answers come
+    /// from the manual only, without actions or documents.
+    pub local_engine: bool,
 }
 
 /// Reads the `help_*` keys (stored like every other setting) with clamping
@@ -83,6 +88,8 @@ pub(crate) fn resolve_help_settings(lookup: &dyn Fn(&str) -> Option<String>) -> 
             HELP_MAX_ROUNDS_DEFAULT as i64,
         ) as usize,
         local_answers: parse_enabled(raw("help_local_answers")),
+        local_engine: cfg!(feature = "local-ml")
+            && raw("llm_mode").as_deref().unwrap_or("local") == "local",
     }
 }
 
@@ -286,6 +293,27 @@ mod tests {
             local_answer_for(&help, None, false, question).is_none(),
             "with the switch off the question must go to the model"
         );
+    }
+
+    #[test]
+    fn only_local_llm_mode_answers_with_gemma_and_only_in_pro() {
+        for (mode, local) in [
+            (None, true),
+            (Some("local"), true),
+            (Some("openrouter"), false),
+            (Some("auto"), false),
+        ] {
+            let stored = match mode {
+                Some(mode) => lookup(&[("llm_mode", mode)]),
+                None => lookup(&[]),
+            };
+            let help = resolve_help_settings(&|key| stored.get(key).cloned());
+            assert_eq!(
+                help.local_engine,
+                local && cfg!(feature = "local-ml"),
+                "llm_mode {mode:?}"
+            );
+        }
     }
 
     #[test]

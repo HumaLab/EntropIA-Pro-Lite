@@ -106,6 +106,15 @@ pub(crate) fn classify_call(name: &str, args: &serde_json::Value) -> ToolClass {
             _ => ToolClass::LocalWrite,
         };
     }
+    if name == "engines_setup" {
+        // `status` only reads the settings; `set` changes where work runs
+        // and which providers receive data, so the owner approves it first.
+        // Anything else asks first: fail closed.
+        return match args.get("action").and_then(|action| action.as_str()) {
+            Some("status") => ToolClass::Read,
+            _ => ToolClass::LocalWrite,
+        };
+    }
     if name == "processing_control" {
         // pause/cancel apply at once (the gate asks inline); resume/retry
         // spend again (the MCP asks in its dialog). Anything else asks
@@ -202,6 +211,29 @@ pub(crate) fn approval_summary(tool: &str, args: &serde_json::Value) -> String {
                     "Instalar modelos locales: {} (puede bajar varios GB)",
                     components.join(", ")
                 )
+            }
+        }
+        "engines_setup" => {
+            let mut changes: Vec<String> = Vec::new();
+            if let Some(engines) = args.get("engines").and_then(|value| value.as_object()) {
+                for (setting, value) in engines {
+                    changes.push(format!("{setting} = {}", value.as_str().unwrap_or("?")));
+                }
+            }
+            if let Some(apis) = args.get("apis").and_then(|value| value.as_object()) {
+                for (api, on) in apis {
+                    let state = if on.as_bool() == Some(true) {
+                        "encender"
+                    } else {
+                        "apagar"
+                    };
+                    changes.push(format!("{state} la API {api}"));
+                }
+            }
+            if changes.is_empty() {
+                fallback()
+            } else {
+                format!("Cambiar motores y APIs: {}", changes.join(", "))
             }
         }
         "processing_control" => {
@@ -603,6 +635,7 @@ mod tests {
         "processing_start",
         "processing_control",
         "models_setup",
+        "engines_setup",
     ];
 
     // -- Behaviour through the executor -------------------------------------
@@ -1099,6 +1132,33 @@ mod tests {
                 &serde_json::json!({"action": "install", "components": ["llm", "glm_ocr"]})
             ),
             "Instalar modelos locales: llm, glm_ocr (puede bajar varios GB)"
+        );
+    }
+
+    #[test]
+    fn engines_setup_status_reads_freely_and_set_asks_first() {
+        assert_eq!(
+            classify_call("engines_setup", &serde_json::json!({"action": "status"})),
+            ToolClass::Read
+        );
+        assert_eq!(
+            classify_call("engines_setup", &serde_json::json!({"action": "set"})),
+            ToolClass::LocalWrite
+        );
+        assert_eq!(
+            classify_call("engines_setup", &serde_json::json!({})),
+            ToolClass::LocalWrite
+        );
+        assert_eq!(
+            approval_summary(
+                "engines_setup",
+                &serde_json::json!({
+                    "action": "set",
+                    "engines": {"llm_mode": "openrouter"},
+                    "apis": {"assemblyai": false}
+                })
+            ),
+            "Cambiar motores y APIs: llm_mode = openrouter, apagar la API assemblyai"
         );
     }
 

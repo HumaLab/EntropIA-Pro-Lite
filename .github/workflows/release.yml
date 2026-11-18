@@ -136,8 +136,9 @@ jobs:
       # llama.cpp revision into resources/tools/llama-server and bundled by
       # the explicit tauri.pro.linux.conf.json overlay. Same rule as Pdfium:
       # not in tauri.linux.conf.json, which merges into every Linux build
-      # (cargo test included) and fails on a missing resource. Windows Pro
-      # still pending (needs CUDA toolkit in CI + overlay entry).
+      # (cargo test included) and fails on a missing resource. Windows ships
+      # none: the app downloads the pinned upstream CUDA build on demand
+      # (src-tauri/src/ocr/llama_server_download.rs).
       #
       # The default build is CUDA (GGML_CUDA=ON) and needs nvcc, which the
       # hosted runner lacks: install only the compiler and the cuBLAS/cudart

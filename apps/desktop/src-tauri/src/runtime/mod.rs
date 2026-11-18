@@ -41,7 +41,9 @@ pub use bootstrap_types::{
 #[cfg(feature = "local-ml")]
 #[tauri::command]
 pub fn runtime_get_status(app_handle: tauri::AppHandle) -> Result<status::RuntimeStatus, String> {
-    RuntimeManager::new().status(&app_handle)
+    RuntimeManager::new()
+        .status(&app_handle)
+        .map(manager::with_metered_deferral)
 }
 
 #[cfg(not(feature = "local-ml"))]

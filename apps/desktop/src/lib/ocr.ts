@@ -199,3 +199,21 @@ export async function extractText(
 export async function extractionIsEditedByHand(assetId: string): Promise<boolean> {
   return invoke<boolean>('extraction_is_edited_by_hand', { assetId })
 }
+
+/** How OCRH would run right now (`ocr_local_high_info`). */
+export interface LocalOcrhInfo {
+  /** The OCRH mode is local: a batch runs OCRL unless it asks for OCRH. */
+  local_mode: boolean
+  /** OCRH would run locally on the CPU, at ~15 min per page. */
+  high_on_cpu: boolean
+}
+
+/** Never throws: not knowing means no warning, as in Lite. */
+export async function localOcrhInfo(): Promise<LocalOcrhInfo> {
+  try {
+    const info = await invoke<LocalOcrhInfo | undefined>('ocr_local_high_info')
+    return info ?? { local_mode: false, high_on_cpu: false }
+  } catch {
+    return { local_mode: false, high_on_cpu: false }
+  }
+}

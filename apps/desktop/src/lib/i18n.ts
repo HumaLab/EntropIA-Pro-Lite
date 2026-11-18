@@ -91,6 +91,17 @@ const es = {
   'home.firstRun.sample': 'Probar con documentos de ejemplo',
   'home.firstRun.sampleLoading': 'Cargando los ejemplos…',
   'home.firstRun.sampleFailed': 'No se pudieron cargar los documentos de ejemplo: {error}',
+  'home.localModes.title': 'Este archivo usa servicios en la nube',
+  'home.localModes.description':
+    'Viene configurado desde EntropIA Lite. EntropIA Pro puede hacer esto en este equipo, sin enviar el contenido afuera:',
+  'home.localModes.stt_mode': 'Dictado y transcripción con Parakeet, en lugar de AssemblyAI',
+  'home.localModes.ocrh_mode': 'OCRH con GLM-OCR local, en lugar de la API de GLM-OCR',
+  'home.localModes.llm_mode': 'IA de texto con el modelo local, en lugar de OpenRouter',
+  'home.localModes.hint':
+    'Los modelos se descargan desde Configuración → APIs remotas. Podés volver a la nube cuando quieras.',
+  'home.localModes.accept': 'Usar los motores locales',
+  'home.localModes.dismiss': 'Seguir con la nube',
+  'home.localModes.failed': 'No se pudieron cambiar los modos: {error}',
   'home.corpus.title': 'Estado del corpus',
   'home.corpus.collections': 'Colecciones',
   'home.corpus.items': 'Documentos',
@@ -139,6 +150,8 @@ const es = {
   'app.startupTitle': 'Preparando tu espacio de trabajo',
   'app.initializing': 'Inicializando...',
   'app.initError': 'No se pudo inicializar la base de datos',
+  'app.initErrorUnknown':
+    'Reintentá. Si vuelve a fallar, el detalle queda en el registro de diagnóstico.',
   'app.retryInit': 'Reintentar',
   'app.compactingTitle': 'Optimizando el archivo…',
   'app.compactingBody': 'No apagues el equipo. La ventana se cierra sola al terminar.',
@@ -226,6 +239,107 @@ const es = {
     'Ajustá proveedores, credenciales y parámetros de inteligencia artificial para {product}.',
   'settings.tabsAria': 'Secciones de configuración',
   'settings.remoteApisTab': 'APIs remotas',
+  'settings.enginesTab': 'Motores',
+  'settings.localModelsTab': 'Modelos locales',
+  'settings.localModels.bgeTitle': 'Embeddings locales (BGE-M3)',
+  'settings.localModels.bgeDescription':
+    'Modelo que vectoriza el texto en este equipo para la búsqueda semántica y el Chat. Se usa cuando Embeddings está en Local ONNX.',
+  'settings.localModels.parakeetTitle': 'Transcripción local (Parakeet)',
+  'settings.localModels.parakeetDescription':
+    'Modelo que transcribe audio y dictado en este equipo, en 25 idiomas. Se usa cuando el Modo STT está en Local o Automático.',
+  'settings.localModels.glmOcrTitle': 'OCRH local (GLM-OCR)',
+  'settings.localModels.glmOcrDescription':
+    'Modelo de OCR de alta precisión que corre en la GPU NVIDIA de este equipo. Se usa cuando el Modo OCRH es Local.',
+  'settings.apiSwitch.label': 'Usar esta API',
+  'settings.apiSwitch.on': 'EntropIA usa {service} cuando una función lo necesita.',
+  'settings.apiSwitch.off':
+    'Desactivada: EntropIA no envía nada a {service}. La clave queda guardada; marcá la casilla y guardá para volver a usarla.',
+  'settings.apiSwitch.offNow':
+    'Desactivada: EntropIA no envía nada a {service}. La clave queda guardada; marcá la casilla para volver a usarla.',
+  'deps.prepare.title': 'Prepará EntropIA Pro para trabajar en este equipo',
+  'deps.prepare.description':
+    'Descarga la base de IA, instala los paquetes de Python y baja todos los modelos que este equipo puede usar. Las descargas siguen en segundo plano; cada fila muestra su avance.',
+  'deps.prepare.action': 'Preparar EntropIA Pro',
+  'deps.prepare.stepRuntime': 'Preparando la base de IA…',
+  'deps.prepare.stepPython': 'Instalando los paquetes de Python…',
+  'deps.prepare.stepModels': 'Iniciando las descargas de modelos…',
+  'deps.prepare.noRuntimeForPython':
+    'No se pueden instalar los paquetes de Python: la base de IA todavía no está lista.',
+  'deps.models.title': 'Modelos y servidores locales',
+  'deps.models.hint':
+    'Lo que usan los motores locales. Los que necesitan GPU NVIDIA se indican y no se descargan en equipos sin ella.',
+  'deps.models.ready': 'Listo',
+  'deps.models.missing': 'Falta',
+  'deps.models.notForThisMachine': 'No aplica en este equipo',
+  'deps.models.downloading': 'Descargando {name}',
+  'deps.models.install': 'Descargar',
+  'deps.models.retry': 'Reintentar',
+  'deps.models.checking': 'Revisando los modelos instalados…',
+  'deps.runtime.fixture':
+    'Esta compilación trae una base de IA de prueba, no la publicada. Las funciones locales que la necesitan no van a funcionar.',
+  'deps.runtime.devFallbackAvailable':
+    'Hay un entorno de desarrollo disponible para instalar los paquetes de Python en este equipo.',
+  'deps.runtime.noFallback': 'Tampoco hay un entorno de desarrollo que la reemplace.',
+  'deps.runtime.affected': 'Capacidades afectadas: {list}',
+  'deps.runtime.unavailableAria': 'Base de IA no disponible',
+  'deps.runtime.offlineTitle':
+    'No pudimos llegar a la fuente de la base de IA: parece que estás sin conexión.',
+  'deps.runtime.offlineBody':
+    'EntropIA Pro necesita descargarla y verificarla la primera vez. Conectate a internet y volvé a verificar. Mientras tanto, el OCR, la transcripción y el NLP locales quedan en pausa.',
+  'deps.runtime.noReleaseTitle':
+    'Esta versión de EntropIA Pro todavía no tiene su runtime publicado.',
+  'deps.runtime.noReleaseBody':
+    'La lista firmada existe, pero no incluye la base de IA para esta versión y sistema. No es un problema de tu equipo: actualizá EntropIA Pro o volvé a verificar más tarde.',
+  'deps.runtime.noSourceTitle':
+    'Todavía no hay una fuente de descarga confiable para la base de IA.',
+  'deps.runtime.noSourceBody':
+    'La lista firmada aún no está publicada, así que no se puede descargar ni verificar de forma segura. No es un problema de tu equipo; la app la toma sola apenas se publique.',
+  'deps.runtime.willBootstrap':
+    'EntropIA Pro la prepara sola apenas haya una fuente válida disponible.',
+  'deps.runtime.repair': 'Reparar runtime',
+  'deps.runtime.retryConnection': 'Reintentar conexión',
+  'deps.runtime.recheck': 'Volver a verificar',
+  'deps.closeError': 'Cerrar error',
+  'deps.uv.venvAt': 'entorno virtual en {path}',
+  'deps.uv.embeddedRuntime': 'runtime embebido · sin venv administrado',
+  'deps.uv.noVenv': 'sin entorno virtual',
+  'deps.uv.devFallback': 'Fallback dev disponible',
+  'deps.uv.localVenvAt': 'entorno virtual local en {path}',
+  'deps.uv.noLocalVenv': 'sin entorno virtual local',
+  'deps.uv.noFallback':
+    'No se pueden instalar paquetes automáticamente: faltan herramientas en este equipo.',
+  'deps.uv.paused': 'Gestión automática pausada hasta que la base de IA esté lista.',
+  'deps.uv.allDetected': 'Paquetes de Python detectados; no hace falta hacer nada.',
+  'deps.uv.devNotRelease':
+    'La base de IA publicada no está lista ({summary}). El entorno de desarrollo no la reemplaza ni la verifica.',
+  'deps.uv.detected': 'Detectado: uv {version} en {path}',
+  'deps.uv.checking': 'Revisando uv…',
+  'deps.installAll': 'Instalar todo',
+  'deps.installAllNeedsRuntime':
+    'Primero tiene que estar lista la base de IA (o un entorno de desarrollo en este equipo).',
+  'deps.installedPct': '{pct}% instalado',
+  'deps.allInstalled': 'Todas las dependencias están instaladas y listas para usar.',
+  'deps.installedButRuntime':
+    'Los paquetes de Python están instalados, pero el runtime de EntropIA Pro necesita atención antes de habilitar OCR, transcripción y NLP.',
+  'deps.checkFailed': 'No se pudieron revisar las dependencias: {error}',
+  'deps.listenersFailed': 'Error al registrar listeners: {error}',
+  'deps.managedByPro': 'Paquete que administra EntropIA Pro.',
+  'deps.required': 'Requerido',
+  'deps.installing': 'Instalando {name}',
+  'deps.hideDetail': 'Ocultar detalle',
+  'deps.showDetail': 'Ver detalle del error',
+  'deps.install': 'Instalar',
+  'deps.retry': 'Reintentar',
+  'deps.checking': 'Revisando dependencias…',
+  'deps.reset.action': 'Resetear entorno',
+  'deps.reset.hint':
+    'Borra el entorno de IA administrado y su configuración. Después hay que volver a preparar EntropIA Pro.',
+  'deps.reset.title': 'Confirmar reseteo del entorno',
+  'deps.reset.description':
+    'Esta acción borra el entorno de IA administrado y las rutas de Python que usan el OCR, la transcripción y el NLP.',
+  'deps.reset.typeToConfirm': 'Para confirmar, escribí',
+  'deps.reset.confirmationLabel': 'Confirmación requerida',
+  'deps.reset.confirm': 'Confirmar reseteo',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sincronización',
   'settings.assistantsTab': 'Asistentes',
@@ -317,7 +431,13 @@ const es = {
   'batch.opOcrIncludeNative': 'Incluir texto nativo',
   'batch.opOcrIncludeNativeHint':
     'Pasa por OCR también las páginas que solo tienen el texto nativo del PDF y reemplaza ese texto. Las páginas que ya pasaron por OCR se saltean igual.',
-  'batch.opEmbeddingsHint': 'Genera embeddings cuando el OCR produzca texto.',
+  'batch.opOcrLocalHigh': 'OCRH local',
+  'batch.opOcrLocalHighHint':
+    'Con el modo OCRH en local, el lote usa OCRL (layout + PaddleOCR, segundos por página). Marcado, usa layout + OCRH local (PaddleOCR-VL o GLM-OCR): más preciso y mucho más lento.',
+  'batch.ocrhCpuNotice':
+    'Este equipo no tiene GPU NVIDIA: OCRH local corre en el procesador y tarda unos 15 minutos por página.',
+  'batch.opEmbeddingsHint':
+    'Genera embeddings cuando el OCR produzca texto. Si lo destildás, esas páginas no se vectorizan solas y quedan fuera de la búsqueda semántica hasta que las vectorices.',
   'batch.opNer': 'Entidades',
   'batch.opNerHint':
     'Busca personas, lugares y organizaciones en cada documento con texto. Saltea los que ya tienen entidades.',
@@ -644,6 +764,8 @@ const es = {
   'batch.schemaNotReady': 'La base todavía está migrando. Reintentá en un momento.',
   'batch.needsOpenrouterKey':
     'Primero cargá tu API key de OpenRouter, en Ajustes → OpenRouter. Sin ella no se pueden pedir embeddings, entidades, tripletes ni esquemas.',
+  'batch.openrouterDisabled':
+    'OpenRouter está desactivada en Configuración → APIs remotas («Usar esta API»). Activala para pedir embeddings, entidades, tripletes, correcciones o esquemas.',
   'batch.statusIdle': 'Sin actividad',
   'batch.statusRunning': 'Procesando {count}',
   'batch.statusBibliography':
@@ -743,6 +865,12 @@ const es = {
   'settings.sttLocalDiarize.label': 'Detectar hablantes',
   'settings.sttLocalDiarize.description':
     'Etiqueta cada segmento con Hablante A, B… (máximo 4, solo Parakeet). Requiere descargar el modelo de diarización (~400 MB).',
+  'settings.parakeetModel.ready': 'Modelo Parakeet descargado.',
+  'settings.parakeetModel.missing':
+    'El modelo Parakeet no está descargado: el dictado y la transcripción local no funcionan hasta descargarlo. Si la descarga se corta, continúa desde donde quedó.',
+  'settings.parakeetModel.download': 'Descargar Parakeet ({size})',
+  'settings.parakeetModel.downloading': 'Descargando Parakeet',
+  'settings.parakeetModel.retry': 'Reintentar descarga',
   'settings.ocrhModeTitle': 'Modo OCRH',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Usa el pipeline local actual de OCR de alta precisión.',
@@ -772,12 +900,19 @@ const es = {
   'settings.glmOcrLocal.retry': 'Reintentar descarga',
   'settings.qwenCorrectLocal.title': 'Corrector local (Qwen3-VL)',
   'settings.qwenCorrectLocal.description':
-    'Corrige OCR con un modelo local de 4B cuando no hay API key remota.',
+    'Corrige OCR en este equipo con un modelo de 4B cuando el modo LLM no es OpenRouter. Requiere GPU NVIDIA; sin ella, la corrección usa el modelo remoto.',
   'settings.qwenCorrectLocal.modelsReady': 'Modelos Qwen instalados.',
   'settings.qwenCorrectLocal.modelsMissing': 'Faltan modelos:',
   'settings.qwenCorrectLocal.download': 'Descargar modelos (~2,9 GB)',
   'settings.qwenCorrectLocal.downloading': 'Descargando modelos…',
   'settings.qwenCorrectLocal.retry': 'Reintentar descarga',
+  'settings.llamaServer.missing':
+    'Falta llama-server, el programa que ejecuta estos modelos en la GPU (~1,1 GB en disco).',
+  'settings.llamaServer.requiresNvidia':
+    'Falta llama-server: se descarga solo en equipos con GPU NVIDIA, la única con la que corren estos modelos.',
+  'settings.llamaServer.download': 'Descargar llama-server (~610 MB)',
+  'settings.llamaServer.downloading': 'Descargando llama-server…',
+  'settings.llamaServer.retry': 'Reintentar descarga',
   'settings.badge.available': 'Disponible',
   'settings.badge.downloadable': 'Descargable',
   'settings.badge.notFound': 'Modelo no encontrado',
@@ -1178,6 +1313,17 @@ const es = {
     'Llegó al límite de rondas de herramientas; la respuesta puede estar incompleta.',
   'help.toolsUnavailable':
     'El modelo no pudo usar herramientas en este turno; respondió sin usar herramientas.',
+  'help.engineLocal':
+    'Responde Gemma local, en este equipo y solo con el manual: no hace acciones ni lee tus documentos.',
+  'help.engineLocalMissing':
+    'Falta el modelo de texto local (Gemma): descargalo en Configuración › Modelos locales.',
+  'help.engineRemote': 'Responde {model} vía OpenRouter.',
+  'help.useRemote': 'Usar OpenRouter ({model}) para esta pregunta',
+  'help.localModelAnswer': 'Respuesta de Gemma local, solo con el manual',
+  'help.diagnosticsHintLocal':
+    'Lo lee Gemma local en este equipo: no viaja a ningún servicio. No incluye claves.',
+  'help.documentsNeedRemote':
+    'Gemma local no puede leer tus documentos. Marcá «Usar OpenRouter» para esta pregunta.',
   'help.suggestionsLabel': 'Probá con:',
   'help.suggestion1': '¿Cómo importo un PDF?',
   'help.suggestion2': '¿Cómo cargo mi clave de OpenRouter?',
@@ -2449,6 +2595,11 @@ const es = {
   'item.textRerun': 'Volver a correr el OCR',
   'item.reocrWarning':
     'El texto tiene correcciones hechas a mano. Si volvés a correr el OCR, se reemplazan. ¿Continuar?',
+  'item.ocrhCpuTitle': 'OCRH local sin GPU',
+  'item.ocrhCpuWarning':
+    'Este equipo no tiene GPU NVIDIA: OCRH local corre en el procesador y tarda unos 15 minutos por página. OCRL tarda segundos.',
+  'item.ocrhCpuContinue': 'Correr OCRH igual',
+  'item.ocrhCpuUseOcrl': 'Usar OCRL',
   'item.imageVersions': 'Versiones de la imagen',
   'item.imageVersionsHelp':
     'Los archivos que dejó cada edición de esta imagen. Elegí cuál mostrar: no se borra ninguno.',
@@ -2616,6 +2767,8 @@ const es = {
   'item.ocrHighBusyTitle': 'Extracción en progreso…',
   'item.ocrCorrectTitle': 'Corrección OCR',
   'item.ocrCorrectUnavailable': 'Configurá OpenRouter o instalá el corrector local',
+  'item.ocrCorrectEngineLocal': 'corre en este equipo con {model}',
+  'item.ocrCorrectEngineRemote': 'envía el texto a {tool} ({model})',
   'item.ocrCorrectNeedsText': 'Extraé texto primero',
   'item.llmUnavailableHint':
     'Corrección, resumen y triples requieren OpenRouter. Configuralo en Configuración.',
@@ -3480,6 +3633,11 @@ type ExtraI18nKey =
   | 'settings.sttLocalEngine.whisper.description'
   | 'settings.sttLocalDiarize.label'
   | 'settings.sttLocalDiarize.description'
+  | 'settings.parakeetModel.ready'
+  | 'settings.parakeetModel.missing'
+  | 'settings.parakeetModel.download'
+  | 'settings.parakeetModel.downloading'
+  | 'settings.parakeetModel.retry'
   | 'settings.ocrhMode.local.label'
   | 'settings.ocrhMode.local.summary'
   | 'settings.ocrhMode.local.description'
@@ -3509,6 +3667,11 @@ type ExtraI18nKey =
   | 'settings.qwenCorrectLocal.download'
   | 'settings.qwenCorrectLocal.downloading'
   | 'settings.qwenCorrectLocal.retry'
+  | 'settings.llamaServer.missing'
+  | 'settings.llamaServer.requiresNvidia'
+  | 'settings.llamaServer.download'
+  | 'settings.llamaServer.downloading'
+  | 'settings.llamaServer.retry'
   | 'settings.badge.available'
   | 'settings.badge.downloadable'
   | 'settings.badge.notFound'
@@ -3596,6 +3759,17 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'home.firstRun.sample': 'Try it with sample documents',
   'home.firstRun.sampleLoading': 'Loading the samples…',
   'home.firstRun.sampleFailed': 'Could not load the sample documents: {error}',
+  'home.localModes.title': 'This archive uses cloud services',
+  'home.localModes.description':
+    'It comes configured from EntropIA Lite. EntropIA Pro can do this on this computer, without sending the content out:',
+  'home.localModes.stt_mode': 'Dictation and transcription with Parakeet, instead of AssemblyAI',
+  'home.localModes.ocrh_mode': 'OCRH with local GLM-OCR, instead of the GLM-OCR API',
+  'home.localModes.llm_mode': 'Text AI with the local model, instead of OpenRouter',
+  'home.localModes.hint':
+    'Models are downloaded from Settings → Remote APIs. You can go back to the cloud whenever you want.',
+  'home.localModes.accept': 'Use the local engines',
+  'home.localModes.dismiss': 'Stay on the cloud',
+  'home.localModes.failed': 'Could not change the modes: {error}',
   'home.corpus.title': 'Corpus status',
   'home.corpus.collections': 'Collections',
   'home.corpus.items': 'Documents',
@@ -4174,6 +4348,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'app.startupTitle': 'Preparing your workspace',
   'app.initializing': 'Initializing...',
   'app.initError': 'Failed to initialize database',
+  'app.initErrorUnknown': 'Retry. If it fails again, the details are in the diagnostic log.',
   'app.retryInit': 'Retry',
   'app.compactingTitle': 'Optimizing the archive…',
   'app.compactingBody': 'Do not turn off the computer. The window closes by itself when done.',
@@ -4258,6 +4433,104 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.subtitle': 'Adjust AI providers, credentials, and parameters for {product}.',
   'settings.tabsAria': 'Settings sections',
   'settings.remoteApisTab': 'Remote APIs',
+  'settings.enginesTab': 'Engines',
+  'settings.localModelsTab': 'Local models',
+  'settings.localModels.bgeTitle': 'Local embeddings (BGE-M3)',
+  'settings.localModels.bgeDescription':
+    'Model that embeds text on this computer for semantic search and the Chat. Used when Embeddings is set to Local ONNX.',
+  'settings.localModels.parakeetTitle': 'Local transcription (Parakeet)',
+  'settings.localModels.parakeetDescription':
+    'Model that transcribes audio and dictation on this computer, in 25 languages. Used when the STT mode is Local or Automatic.',
+  'settings.localModels.glmOcrTitle': 'Local OCRH (GLM-OCR)',
+  'settings.localModels.glmOcrDescription':
+    "High-accuracy OCR model that runs on this computer's NVIDIA GPU. Used when the OCRH mode is Local.",
+  'settings.apiSwitch.label': 'Use this API',
+  'settings.apiSwitch.on': 'EntropIA uses {service} when a feature needs it.',
+  'settings.apiSwitch.off':
+    'Switched off: EntropIA sends nothing to {service}. The key stays stored; tick the box and save to use it again.',
+  'settings.apiSwitch.offNow':
+    'Switched off: EntropIA sends nothing to {service}. The key stays stored; tick the box to use it again.',
+  'deps.prepare.title': 'Get EntropIA Pro ready to work on this computer',
+  'deps.prepare.description':
+    'Downloads the AI base, installs the Python packages and fetches every model this computer can use. Downloads continue in the background; each row shows its progress.',
+  'deps.prepare.action': 'Prepare EntropIA Pro',
+  'deps.prepare.stepRuntime': 'Preparing the AI base…',
+  'deps.prepare.stepPython': 'Installing the Python packages…',
+  'deps.prepare.stepModels': 'Starting the model downloads…',
+  'deps.prepare.noRuntimeForPython':
+    'The Python packages cannot be installed: the AI base is not ready yet.',
+  'deps.models.title': 'Local models and servers',
+  'deps.models.hint':
+    'What the local engines use. The ones that need an NVIDIA GPU are marked and are not downloaded on computers without one.',
+  'deps.models.ready': 'Ready',
+  'deps.models.missing': 'Missing',
+  'deps.models.notForThisMachine': 'Not for this computer',
+  'deps.models.downloading': 'Downloading {name}',
+  'deps.models.install': 'Download',
+  'deps.models.retry': 'Retry',
+  'deps.models.checking': 'Checking the installed models…',
+  'deps.runtime.fixture':
+    'This build carries a test AI base, not the published one. The local features that need it will not work.',
+  'deps.runtime.devFallbackAvailable':
+    'A development environment is available to install the Python packages on this computer.',
+  'deps.runtime.noFallback': 'There is no development environment to stand in for it either.',
+  'deps.runtime.affected': 'Affected capabilities: {list}',
+  'deps.runtime.unavailableAria': 'AI base unavailable',
+  'deps.runtime.offlineTitle': 'We could not reach the AI base source: you seem to be offline.',
+  'deps.runtime.offlineBody':
+    'EntropIA Pro needs to download and verify it the first time. Connect to the internet and check again. Meanwhile, local OCR, transcription and NLP are paused.',
+  'deps.runtime.noReleaseTitle': 'This version of EntropIA Pro has no published runtime yet.',
+  'deps.runtime.noReleaseBody':
+    'The signed list exists but does not include the AI base for this version and system. It is not a problem with your computer: update EntropIA Pro or check again later.',
+  'deps.runtime.noSourceTitle': 'There is no trusted download source for the AI base yet.',
+  'deps.runtime.noSourceBody':
+    'The signed list is not published yet, so it cannot be downloaded or verified safely. It is not a problem with your computer; the app picks it up as soon as it is published.',
+  'deps.runtime.willBootstrap':
+    'EntropIA Pro prepares it by itself as soon as a valid source is available.',
+  'deps.runtime.repair': 'Repair runtime',
+  'deps.runtime.retryConnection': 'Retry connection',
+  'deps.runtime.recheck': 'Check again',
+  'deps.closeError': 'Close error',
+  'deps.uv.venvAt': 'virtual environment at {path}',
+  'deps.uv.embeddedRuntime': 'embedded runtime · no managed venv',
+  'deps.uv.noVenv': 'no virtual environment',
+  'deps.uv.devFallback': 'Dev fallback available',
+  'deps.uv.localVenvAt': 'local virtual environment at {path}',
+  'deps.uv.noLocalVenv': 'no local virtual environment',
+  'deps.uv.noFallback':
+    'Packages cannot be installed automatically: tools are missing on this computer.',
+  'deps.uv.paused': 'Automatic management paused until the AI base is ready.',
+  'deps.uv.allDetected': 'Python packages detected; nothing to do.',
+  'deps.uv.devNotRelease':
+    'The published AI base is not ready ({summary}). The development environment neither replaces nor verifies it.',
+  'deps.uv.detected': 'Detected: uv {version} at {path}',
+  'deps.uv.checking': 'Checking uv…',
+  'deps.installAll': 'Install all',
+  'deps.installAllNeedsRuntime':
+    'The AI base must be ready first (or a development environment on this computer).',
+  'deps.installedPct': '{pct}% installed',
+  'deps.allInstalled': 'Every dependency is installed and ready to use.',
+  'deps.installedButRuntime':
+    'The Python packages are installed, but the EntropIA Pro runtime needs attention before OCR, transcription and NLP can run.',
+  'deps.checkFailed': 'The dependencies could not be checked: {error}',
+  'deps.listenersFailed': 'Could not register listeners: {error}',
+  'deps.managedByPro': 'Package managed by EntropIA Pro.',
+  'deps.required': 'Required',
+  'deps.installing': 'Installing {name}',
+  'deps.hideDetail': 'Hide detail',
+  'deps.showDetail': 'Show error detail',
+  'deps.install': 'Install',
+  'deps.retry': 'Retry',
+  'deps.checking': 'Checking dependencies…',
+  'deps.reset.action': 'Reset environment',
+  'deps.reset.hint':
+    'Deletes the managed AI environment and its settings. EntropIA Pro must be prepared again afterwards.',
+  'deps.reset.title': 'Confirm environment reset',
+  'deps.reset.description':
+    'This deletes the managed AI environment and the Python paths OCR, transcription and NLP use.',
+  'deps.reset.typeToConfirm': 'To confirm, type',
+  'deps.reset.confirmationLabel': 'Confirmation required',
+  'deps.reset.confirm': 'Confirm reset',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sync',
   'settings.assistantsTab': 'Assistants',
@@ -4353,7 +4626,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.opOcrIncludeNative': 'Include native text',
   'batch.opOcrIncludeNativeHint':
     'Also runs OCR on pages that only have the native PDF text, replacing that text. Pages that already went through OCR are still skipped.',
-  'batch.opEmbeddingsHint': 'Generate embeddings once OCR produces text.',
+  'batch.opOcrLocalHigh': 'Local OCRH',
+  'batch.opOcrLocalHighHint':
+    'With the OCRH mode set to local, the batch uses OCRL (layout + PaddleOCR, seconds per page). Ticked, it uses layout + local OCRH (PaddleOCR-VL or GLM-OCR): more accurate and much slower.',
+  'batch.ocrhCpuNotice':
+    'This computer has no NVIDIA GPU: local OCRH runs on the processor and takes about 15 minutes per page.',
+  'batch.opEmbeddingsHint':
+    'Generate embeddings once OCR produces text. Unchecked, those pages are not embedded automatically and stay out of semantic search until you embed them.',
   'batch.opNer': 'Entities',
   'batch.opNerHint':
     'Finds people, places and organizations in every document with text. Skips documents that already have entities.',
@@ -4675,6 +4954,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.schemaNotReady': 'The database is still migrating. Try again in a moment.',
   'batch.needsOpenrouterKey':
     'Load your OpenRouter API key first, under Settings → OpenRouter. Without it, embeddings, entities, triples and schemas cannot be requested.',
+  'batch.openrouterDisabled':
+    'OpenRouter is switched off in Settings → Remote APIs ("Use this API"). Switch it on to request embeddings, entities, triples, corrections or schemas.',
   'batch.statusIdle': 'Idle',
   'batch.statusRunning': 'Processing {count}',
   'batch.statusBibliography':
@@ -4775,6 +5056,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.sttLocalDiarize.label': 'Detect speakers',
   'settings.sttLocalDiarize.description':
     'Tag each segment with its speaker (Hablante A, B…, max 4, Parakeet only). Requires downloading the diarization model (~400 MB).',
+  'settings.parakeetModel.ready': 'Parakeet model downloaded.',
+  'settings.parakeetModel.missing':
+    'The Parakeet model is not downloaded: dictation and local transcription do not work until it is. An interrupted download resumes where it stopped.',
+  'settings.parakeetModel.download': 'Download Parakeet ({size})',
+  'settings.parakeetModel.downloading': 'Downloading Parakeet',
+  'settings.parakeetModel.retry': 'Retry download',
   'settings.ocrhModeTitle': 'OCRH mode',
   'settings.ocrhMode.local.label': 'Local',
   'settings.ocrhMode.local.summary': 'Use the current local high-accuracy OCR pipeline.',
@@ -4805,12 +5092,19 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.glmOcrLocal.retry': 'Retry download',
   'settings.qwenCorrectLocal.title': 'Local corrector (Qwen3-VL)',
   'settings.qwenCorrectLocal.description':
-    'Corrects OCR with a local 4B model when no remote API key is set.',
+    'Corrects OCR on this computer with a 4B model unless the LLM mode is OpenRouter. Needs an NVIDIA GPU; without one, correction uses the remote model.',
   'settings.qwenCorrectLocal.modelsReady': 'Qwen models installed.',
   'settings.qwenCorrectLocal.modelsMissing': 'Missing models:',
   'settings.qwenCorrectLocal.download': 'Download models (~2.9 GB)',
   'settings.qwenCorrectLocal.downloading': 'Downloading models…',
   'settings.qwenCorrectLocal.retry': 'Retry download',
+  'settings.llamaServer.missing':
+    'llama-server missing: the program that runs these models on the GPU (~1.1 GB on disk).',
+  'settings.llamaServer.requiresNvidia':
+    'llama-server missing: it downloads only on computers with an NVIDIA GPU, the only kind these models run on.',
+  'settings.llamaServer.download': 'Download llama-server (~610 MB)',
+  'settings.llamaServer.downloading': 'Downloading llama-server…',
+  'settings.llamaServer.retry': 'Retry download',
   'settings.badge.available': 'Available',
   'settings.badge.downloadable': 'Downloadable',
   'settings.badge.notFound': 'Model not found',
@@ -5205,6 +5499,17 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'help.roundLimitReached': 'Reached the tool round limit; the answer may be incomplete.',
   'help.toolsUnavailable':
     'The model could not use tools for this turn; it answered without using tools.',
+  'help.engineLocal':
+    'Local Gemma answers, on this computer and from the manual only: it takes no actions and does not read your documents.',
+  'help.engineLocalMissing':
+    'The local text model (Gemma) is missing: download it in Settings › Local models.',
+  'help.engineRemote': '{model} answers through OpenRouter.',
+  'help.useRemote': 'Use OpenRouter ({model}) for this question',
+  'help.localModelAnswer': 'Answer from local Gemma, from the manual only',
+  'help.diagnosticsHintLocal':
+    'Local Gemma reads it on this computer: it goes to no service. It includes no keys.',
+  'help.documentsNeedRemote':
+    'Local Gemma cannot read your documents. Tick «Use OpenRouter» for this question.',
   'help.suggestionsLabel': 'Try:',
   'help.suggestion1': 'How do I import a PDF?',
   'help.suggestion2': 'How do I load my OpenRouter key?',
@@ -5930,6 +6235,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.textRerun': 'Run the OCR again',
   'item.reocrWarning':
     'The text has manual corrections. Running the OCR again will replace them. Continue?',
+  'item.ocrhCpuTitle': 'Local OCRH without a GPU',
+  'item.ocrhCpuWarning':
+    'This computer has no NVIDIA GPU: local OCRH runs on the processor and takes about 15 minutes per page. OCRL takes seconds.',
+  'item.ocrhCpuContinue': 'Run OCRH anyway',
+  'item.ocrhCpuUseOcrl': 'Use OCRL',
   'item.imageVersions': 'Image versions',
   'item.imageVersionsHelp':
     'The files each edit of this image left behind. Choose which one to show: none is deleted.',
@@ -6098,6 +6408,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.ocrHighBusyTitle': 'Extraction in progress…',
   'item.ocrCorrectTitle': 'OCR correction',
   'item.ocrCorrectUnavailable': 'Configure OpenRouter or install the local corrector',
+  'item.ocrCorrectEngineLocal': 'runs on this computer with {model}',
+  'item.ocrCorrectEngineRemote': 'sends the text to {tool} ({model})',
   'item.ocrCorrectNeedsText': 'Extract text first',
   'item.llmUnavailableHint':
     'Correction, summary, and triples require OpenRouter. Configure it in Settings.',

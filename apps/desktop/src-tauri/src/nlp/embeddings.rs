@@ -430,12 +430,25 @@ struct EmbeddingData {
 }
 
 /// Engine compartido por proceso. Un solo slot: la app tiene UNA configuración
-/// de embeddings activa, así que un HashMap sería complejidad sin uso.
+/// de embeddings activa, así que un HashMap sería complejidad sin uso. Todos
+/// los consumidores (RAG, lotes, Biblioteca, Investigar) pasan por acá: un
+/// slot por consumidor cargaba una copia de BGE-M3 (~2,2 GB) en cada uno.
 static ENGINE_CACHE: OnceLock<Mutex<Option<CachedEmbeddingEngine>>> = OnceLock::new();
+
+/// Serializa los tests que observan el slot global, en cualquier módulo.
+#[cfg(test)]
+pub(crate) static ENGINE_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Un engine local sin uso durante este tiempo se descarga (R7): BGE-M3
+/// ocupa ~2,5 GB de memoria privada, y quedaba residente toda la sesión
+/// después de una sola búsqueda o un barrido de embeddings.
+const LOCAL_ENGINE_IDLE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const IDLE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 struct CachedEmbeddingEngine {
     fingerprint: String,
     engine: Arc<EmbeddingEngine>,
+    last_used: std::time::Instant,
 }
 
 /// Devuelve el engine compartido para `config`, inicializándolo la primera vez.
@@ -459,8 +472,9 @@ pub fn get_or_init_engine(config: EmbeddingConfig) -> Result<Arc<EmbeddingEngine
         .lock()
         .map_err(|_| "Embedding engine cache lock poisoned".to_string())?;
 
-    if let Some(cached) = guard.as_ref() {
+    if let Some(cached) = guard.as_mut() {
         if cached.fingerprint == fingerprint {
+            cached.last_used = std::time::Instant::now();
             return Ok(Arc::clone(&cached.engine));
         }
     }
@@ -469,11 +483,62 @@ pub fn get_or_init_engine(config: EmbeddingConfig) -> Result<Arc<EmbeddingEngine
     // otra huella se descarta acá, que es lo que hace que cambiar de proveedor
     // o de modelo en Configuración tenga efecto sin reiniciar la app.
     let engine = Arc::new(EmbeddingEngine::init(config)?);
+    if engine.provider_name() == "local" {
+        start_idle_release();
+    }
     *guard = Some(CachedEmbeddingEngine {
         fingerprint,
         engine: Arc::clone(&engine),
+        last_used: std::time::Instant::now(),
     });
     Ok(engine)
+}
+
+/// Whether the cached engine can be dropped: a local one, idle long enough,
+/// that no caller still holds (`holders` counts the cache's own reference).
+fn should_release(is_local: bool, idle_for: std::time::Duration, holders: usize) -> bool {
+    is_local && idle_for >= LOCAL_ENGINE_IDLE && holders == 1
+}
+
+/// One background thread per process checks the slot every minute. The next
+/// caller after a release pays one engine init again (a few seconds).
+fn start_idle_release() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    STARTED.get_or_init(|| {
+        let spawned = std::thread::Builder::new()
+            .name("embedding-idle-release".to_string())
+            .spawn(|| loop {
+                std::thread::sleep(IDLE_CHECK_INTERVAL);
+                release_idle_engine();
+            });
+        if let Err(error) = spawned {
+            log::warn!(target: "nlp/embeddings", "Idle release thread not started: {error}");
+        }
+    });
+}
+
+fn release_idle_engine() {
+    let Some(cache) = ENGINE_CACHE.get() else {
+        return;
+    };
+    let Ok(mut guard) = cache.lock() else {
+        return;
+    };
+    let release = guard.as_ref().is_some_and(|cached| {
+        should_release(
+            cached.engine.provider_name() == "local",
+            cached.last_used.elapsed(),
+            Arc::strong_count(&cached.engine),
+        )
+    });
+    if release {
+        *guard = None;
+        log::info!(
+            target: "nlp/embeddings",
+            "Local embedding engine released after {} min idle",
+            LOCAL_ENGINE_IDLE.as_secs() / 60
+        );
+    }
 }
 
 impl EmbeddingEngine {
@@ -681,38 +746,6 @@ impl EmbeddingEngine {
             #[cfg(feature = "local-ml")]
             EmbeddingBackend::Local(_) => "local",
         }
-    }
-}
-
-pub(crate) fn config_cache_key(config: &EmbeddingConfig) -> String {
-    let api_key_hash = rolling_hash64(config.api_key.as_bytes());
-
-    #[cfg(feature = "local-ml")]
-    {
-        let path_key = |path: &Option<PathBuf>| {
-            path.as_ref()
-                .map(|path| path.to_string_lossy().to_string())
-                .unwrap_or_default()
-        };
-
-        format!(
-            "{:?}|{}|{}|{}|{}|{}|{}",
-            config.provider,
-            config.model_name,
-            api_key_hash,
-            path_key(&config.local_model_dir),
-            path_key(&config.local_model_path),
-            path_key(&config.local_tokenizer_path),
-            config.local_max_length,
-        )
-    }
-
-    #[cfg(not(feature = "local-ml"))]
-    {
-        format!(
-            "{:?}|{}|{}",
-            config.provider, config.model_name, api_key_hash,
-        )
     }
 }
 
@@ -1740,12 +1773,16 @@ fn download_local_embedding_file(
 
     let total_bytes = response.content_length();
     let mut reader = response;
-    let mut file = std::fs::File::create(&tmp_path).map_err(|e| {
-        format!(
-            "Failed to create temp BGE-M3 asset {}: {e}",
-            tmp_path.display()
-        )
-    })?;
+    // Batched writes (R8): one read is about one TLS record.
+    let mut file = std::io::BufWriter::with_capacity(
+        1 << 20,
+        std::fs::File::create(&tmp_path).map_err(|e| {
+            format!(
+                "Failed to create temp BGE-M3 asset {}: {e}",
+                tmp_path.display()
+            )
+        })?,
+    );
     let mut downloaded_bytes = 0_u64;
     let mut buffer = vec![0_u8; DOWNLOAD_CHUNK_SIZE];
     let mut last_reported_pct = 0_u8;
@@ -1777,6 +1814,8 @@ fn download_local_embedding_file(
         }
     }
 
+    file.flush()
+        .map_err(|e| format!("Failed while writing BGE-M3 asset {filename}: {e}"))?;
     drop(file);
     let downloaded_size = std::fs::metadata(&tmp_path)
         .map_err(|e| format!("Failed to inspect downloaded BGE-M3 asset {filename}: {e}"))?
@@ -2002,6 +2041,15 @@ fn managed_venv_onnxruntime_capi_dirs(managed_root: &Path) -> Vec<PathBuf> {
 #[cfg(feature = "local-ml")]
 fn app_data_root_from_local_model_dir(model_dir: &Path) -> Option<PathBuf> {
     let category_dir = model_dir.parent()?;
+    if category_dir
+        .file_name()?
+        .to_string_lossy()
+        .eq_ignore_ascii_case("models")
+    {
+        // Flat layout: <app-data>/models/<model> (Parakeet since it left the
+        // runtime's HF cache, R23).
+        return category_dir.parent().map(Path::to_path_buf);
+    }
     let models_dir = category_dir.parent()?;
     if models_dir
         .file_name()?
@@ -2333,7 +2381,47 @@ pub(crate) fn scan_text_assets(
     limit: Option<usize>,
     missing_only: bool,
 ) -> Result<Vec<AssetEmbeddingCandidate>, String> {
-    let sql = String::from(
+    scan_text_assets_filtered(conn, limit, missing_only, false)
+}
+
+/// [`scan_text_assets`] for the automatic repair sweep: it also skips source
+/// revisions kept away from automatic embedding (a cancelled request, or a
+/// batch that left embeddings out, R29). Filtering before the limit matters:
+/// the sweep takes the oldest few candidates, and suppressed ones at the
+/// head of the list used to stall it for the whole archive.
+pub(crate) fn scan_auto_embedding_candidates(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<AssetEmbeddingCandidate>, String> {
+    scan_text_assets_filtered(conn, Some(limit), true, true)
+}
+
+fn scan_text_assets_filtered(
+    conn: &Connection,
+    limit: Option<usize>,
+    missing_only: bool,
+    skip_auto_suppressed: bool,
+) -> Result<Vec<AssetEmbeddingCandidate>, String> {
+    // A fresh archive runs the sweep before the queue tables exist.
+    let revisions_exist = skip_auto_suppressed
+        && conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'processing_asset_revisions'",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok();
+    let suppressed_clause = if revisions_exist {
+        "AND NOT EXISTS(
+            SELECT 1 FROM processing_asset_revisions r
+            WHERE r.asset_id = a.id
+              AND r.auto_suppressed_revision IS NOT NULL
+              AND r.auto_suppressed_revision = r.source_revision
+        )"
+    } else {
+        ""
+    };
+    let sql = format!(
         r#"
         SELECT a.id, a.item_id
         FROM assets a
@@ -2351,8 +2439,9 @@ pub(crate) fn scan_text_assets(
                   AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0
             )
         )
+        {suppressed_clause}
         ORDER BY a.created_at ASC, a.id ASC
-        "#,
+        "#
     );
     let mut stmt = conn
         .prepare(&sql)
@@ -2479,6 +2568,11 @@ mod tests {
         // HF cache layout: <root>/caches/hf/<model> (Parakeet et al.)
         assert_eq!(
             app_data_root_from_local_model_dir(Path::new("/data/caches/hf/parakeet-tdt-0.6b-v3")),
+            Some(PathBuf::from("/data"))
+        );
+        // Flat layout: <root>/models/<model> (Parakeet, R23)
+        assert_eq!(
+            app_data_root_from_local_model_dir(Path::new("/data/models/parakeet-tdt-0.6b-v3")),
             Some(PathBuf::from("/data"))
         );
         assert_eq!(
@@ -2761,11 +2855,28 @@ mod tests {
     }
 
     // ── Engine cache (F2) ────────────────────────────────────────────────────
+    // `ENGINE_CACHE` es un único slot global: cualquier test que lo toque
+    // desaloja al de al lado, así que los que observan identidad del engine
+    // toman `ENGINE_CACHE_TEST_LOCK`.
 
-    /// `ENGINE_CACHE` es un único slot global: cualquier test que lo toque
-    /// desaloja al de al lado. Rust corre los tests en paralelo, así que los
-    /// que observan identidad del engine tienen que serializarse.
-    static ENGINE_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn only_an_idle_local_engine_nobody_holds_is_released() {
+        let idle = LOCAL_ENGINE_IDLE;
+        assert!(should_release(true, idle, 1));
+        assert!(
+            !should_release(true, idle, 2),
+            "a running batch still holds it"
+        );
+        assert!(!should_release(
+            true,
+            idle - std::time::Duration::from_secs(1),
+            1
+        ));
+        assert!(
+            !should_release(false, idle, 1),
+            "the API engine costs no memory"
+        );
+    }
 
     #[test]
     fn engine_cache_returns_the_same_instance_for_an_unchanged_config() {

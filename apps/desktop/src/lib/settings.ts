@@ -37,6 +37,21 @@ export function settingsDelete(key: string): Promise<void> {
 }
 
 /**
+ * Whether a provider key can be used: `missing` when none is stored,
+ * `disabled` when the person switched it off ("Usar esta API"; the backend
+ * then reads it as absent, settings.rs `api_key_disabled`). `undefined` when
+ * the read answered nothing at all, which must not pass for a missing key.
+ */
+export type ApiKeyState = 'usable' | 'missing' | 'disabled'
+
+export async function apiKeyState(key: string): Promise<ApiKeyState | undefined> {
+  const [stored, disabled] = await Promise.all([settingsGet(key), settingsGet(`${key}_disabled`)])
+  if (stored === undefined) return undefined
+  if (!stored?.trim()) return 'missing'
+  return disabled === '1' ? 'disabled' : 'usable'
+}
+
+/**
  * Marker Rust puts in front of a credential error when the system has no usable
  * credential store (src-tauri/src/settings.rs, `CREDENTIAL_STORE_UNAVAILABLE`).
  */

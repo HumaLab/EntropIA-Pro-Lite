@@ -538,6 +538,10 @@ pub async fn processing_sync_bibliography_library(
 /// Batch OCR modifier: pages whose only text is the native PDF layer are
 /// OCR'd too, replacing that text. Off unless the request names it.
 pub const OCR_INCLUDE_NATIVE: &str = "ocr_include_native";
+/// Batch OCR modifier: with the OCRH mode set to local, the batch runs the
+/// local OCRH pipeline (layout + PaddleOCR-VL or GLM-OCR) instead of OCRL
+/// (layout + PaddleOCR). Remote and auto modes already run OCRH.
+pub const OCR_LOCAL_HIGH: &str = "ocr_local_high";
 
 pub fn prepare_batch(
     conn: &Connection,
@@ -562,9 +566,13 @@ pub fn prepare_batch(
         })
         .cloned()
         .collect();
-    // Including native-text pages only refines OCR; alone it selects nothing.
-    if ops.iter().any(|op| op == "ocr") && operations.iter().any(|op| op == OCR_INCLUDE_NATIVE) {
-        ops.push(OCR_INCLUDE_NATIVE.to_string());
+    // Both OCR modifiers only refine OCR; alone they select nothing.
+    if ops.iter().any(|op| op == "ocr") {
+        for modifier in [OCR_INCLUDE_NATIVE, OCR_LOCAL_HIGH] {
+            if operations.iter().any(|op| op == modifier) {
+                ops.push(modifier.to_string());
+            }
+        }
     }
     ops.sort();
     ops.dedup();
@@ -1197,6 +1205,67 @@ pub async fn processing_get_batch(
     .await
 }
 
+/// A unit of work an asset is waiting on, as the item view shows it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetActiveTaskDto {
+    pub task_id: String,
+    /// `pending`, `retry_wait` or `running`.
+    pub state: String,
+    pub progress_done: i64,
+    pub progress_total: Option<i64>,
+    pub queued_at: i64,
+}
+
+/// R16: the live `kind` unit of an asset, when some batch still wants it
+/// run. The item view's OCR state lived only in memory, fed by events: after
+/// leaving and returning to the document a running OCRH was invisible and the
+/// previous extraction showed as DONE.
+pub(crate) fn asset_active_task(
+    conn: &Connection,
+    asset_id: &str,
+    kind: &str,
+) -> Result<Option<AssetActiveTaskDto>, String> {
+    let Some(task_id) = repository::live_task(conn, "corpus", "asset", asset_id, kind)? else {
+        return Ok(None);
+    };
+    if !repository::execution_wanted(conn, &task_id)? {
+        return Ok(None);
+    }
+    let (state, progress_done, progress_total, queued_at): (String, i64, Option<i64>, i64) = conn
+        .query_row(
+            "SELECT state, progress_done, progress_total, created_at
+             FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(|e| format!("Failed to read task {task_id}: {e}"))?;
+    if !matches!(state.as_str(), "pending" | "retry_wait" | "running") {
+        return Ok(None);
+    }
+    Ok(Some(AssetActiveTaskDto {
+        task_id,
+        state,
+        progress_done,
+        progress_total,
+        queued_at,
+    }))
+}
+
+#[tauri::command]
+pub async fn processing_asset_active_task(
+    asset_id: String,
+    kind: String,
+    db: State<'_, AppDbState>,
+) -> Result<Option<AssetActiveTaskDto>, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_ready(&db_path)?;
+        asset_active_task(&conn, &asset_id, &kind)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn processing_list_tasks(
     batch_id: String,
@@ -1257,6 +1326,59 @@ mod tests {
             row.get(0)
         })
         .unwrap()
+    }
+
+    /// R16: the item view sees an OCR as in progress only while it is
+    /// queued or running and some batch still wants it.
+    #[test]
+    fn an_asset_reports_only_wanted_units_that_are_in_progress() {
+        let (_dir, conn) = archive();
+        conn.execute(
+            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, created_at, updated_at)
+             VALUES ('b', 'req', 'manual', 'running', 'run', '[\"ocr\"]', 1, 1)",
+            [],
+        )
+        .unwrap();
+        let task = repository::admit_or_attach(&conn, "b", "ocr", "ast_alfa_2", 0, "fp", "c", None)
+            .unwrap()
+            .task_id;
+
+        let active = asset_active_task(&conn, "ast_alfa_2", "ocr")
+            .unwrap()
+            .expect("queued");
+        assert_eq!(
+            (active.task_id.as_str(), active.state.as_str()),
+            (task.as_str(), "pending")
+        );
+        assert!(asset_active_task(&conn, "ast_alfa_2", "embedding")
+            .unwrap()
+            .is_none());
+
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'interrupted' WHERE id = ?1",
+            [&task],
+        )
+        .unwrap();
+        assert!(
+            asset_active_task(&conn, "ast_alfa_2", "ocr")
+                .unwrap()
+                .is_none(),
+            "an interrupted unit is not in progress"
+        );
+
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'running' WHERE id = ?1",
+            [&task],
+        )
+        .unwrap();
+        conn.execute("UPDATE processing_batches SET desired_state = 'pause'", [])
+            .unwrap();
+        assert!(
+            asset_active_task(&conn, "ast_alfa_2", "ocr")
+                .unwrap()
+                .is_none(),
+            "a unit nobody wants run any more is not in progress"
+        );
     }
 
     /// Planning normally moves a draft to `ready` in the background; these
@@ -1334,10 +1456,22 @@ mod tests {
             "req-3",
             &[ALFA.to_string()],
             &[],
-            &ops(&["ocr_include_native"]),
+            &ops(&["ocr_include_native", "ocr_local_high"]),
         )
-        .expect_err("the option alone selects nothing");
+        .expect_err("the modifiers alone select nothing");
         assert!(alone.starts_with("invalid_selection"), "{alone}");
+        let high = prepare_batch(
+            &conn,
+            "req-4",
+            &[ALFA.to_string()],
+            &[],
+            &ops(&["ocr", "ocr_local_high"]),
+        )
+        .expect("prepare with local OCRH");
+        assert_eq!(
+            batch_snapshot(&conn, &high.batch_id).unwrap().operations,
+            vec!["ocr".to_string(), "ocr_local_high".to_string()]
+        );
     }
 
     fn snapshot_collection_ids(conn: &Connection, batch_id: &str) -> Vec<String> {

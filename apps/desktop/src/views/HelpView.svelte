@@ -17,6 +17,7 @@
     helpHistoryList,
     helpStatus,
     helpStop,
+    isLocalModelMissingError,
     isNoKeyError,
     listenHelpApproval,
     listenHelpApprovalOutcome,
@@ -74,6 +75,8 @@
     roundLimitReached?: boolean
     /** True when the provider rejected tool use and the answer is plain (T22). */
     toolsUnavailable?: boolean
+    /** True when the local Gemma wrote it from the manual only (R22). */
+    localModel?: boolean
     /** Decided MCP approvals that followed this answer (T26). */
     notices?: HelpOutcomeNotice[]
   }
@@ -97,6 +100,16 @@
   let includeDiagnostics = $state(false)
   // Opt-in per question, off by default (S12); same reset-after-send pattern.
   let includeDocuments = $state(false)
+  // Where questions go (R22): the local Gemma when `llm_mode = local` in Pro,
+  // else the OpenRouter agent. `useRemote` sends one question to OpenRouter
+  // anyway; same reset-after-send pattern as the other opt-ins.
+  let localEngine = $state(false)
+  let localModelReady = $state(true)
+  let hasOpenrouterKey = $state(false)
+  let remoteModel = $state('')
+  let useRemote = $state(false)
+  // The local engine cannot use tools, so documents need OpenRouter.
+  const documentsAvailable = $derived(!localEngine || useRemote)
   let preview = $state<string | null>(null)
   let previewOpen = $state(false)
   let previewLoading = $state(false)
@@ -130,6 +143,7 @@
       local: meta['local'] === true,
       roundLimitReached: meta['roundLimitReached'] === true,
       toolsUnavailable: meta['toolsUnavailable'] === true,
+      localModel: meta['localModel'] === true,
     }
   }
 
@@ -344,7 +358,12 @@
     })
     void helpStatus().then(
       (result) => {
-        status = result.hasOpenrouterKey ? 'ready' : 'no-key'
+        hasOpenrouterKey = result.hasOpenrouterKey
+        remoteModel = result.model ?? ''
+        localEngine = result.localEngine === true
+        localModelReady = result.localModelReady !== false
+        // The local Gemma needs no key (R22): only the OpenRouter agent does.
+        status = result.hasOpenrouterKey || localEngine ? 'ready' : 'no-key'
       },
       () => {
         // A failed check is not a missing key: let the user ask, and let
@@ -417,11 +436,14 @@
     messages = [...messages, { role: 'user', content: question }]
     if (fromDraft) draft = ''
     // Same pattern as diagnostics (S5): every send starts unsubscribed again.
-    const withDocuments = includeDocuments
+    const withDocuments = includeDocuments && documentsAvailable
     includeDocuments = false
+    const remote = localEngine && useRemote
+    useRemote = false
     try {
       const answer = await helpAsk(question, history, diagnostics, {
         ...(withDocuments ? { documents: true as const } : {}),
+        ...(remote ? { remote: true as const } : {}),
         requestId,
         conversationId,
       })
@@ -437,6 +459,7 @@
           steps: answer.steps ?? [],
           roundLimitReached: answer.roundLimitReached ?? false,
           toolsUnavailable: answer.toolsUnavailable ?? false,
+          localModel: answer.localModel ?? false,
         },
       ]
       void refreshHistory()
@@ -445,6 +468,12 @@
         // No local answer and no key: show the key message (S6) instead of
         // a generic error. The input stays for a local question.
         error = t('help.noKeyBody')
+        if (fromDraft) draft = question
+        return
+      }
+      if (isLocalModelMissingError(sendError)) {
+        localModelReady = false
+        error = t('help.engineLocalMissing')
         if (fromDraft) draft = question
         return
       }
@@ -540,6 +569,9 @@
           </div>
           {#if message.local}
             <p class="help-view__local">{$currentLocale && t('help.localAnswer')}</p>
+          {/if}
+          {#if message.localModel}
+            <p class="help-view__local">{$currentLocale && t('help.localModelAnswer')}</p>
           {/if}
           {#if metaCount(message) > 0}
             {@const metaId = `help-meta-${paneId}-${index}`}
@@ -757,6 +789,27 @@
         void send()
       }}
     >
+      {#if localEngine}
+        <div class="help-view__engine">
+          <p class="help-view__note">
+            {$currentLocale &&
+              (localModelReady ? t('help.engineLocal') : t('help.engineLocalMissing'))}
+          </p>
+          {#if hasOpenrouterKey}
+            <Checkbox
+              bind:checked={useRemote}
+              disabled={sending}
+              label={$currentLocale && t('help.useRemote', { model: remoteModel })}
+            >
+              {$currentLocale && t('help.useRemote', { model: remoteModel })}
+            </Checkbox>
+          {/if}
+        </div>
+      {:else if remoteModel}
+        <p class="help-view__note">
+          {$currentLocale && t('help.engineRemote', { model: remoteModel })}
+        </p>
+      {/if}
       <div class="help-view__optins" class:help-view__optins--single={maximized}>
         <div class="help-view__optin">
           <Checkbox
@@ -771,12 +824,18 @@
             class="help-view__info"
             aria-label={$currentLocale && t('help.diagnosticsInfo')}
             aria-describedby="help-diagnostics-hint-{paneId}"
-            use:tooltip={$currentLocale && t('help.diagnosticsHint')}
+            use:tooltip={$currentLocale &&
+              (localEngine && !useRemote
+                ? t('help.diagnosticsHintLocal')
+                : t('help.diagnosticsHint'))}
           >
             <ActionIcon name="info" size={12} />
           </button>
           <span id="help-diagnostics-hint-{paneId}" class="help-view__visually-hidden">
-            {$currentLocale && t('help.diagnosticsHint')}
+            {$currentLocale &&
+              (localEngine && !useRemote
+                ? t('help.diagnosticsHintLocal')
+                : t('help.diagnosticsHint'))}
           </span>
           <button
             type="button"
@@ -789,7 +848,7 @@
         <div class="help-view__optin">
           <Checkbox
             bind:checked={includeDocuments}
-            disabled={sending}
+            disabled={sending || !documentsAvailable}
             label={$currentLocale && t('help.includeDocuments')}
           >
             {$currentLocale && t('help.includeDocuments')}
@@ -799,12 +858,14 @@
             class="help-view__info"
             aria-label={$currentLocale && t('help.documentsInfo')}
             aria-describedby="help-documents-hint-{paneId}"
-            use:tooltip={$currentLocale && t('help.documentsHint')}
+            use:tooltip={$currentLocale &&
+              (documentsAvailable ? t('help.documentsHint') : t('help.documentsNeedRemote'))}
           >
             <ActionIcon name="info" size={12} />
           </button>
           <span id="help-documents-hint-{paneId}" class="help-view__visually-hidden">
-            {$currentLocale && t('help.documentsHint')}
+            {$currentLocale &&
+              (documentsAvailable ? t('help.documentsHint') : t('help.documentsNeedRemote'))}
           </span>
         </div>
       </div>
@@ -1228,6 +1289,14 @@
     gap: var(--space-2);
     padding-top: var(--space-2);
     border-top: 1px solid var(--border-subtle);
+  }
+
+  /* Where the question goes (R22): the local Gemma line and its one-question
+     OpenRouter switch, above the opt-ins. */
+  .help-view__engine {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
   }
 
   /* Opt-ins (T28): one wrapping row by default; a single line only with the

@@ -54,7 +54,10 @@ impl AppLogsState {
     pub fn new(log_dir: PathBuf) -> Self {
         let log_file = log_dir.join(LOG_FILE_NAME);
         let (entries, mut file_lines) = load_existing_entries(&log_file, MAX_LOG_ENTRIES);
-        if file_lines > MAX_LOG_ENTRIES && rewrite_log_file(&log_file, &entries).is_ok() {
+        // Same threshold as appends (R2): a launch rewrites the file only when
+        // it really outgrew it, so a log tailer's offsets survive most starts.
+        // Entry ids stay stable across a rewrite either way.
+        if file_lines > COMPACT_AT_FILE_LINES && rewrite_log_file(&log_file, &entries).is_ok() {
             file_lines = entries.len();
         }
         let next_id = entries
@@ -597,6 +600,24 @@ mod tests {
         assert_eq!(file_line_count(&log_file), MAX_LOG_ENTRIES);
         let reloaded = AppLogsState::new(dir.path().to_path_buf());
         assert_eq!(reloaded.recent_entries(1)[0].id, 49_999);
+    }
+
+    #[test]
+    fn a_launch_leaves_a_log_below_the_append_threshold_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_file = dir.path().join(LOG_FILE_NAME);
+        let lines = MAX_LOG_ENTRIES + 500;
+        let mut contents = String::new();
+        for id in 0..lines {
+            contents.push_str(&entry_line(id as u64));
+            contents.push('\n');
+        }
+        fs::write(&log_file, &contents).unwrap();
+
+        let state = AppLogsState::new(dir.path().to_path_buf());
+
+        assert_eq!(fs::read_to_string(&log_file).unwrap(), contents);
+        assert_eq!(state.recent_entries(1)[0].id, lines as u64 - 1);
     }
 
     #[test]

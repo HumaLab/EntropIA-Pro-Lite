@@ -16,10 +16,8 @@ const depsMocks = vi.hoisted(() => ({
   onRuntimeStatus: vi.fn(),
   onRuntimeProgress: vi.fn(),
   runtimeCanBootstrapAutomatically: vi.fn(),
-  llmLocalModelInfo: vi.fn(),
-  llmDownloadModel: vi.fn(),
-  embeddingLocalModelInfo: vi.fn(),
-  embeddingDownloadModel: vi.fn(),
+  localSetupStatus: vi.fn(),
+  localSetupInstall: vi.fn(),
   listen: vi.fn(),
 }))
 
@@ -108,15 +106,31 @@ vi.mock('$lib/runtime', () => ({
   runtimeCanBootstrapAutomatically: depsMocks.runtimeCanBootstrapAutomatically,
 }))
 
-vi.mock('$lib/llm', () => ({
-  llmLocalModelInfo: depsMocks.llmLocalModelInfo,
-  llmDownloadModel: depsMocks.llmDownloadModel,
+vi.mock('$lib/local-setup', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/local-setup')>()),
+  localSetupStatus: depsMocks.localSetupStatus,
+  localSetupInstall: depsMocks.localSetupInstall,
 }))
 
-vi.mock('$lib/embeddings', () => ({
-  embeddingLocalModelInfo: depsMocks.embeddingLocalModelInfo,
-  embeddingDownloadModel: depsMocks.embeddingDownloadModel,
-}))
+const READY_SETUP = {
+  localMl: true,
+  components: [
+    {
+      id: 'runtime',
+      label: 'Base de IA local (runtime)',
+      ready: true,
+      detail: 'Runtime listo',
+      enables: 'OCR local',
+    },
+    {
+      id: 'llm',
+      label: 'Modelo de texto local (Gemma)',
+      ready: true,
+      detail: 'Instalado: gemma.gguf (2,5 GB).',
+      enables: 'Chat',
+    },
+  ],
+}
 
 describe('DependenciasTab', () => {
   beforeEach(() => {
@@ -145,29 +159,8 @@ describe('DependenciasTab', () => {
     depsMocks.onRuntimeProgress.mockResolvedValue(vi.fn())
     depsMocks.listen.mockResolvedValue(vi.fn())
     depsMocks.runtimeCanBootstrapAutomatically.mockReturnValue(false)
-    depsMocks.llmDownloadModel.mockResolvedValue('started')
-    depsMocks.embeddingDownloadModel.mockResolvedValue('started')
-    depsMocks.llmLocalModelInfo.mockResolvedValue({
-      exists: true,
-      available: true,
-      can_auto_download: false,
-      disabled_reason: null,
-      path: '/runtime/models/gemma-4-E2B-it-Q4_K_M.gguf',
-      size_bytes: 2_500_000_000,
-      filename: 'gemma-4-E2B-it-Q4_K_M.gguf',
-      source_url: 'https://example.invalid/gemma.gguf',
-    })
-    depsMocks.embeddingLocalModelInfo.mockResolvedValue({
-      exists: true,
-      available: true,
-      can_auto_download: false,
-      directory: '/runtime/models/embeddings/bge-m3',
-      path: '/runtime/models/embeddings/bge-m3/model.onnx',
-      size_bytes: 2_200_000_000,
-      required_files: [],
-      missing_files: [],
-      source_repo: 'BAAI/bge-m3',
-    })
+    depsMocks.localSetupStatus.mockResolvedValue(READY_SETUP)
+    depsMocks.localSetupInstall.mockResolvedValue([])
     depsMocks.resetDeps.mockResolvedValue(undefined)
     depsMocks.getRuntimeStatus.mockResolvedValue({
       state: 'healthy',
@@ -278,13 +271,75 @@ describe('DependenciasTab', () => {
     })
 
     const { unmount } = render(DependenciasTab)
-    await waitFor(() => expect(handlers.has('embedding:download_error')).toBe(true))
+    await waitFor(() => expect(handlers.has('qwen-correct:download_error')).toBe(true))
     unmount()
-    depsMocks.llmLocalModelInfo.mockClear()
+    depsMocks.localSetupStatus.mockClear()
 
     await handlers.get('llm:download_complete')!()
 
-    expect(depsMocks.llmLocalModelInfo).not.toHaveBeenCalled()
+    expect(depsMocks.localSetupStatus).not.toHaveBeenCalled()
+  })
+
+  it('lists every local model, explains the GPU-only ones and prepares only what this computer can use', async () => {
+    depsMocks.localSetupStatus.mockResolvedValue({
+      localMl: true,
+      components: [
+        ...READY_SETUP.components,
+        {
+          id: 'parakeet',
+          label: 'Transcripción local (Parakeet)',
+          ready: false,
+          detail: 'Falta descargar unos 2,6 GB.',
+          enables: 'Dictado',
+        },
+        {
+          id: 'glm_ocr',
+          label: 'OCRH local (GLM-OCR)',
+          ready: false,
+          detail: 'Faltan los modelos (unos 1,4 GB).',
+          enables: 'OCRH',
+          unavailableReason:
+            'Necesita una GPU NVIDIA: este equipo no tiene, así que no se descarga.',
+        },
+      ],
+    })
+    depsMocks.localSetupInstall.mockResolvedValue([
+      { id: 'parakeet', started: true, message: 'descarga iniciada' },
+    ])
+    render(DependenciasTab)
+
+    expect(await screen.findByText('Transcripción local (Parakeet)')).toBeInTheDocument()
+    expect(screen.getByText('Falta descargar unos 2,6 GB.')).toBeInTheDocument()
+    expect(screen.getByText(/Necesita una GPU NVIDIA/)).toBeInTheDocument()
+    expect(screen.getByText('No aplica en este equipo')).toBeInTheDocument()
+    // Only one row can be downloaded here.
+    expect(screen.getAllByRole('button', { name: 'Descargar' })).toHaveLength(1)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Preparar EntropIA Pro' }))
+    await waitFor(() => expect(depsMocks.localSetupInstall).toHaveBeenCalledWith(['parakeet']))
+  })
+
+  it('shows on the row why a download could not start', async () => {
+    depsMocks.localSetupStatus.mockResolvedValue({
+      localMl: true,
+      components: [
+        {
+          id: 'reranker',
+          label: 'Reranker local (BGE v2 M3)',
+          ready: false,
+          detail: 'Falta descargar (unos 560 MB).',
+          enables: 'Chat',
+        },
+      ],
+    })
+    depsMocks.localSetupInstall.mockResolvedValue([
+      { id: 'reranker', started: false, message: 'no se pudo iniciar: sin espacio en disco' },
+    ])
+    render(DependenciasTab)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Descargar' }))
+    expect(await screen.findByText('no se pudo iniciar: sin espacio en disco')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reintentar' })).toBeInTheDocument()
   })
 
   it('shows runtime status details and repair CTA for damaged runtime', async () => {
@@ -572,7 +627,7 @@ describe('DependenciasTab', () => {
     expect(
       await screen.findByText('Esta versión de EntropIA Pro todavía no tiene su runtime publicado.')
     ).toBeInTheDocument()
-    expect(screen.queryByText(/aún no está publicado/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/aún no está publicada/)).not.toBeInTheDocument()
   })
 
   it('keeps the generic source-unavailable text when no blocked reason is present', async () => {
@@ -609,7 +664,7 @@ describe('DependenciasTab', () => {
 
     render(DependenciasTab)
 
-    expect(await screen.findByText(/aún no está publicado/)).toBeInTheDocument()
+    expect(await screen.findByText(/aún no está publicada/)).toBeInTheDocument()
     expect(
       screen.queryByText('Esta versión de EntropIA Pro todavía no tiene su runtime publicado.')
     ).not.toBeInTheDocument()
@@ -647,7 +702,7 @@ describe('DependenciasTab', () => {
     expect(dialog).toBeInTheDocument()
     expect(dialog).toHaveAttribute('aria-modal', 'true')
     expect(dialog).toHaveAccessibleName('Confirmar reseteo del entorno')
-    expect(dialog).toHaveAccessibleDescription(/Esta acción elimina el entorno administrado/i)
+    expect(dialog).toHaveAccessibleDescription(/Esta acción borra el entorno de IA administrado/i)
     expect(screen.getByText('Confirmar reseteo del entorno')).toBeInTheDocument()
     const confirmButton = screen.getByRole('button', { name: 'Confirmar reseteo' })
     expect(confirmButton).toBeDisabled()
@@ -750,11 +805,7 @@ describe('DependenciasTab', () => {
 
     const button = await screen.findByRole('button', { name: 'Instalar todo' })
     expect(button).toBeDisabled()
-    expect(
-      screen.getByText(
-        /Necesit.s runtime release hidratado\/compatible o un fallback de desarrollo disponible para esta plataforma/i
-      )
-    ).toBeInTheDocument()
+    expect(screen.getByText(/Primero tiene que estar lista la base de IA/i)).toBeInTheDocument()
   })
 
   it('updates from deps complete events without re-running dependency probes', async () => {

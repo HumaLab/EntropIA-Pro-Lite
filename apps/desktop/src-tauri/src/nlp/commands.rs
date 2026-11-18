@@ -65,8 +65,7 @@ fn triples_retired_error(target: &str) -> String {
 pub(crate) fn resolve_embedding_model_dir_for(
     db_path: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
-    let cache_dir = crate::path_utils::remembered_cache_dir();
-    let app_data_dir = cache_dir.as_deref().or_else(|| db_path.parent());
+    let model_root = crate::path_utils::model_root(db_path);
     let conn = crate::db::open::open_archive_connection(db_path)
         .map_err(|e| format!("Failed to open DB: {e}"))?;
     let configured = crate::settings::get_raw_setting(
@@ -75,7 +74,7 @@ pub(crate) fn resolve_embedding_model_dir_for(
     );
     Ok(super::embeddings::resolve_local_embedding_model_dir(
         configured.as_deref(),
-        app_data_dir,
+        Some(&model_root),
     ))
 }
 
@@ -83,8 +82,7 @@ pub(crate) fn resolve_embedding_model_dir_for(
 /// an async command must not lock `ui_conn` on its own thread (A-05b).
 async fn local_embedding_model_dir(db: &AppDbState) -> std::path::PathBuf {
     // The model is cache, not data: it no longer lives beside the database.
-    let cache_dir = crate::path_utils::remembered_cache_dir();
-    let app_data_dir = cache_dir.as_deref().or_else(|| db.db_path.parent());
+    let model_root = crate::path_utils::model_root(&db.db_path);
     let db = db.clone();
     let configured = run_blocking_db_task(move || {
         let conn = db
@@ -98,7 +96,7 @@ async fn local_embedding_model_dir(db: &AppDbState) -> std::path::PathBuf {
     })
     .await
     .unwrap_or_default();
-    super::embeddings::resolve_local_embedding_model_dir(configured.as_deref(), app_data_dir)
+    super::embeddings::resolve_local_embedding_model_dir(configured.as_deref(), Some(&model_root))
 }
 
 #[tauri::command]

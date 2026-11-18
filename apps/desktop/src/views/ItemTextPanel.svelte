@@ -19,7 +19,7 @@
     transcriptionIsEditedByHand,
     type AssetTranscriptionState,
   } from '$lib/transcription'
-  import type { ItemLlmState } from '$lib/llm'
+  import type { ItemLlmState, OcrCorrectionEngine } from '$lib/llm'
   import { getAssetPathLabel } from '$lib/item-metadata'
 
   let {
@@ -33,7 +33,7 @@
     transcriptionEditedText,
     llmState,
     llmAvailable,
-    ocrCorrectionAvailable,
+    ocrCorrectionEngine,
     localOcrAvailable,
     isOcrCorrected,
     ocrEditingDisabled,
@@ -57,7 +57,7 @@
     transcriptionEditedText: string
     llmState: ItemLlmState
     llmAvailable: boolean
-    ocrCorrectionAvailable: boolean
+    ocrCorrectionEngine: OcrCorrectionEngine | null
     localOcrAvailable: boolean
     isOcrCorrected: boolean
     ocrEditingDisabled: boolean
@@ -77,6 +77,17 @@
   let transcriptionCheckError = $state<string | null>(null)
   let renamingSpeakers = $state(false)
   let speakerEdits = $state<Array<{ old: string; next: string }>>([])
+
+  const ocrCorrectionAvailable = $derived(ocrCorrectionEngine?.available ?? false)
+  // R21: say where the text goes before the user sends it.
+  const ocrCorrectionEngineText = $derived(
+    ocrCorrectionEngine?.local
+      ? translate('item.ocrCorrectEngineLocal', { model: ocrCorrectionEngine.model ?? '' })
+      : translate('item.ocrCorrectEngineRemote', {
+          tool: ocrCorrectionEngine?.tool ?? '',
+          model: ocrCorrectionEngine?.model ?? '',
+        })
+  )
 
   async function requestTranscription(asset: Asset) {
     if (checkingTranscription) return
@@ -233,9 +244,7 @@
                 ? translate('item.ocrCorrectUnavailable')
                 : ocrState.status !== 'done'
                   ? translate('item.ocrCorrectNeedsText')
-                  : isPdfAsset
-                    ? translate('item.pdfCorrectTitle')
-                    : translate('item.ocrCorrectTitle')}
+                  : `${translate(isPdfAsset ? 'item.pdfCorrectTitle' : 'item.ocrCorrectTitle')} · ${ocrCorrectionEngineText}`}
             >
               {getCorrectionActionLabel(selectedAsset.type)}
             </Button>

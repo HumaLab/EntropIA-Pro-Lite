@@ -40,7 +40,7 @@ function setup(edited = false, pendingEdit = false, overrides: Partial<Props> = 
     transcriptionEditedText: 'original',
     llmState: { status: 'idle', activeJob: null, result: null, error: null },
     llmAvailable: false,
-    ocrCorrectionAvailable: false,
+    ocrCorrectionEngine: null,
     localOcrAvailable: false,
     isOcrCorrected: false,
     ocrEditingDisabled: false,
@@ -153,6 +153,25 @@ it('opens the recovered text of a failed OCR run and honours the editing lock', 
     'true'
   )
   expect(screen.getByRole('textbox')).toBeDisabled()
+})
+
+// R21: the OCRC button says where the text goes before it is sent.
+it.each([
+  [
+    { available: true, local: true, tool: 'Qwen3-VL local (llama-server)', model: 'qwen.gguf' },
+    'Corrección OCR · corre en este equipo con qwen.gguf',
+  ],
+  [
+    { available: true, local: false, tool: 'OpenRouter API', model: 'google/gemini' },
+    'Corrección OCR · envía el texto a OpenRouter API (google/gemini)',
+  ],
+])('names the OCRC engine in the button tooltip', (engine, title) => {
+  setup(false, false, {
+    selectedAsset: imageAsset,
+    ocrState: ocrState('done'),
+    ocrCorrectionEngine: engine,
+  })
+  expect(screen.getByRole('button', { name: 'OCRC' })).toHaveAttribute('data-tooltip', title)
 })
 
 it('reports transcription edits from the disclosed field', async () => {

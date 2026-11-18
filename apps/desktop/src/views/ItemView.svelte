@@ -107,7 +107,13 @@
   import { assetHasImageVersions, type ImageVersion } from '$lib/image-versions'
   import { runPendingAssetJob } from '$lib/item-view-media-jobs'
   import { recordAssetProcess, type RendererProcess } from '$lib/asset-history'
-  import { OcrStore, extractText, extractionIsEditedByHand, type OcrMode } from '$lib/ocr'
+  import {
+    OcrStore,
+    extractText,
+    extractionIsEditedByHand,
+    localOcrhInfo,
+    type OcrMode,
+  } from '$lib/ocr'
   import { TranscriptionStore, transcribeAudio, transcribeDictation } from '$lib/transcription'
   import {
     NlpStore,
@@ -128,13 +134,16 @@
     llmRestoreOriginalOcrAsset,
     llmExtractTriplesAsset,
     llmIsAvailable,
-    llmOcrCorrectionIsAvailable,
+    llmOcrCorrectionEngine,
+    type OcrCorrectionEngine,
     llmGetResult,
     llmGetResults,
   } from '$lib/llm'
   import { GeoStore, geocodeEntity } from '$lib/geo'
+  import { processingAssetActiveTask } from '$lib/batch-processing'
   import {
     ActionIcon,
+    Button,
     ConfirmDialog,
     IconButton,
     Panel,
@@ -300,6 +309,9 @@
   // A user-requested OCR waiting for the person to accept that it replaces
   // corrections made by hand.
   let pendingOcrRerun = $state<{ assetId: string; mode: OcrMode } | null>(null)
+  // A user-requested OCRH that would run on the CPU (~15 min per page),
+  // waiting for the person to accept the wait (R17).
+  let pendingCpuOcrh = $state<{ assetId: string; editedByHand: boolean } | null>(null)
   // A version chosen in the versions panel, waiting for the person to accept
   // that the annotations of the image may not match it.
   let pendingVersionSwitch = $state<{ assetId: string; version: ImageVersion } | null>(null)
@@ -849,7 +861,7 @@
   let llmTick = $state(0)
 
   let llmAvailable = $state(false)
-  let ocrCorrectionAvailable = $state(false)
+  let ocrCorrectionEngine = $state<OcrCorrectionEngine | null>(null)
   let summaryTexts = $state(new Map<string, string>()) // assetId → summary text
   let summaryTick = $state(0) // reactivity trigger for summary display
 
@@ -2019,12 +2031,36 @@
     })
   }
 
-  function startOrConfirmOcr(asset: Asset, mode: OcrMode, editedByHand: boolean) {
+  async function startOrConfirmOcr(asset: Asset, mode: OcrMode, editedByHand: boolean) {
+    if (mode === 'high' && (await localOcrhInfo()).high_on_cpu) {
+      pendingCpuOcrh = { assetId: asset.id, editedByHand }
+      return
+    }
+    return confirmHandEditsOrRun(asset, mode, editedByHand)
+  }
+
+  function confirmHandEditsOrRun(asset: Asset, mode: OcrMode, editedByHand: boolean) {
     if (editedByHand) {
       pendingOcrRerun = { assetId: asset.id, mode }
       return
     }
     return handleExtractText(asset, mode)
+  }
+
+  async function confirmCpuOcrh() {
+    const pending = pendingCpuOcrh
+    pendingCpuOcrh = null
+    const asset = selectedAsset
+    if (!pending || !asset || asset.id !== pending.assetId) return
+    await confirmHandEditsOrRun(asset, 'high', pending.editedByHand)
+  }
+
+  async function useOcrlInstead() {
+    const pending = pendingCpuOcrh
+    pendingCpuOcrh = null
+    const asset = selectedAsset
+    if (!pending || !asset || asset.id !== pending.assetId) return
+    await confirmHandEditsOrRun(asset, 'light', pending.editedByHand)
   }
 
   async function confirmOcrRerun() {
@@ -3237,23 +3273,43 @@
 
     if (asset.type !== 'audio') loadOcrTextEditedByHand(asset.id)
 
-    // Load existing extraction text for this asset
+    // Load existing extraction text for this asset, and any OCR the queue is
+    // still running for it: the OCR state lives in memory, so after leaving
+    // and coming back a running OCRH would otherwise show the old text as
+    // DONE (R16). The previous text stays visible while the new one runs.
     const store = getStore()
-    void store.extractions.findByAsset(asset.id).then((extraction) => {
-      if (
-        selectedAssetStateLoadGuard.isCurrent(requestToken) &&
-        isCurrentSelectedAsset(asset) &&
-        extraction
-      ) {
-        ocrStore._updateState(asset.id, {
-          status: 'done',
-          progress: 100,
-          textLength: extraction.textContent.length,
-          method: extraction.method,
-          textContent: extraction.textContent,
-        })
-        ocrTick++
+    void Promise.all([
+      store.extractions.findByAsset(asset.id),
+      asset.type === 'audio'
+        ? Promise.resolve(null)
+        : processingAssetActiveTask(asset.id, 'ocr').catch(() => null),
+    ]).then(([extraction, activeOcr]) => {
+      if (!selectedAssetStateLoadGuard.isCurrent(requestToken) || !isCurrentSelectedAsset(asset)) {
+        return
       }
+      if (!extraction && !activeOcr) return
+      const previous = extraction
+        ? {
+            textLength: extraction.textContent.length,
+            method: extraction.method,
+            textContent: extraction.textContent,
+          }
+        : {}
+      if (activeOcr) {
+        const running = activeOcr.state === 'running'
+        ocrStore._updateState(asset.id, {
+          ...previous,
+          status: running ? 'running' : 'pending',
+          progress:
+            running && activeOcr.progressTotal
+              ? Math.round((activeOcr.progressDone / activeOcr.progressTotal) * 100)
+              : 0,
+          stage: running ? 'running' : 'queued',
+        })
+      } else {
+        ocrStore._updateState(asset.id, { ...previous, status: 'done', progress: 100 })
+      }
+      ocrTick++
     })
 
     // Load existing transcription for audio assets
@@ -3434,12 +3490,12 @@
         llmAvailable = false
       })
 
-    llmOcrCorrectionIsAvailable()
-      .then((available) => {
-        ocrCorrectionAvailable = available
+    llmOcrCorrectionEngine()
+      .then((engine) => {
+        ocrCorrectionEngine = engine
       })
       .catch(() => {
-        ocrCorrectionAvailable = false
+        ocrCorrectionEngine = null
       })
 
     geoStore
@@ -3900,7 +3956,7 @@
               transcriptionEditedText={textPanelTranscriptionEditedText}
               llmState={textPanelLlmState}
               {llmAvailable}
-              {ocrCorrectionAvailable}
+              {ocrCorrectionEngine}
               localOcrAvailable={LOCAL_ML}
               isOcrCorrected={selectedAsset ? ocrCorrectedAssets.has(selectedAsset.id) : false}
               ocrEditingDisabled={correctingOcrAssetId === selectedAsset?.id ||
@@ -4039,6 +4095,21 @@
       oncancel={() => (pendingOcrRerun = null)}
       onconfirm={confirmOcrRerun}
     />
+  {/if}
+
+  {#if pendingCpuOcrh && pendingCpuOcrh.assetId === selectedAssetId}
+    <ConfirmDialog
+      title={translate('item.ocrhCpuTitle')}
+      message={translate('item.ocrhCpuWarning')}
+      cancelLabel={translate('collections.cancel')}
+      confirmLabel={translate('item.ocrhCpuContinue')}
+      oncancel={() => (pendingCpuOcrh = null)}
+      onconfirm={confirmCpuOcrh}
+    >
+      <Button variant="secondary" size="sm" onclick={useOcrlInstead}>
+        {translate('item.ocrhCpuUseOcrl')}
+      </Button>
+    </ConfirmDialog>
   {/if}
 
   {#if pendingVersionSwitch && pendingVersionSwitch.assetId === selectedAssetId}

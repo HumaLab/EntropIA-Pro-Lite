@@ -7,6 +7,7 @@ import type { HomeSnapshot, HomeActivityEntry } from '$lib/home'
 import type { SyncStatus } from '$lib/sync'
 import type { BatchGlobalSummary, BatchSummary } from '$lib/batch-processing'
 import { CREATE_COLLECTION_EVENT } from '$lib/document-explorer'
+import { LOCAL_ML } from '$lib/capabilities'
 import HomeView from './HomeView.svelte'
 import { onSettingsTabRequest } from '$lib/settings-tab-request'
 
@@ -1272,6 +1273,55 @@ describe('HomeView', () => {
       await screen.findByText('Empezá con EntropIA')
       expect(screen.getByRole('button', { name: 'Recuperar' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Escribir' })).toBeInTheDocument()
+    })
+  })
+
+  // Pro only: Lite has no local engines to offer.
+  describe.runIf(LOCAL_ML)('local modes offer (R6)', () => {
+    const offer = [
+      { key: 'stt_mode', current: 'assemblyai', local: 'local' },
+      { key: 'ocrh_mode', current: 'glm_ocr', local: 'local' },
+    ]
+
+    beforeEach(async () => {
+      const { invoke } = await import('@tauri-apps/api/core')
+      vi.mocked(invoke).mockImplementation(async (command: string) =>
+        command === 'local_modes_offer' ? offer : undefined
+      )
+      settingsRef.values.clear()
+      settingsRef.values.set('sample_collection_autoloaded', '1')
+      homeRef.loadHomeSnapshot.mockResolvedValue(makeSnapshot())
+    })
+
+    afterEach(async () => {
+      const { invoke } = await import('@tauri-apps/api/core')
+      vi.mocked(invoke).mockImplementation(async (command: string) =>
+        command === 'resolve_data_dir' ? '/mock/app-data' : undefined
+      )
+    })
+
+    it('switches the offered modes to local and closes for good', async () => {
+      render(HomeView)
+
+      expect(await screen.findByText('Este archivo usa servicios en la nube')).toBeInTheDocument()
+      expect(screen.getByText(/Dictado y transcripción con Parakeet/)).toBeInTheDocument()
+      expect(screen.queryByText(/IA de texto con el modelo local/)).not.toBeInTheDocument()
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Usar los motores locales' }))
+      await waitFor(() =>
+        expect(screen.queryByText('Este archivo usa servicios en la nube')).not.toBeInTheDocument()
+      )
+      expect(settingsRef.values.get('stt_mode')).toBe('local')
+      expect(settingsRef.values.get('ocrh_mode')).toBe('local')
+      expect(settingsRef.values.get('pro_local_modes_offered')).toBe('1')
+    })
+
+    it('keeps the cloud modes when dismissed', async () => {
+      render(HomeView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Seguir con la nube' }))
+      await waitFor(() => expect(settingsRef.values.get('pro_local_modes_offered')).toBe('1'))
+      expect(settingsRef.values.has('stt_mode')).toBe(false)
     })
   })
 })
