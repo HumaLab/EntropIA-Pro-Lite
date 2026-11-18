@@ -42,8 +42,8 @@
     },
     {
       "path": "scripts/transcribe.py",
-      "sha256": "cf93a8df51003ad15cf9e03ddd450a9af43939fdba72b942404b020522e75b97",
-      "size": 10691,
+      "sha256": "8d533b2cc24c3f9ab52095030a761202ca36daafe2f011911cccd8d67c420bcc",
+      "size": 11802,
       "executable": false
     }
   ],

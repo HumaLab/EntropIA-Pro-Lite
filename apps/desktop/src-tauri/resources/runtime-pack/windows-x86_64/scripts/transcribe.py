@@ -169,6 +169,34 @@ def _download_model_as_regular_files(
         return None
 
 
+WHISPER_SAMPLE_RATE = 16000
+
+
+def _decode_audio(path):
+    """Decode any container PyAV reads to 16 kHz mono float32 samples.
+
+    faster-whisper 1.2.x decodes with ``av.open(..., metadata_errors=...)``,
+    an argument PyAV removed in 15.0; the runtime pack ships PyAV 18, so its
+    own decoder fails on every file. Decoding here keeps the same output
+    (s16 mono at 16 kHz, scaled to [-1, 1]) on every PyAV version.
+    """
+    import av
+    import numpy as np
+
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=WHISPER_SAMPLE_RATE)
+    chunks = []
+    with av.open(path, mode="r") as container:
+        stream = container.streams.audio[0]
+        for frame in container.decode(stream):
+            for resampled in resampler.resample(frame):
+                chunks.append(resampled.to_ndarray().reshape(-1))
+        for resampled in resampler.resample(None):
+            chunks.append(resampled.to_ndarray().reshape(-1))
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate(chunks).astype(np.float32) / 32768.0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Transcribe audio using faster-whisper"
@@ -244,7 +272,8 @@ def main():
         }
 
         sys.stderr.write(f"[transcribe] Transcribing: {args.audio_path}\n")
-        segments_iter, info = model.transcribe(args.audio_path, **transcribe_kwargs)
+        audio = _decode_audio(args.audio_path)
+        segments_iter, info = model.transcribe(audio, **transcribe_kwargs)
 
         # Collect segments
         result = []
