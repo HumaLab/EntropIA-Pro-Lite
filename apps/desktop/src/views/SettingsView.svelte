@@ -205,7 +205,9 @@
     hasDepsWarning = v
   })
   type SettingsTab =
+    | 'engines'
     | 'api'
+    | 'localModels'
     | 'prompts'
     | 'modelParams'
     | 'ragParams'
@@ -220,7 +222,10 @@
     | 'backup'
     | 'maintenance'
     | 'appearance'
-  let activeTab = $state<SettingsTab>(isCriticalMissing() ? 'dependencias' : 'api')
+  // Pro opens on the engines (what runs where); Lite has only the API tab.
+  let activeTab = $state<SettingsTab>(
+    isCriticalMissing() ? 'dependencias' : LOCAL_ML ? 'engines' : 'api'
+  )
 
   // State
   let apiKey = $state('')
@@ -2117,9 +2122,22 @@
       </section>
 
       <TabList aria-label={t('settings.tabsAria')}>
+        {#if LOCAL_ML}
+          <TabButton active={activeTab === 'engines'} onclick={() => (activeTab = 'engines')}>
+            {t('settings.enginesTab')}
+          </TabButton>
+        {/if}
         <TabButton active={activeTab === 'api'} onclick={() => (activeTab = 'api')}>
           {t('settings.remoteApisTab')}
         </TabButton>
+        {#if LOCAL_ML}
+          <TabButton
+            active={activeTab === 'localModels'}
+            onclick={() => (activeTab = 'localModels')}
+          >
+            {t('settings.localModelsTab')}
+          </TabButton>
+        {/if}
         <TabButton active={activeTab === 'prompts'} onclick={() => (activeTab = 'prompts')}>
           {t('settings.promptsTab')}
         </TabButton>
@@ -2171,7 +2189,7 @@
       </TabList>
     </div>
 
-    {#if activeTab === 'api'}
+    {#if activeTab === 'api' || activeTab === 'engines' || activeTab === 'localModels'}
       {#if saveFeedback}
         <p
           class="surface-message"
@@ -2191,229 +2209,479 @@
         </div>
       {/if}
 
-      <!-- Every card in this tab is a track of one grid, so the order on the
-           page is the order in the markup and Pro's mode cards keep sitting
-           beside the provider they belong to. `auto-fit` measures the grid's
-           own box, which is the only right measurement here: the Configuración
-           sidebar takes width the viewport does not know about. `align-items:
-           start` is what stops a short card being stretched to the height of
-           a tall neighbour. -->
-      <div class="settings__provider-grid">
-        {#if LOCAL_ML}
-          <Card>
-            <section class="settings-card-section">
-              <div class="settings-card-section__copy">
-                <h2>{t('settings.llmModeTitle')}</h2>
-                <p>{currentModeDescription}</p>
-              </div>
-
-              <RadioGroup
-                name="llm_mode"
-                value={llmMode}
-                onchange={(next) => (llmMode = next as LlmMode)}
-                label={t('settings.llmModeTitle')}
-                hideLabel
-                columnMin="100%"
-              >
-                <RadioCard value="local" label={t('settings.llmMode.local.label')} wrapDescription>
-                  {#snippet description()}
-                    {t('settings.llmMode.local.description')}
-                    {#if localModel?.exists}
-                      <StatusBadge variant="success" size="xs"
-                        >{t('settings.badge.available')}</StatusBadge
-                      >
-                    {:else if localModel?.can_auto_download || localAvailable}
-                      <StatusBadge variant="warning" size="xs"
-                        >{t('settings.badge.downloadable')}</StatusBadge
-                      >
-                    {:else}
-                      <StatusBadge variant="warning" size="xs"
-                        >{t('settings.badge.notFound')}</StatusBadge
-                      >
-                    {/if}
-                  {/snippet}
-                </RadioCard>
-                <RadioCard
-                  value="openrouter"
-                  label={t('settings.llmMode.openrouter.label')}
-                  description={t('settings.llmMode.openrouter.description')}
-                  wrapDescription
-                />
-                <RadioCard
-                  value="auto"
-                  label={t('settings.llmMode.auto.label')}
-                  description={t('settings.llmMode.auto.description')}
-                  wrapDescription
-                />
-              </RadioGroup>
-            </section>
-          </Card>
-        {/if}
-
-        {#if LOCAL_ML}
-          <Card>
-            <section class="settings-card-section">
-              <div class="settings-card-section__copy">
-                <h2>{t('settings.localModel.title')}</h2>
-                <p>{t('settings.localModel.description')}</p>
-              </div>
-
-              {#if localModel}
-                <div class="settings__local-model">
-                  <div class="settings__local-model-row">
-                    <span class="settings__label">{t('settings.localModel.status')}</span>
-                    {#if localModel.exists}
-                      <StatusBadge variant="success" size="xs"
-                        >{t('settings.localModel.found')}</StatusBadge
-                      >
-                      <span class="settings__local-model-size"
-                        >{formatBytes(localModel.size_bytes)}</span
-                      >
-                    {:else if localModel.can_auto_download}
-                      <StatusBadge variant="warning" size="xs"
-                        >{t('settings.localModel.downloadable')}</StatusBadge
-                      >
-                    {:else}
-                      <StatusBadge variant="warning" size="xs"
-                        >{t('settings.localModel.missing')}</StatusBadge
-                      >
-                    {/if}
-                  </div>
-
-                  <div class="settings__local-model-row">
-                    <span class="settings__label">{t('settings.localModel.path')}</span>
-                    <code class="settings__local-model-path">{localModel.path}</code>
-                  </div>
-
-                  {#if !localModel.exists}
-                    <p class="settings__local-model-guide">
-                      {t('settings.localModel.guide')}
-                      <code>{localModel.filename}</code>
-                    </p>
-
-                    <div class="settings__field settings__field--stacked">
-                      <label class="settings__label" for="local-model-filename-{paneId}"
-                        >{t('settings.localModel.filename')}</label
-                      >
-                      <Input
-                        id="local-model-filename-{paneId}"
-                        size="sm"
-                        font="mono"
-                        bind:value={localModelFilename}
-                        placeholder={localModel?.filename ?? ''}
-                      />
-                    </div>
-
-                    <div class="settings__field settings__field--stacked">
-                      <label class="settings__label" for="local-model-source-{paneId}"
-                        >{t('settings.localModel.sourceUrl')}</label
-                      >
-                      <Input
-                        id="local-model-source-{paneId}"
-                        size="sm"
-                        font="mono"
-                        bind:value={localModelSourceUrl}
-                        placeholder="https://…"
-                      />
-                    </div>
-
-                    {#if downloading}
-                      <div class="settings__download-progress">
-                        <ProgressBar
-                          value={downloadPct}
-                          label={t('settings.localModel.downloading')}
-                        />
-                        <span class="settings__download-progress-text"
-                          >{downloadPct}% — {t('settings.localModel.downloading')}</span
-                        >
-                      </div>
-                    {:else}
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onclick={handleDownloadModel}
-                        disabled={!localModelSourceUrl.trim()}
-                      >
-                        {t('settings.localModel.download')}
-                      </Button>
-                    {/if}
-
-                    {#if downloadError}
-                      <p class="surface-message surface-message--error">{downloadError}</p>
-                    {/if}
-                  {/if}
-
-                  <Button variant="secondary" size="sm" onclick={() => llmOpenModelsDir()}>
-                    {t('settings.localModel.openFolder')}
-                  </Button>
-                </div>
-              {:else}
-                <p class="settings__hint">{t('settings.localModel.loading')}</p>
-              {/if}
-            </section>
-          </Card>
-        {/if}
-
-        {#if LOCAL_ML}
-          <Card>
-            <section class="settings-card-section">
-              <div class="settings-card-section__copy">
-                <h2>{t('settings.embeddingProvider.title')}</h2>
-                <p>{t('settings.embeddingProvider.description', { product: PRODUCT_NAME })}</p>
-              </div>
-
-              <RadioGroup
-                name="embedding_provider"
-                value={embeddingProvider}
-                onchange={(next) => (embeddingProvider = next as EmbeddingProvider)}
-                label={t('settings.embeddingProvider.title')}
-                hideLabel
-                columnMin="100%"
-              >
-                <RadioCard
-                  value="api"
-                  label={t('settings.embeddingProvider.api.label')}
-                  description={t('settings.embeddingProvider.api.description')}
-                  wrapDescription
-                />
-                <RadioCard
-                  value="local"
-                  label={t('settings.embeddingProvider.local.label')}
-                  description={t('settings.embeddingProvider.local.description')}
-                  wrapDescription
-                />
-              </RadioGroup>
-
-              {#if embeddingProvider === 'local'}
-                <div class="settings__field settings__field--stacked">
-                  <label class="settings__label" for="local-embedding-model-dir-{paneId}">
-                    {t('settings.embeddingProvider.localPath')}
-                  </label>
-                  <Input
-                    id="local-embedding-model-dir-{paneId}"
-                    size="sm"
-                    font="mono"
-                    bind:value={localEmbeddingModelDir}
-                    placeholder={t('settings.embeddingProvider.localPathPlaceholder')}
-                  />
-                  <p class="settings__hint">
-                    {t('settings.embeddingProvider.localPathHint', { product: PRODUCT_NAME })}
-                  </p>
+      <!-- Each of these tabs is one grid, so the order on the page is the
+           order in the markup. Pro splits what Lite keeps in one tab: the
+           engines (where each feature runs), the providers' keys, and the
+           local models, which show whatever mode is chosen. `auto-fit`
+           measures the grid's own box, which is the only right measurement
+           here: the Configuración sidebar takes width the viewport does not
+           know about. `align-items: start` is what stops a short card being
+           stretched to the height of a tall neighbour. -->
+      {#if activeTab === 'engines'}
+        <div class="settings__provider-grid">
+          {#if LOCAL_ML}
+            <Card>
+              <section class="settings-card-section">
+                <div class="settings-card-section__copy">
+                  <h2>{t('settings.llmModeTitle')}</h2>
+                  <p>{currentModeDescription}</p>
                 </div>
 
-                {#if localEmbeddingModel}
-                  <div class="settings__local-model">
-                    <div class="settings__local-model-row">
-                      <span class="settings__label"
-                        >{t('settings.embeddingProvider.localStatus')}</span
-                      >
-                      {#if localEmbeddingModel.available}
+                <RadioGroup
+                  name="llm_mode"
+                  value={llmMode}
+                  onchange={(next) => (llmMode = next as LlmMode)}
+                  label={t('settings.llmModeTitle')}
+                  hideLabel
+                  columnMin="100%"
+                >
+                  <RadioCard
+                    value="local"
+                    label={t('settings.llmMode.local.label')}
+                    wrapDescription
+                  >
+                    {#snippet description()}
+                      {t('settings.llmMode.local.description')}
+                      {#if localModel?.exists}
                         <StatusBadge variant="success" size="xs"
-                          >{t('settings.embeddingProvider.localComplete')}</StatusBadge
+                          >{t('settings.badge.available')}</StatusBadge
+                        >
+                      {:else if localModel?.can_auto_download || localAvailable}
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.badge.downloadable')}</StatusBadge
                         >
                       {:else}
                         <StatusBadge variant="warning" size="xs"
-                          >{t('settings.embeddingProvider.localIncomplete')}</StatusBadge
+                          >{t('settings.badge.notFound')}</StatusBadge
+                        >
+                      {/if}
+                    {/snippet}
+                  </RadioCard>
+                  <RadioCard
+                    value="openrouter"
+                    label={t('settings.llmMode.openrouter.label')}
+                    description={t('settings.llmMode.openrouter.description')}
+                    wrapDescription
+                  />
+                  <RadioCard
+                    value="auto"
+                    label={t('settings.llmMode.auto.label')}
+                    description={t('settings.llmMode.auto.description')}
+                    wrapDescription
+                  />
+                </RadioGroup>
+              </section>
+            </Card>
+          {/if}
+
+          {#if LOCAL_ML}
+            <Card>
+              <section class="settings-card-section">
+                <div class="settings-card-section__copy">
+                  <h2>{t('settings.embeddingProvider.title')}</h2>
+                  <p>{t('settings.embeddingProvider.description', { product: PRODUCT_NAME })}</p>
+                </div>
+
+                <RadioGroup
+                  name="embedding_provider"
+                  value={embeddingProvider}
+                  onchange={(next) => (embeddingProvider = next as EmbeddingProvider)}
+                  label={t('settings.embeddingProvider.title')}
+                  hideLabel
+                  columnMin="100%"
+                >
+                  <RadioCard
+                    value="api"
+                    label={t('settings.embeddingProvider.api.label')}
+                    description={t('settings.embeddingProvider.api.description')}
+                    wrapDescription
+                  />
+                  <RadioCard
+                    value="local"
+                    label={t('settings.embeddingProvider.local.label')}
+                    description={t('settings.embeddingProvider.local.description')}
+                    wrapDescription
+                  />
+                </RadioGroup>
+
+                {#if embeddingProvider !== 'local'}
+                  <p class="settings__hint settings__hint--privacy">
+                    {t('settings.embeddingProvider.apiPrivacyNotice')}
+                  </p>
+                {/if}
+              </section>
+            </Card>
+          {/if}
+
+          {#if LOCAL_ML}
+            <Card>
+              <section class="settings-card-section">
+                <div class="settings-card-section__copy">
+                  <h2>{t('settings.sttModeTitle')}</h2>
+                  <p>{currentSttModeDescription}</p>
+                </div>
+
+                <RadioGroup
+                  name="stt_mode"
+                  value={sttMode}
+                  onchange={(next) => (sttMode = next as SttMode)}
+                  label={t('settings.sttModeTitle')}
+                  hideLabel
+                  columnMin="100%"
+                >
+                  <RadioCard
+                    value="local"
+                    label={t('settings.sttMode.local.label')}
+                    description={t('settings.sttMode.local.description')}
+                    wrapDescription
+                  />
+                  <RadioCard
+                    value="assemblyai"
+                    label={t('settings.sttMode.assemblyai.label')}
+                    description={t('settings.sttMode.assemblyai.description')}
+                    wrapDescription
+                  />
+                  <RadioCard
+                    value="auto"
+                    label={t('settings.sttMode.auto.label')}
+                    description={t('settings.sttMode.auto.description')}
+                    wrapDescription
+                  />
+                </RadioGroup>
+
+                {#if sttMode === 'local'}
+                  <div class="settings__field settings__field--stacked">
+                    <RadioGroup
+                      name="stt_local_engine"
+                      value={sttLocalEngine}
+                      onchange={(next) => (sttLocalEngine = next as SttLocalEngine)}
+                      label={t('settings.sttLocalEngine.title')}
+                      columnMin="100%"
+                    >
+                      <RadioCard
+                        value="parakeet"
+                        label={t('settings.sttLocalEngine.parakeet.label')}
+                        description={t('settings.sttLocalEngine.parakeet.description')}
+                        wrapDescription
+                      />
+                      <RadioCard
+                        value="whisper"
+                        label={t('settings.sttLocalEngine.whisper.label')}
+                        description={t('settings.sttLocalEngine.whisper.description')}
+                        wrapDescription
+                      />
+                    </RadioGroup>
+                    {#if sttLocalEngine === 'parakeet'}
+                      <!-- Checkbox is its own label: no wrapping label around it. -->
+                      <Checkbox bind:checked={sttLocalDiarize}>
+                        <strong>{t('settings.sttLocalDiarize.label')}</strong>
+                        <span class="settings__check-desc"
+                          >{t('settings.sttLocalDiarize.description')}</span
+                        >
+                      </Checkbox>
+                    {/if}
+                  </div>
+                {/if}
+                {#if sttMode !== 'local'}
+                  <p class="settings__hint settings__hint--privacy">
+                    {t('settings.sttPrivacyNotice')}
+                  </p>
+                {/if}
+              </section>
+            </Card>
+          {/if}
+
+          {#if LOCAL_ML}
+            <Card>
+              <section class="settings-card-section">
+                <div class="settings-card-section__copy">
+                  <h2>{t('settings.ocrhModeTitle')}</h2>
+                  <p>{currentOcrhModeDescription}</p>
+                </div>
+
+                <RadioGroup
+                  name="ocrh_mode"
+                  value={ocrhMode}
+                  onchange={(next) => (ocrhMode = next as OcrhMode)}
+                  label={t('settings.ocrhModeTitle')}
+                  hideLabel
+                  columnMin="100%"
+                >
+                  <RadioCard
+                    value="local"
+                    label={t('settings.ocrhMode.local.label')}
+                    description={t('settings.ocrhMode.local.description')}
+                    wrapDescription
+                  />
+                  <RadioCard
+                    value="glm_ocr"
+                    label={t('settings.ocrhMode.glm_ocr.label')}
+                    description={t('settings.ocrhMode.glm_ocr.description')}
+                    wrapDescription
+                  />
+                  <RadioCard
+                    value="auto"
+                    label={t('settings.ocrhMode.auto.label')}
+                    description={t('settings.ocrhMode.auto.description')}
+                    wrapDescription
+                  />
+                </RadioGroup>
+
+                {#if ocrhMode !== 'local'}
+                  <p class="settings__hint settings__hint--privacy">
+                    {t('settings.ocrhPrivacyNotice')}
+                  </p>
+                {/if}
+
+                {#if ocrhMode === 'local'}
+                  <div class="settings__field settings__field--stacked">
+                    <RadioGroup
+                      name="ocrh_local_engine"
+                      value={ocrhLocalEngine}
+                      onchange={(next) => (ocrhLocalEngine = next as OcrhLocalEngine)}
+                      label={t('settings.ocrhLocalEngine.title')}
+                      columnMin="100%"
+                    >
+                      <RadioCard
+                        value="auto"
+                        label={t('settings.ocrhLocalEngine.auto.label')}
+                        description={t('settings.ocrhLocalEngine.auto.description')}
+                        wrapDescription
+                      />
+                      <RadioCard
+                        value="glm_ocr"
+                        label={t('settings.ocrhLocalEngine.glm_ocr.label')}
+                        description={t('settings.ocrhLocalEngine.glm_ocr.description')}
+                        wrapDescription
+                      />
+                      <RadioCard
+                        value="paddle_vl"
+                        label={t('settings.ocrhLocalEngine.paddle_vl.label')}
+                        description={t('settings.ocrhLocalEngine.paddle_vl.description')}
+                        wrapDescription
+                      />
+                    </RadioGroup>
+                  </div>
+                {/if}
+              </section>
+            </Card>
+          {/if}
+        </div>
+      {:else if activeTab === 'localModels'}
+        <div class="settings__provider-grid">
+          {#if LOCAL_ML}
+            <Card>
+              <section class="settings-card-section">
+                <div class="settings-card-section__copy">
+                  <h2>{t('settings.localModel.title')}</h2>
+                  <p>{t('settings.localModel.description')}</p>
+                </div>
+
+                {#if localModel}
+                  <div class="settings__local-model">
+                    <div class="settings__local-model-row">
+                      <span class="settings__label">{t('settings.localModel.status')}</span>
+                      {#if localModel.exists}
+                        <StatusBadge variant="success" size="xs"
+                          >{t('settings.localModel.found')}</StatusBadge
+                        >
+                        <span class="settings__local-model-size"
+                          >{formatBytes(localModel.size_bytes)}</span
+                        >
+                      {:else if localModel.can_auto_download}
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.localModel.downloadable')}</StatusBadge
+                        >
+                      {:else}
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.localModel.missing')}</StatusBadge
+                        >
+                      {/if}
+                    </div>
+
+                    <div class="settings__local-model-row">
+                      <span class="settings__label">{t('settings.localModel.path')}</span>
+                      <code class="settings__local-model-path">{localModel.path}</code>
+                    </div>
+
+                    {#if !localModel.exists}
+                      <p class="settings__local-model-guide">
+                        {t('settings.localModel.guide')}
+                        <code>{localModel.filename}</code>
+                      </p>
+
+                      <div class="settings__field settings__field--stacked">
+                        <label class="settings__label" for="local-model-filename-{paneId}"
+                          >{t('settings.localModel.filename')}</label
+                        >
+                        <Input
+                          id="local-model-filename-{paneId}"
+                          size="sm"
+                          font="mono"
+                          bind:value={localModelFilename}
+                          placeholder={localModel?.filename ?? ''}
+                        />
+                      </div>
+
+                      <div class="settings__field settings__field--stacked">
+                        <label class="settings__label" for="local-model-source-{paneId}"
+                          >{t('settings.localModel.sourceUrl')}</label
+                        >
+                        <Input
+                          id="local-model-source-{paneId}"
+                          size="sm"
+                          font="mono"
+                          bind:value={localModelSourceUrl}
+                          placeholder="https://…"
+                        />
+                      </div>
+
+                      {#if downloading}
+                        <div class="settings__download-progress">
+                          <ProgressBar
+                            value={downloadPct}
+                            label={t('settings.localModel.downloading')}
+                          />
+                          <span class="settings__download-progress-text"
+                            >{downloadPct}% — {t('settings.localModel.downloading')}</span
+                          >
+                        </div>
+                      {:else}
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onclick={handleDownloadModel}
+                          disabled={!localModelSourceUrl.trim()}
+                        >
+                          {t('settings.localModel.download')}
+                        </Button>
+                      {/if}
+
+                      {#if downloadError}
+                        <p class="surface-message surface-message--error">{downloadError}</p>
+                      {/if}
+                    {/if}
+
+                    <Button variant="secondary" size="sm" onclick={() => llmOpenModelsDir()}>
+                      {t('settings.localModel.openFolder')}
+                    </Button>
+                  </div>
+                {:else}
+                  <p class="settings__hint">{t('settings.localModel.loading')}</p>
+                {/if}
+              </section>
+            </Card>
+          {/if}
+          <Card>
+            <section class="settings-card-section">
+              <div class="settings-card-section__copy">
+                <h2>{t('settings.localModels.bgeTitle')}</h2>
+                <p>{t('settings.localModels.bgeDescription')}</p>
+              </div>
+              <div class="settings__field settings__field--stacked">
+                <label class="settings__label" for="local-embedding-model-dir-{paneId}">
+                  {t('settings.embeddingProvider.localPath')}
+                </label>
+                <Input
+                  id="local-embedding-model-dir-{paneId}"
+                  size="sm"
+                  font="mono"
+                  bind:value={localEmbeddingModelDir}
+                  placeholder={t('settings.embeddingProvider.localPathPlaceholder')}
+                />
+                <p class="settings__hint">
+                  {t('settings.embeddingProvider.localPathHint', { product: PRODUCT_NAME })}
+                </p>
+              </div>
+
+              {#if localEmbeddingModel}
+                <div class="settings__local-model">
+                  <div class="settings__local-model-row">
+                    <span class="settings__label"
+                      >{t('settings.embeddingProvider.localStatus')}</span
+                    >
+                    {#if localEmbeddingModel.available}
+                      <StatusBadge variant="success" size="xs"
+                        >{t('settings.embeddingProvider.localComplete')}</StatusBadge
+                      >
+                    {:else}
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.embeddingProvider.localIncomplete')}</StatusBadge
+                      >
+                    {/if}
+                  </div>
+
+                  <div class="settings__local-model-row">
+                    <span class="settings__label">{t('settings.embeddingProvider.localPath')}</span>
+                    <code class="settings__local-model-path">{localEmbeddingModel.directory}</code>
+                  </div>
+
+                  <p class="settings__hint">
+                    {t('settings.embeddingProvider.localInstallHint', {
+                      product: PRODUCT_NAME,
+                      repo: localEmbeddingModel.source_repo,
+                    })}
+                  </p>
+
+                  {#if localEmbeddingModel.missing_files.length > 0}
+                    <ul class="settings__hint">
+                      {#each localEmbeddingModel.missing_files as file (file.filename)}
+                        <li>
+                          <code>{file.filename}</code> ← {file.source_path} ({formatBytes(
+                            file.size_bytes
+                          )})
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+
+                  {#if embeddingDownloading}
+                    <div class="settings__download-progress">
+                      <ProgressBar
+                        value={embeddingDownloadPct}
+                        label={t('settings.embeddingProvider.downloading')}
+                      />
+                      <span class="settings__download-progress-text">
+                        {embeddingDownloadPct}% — {embeddingDownloadFile ||
+                          t('settings.embeddingProvider.downloading')}
+                      </span>
+                    </div>
+                  {:else if !localEmbeddingModel.available}
+                    <Button variant="primary" size="sm" onclick={handleDownloadEmbeddingModel}>
+                      {t('settings.embeddingProvider.installLocal')}
+                    </Button>
+                  {/if}
+
+                  {#if embeddingDownloadError}
+                    <p class="surface-message surface-message--error">{embeddingDownloadError}</p>
+                  {/if}
+
+                  <Button variant="secondary" size="sm" onclick={() => embeddingOpenModelsDir()}>
+                    {t('settings.embeddingProvider.openLocalFolder')}
+                  </Button>
+                </div>
+              {/if}
+            </section>
+          </Card>
+          {#if LOCAL_ML}
+            <Card>
+              <section class="settings-card-section">
+                <div class="settings-card-section__copy">
+                  <h2>{t('settings.reranker.title')}</h2>
+                  <p>{t('settings.reranker.description')}</p>
+                </div>
+
+                {#if localRerankerModel}
+                  <div class="settings__local-model">
+                    <div class="settings__local-model-row">
+                      <span class="settings__label">{t('settings.reranker.title')}</span>
+                      {#if localRerankerModel.available}
+                        <StatusBadge variant="success" size="xs"
+                          >{t('settings.reranker.ready')}</StatusBadge
+                        >
+                      {:else}
+                        <StatusBadge variant="warning" size="xs"
+                          >{t('settings.reranker.missing')}</StatusBadge
                         >
                       {/if}
                     </div>
@@ -2422,953 +2690,744 @@
                       <span class="settings__label"
                         >{t('settings.embeddingProvider.localPath')}</span
                       >
-                      <code class="settings__local-model-path">{localEmbeddingModel.directory}</code
-                      >
+                      <code class="settings__local-model-path">{localRerankerModel.directory}</code>
                     </div>
 
                     <p class="settings__hint">
-                      {t('settings.embeddingProvider.localInstallHint', {
-                        product: PRODUCT_NAME,
-                        repo: localEmbeddingModel.source_repo,
-                      })}
+                      {t('settings.reranker.installHint', { repo: localRerankerModel.sourceRepo })}
                     </p>
 
-                    {#if localEmbeddingModel.missing_files.length > 0}
-                      <ul class="settings__hint">
-                        {#each localEmbeddingModel.missing_files as file (file.filename)}
-                          <li>
-                            <code>{file.filename}</code> ← {file.source_path} ({formatBytes(
-                              file.size_bytes
-                            )})
-                          </li>
-                        {/each}
-                      </ul>
-                    {/if}
-
-                    {#if embeddingDownloading}
+                    {#if rerankerDownloading}
                       <div class="settings__download-progress">
                         <ProgressBar
-                          value={embeddingDownloadPct}
-                          label={t('settings.embeddingProvider.downloading')}
+                          value={rerankerDownloadPct}
+                          label={t('settings.reranker.downloading')}
                         />
                         <span class="settings__download-progress-text">
-                          {embeddingDownloadPct}% — {embeddingDownloadFile ||
-                            t('settings.embeddingProvider.downloading')}
+                          {rerankerDownloadPct}% — {rerankerDownloadFile ||
+                            t('settings.reranker.downloading')}
                         </span>
                       </div>
-                    {:else if !localEmbeddingModel.available}
-                      <Button variant="primary" size="sm" onclick={handleDownloadEmbeddingModel}>
-                        {t('settings.embeddingProvider.installLocal')}
+                    {:else if !localRerankerModel.available}
+                      <Button variant="primary" size="sm" onclick={handleDownloadRerankerModel}>
+                        {t('settings.reranker.install')}
                       </Button>
                     {/if}
 
-                    {#if embeddingDownloadError}
-                      <p class="surface-message surface-message--error">{embeddingDownloadError}</p>
+                    {#if rerankerDownloadError}
+                      <p class="surface-message surface-message--error">{rerankerDownloadError}</p>
                     {/if}
 
-                    <Button variant="secondary" size="sm" onclick={() => embeddingOpenModelsDir()}>
-                      {t('settings.embeddingProvider.openLocalFolder')}
+                    <Button variant="secondary" size="sm" onclick={() => rerankerOpenModelsDir()}>
+                      {t('settings.reranker.openFolder')}
                     </Button>
                   </div>
+                {:else}
+                  <p class="settings__hint">{t('settings.localModel.loading')}</p>
                 {/if}
-              {:else}
-                <p class="settings__hint settings__hint--privacy">
-                  {t('settings.embeddingProvider.apiPrivacyNotice')}
-                </p>
-              {/if}
-            </section>
-          </Card>
-        {/if}
-
-        {#if LOCAL_ML}
+              </section>
+            </Card>
+          {/if}
           <Card>
             <section class="settings-card-section">
               <div class="settings-card-section__copy">
-                <h2>{t('settings.reranker.title')}</h2>
-                <p>{t('settings.reranker.description')}</p>
+                <h2>{t('settings.localModels.parakeetTitle')}</h2>
+                <p>{t('settings.localModels.parakeetDescription')}</p>
               </div>
+              {#if parakeetModel}
+                <div class="settings__local-model">
+                  {#if parakeetModel.installed}
+                    <p class="settings__hint">{t('settings.parakeetModel.ready')}</p>
+                  {:else if parakeetDownloading}
+                    <div class="settings__download-progress">
+                      <ProgressBar
+                        value={parakeetDownloadPct}
+                        label={t('settings.parakeetModel.downloading')}
+                      />
+                      <span class="settings__download-progress-text">
+                        {parakeetDownloadPct}% — {t('settings.parakeetModel.downloading')}
+                      </span>
+                    </div>
+                  {:else}
+                    <p class="settings__hint">{t('settings.parakeetModel.missing')}</p>
+                    <Button variant="primary" size="sm" onclick={handleDownloadParakeet}>
+                      {t('settings.parakeetModel.download', {
+                        size: formatBytes(parakeetModel.missing_bytes),
+                      })}
+                    </Button>
+                  {/if}
+                  {#if parakeetDownloadError}
+                    <p class="surface-message surface-message--error">
+                      {parakeetDownloadError}
+                      <Button variant="secondary" size="sm" onclick={handleDownloadParakeet}>
+                        {t('settings.parakeetModel.retry')}
+                      </Button>
+                    </p>
+                  {/if}
+                </div>
+              {/if}
+            </section>
+          </Card>
+          {#snippet llamaServerStatus(info: {
+            server_present: boolean
+            server_source: LlamaServerSource
+          })}
+            {#if !info.server_present}
+              {#if info.server_source === 'download'}
+                <p class="settings__hint">{t('settings.llamaServer.missing')}</p>
+                {#if llamaServerDownloading}
+                  <div class="settings__download-progress">
+                    <ProgressBar
+                      value={llamaServerDownloadPct}
+                      label={t('settings.llamaServer.downloading')}
+                    />
+                    <span class="settings__download-progress-text">
+                      {llamaServerDownloadPct}% — {t('settings.llamaServer.downloading')}
+                    </span>
+                  </div>
+                {:else}
+                  <Button variant="primary" size="sm" onclick={handleDownloadLlamaServer}>
+                    {t('settings.llamaServer.download')}
+                  </Button>
+                {/if}
+                {#if llamaServerDownloadError}
+                  <p class="surface-message surface-message--error">
+                    {llamaServerDownloadError}
+                    <Button variant="secondary" size="sm" onclick={handleDownloadLlamaServer}>
+                      {t('settings.llamaServer.retry')}
+                    </Button>
+                  </p>
+                {/if}
+              {:else if info.server_source === 'requires_nvidia_gpu'}
+                <p class="settings__hint">{t('settings.llamaServer.requiresNvidia')}</p>
+              {:else}
+                <p class="settings__hint">{t('settings.glmOcrLocal.serverMissing')}</p>
+              {/if}
+            {/if}
+          {/snippet}
 
-              {#if localRerankerModel}
+          <Card>
+            <section class="settings-card-section">
+              <div class="settings-card-section__copy">
+                <h2>{t('settings.localModels.glmOcrTitle')}</h2>
+                <p>{t('settings.localModels.glmOcrDescription')}</p>
+              </div>
+              {#if glmOcrLocal}
                 <div class="settings__local-model">
                   <div class="settings__local-model-row">
-                    <span class="settings__label">{t('settings.reranker.title')}</span>
-                    {#if localRerankerModel.available}
+                    {#if glmOcrLocal.model_present && glmOcrLocal.mmproj_present}
                       <StatusBadge variant="success" size="xs"
-                        >{t('settings.reranker.ready')}</StatusBadge
+                        >{t('settings.glmOcrLocal.modelsReady')}</StatusBadge
+                      >
+                    {:else}
+                      <!-- The badge holds the state; the file names, long enough to
+                             overflow a one-line pill, sit beside it. -->
+                      <StatusBadge variant="warning" size="xs"
+                        >{t('settings.glmOcrLocal.modelsMissing')}</StatusBadge
+                      >
+                      <code class="settings__local-model-path"
+                        >{[
+                          !glmOcrLocal.model_present && 'GLM-OCR-Q8_0.gguf',
+                          !glmOcrLocal.mmproj_present && 'mmproj-GLM-OCR-Q8_0.gguf',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}</code
+                      >
+                    {/if}
+                  </div>
+
+                  {@render llamaServerStatus(glmOcrLocal)}
+
+                  {#if glmOcrDownloading}
+                    <div class="settings__download-progress">
+                      <ProgressBar
+                        value={glmOcrDownloadPct}
+                        label={t('settings.glmOcrLocal.downloading')}
+                      />
+                      <span class="settings__download-progress-text">
+                        {glmOcrDownloadPct}% — {t('settings.glmOcrLocal.downloading')}
+                      </span>
+                    </div>
+                  {:else if !glmOcrLocal.model_present || !glmOcrLocal.mmproj_present}
+                    <Button variant="primary" size="sm" onclick={handleDownloadGlmOcrModels}>
+                      {t('settings.glmOcrLocal.download')}
+                    </Button>
+                  {/if}
+
+                  {#if glmOcrDownloadError}
+                    <p class="surface-message surface-message--error">
+                      {glmOcrDownloadError}
+                      <Button variant="secondary" size="sm" onclick={handleDownloadGlmOcrModels}>
+                        {t('settings.glmOcrLocal.retry')}
+                      </Button>
+                    </p>
+                  {/if}
+                </div>
+              {/if}
+            </section>
+          </Card>
+          <Card>
+            <section class="settings-card-section">
+              <div class="settings-card-section__copy">
+                <h2>{t('settings.qwenCorrectLocal.title')}</h2>
+                <p>{t('settings.qwenCorrectLocal.description')}</p>
+              </div>
+              {#if qwenLocal}
+                <div class="settings__local-model">
+                  <div class="settings__local-model-row">
+                    {#if qwenLocal.model_present && qwenLocal.mmproj_present}
+                      <StatusBadge variant="success" size="xs"
+                        >{t('settings.qwenCorrectLocal.modelsReady')}</StatusBadge
                       >
                     {:else}
                       <StatusBadge variant="warning" size="xs"
-                        >{t('settings.reranker.missing')}</StatusBadge
+                        >{t('settings.qwenCorrectLocal.modelsMissing')}</StatusBadge
+                      >
+                      <code class="settings__local-model-path"
+                        >{[
+                          !qwenLocal.model_present && 'Qwen3VL-4B-Instruct-Q4_K_M.gguf',
+                          !qwenLocal.mmproj_present && 'mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}</code
                       >
                     {/if}
                   </div>
+                  {@render llamaServerStatus(qwenLocal)}
 
-                  <div class="settings__local-model-row">
-                    <span class="settings__label">{t('settings.embeddingProvider.localPath')}</span>
-                    <code class="settings__local-model-path">{localRerankerModel.directory}</code>
-                  </div>
-
-                  <p class="settings__hint">
-                    {t('settings.reranker.installHint', { repo: localRerankerModel.sourceRepo })}
-                  </p>
-
-                  {#if rerankerDownloading}
+                  {#if qwenDownloading}
                     <div class="settings__download-progress">
                       <ProgressBar
-                        value={rerankerDownloadPct}
-                        label={t('settings.reranker.downloading')}
+                        value={qwenDownloadPct}
+                        label={t('settings.qwenCorrectLocal.downloading')}
                       />
                       <span class="settings__download-progress-text">
-                        {rerankerDownloadPct}% — {rerankerDownloadFile ||
-                          t('settings.reranker.downloading')}
+                        {qwenDownloadPct}% — {t('settings.qwenCorrectLocal.downloading')}
                       </span>
                     </div>
-                  {:else if !localRerankerModel.available}
-                    <Button variant="primary" size="sm" onclick={handleDownloadRerankerModel}>
-                      {t('settings.reranker.install')}
+                  {:else if !qwenLocal.model_present || !qwenLocal.mmproj_present}
+                    <Button variant="primary" size="sm" onclick={handleDownloadQwenModels}>
+                      {t('settings.qwenCorrectLocal.download')}
                     </Button>
                   {/if}
 
-                  {#if rerankerDownloadError}
-                    <p class="surface-message surface-message--error">{rerankerDownloadError}</p>
+                  {#if qwenDownloadError}
+                    <p class="surface-message surface-message--error">
+                      {qwenDownloadError}
+                      <Button variant="secondary" size="sm" onclick={handleDownloadQwenModels}>
+                        {t('settings.qwenCorrectLocal.retry')}
+                      </Button>
+                    </p>
                   {/if}
-
-                  <Button variant="secondary" size="sm" onclick={() => rerankerOpenModelsDir()}>
-                    {t('settings.reranker.openFolder')}
-                  </Button>
                 </div>
-              {:else}
-                <p class="settings__hint">{t('settings.localModel.loading')}</p>
               {/if}
             </section>
           </Card>
-        {/if}
-
-        <Card>
-          <section class="settings-card-section">
-            <div class="settings-card-section__copy">
-              <!-- Title and the key link share the line; the description sits
+        </div>
+      {:else}
+        <div class="settings__provider-grid">
+          <Card>
+            <section class="settings-card-section">
+              <div class="settings-card-section__copy">
+                <!-- Title and the key link share the line; the description sits
                  under both. Three stacked lines was most of this card's
                  height, and two of them were one word wide. -->
-              <div class="settings-card-section__head">
-                <h2>{t('settings.openrouter.title')}</h2>
-                <a
-                  class="settings__provider-link"
-                  href={PROVIDER_LINKS.openrouter}
-                  onclick={(event) =>
-                    openProviderLink(event, PROVIDER_LINKS.openrouter, 'OpenRouter')}
-                  aria-label={t('settings.getApiKeyLink', { provider: 'OpenRouter' })}
-                >
-                  <!-- Short on screen, but three links reading "Obtener API
+                <div class="settings-card-section__head">
+                  <h2>{t('settings.openrouter.title')}</h2>
+                  <a
+                    class="settings__provider-link"
+                    href={PROVIDER_LINKS.openrouter}
+                    onclick={(event) =>
+                      openProviderLink(event, PROVIDER_LINKS.openrouter, 'OpenRouter')}
+                    aria-label={t('settings.getApiKeyLink', { provider: 'OpenRouter' })}
+                  >
+                    <!-- Short on screen, but three links reading "Obtener API
                      key" would be three identical accessible names: the label
                      keeps the provider for anyone who cannot see which card
                      the link sits in. -->
-                  <span>{t('settings.getApiKeyShort')}</span>
-                  <ActionIcon name="external-link" size={14} />
-                </a>
-              </div>
-              <p>{t('settings.openrouter.description')}</p>
-            </div>
-
-            <div class="settings__field settings__field--stacked">
-              <label class="settings__label" for="api-key-{paneId}">{t('settings.apiKey')}</label>
-              <div class="settings__input-row">
-                <div class="settings__key-field">
-                  <Input
-                    id="api-key-{paneId}"
-                    type={showApiKey ? 'text' : 'password'}
-                    size="sm"
-                    font="mono"
-                    bind:value={apiKey}
-                    placeholder={t('settings.apiKeyPlaceholder')}
-                  />
+                    <span>{t('settings.getApiKeyShort')}</span>
+                    <ActionIcon name="external-link" size={14} />
+                  </a>
                 </div>
-                <IconButton
-                  variant="secondary"
-                  size="sm"
-                  onclick={() => (showApiKey = !showApiKey)}
-                  title={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-                  label={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-                >
-                  <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={14} />
-                </IconButton>
-                {#if maskedApiKey}
+                <p>{t('settings.openrouter.description')}</p>
+              </div>
+
+              <div class="settings__field settings__field--stacked">
+                <label class="settings__label" for="api-key-{paneId}">{t('settings.apiKey')}</label>
+                <div class="settings__input-row">
+                  <div class="settings__key-field">
+                    <Input
+                      id="api-key-{paneId}"
+                      type={showApiKey ? 'text' : 'password'}
+                      size="sm"
+                      font="mono"
+                      bind:value={apiKey}
+                      placeholder={t('settings.apiKeyPlaceholder')}
+                    />
+                  </div>
                   <IconButton
                     variant="secondary"
                     size="sm"
-                    onclick={() => requestClearKey('openrouter')}
-                    title={t('settings.clearKey', { service: 'OpenRouter' })}
-                    label={t('settings.clearKey', { service: 'OpenRouter' })}
+                    onclick={() => (showApiKey = !showApiKey)}
+                    title={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                    label={showApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                   >
-                    <ActionIcon name="delete" size={14} />
+                    <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={14} />
                   </IconButton>
-                {/if}
-                <div class="settings__key-action">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onclick={handleTestConnection}
-                    disabled={testing || !hasOpenRouterCredential}
-                  >
-                    {testing ? t('settings.testingConnection') : t('settings.testConnection')}
-                  </Button>
+                  {#if maskedApiKey}
+                    <IconButton
+                      variant="secondary"
+                      size="sm"
+                      onclick={() => requestClearKey('openrouter')}
+                      title={t('settings.clearKey', { service: 'OpenRouter' })}
+                      label={t('settings.clearKey', { service: 'OpenRouter' })}
+                    >
+                      <ActionIcon name="delete" size={14} />
+                    </IconButton>
+                  {/if}
+                  <div class="settings__key-action">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onclick={handleTestConnection}
+                      disabled={testing || !hasOpenRouterCredential}
+                    >
+                      {testing ? t('settings.testingConnection') : t('settings.testConnection')}
+                    </Button>
+                  </div>
                 </div>
+
+                {#if openRouterKeyStatus}
+                  <p
+                    class="settings__hint settings__key-status"
+                    class:settings__key-status--warn={openRouterKeyStatus.warn}
+                  >
+                    <ActionIcon
+                      name={openRouterKeyStatus.warn ? 'triangle-alert' : 'circle-check'}
+                      size={12}
+                    />
+                    <span>{openRouterKeyStatus.text}</span>
+                  </p>
+                {:else if !apiKey.trim()}
+                  <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
+                {/if}
+
+                {#if testResult}
+                  <p
+                    class="surface-message settings__feedback"
+                    class:surface-message--success={testResult.success}
+                    class:surface-message--error={!testResult.success}
+                  >
+                    {testResult.message}
+                  </p>
+                {/if}
               </div>
 
-              {#if openRouterKeyStatus}
-                <p
-                  class="settings__hint settings__key-status"
-                  class:settings__key-status--warn={openRouterKeyStatus.warn}
+              <div class="settings__field settings__field--stacked">
+                <label class="settings__label" for="openai-base-url-{paneId}"
+                  >{t('settings.openaiCompatibleBaseUrl.label')}</label
                 >
-                  <ActionIcon
-                    name={openRouterKeyStatus.warn ? 'triangle-alert' : 'circle-check'}
-                    size={12}
-                  />
-                  <span>{openRouterKeyStatus.text}</span>
-                </p>
-              {:else if !apiKey.trim()}
-                <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
-              {/if}
-
-              {#if testResult}
-                <p
-                  class="surface-message settings__feedback"
-                  class:surface-message--success={testResult.success}
-                  class:surface-message--error={!testResult.success}
-                >
-                  {testResult.message}
-                </p>
-              {/if}
-            </div>
-
-            <div class="settings__field settings__field--stacked">
-              <label class="settings__label" for="openai-base-url-{paneId}"
-                >{t('settings.openaiCompatibleBaseUrl.label')}</label
-              >
-              <Input
-                id="openai-base-url-{paneId}"
-                size="sm"
-                font="mono"
-                bind:value={openaiCompatibleBaseUrl}
-                placeholder="http://127.0.0.1:11434"
-              />
-              <p class="settings__hint">{t('settings.openaiCompatibleBaseUrl.description')}</p>
-            </div>
-            <div class="settings__field settings__field--stacked">
-              <!-- The two model names are short and belong together, so they
+                <Input
+                  id="openai-base-url-{paneId}"
+                  size="sm"
+                  font="mono"
+                  bind:value={openaiCompatibleBaseUrl}
+                  placeholder="http://127.0.0.1:11434"
+                />
+                <p class="settings__hint">{t('settings.openaiCompatibleBaseUrl.description')}</p>
+              </div>
+              <div class="settings__field settings__field--stacked">
+                <!-- The two model names are short and belong together, so they
                  share a row once the card is wide enough for both and fall
                  back to one column when it is not. -->
-              <div class="settings__model-fields">
-                <Input
-                  label={t('settings.model')}
-                  type="text"
-                  size="sm"
-                  bind:value={model}
-                  placeholder={t('settings.modelPlaceholder')}
-                />
-                <Input
-                  label={t('settings.embeddingProvider.model')}
-                  type="text"
-                  size="sm"
-                  bind:value={embeddingModel}
-                  placeholder={DEFAULT_OPENROUTER_EMBEDDING_MODEL}
-                />
-              </div>
-
-              {#if availableModels.length > 0}
-                <div class="settings__model-list">
-                  <p class="settings__model-list-title">{t('settings.suggestedModels')}</p>
-                  {#each availableModels
-                    .filter((m) => m.id.includes('gemma') || m.id.includes('llama') || m.id.includes('mistral') || m.id.includes('qwen') || m.id.includes('claude') || m.id.includes('gpt'))
-                    .slice(0, 15) as m (m.id)}
-                    <button
-                      class="settings__model-option"
-                      type="button"
-                      class:selected={model === m.id}
-                      onclick={() => handleModelSelect(m.id)}
-                    >
-                      <span class="settings__model-id">{m.id}</span>
-                      <span class="settings__model-ctx"
-                        >{Math.round(m.context_length / 1024)}k ctx</span
-                      >
-                    </button>
-                  {/each}
+                <div class="settings__model-fields">
+                  <Input
+                    label={t('settings.model')}
+                    type="text"
+                    size="sm"
+                    bind:value={model}
+                    placeholder={t('settings.modelPlaceholder')}
+                  />
+                  <Input
+                    label={t('settings.embeddingProvider.model')}
+                    type="text"
+                    size="sm"
+                    bind:value={embeddingModel}
+                    placeholder={DEFAULT_OPENROUTER_EMBEDDING_MODEL}
+                  />
                 </div>
-              {/if}
-              <p class="settings__hint">{t('settings.embeddingProvider.modelHint')}</p>
-            </div>
-          </section>
-        </Card>
 
-        <VercelFallbackCard />
+                {#if availableModels.length > 0}
+                  <div class="settings__model-list">
+                    <p class="settings__model-list-title">{t('settings.suggestedModels')}</p>
+                    {#each availableModels
+                      .filter((m) => m.id.includes('gemma') || m.id.includes('llama') || m.id.includes('mistral') || m.id.includes('qwen') || m.id.includes('claude') || m.id.includes('gpt'))
+                      .slice(0, 15) as m (m.id)}
+                      <button
+                        class="settings__model-option"
+                        type="button"
+                        class:selected={model === m.id}
+                        onclick={() => handleModelSelect(m.id)}
+                      >
+                        <span class="settings__model-id">{m.id}</span>
+                        <span class="settings__model-ctx"
+                          >{Math.round(m.context_length / 1024)}k ctx</span
+                        >
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                <p class="settings__hint">{t('settings.embeddingProvider.modelHint')}</p>
+              </div>
+            </section>
+          </Card>
 
-        {#if LOCAL_ML}
+          <VercelFallbackCard />
           <Card>
             <section class="settings-card-section">
               <div class="settings-card-section__copy">
-                <h2>{t('settings.sttModeTitle')}</h2>
-                <p>{currentSttModeDescription}</p>
-              </div>
-
-              <RadioGroup
-                name="stt_mode"
-                value={sttMode}
-                onchange={(next) => (sttMode = next as SttMode)}
-                label={t('settings.sttModeTitle')}
-                hideLabel
-                columnMin="100%"
-              >
-                <RadioCard
-                  value="local"
-                  label={t('settings.sttMode.local.label')}
-                  description={t('settings.sttMode.local.description')}
-                  wrapDescription
-                />
-                <RadioCard
-                  value="assemblyai"
-                  label={t('settings.sttMode.assemblyai.label')}
-                  description={t('settings.sttMode.assemblyai.description')}
-                  wrapDescription
-                />
-                <RadioCard
-                  value="auto"
-                  label={t('settings.sttMode.auto.label')}
-                  description={t('settings.sttMode.auto.description')}
-                  wrapDescription
-                />
-              </RadioGroup>
-
-              {#if sttMode === 'local'}
-                <div class="settings__field settings__field--stacked">
-                  <RadioGroup
-                    name="stt_local_engine"
-                    value={sttLocalEngine}
-                    onchange={(next) => (sttLocalEngine = next as SttLocalEngine)}
-                    label={t('settings.sttLocalEngine.title')}
-                    columnMin="100%"
-                  >
-                    <RadioCard
-                      value="parakeet"
-                      label={t('settings.sttLocalEngine.parakeet.label')}
-                      description={t('settings.sttLocalEngine.parakeet.description')}
-                      wrapDescription
-                    />
-                    <RadioCard
-                      value="whisper"
-                      label={t('settings.sttLocalEngine.whisper.label')}
-                      description={t('settings.sttLocalEngine.whisper.description')}
-                      wrapDescription
-                    />
-                  </RadioGroup>
-                  {#if sttLocalEngine === 'parakeet'}
-                    <!-- Checkbox is its own label: no wrapping label around it. -->
-                    <Checkbox bind:checked={sttLocalDiarize}>
-                      <strong>{t('settings.sttLocalDiarize.label')}</strong>
-                      <span class="settings__check-desc"
-                        >{t('settings.sttLocalDiarize.description')}</span
-                      >
-                    </Checkbox>
-                    {#if parakeetModel}
-                      <div class="settings__local-model">
-                        {#if parakeetModel.installed}
-                          <p class="settings__hint">{t('settings.parakeetModel.ready')}</p>
-                        {:else if parakeetDownloading}
-                          <div class="settings__download-progress">
-                            <ProgressBar
-                              value={parakeetDownloadPct}
-                              label={t('settings.parakeetModel.downloading')}
-                            />
-                            <span class="settings__download-progress-text">
-                              {parakeetDownloadPct}% — {t('settings.parakeetModel.downloading')}
-                            </span>
-                          </div>
-                        {:else}
-                          <p class="settings__hint">{t('settings.parakeetModel.missing')}</p>
-                          <Button variant="primary" size="sm" onclick={handleDownloadParakeet}>
-                            {t('settings.parakeetModel.download', {
-                              size: formatBytes(parakeetModel.missing_bytes),
-                            })}
-                          </Button>
-                        {/if}
-                        {#if parakeetDownloadError}
-                          <p class="surface-message surface-message--error">
-                            {parakeetDownloadError}
-                            <Button variant="secondary" size="sm" onclick={handleDownloadParakeet}>
-                              {t('settings.parakeetModel.retry')}
-                            </Button>
-                          </p>
-                        {/if}
-                      </div>
-                    {/if}
-                  {/if}
-                </div>
-              {/if}
-              {#if sttMode !== 'local'}
-                <p class="settings__hint settings__hint--privacy">
-                  {t('settings.sttPrivacyNotice')}
-                </p>
-              {/if}
-            </section>
-          </Card>
-        {/if}
-
-        <Card>
-          <section class="settings-card-section">
-            <div class="settings-card-section__copy">
-              <!-- Title and the key link share the line; the description sits
+                <!-- Title and the key link share the line; the description sits
                  under both. Three stacked lines was most of this card's
                  height, and two of them were one word wide. -->
-              <div class="settings-card-section__head">
-                <h2>{t('settings.assemblyai.title')}</h2>
-                <a
-                  class="settings__provider-link"
-                  href={PROVIDER_LINKS.assemblyai}
-                  onclick={(event) =>
-                    openProviderLink(event, PROVIDER_LINKS.assemblyai, 'AssemblyAI')}
-                  aria-label={t('settings.getApiKeyLink', { provider: 'AssemblyAI' })}
-                >
-                  <!-- Short on screen, but three links reading "Obtener API
+                <div class="settings-card-section__head">
+                  <h2>{t('settings.assemblyai.title')}</h2>
+                  <a
+                    class="settings__provider-link"
+                    href={PROVIDER_LINKS.assemblyai}
+                    onclick={(event) =>
+                      openProviderLink(event, PROVIDER_LINKS.assemblyai, 'AssemblyAI')}
+                    aria-label={t('settings.getApiKeyLink', { provider: 'AssemblyAI' })}
+                  >
+                    <!-- Short on screen, but three links reading "Obtener API
                      key" would be three identical accessible names: the label
                      keeps the provider for anyone who cannot see which card
                      the link sits in. -->
-                  <span>{t('settings.getApiKeyShort')}</span>
-                  <ActionIcon name="external-link" size={14} />
-                </a>
-              </div>
-              <p>{t('settings.assemblyai.description')}</p>
-            </div>
-
-            <div class="settings__field settings__field--stacked">
-              <label class="settings__label" for="assemblyai-api-key-{paneId}"
-                >{t('settings.apiKey')}</label
-              >
-              <div class="settings__input-row">
-                <div class="settings__key-field">
-                  <Input
-                    id="assemblyai-api-key-{paneId}"
-                    type={showAssemblyAiApiKey ? 'text' : 'password'}
-                    size="sm"
-                    font="mono"
-                    bind:value={assemblyAiApiKey}
-                    placeholder={t('settings.assemblyAiApiKeyPlaceholder')}
-                  />
+                    <span>{t('settings.getApiKeyShort')}</span>
+                    <ActionIcon name="external-link" size={14} />
+                  </a>
                 </div>
-                <IconButton
-                  variant="secondary"
-                  size="sm"
-                  onclick={() => (showAssemblyAiApiKey = !showAssemblyAiApiKey)}
-                  title={showAssemblyAiApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-                  label={showAssemblyAiApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-                >
-                  <ActionIcon name={showAssemblyAiApiKey ? 'eye-off' : 'eye'} size={14} />
-                </IconButton>
-                {#if maskedAssemblyAiApiKey}
-                  <IconButton
-                    variant="secondary"
-                    size="sm"
-                    onclick={() => requestClearKey('assemblyai')}
-                    title={t('settings.clearKey', { service: 'AssemblyAI' })}
-                    label={t('settings.clearKey', { service: 'AssemblyAI' })}
-                  >
-                    <ActionIcon name="delete" size={14} />
-                  </IconButton>
-                {/if}
-                <div class="settings__key-action">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onclick={handleTestAssemblyAiConnection}
-                    disabled={testingAssemblyAi || !hasAssemblyAiCredential}
-                  >
-                    {testingAssemblyAi
-                      ? t('settings.testingConnection')
-                      : t('settings.testConnection')}
-                  </Button>
-                </div>
+                <p>{t('settings.assemblyai.description')}</p>
               </div>
 
-              {#if assemblyAiKeyStatus}
-                <p
-                  class="settings__hint settings__key-status"
-                  class:settings__key-status--warn={assemblyAiKeyStatus.warn}
+              <div class="settings__field settings__field--stacked">
+                <label class="settings__label" for="assemblyai-api-key-{paneId}"
+                  >{t('settings.apiKey')}</label
                 >
-                  <ActionIcon
-                    name={assemblyAiKeyStatus.warn ? 'triangle-alert' : 'circle-check'}
-                    size={12}
-                  />
-                  <span>{assemblyAiKeyStatus.text}</span>
-                </p>
-              {:else if !assemblyAiApiKey.trim()}
-                <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
-              {/if}
-
-              {#if assemblyAiTestResult}
-                <p
-                  class="surface-message settings__feedback"
-                  class:surface-message--success={assemblyAiTestResult.success}
-                  class:surface-message--error={!assemblyAiTestResult.success}
-                >
-                  {assemblyAiTestResult.message}
-                </p>
-              {/if}
-            </div>
-
-            <div class="settings__field settings__field--stacked">
-              <!-- Label and control on one line: a whole block for a two-option
-                 choice was the tallest thing in this card. -->
-              <div class="settings__inline-field">
-                <span class="settings__label" id="assemblyai-speaker-labels-label-{paneId}">
-                  {t('settings.assemblyAiSpeakerLabels')}
-                </span>
-                <ToolbarMenu
-                  label={t('settings.assemblyAiSpeakerLabels')}
-                  items={speakerLabelItems}
-                >
-                  {#snippet trigger(props, { open })}
-                    <!-- Named by the visible label and its own value, read
-                         together: the trigger lists itself in aria-labelledby. -->
-                    <SelectTrigger
-                      {...props}
-                      id="assemblyai-speaker-labels-value-{paneId}"
+                <div class="settings__input-row">
+                  <div class="settings__key-field">
+                    <Input
+                      id="assemblyai-api-key-{paneId}"
+                      type={showAssemblyAiApiKey ? 'text' : 'password'}
                       size="sm"
-                      {open}
-                      label={speakerLabelValue}
-                      aria-labelledby="assemblyai-speaker-labels-label-{paneId} assemblyai-speaker-labels-value-{paneId}"
+                      font="mono"
+                      bind:value={assemblyAiApiKey}
+                      placeholder={t('settings.assemblyAiApiKeyPlaceholder')}
                     />
-                  {/snippet}
-                </ToolbarMenu>
-              </div>
-              <p class="settings__hint">{t('settings.assemblyAiSpeakerLabelsHint')}</p>
-            </div>
-          </section>
-        </Card>
+                  </div>
+                  <IconButton
+                    variant="secondary"
+                    size="sm"
+                    onclick={() => (showAssemblyAiApiKey = !showAssemblyAiApiKey)}
+                    title={showAssemblyAiApiKey
+                      ? t('settings.hideApiKey')
+                      : t('settings.showApiKey')}
+                    label={showAssemblyAiApiKey
+                      ? t('settings.hideApiKey')
+                      : t('settings.showApiKey')}
+                  >
+                    <ActionIcon name={showAssemblyAiApiKey ? 'eye-off' : 'eye'} size={14} />
+                  </IconButton>
+                  {#if maskedAssemblyAiApiKey}
+                    <IconButton
+                      variant="secondary"
+                      size="sm"
+                      onclick={() => requestClearKey('assemblyai')}
+                      title={t('settings.clearKey', { service: 'AssemblyAI' })}
+                      label={t('settings.clearKey', { service: 'AssemblyAI' })}
+                    >
+                      <ActionIcon name="delete" size={14} />
+                    </IconButton>
+                  {/if}
+                  <div class="settings__key-action">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onclick={handleTestAssemblyAiConnection}
+                      disabled={testingAssemblyAi || !hasAssemblyAiCredential}
+                    >
+                      {testingAssemblyAi
+                        ? t('settings.testingConnection')
+                        : t('settings.testConnection')}
+                    </Button>
+                  </div>
+                </div>
 
-        {#if LOCAL_ML}
+                {#if assemblyAiKeyStatus}
+                  <p
+                    class="settings__hint settings__key-status"
+                    class:settings__key-status--warn={assemblyAiKeyStatus.warn}
+                  >
+                    <ActionIcon
+                      name={assemblyAiKeyStatus.warn ? 'triangle-alert' : 'circle-check'}
+                      size={12}
+                    />
+                    <span>{assemblyAiKeyStatus.text}</span>
+                  </p>
+                {:else if !assemblyAiApiKey.trim()}
+                  <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
+                {/if}
+
+                {#if assemblyAiTestResult}
+                  <p
+                    class="surface-message settings__feedback"
+                    class:surface-message--success={assemblyAiTestResult.success}
+                    class:surface-message--error={!assemblyAiTestResult.success}
+                  >
+                    {assemblyAiTestResult.message}
+                  </p>
+                {/if}
+              </div>
+
+              <div class="settings__field settings__field--stacked">
+                <!-- Label and control on one line: a whole block for a two-option
+                 choice was the tallest thing in this card. -->
+                <div class="settings__inline-field">
+                  <span class="settings__label" id="assemblyai-speaker-labels-label-{paneId}">
+                    {t('settings.assemblyAiSpeakerLabels')}
+                  </span>
+                  <ToolbarMenu
+                    label={t('settings.assemblyAiSpeakerLabels')}
+                    items={speakerLabelItems}
+                  >
+                    {#snippet trigger(props, { open })}
+                      <!-- Named by the visible label and its own value, read
+                         together: the trigger lists itself in aria-labelledby. -->
+                      <SelectTrigger
+                        {...props}
+                        id="assemblyai-speaker-labels-value-{paneId}"
+                        size="sm"
+                        {open}
+                        label={speakerLabelValue}
+                        aria-labelledby="assemblyai-speaker-labels-label-{paneId} assemblyai-speaker-labels-value-{paneId}"
+                      />
+                    {/snippet}
+                  </ToolbarMenu>
+                </div>
+                <p class="settings__hint">{t('settings.assemblyAiSpeakerLabelsHint')}</p>
+              </div>
+            </section>
+          </Card>
           <Card>
             <section class="settings-card-section">
               <div class="settings-card-section__copy">
-                <h2>{t('settings.ocrhModeTitle')}</h2>
-                <p>{currentOcrhModeDescription}</p>
-              </div>
-
-              <RadioGroup
-                name="ocrh_mode"
-                value={ocrhMode}
-                onchange={(next) => (ocrhMode = next as OcrhMode)}
-                label={t('settings.ocrhModeTitle')}
-                hideLabel
-                columnMin="100%"
-              >
-                <RadioCard
-                  value="local"
-                  label={t('settings.ocrhMode.local.label')}
-                  description={t('settings.ocrhMode.local.description')}
-                  wrapDescription
-                />
-                <RadioCard
-                  value="glm_ocr"
-                  label={t('settings.ocrhMode.glm_ocr.label')}
-                  description={t('settings.ocrhMode.glm_ocr.description')}
-                  wrapDescription
-                />
-                <RadioCard
-                  value="auto"
-                  label={t('settings.ocrhMode.auto.label')}
-                  description={t('settings.ocrhMode.auto.description')}
-                  wrapDescription
-                />
-              </RadioGroup>
-
-              {#if ocrhMode !== 'local'}
-                <p class="settings__hint settings__hint--privacy">
-                  {t('settings.ocrhPrivacyNotice')}
-                </p>
-              {/if}
-
-              {#if ocrhMode === 'local'}
-                <div class="settings__field settings__field--stacked">
-                  <RadioGroup
-                    name="ocrh_local_engine"
-                    value={ocrhLocalEngine}
-                    onchange={(next) => (ocrhLocalEngine = next as OcrhLocalEngine)}
-                    label={t('settings.ocrhLocalEngine.title')}
-                    columnMin="100%"
-                  >
-                    <RadioCard
-                      value="auto"
-                      label={t('settings.ocrhLocalEngine.auto.label')}
-                      description={t('settings.ocrhLocalEngine.auto.description')}
-                      wrapDescription
-                    />
-                    <RadioCard
-                      value="glm_ocr"
-                      label={t('settings.ocrhLocalEngine.glm_ocr.label')}
-                      description={t('settings.ocrhLocalEngine.glm_ocr.description')}
-                      wrapDescription
-                    />
-                    <RadioCard
-                      value="paddle_vl"
-                      label={t('settings.ocrhLocalEngine.paddle_vl.label')}
-                      description={t('settings.ocrhLocalEngine.paddle_vl.description')}
-                      wrapDescription
-                    />
-                  </RadioGroup>
-                </div>
-
-                {#snippet llamaServerStatus(info: {
-                  server_present: boolean
-                  server_source: LlamaServerSource
-                })}
-                  {#if !info.server_present}
-                    {#if info.server_source === 'download'}
-                      <p class="settings__hint">{t('settings.llamaServer.missing')}</p>
-                      {#if llamaServerDownloading}
-                        <div class="settings__download-progress">
-                          <ProgressBar
-                            value={llamaServerDownloadPct}
-                            label={t('settings.llamaServer.downloading')}
-                          />
-                          <span class="settings__download-progress-text">
-                            {llamaServerDownloadPct}% — {t('settings.llamaServer.downloading')}
-                          </span>
-                        </div>
-                      {:else}
-                        <Button variant="primary" size="sm" onclick={handleDownloadLlamaServer}>
-                          {t('settings.llamaServer.download')}
-                        </Button>
-                      {/if}
-                      {#if llamaServerDownloadError}
-                        <p class="surface-message surface-message--error">
-                          {llamaServerDownloadError}
-                          <Button variant="secondary" size="sm" onclick={handleDownloadLlamaServer}>
-                            {t('settings.llamaServer.retry')}
-                          </Button>
-                        </p>
-                      {/if}
-                    {:else if info.server_source === 'requires_nvidia_gpu'}
-                      <p class="settings__hint">{t('settings.llamaServer.requiresNvidia')}</p>
-                    {:else}
-                      <p class="settings__hint">{t('settings.glmOcrLocal.serverMissing')}</p>
-                    {/if}
-                  {/if}
-                {/snippet}
-
-                {#if glmOcrLocal}
-                  <div class="settings__local-model">
-                    <div class="settings__local-model-row">
-                      {#if glmOcrLocal.model_present && glmOcrLocal.mmproj_present}
-                        <StatusBadge variant="success" size="xs"
-                          >{t('settings.glmOcrLocal.modelsReady')}</StatusBadge
-                        >
-                      {:else}
-                        <!-- The badge holds the state; the file names, long enough to
-                             overflow a one-line pill, sit beside it. -->
-                        <StatusBadge variant="warning" size="xs"
-                          >{t('settings.glmOcrLocal.modelsMissing')}</StatusBadge
-                        >
-                        <code class="settings__local-model-path"
-                          >{[
-                            !glmOcrLocal.model_present && 'GLM-OCR-Q8_0.gguf',
-                            !glmOcrLocal.mmproj_present && 'mmproj-GLM-OCR-Q8_0.gguf',
-                          ]
-                            .filter(Boolean)
-                            .join(' ')}</code
-                        >
-                      {/if}
-                    </div>
-
-                    {@render llamaServerStatus(glmOcrLocal)}
-
-                    {#if glmOcrDownloading}
-                      <div class="settings__download-progress">
-                        <ProgressBar
-                          value={glmOcrDownloadPct}
-                          label={t('settings.glmOcrLocal.downloading')}
-                        />
-                        <span class="settings__download-progress-text">
-                          {glmOcrDownloadPct}% — {t('settings.glmOcrLocal.downloading')}
-                        </span>
-                      </div>
-                    {:else if !glmOcrLocal.model_present || !glmOcrLocal.mmproj_present}
-                      <Button variant="primary" size="sm" onclick={handleDownloadGlmOcrModels}>
-                        {t('settings.glmOcrLocal.download')}
-                      </Button>
-                    {/if}
-
-                    {#if glmOcrDownloadError}
-                      <p class="surface-message surface-message--error">
-                        {glmOcrDownloadError}
-                        <Button variant="secondary" size="sm" onclick={handleDownloadGlmOcrModels}>
-                          {t('settings.glmOcrLocal.retry')}
-                        </Button>
-                      </p>
-                    {/if}
-                  </div>
-                {/if}
-
-                {#if qwenLocal}
-                  <div class="settings__local-model">
-                    <div class="settings__local-model-row">
-                      <span class="settings__label">{t('settings.qwenCorrectLocal.title')}</span>
-                      {#if qwenLocal.model_present && qwenLocal.mmproj_present}
-                        <StatusBadge variant="success" size="xs"
-                          >{t('settings.qwenCorrectLocal.modelsReady')}</StatusBadge
-                        >
-                      {:else}
-                        <StatusBadge variant="warning" size="xs"
-                          >{t('settings.qwenCorrectLocal.modelsMissing')}</StatusBadge
-                        >
-                        <code class="settings__local-model-path"
-                          >{[
-                            !qwenLocal.model_present && 'Qwen3VL-4B-Instruct-Q4_K_M.gguf',
-                            !qwenLocal.mmproj_present && 'mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf',
-                          ]
-                            .filter(Boolean)
-                            .join(' ')}</code
-                        >
-                      {/if}
-                    </div>
-                    <p class="settings__hint">{t('settings.qwenCorrectLocal.description')}</p>
-
-                    {@render llamaServerStatus(qwenLocal)}
-
-                    {#if qwenDownloading}
-                      <div class="settings__download-progress">
-                        <ProgressBar
-                          value={qwenDownloadPct}
-                          label={t('settings.qwenCorrectLocal.downloading')}
-                        />
-                        <span class="settings__download-progress-text">
-                          {qwenDownloadPct}% — {t('settings.qwenCorrectLocal.downloading')}
-                        </span>
-                      </div>
-                    {:else if !qwenLocal.model_present || !qwenLocal.mmproj_present}
-                      <Button variant="primary" size="sm" onclick={handleDownloadQwenModels}>
-                        {t('settings.qwenCorrectLocal.download')}
-                      </Button>
-                    {/if}
-
-                    {#if qwenDownloadError}
-                      <p class="surface-message surface-message--error">
-                        {qwenDownloadError}
-                        <Button variant="secondary" size="sm" onclick={handleDownloadQwenModels}>
-                          {t('settings.qwenCorrectLocal.retry')}
-                        </Button>
-                      </p>
-                    {/if}
-                  </div>
-                {/if}
-              {/if}
-            </section>
-          </Card>
-        {/if}
-
-        <Card>
-          <section class="settings-card-section">
-            <div class="settings-card-section__copy">
-              <!-- Title and the key link share the line; the description sits
+                <!-- Title and the key link share the line; the description sits
                  under both. Three stacked lines was most of this card's
                  height, and two of them were one word wide. -->
-              <div class="settings-card-section__head">
-                <h2>{t('settings.glmOcr.title')}</h2>
-                <a
-                  class="settings__provider-link"
-                  href={PROVIDER_LINKS.glmOcr}
-                  onclick={(event) => openProviderLink(event, PROVIDER_LINKS.glmOcr, 'Z.ai')}
-                  aria-label={t('settings.getApiKeyLink', { provider: 'Z.ai' })}
-                >
-                  <!-- Short on screen, but three links reading "Obtener API
+                <div class="settings-card-section__head">
+                  <h2>{t('settings.glmOcr.title')}</h2>
+                  <a
+                    class="settings__provider-link"
+                    href={PROVIDER_LINKS.glmOcr}
+                    onclick={(event) => openProviderLink(event, PROVIDER_LINKS.glmOcr, 'Z.ai')}
+                    aria-label={t('settings.getApiKeyLink', { provider: 'Z.ai' })}
+                  >
+                    <!-- Short on screen, but three links reading "Obtener API
                      key" would be three identical accessible names: the label
                      keeps the provider for anyone who cannot see which card
                      the link sits in. -->
-                  <span>{t('settings.getApiKeyShort')}</span>
-                  <ActionIcon name="external-link" size={14} />
-                </a>
-              </div>
-              <p>{t('settings.glmOcr.description')}</p>
-            </div>
-
-            <div class="settings__field settings__field--stacked">
-              <label class="settings__label" for="glm-ocr-api-key-{paneId}"
-                >{t('settings.apiKey')}</label
-              >
-              <div class="settings__input-row">
-                <div class="settings__key-field">
-                  <Input
-                    id="glm-ocr-api-key-{paneId}"
-                    type={showGlmOcrApiKey ? 'text' : 'password'}
-                    size="sm"
-                    font="mono"
-                    bind:value={glmOcrApiKey}
-                    placeholder={t('settings.glmOcrApiKeyPlaceholder')}
-                  />
+                    <span>{t('settings.getApiKeyShort')}</span>
+                    <ActionIcon name="external-link" size={14} />
+                  </a>
                 </div>
-                <IconButton
-                  variant="secondary"
-                  size="sm"
-                  onclick={() => (showGlmOcrApiKey = !showGlmOcrApiKey)}
-                  title={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-                  label={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                <p>{t('settings.glmOcr.description')}</p>
+              </div>
+
+              <div class="settings__field settings__field--stacked">
+                <label class="settings__label" for="glm-ocr-api-key-{paneId}"
+                  >{t('settings.apiKey')}</label
                 >
-                  <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={14} />
-                </IconButton>
-                {#if maskedGlmOcrApiKey}
+                <div class="settings__input-row">
+                  <div class="settings__key-field">
+                    <Input
+                      id="glm-ocr-api-key-{paneId}"
+                      type={showGlmOcrApiKey ? 'text' : 'password'}
+                      size="sm"
+                      font="mono"
+                      bind:value={glmOcrApiKey}
+                      placeholder={t('settings.glmOcrApiKeyPlaceholder')}
+                    />
+                  </div>
                   <IconButton
                     variant="secondary"
                     size="sm"
-                    onclick={() => requestClearKey('glmOcr')}
-                    title={t('settings.clearKey', { service: 'GLM-OCR' })}
-                    label={t('settings.clearKey', { service: 'GLM-OCR' })}
+                    onclick={() => (showGlmOcrApiKey = !showGlmOcrApiKey)}
+                    title={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                    label={showGlmOcrApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                   >
-                    <ActionIcon name="delete" size={14} />
+                    <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={14} />
                   </IconButton>
-                {/if}
-                <div class="settings__key-action">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onclick={handleTestGlmOcrConnection}
-                    disabled={testingGlmOcr || !hasGlmOcrCredential}
+                  {#if maskedGlmOcrApiKey}
+                    <IconButton
+                      variant="secondary"
+                      size="sm"
+                      onclick={() => requestClearKey('glmOcr')}
+                      title={t('settings.clearKey', { service: 'GLM-OCR' })}
+                      label={t('settings.clearKey', { service: 'GLM-OCR' })}
+                    >
+                      <ActionIcon name="delete" size={14} />
+                    </IconButton>
+                  {/if}
+                  <div class="settings__key-action">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onclick={handleTestGlmOcrConnection}
+                      disabled={testingGlmOcr || !hasGlmOcrCredential}
+                    >
+                      {testingGlmOcr
+                        ? t('settings.testingConnection')
+                        : t('settings.testConnection')}
+                    </Button>
+                  </div>
+                </div>
+
+                {#if glmOcrKeyStatus}
+                  <p
+                    class="settings__hint settings__key-status"
+                    class:settings__key-status--warn={glmOcrKeyStatus.warn}
                   >
-                    {testingGlmOcr ? t('settings.testingConnection') : t('settings.testConnection')}
-                  </Button>
+                    <ActionIcon
+                      name={glmOcrKeyStatus.warn ? 'triangle-alert' : 'circle-check'}
+                      size={12}
+                    />
+                    <span>{glmOcrKeyStatus.text}</span>
+                  </p>
+                {:else if !glmOcrApiKey.trim()}
+                  <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
+                {/if}
+
+                {#if glmOcrTestResult}
+                  <p
+                    class="surface-message settings__feedback"
+                    class:surface-message--success={glmOcrTestResult.success}
+                    class:surface-message--error={!glmOcrTestResult.success}
+                  >
+                    {glmOcrTestResult.message}
+                  </p>
+                {/if}
+              </div>
+            </section>
+          </Card>
+
+          <Card>
+            <section class="settings-card-section">
+              <div class="settings-card-section__copy">
+                <div class="settings-card-section__head">
+                  <h2>{t('settings.zotero.title')}</h2>
+                  <a
+                    class="settings__provider-link"
+                    href={PROVIDER_LINKS.zotero}
+                    onclick={(event) => openProviderLink(event, PROVIDER_LINKS.zotero, 'Zotero')}
+                    aria-label={t('settings.getApiKeyLink', { provider: 'Zotero' })}
+                  >
+                    <span>{t('settings.getApiKeyShort')}</span>
+                    <ActionIcon name="external-link" size={14} />
+                  </a>
                 </div>
+                <p>{t('settings.zotero.description')}</p>
               </div>
 
-              {#if glmOcrKeyStatus}
-                <p
-                  class="settings__hint settings__key-status"
-                  class:settings__key-status--warn={glmOcrKeyStatus.warn}
+              <div class="settings__field settings__field--stacked">
+                <label class="settings__label" for="zotero-api-key-{paneId}"
+                  >{t('settings.zotero.keyLabel')}</label
                 >
-                  <ActionIcon
-                    name={glmOcrKeyStatus.warn ? 'triangle-alert' : 'circle-check'}
-                    size={12}
-                  />
-                  <span>{glmOcrKeyStatus.text}</span>
-                </p>
-              {:else if !glmOcrApiKey.trim()}
-                <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
-              {/if}
-
-              {#if glmOcrTestResult}
-                <p
-                  class="surface-message settings__feedback"
-                  class:surface-message--success={glmOcrTestResult.success}
-                  class:surface-message--error={!glmOcrTestResult.success}
-                >
-                  {glmOcrTestResult.message}
-                </p>
-              {/if}
-            </div>
-          </section>
-        </Card>
-
-        <Card>
-          <section class="settings-card-section">
-            <div class="settings-card-section__copy">
-              <div class="settings-card-section__head">
-                <h2>{t('settings.zotero.title')}</h2>
-                <a
-                  class="settings__provider-link"
-                  href={PROVIDER_LINKS.zotero}
-                  onclick={(event) => openProviderLink(event, PROVIDER_LINKS.zotero, 'Zotero')}
-                  aria-label={t('settings.getApiKeyLink', { provider: 'Zotero' })}
-                >
-                  <span>{t('settings.getApiKeyShort')}</span>
-                  <ActionIcon name="external-link" size={14} />
-                </a>
-              </div>
-              <p>{t('settings.zotero.description')}</p>
-            </div>
-
-            <div class="settings__field settings__field--stacked">
-              <label class="settings__label" for="zotero-api-key-{paneId}"
-                >{t('settings.zotero.keyLabel')}</label
-              >
-              <div class="settings__input-row">
-                <div class="settings__key-field">
-                  <Input
-                    id="zotero-api-key-{paneId}"
-                    type={showZoteroApiKey ? 'text' : 'password'}
-                    size="sm"
-                    font="mono"
-                    bind:value={zoteroApiKey}
-                    placeholder={t('settings.zotero.keyPlaceholder')}
-                    autocomplete="off"
-                  />
-                </div>
-                <IconButton
-                  variant="secondary"
-                  size="sm"
-                  onclick={() => (showZoteroApiKey = !showZoteroApiKey)}
-                  title={showZoteroApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-                  label={showZoteroApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
-                >
-                  <ActionIcon name={showZoteroApiKey ? 'eye-off' : 'eye'} size={14} />
-                </IconButton>
-                {#if maskedZoteroApiKey}
+                <div class="settings__input-row">
+                  <div class="settings__key-field">
+                    <Input
+                      id="zotero-api-key-{paneId}"
+                      type={showZoteroApiKey ? 'text' : 'password'}
+                      size="sm"
+                      font="mono"
+                      bind:value={zoteroApiKey}
+                      placeholder={t('settings.zotero.keyPlaceholder')}
+                      autocomplete="off"
+                    />
+                  </div>
                   <IconButton
                     variant="secondary"
                     size="sm"
-                    onclick={() => requestClearKey('zotero')}
-                    title={t('settings.clearKey', { service: 'Zotero' })}
-                    label={t('settings.clearKey', { service: 'Zotero' })}
+                    onclick={() => (showZoteroApiKey = !showZoteroApiKey)}
+                    title={showZoteroApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
+                    label={showZoteroApiKey ? t('settings.hideApiKey') : t('settings.showApiKey')}
                   >
-                    <ActionIcon name="delete" size={14} />
+                    <ActionIcon name={showZoteroApiKey ? 'eye-off' : 'eye'} size={14} />
                   </IconButton>
-                {/if}
-                <div class="settings__key-action">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onclick={handleVerifyZoteroKey}
-                    disabled={verifyingZotero || !hasZoteroCredential}
-                  >
-                    {verifyingZotero ? t('settings.zotero.verifying') : t('settings.zotero.verify')}
-                  </Button>
+                  {#if maskedZoteroApiKey}
+                    <IconButton
+                      variant="secondary"
+                      size="sm"
+                      onclick={() => requestClearKey('zotero')}
+                      title={t('settings.clearKey', { service: 'Zotero' })}
+                      label={t('settings.clearKey', { service: 'Zotero' })}
+                    >
+                      <ActionIcon name="delete" size={14} />
+                    </IconButton>
+                  {/if}
+                  <div class="settings__key-action">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onclick={handleVerifyZoteroKey}
+                      disabled={verifyingZotero || !hasZoteroCredential}
+                    >
+                      {verifyingZotero
+                        ? t('settings.zotero.verifying')
+                        : t('settings.zotero.verify')}
+                    </Button>
+                  </div>
                 </div>
+
+                {#if zoteroKeyStatus}
+                  <p
+                    class="settings__hint settings__key-status"
+                    class:settings__key-status--warn={zoteroKeyStatus.warn}
+                  >
+                    <ActionIcon
+                      name={zoteroKeyStatus.warn ? 'triangle-alert' : 'circle-check'}
+                      size={12}
+                    />
+                    <span>{zoteroKeyStatus.text}</span>
+                  </p>
+                {:else if !zoteroApiKey.trim()}
+                  <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
+                {/if}
+
+                <p class="settings__hint">{t('settings.zotero.syncNote')}</p>
+
+                {#if zoteroCheck?.state === 'valid'}
+                  <ul class="surface-message surface-message--success settings__access-list">
+                    {#each zoteroAccessLines as line (line)}
+                      <li>{line}</li>
+                    {/each}
+                  </ul>
+                {:else if zoteroCheck?.state === 'invalid_key'}
+                  <p class="surface-message surface-message--error settings__feedback">
+                    {t('settings.zotero.invalidKey')}
+                  </p>
+                {:else if zoteroCheck?.state === 'unreachable'}
+                  <p class="surface-message surface-message--error settings__feedback">
+                    {t('settings.zotero.unreachable')}
+                  </p>
+                {:else if zoteroError}
+                  <p class="surface-message surface-message--error settings__feedback">
+                    {zoteroError}
+                  </p>
+                {/if}
               </div>
-
-              {#if zoteroKeyStatus}
-                <p
-                  class="settings__hint settings__key-status"
-                  class:settings__key-status--warn={zoteroKeyStatus.warn}
-                >
-                  <ActionIcon
-                    name={zoteroKeyStatus.warn ? 'triangle-alert' : 'circle-check'}
-                    size={12}
-                  />
-                  <span>{zoteroKeyStatus.text}</span>
-                </p>
-              {:else if !zoteroApiKey.trim()}
-                <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
-              {/if}
-
-              <p class="settings__hint">{t('settings.zotero.syncNote')}</p>
-
-              {#if zoteroCheck?.state === 'valid'}
-                <ul class="surface-message surface-message--success settings__access-list">
-                  {#each zoteroAccessLines as line (line)}
-                    <li>{line}</li>
-                  {/each}
-                </ul>
-              {:else if zoteroCheck?.state === 'invalid_key'}
-                <p class="surface-message surface-message--error settings__feedback">
-                  {t('settings.zotero.invalidKey')}
-                </p>
-              {:else if zoteroCheck?.state === 'unreachable'}
-                <p class="surface-message surface-message--error settings__feedback">
-                  {t('settings.zotero.unreachable')}
-                </p>
-              {:else if zoteroError}
-                <p class="surface-message surface-message--error settings__feedback">
-                  {zoteroError}
-                </p>
-              {/if}
-            </div>
-          </section>
-        </Card>
-      </div>
+            </section>
+          </Card>
+        </div>
+      {/if}
     {:else if activeTab === 'prompts'}
       {#if saveFeedback}
         <p

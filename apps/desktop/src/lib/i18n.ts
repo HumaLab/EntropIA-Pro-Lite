@@ -238,6 +238,17 @@ const es = {
     'Ajustá proveedores, credenciales y parámetros de inteligencia artificial para {product}.',
   'settings.tabsAria': 'Secciones de configuración',
   'settings.remoteApisTab': 'APIs remotas',
+  'settings.enginesTab': 'Motores',
+  'settings.localModelsTab': 'Modelos locales',
+  'settings.localModels.bgeTitle': 'Embeddings locales (BGE-M3)',
+  'settings.localModels.bgeDescription':
+    'Modelo que vectoriza el texto en este equipo para la búsqueda semántica y el Chat. Se usa cuando Embeddings está en Local ONNX.',
+  'settings.localModels.parakeetTitle': 'Transcripción local (Parakeet)',
+  'settings.localModels.parakeetDescription':
+    'Modelo que transcribe audio y dictado en este equipo, en 25 idiomas. Se usa cuando el Modo STT está en Local o Automático.',
+  'settings.localModels.glmOcrTitle': 'OCRH local (GLM-OCR)',
+  'settings.localModels.glmOcrDescription':
+    'Modelo de OCR de alta precisión que corre en la GPU NVIDIA de este equipo. Se usa cuando el Modo OCRH es Local.',
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sincronización',
   'settings.assistantsTab': 'Asistentes',
@@ -4318,6 +4329,17 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.subtitle': 'Adjust AI providers, credentials, and parameters for {product}.',
   'settings.tabsAria': 'Settings sections',
   'settings.remoteApisTab': 'Remote APIs',
+  'settings.enginesTab': 'Engines',
+  'settings.localModelsTab': 'Local models',
+  'settings.localModels.bgeTitle': 'Local embeddings (BGE-M3)',
+  'settings.localModels.bgeDescription':
+    'Model that embeds text on this computer for semantic search and the Chat. Used when Embeddings is set to Local ONNX.',
+  'settings.localModels.parakeetTitle': 'Local transcription (Parakeet)',
+  'settings.localModels.parakeetDescription':
+    'Model that transcribes audio and dictation on this computer, in 25 languages. Used when the STT mode is Local or Automatic.',
+  'settings.localModels.glmOcrTitle': 'Local OCRH (GLM-OCR)',
+  'settings.localModels.glmOcrDescription':
+    "High-accuracy OCR model that runs on this computer's NVIDIA GPU. Used when the OCRH mode is Local.",
   'settings.logsTab': 'Logs',
   'settings.syncTab': 'Sync',
   'settings.assistantsTab': 'Assistants',
