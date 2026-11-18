@@ -91,6 +91,7 @@ const TOOL_DOCUMENTS_IMPORT: &str = "documents_import";
 const TOOL_DOCUMENTS_DELETE: &str = "documents_delete";
 const TOOL_COLLECTIONS_DELETE: &str = "collections_delete";
 const TOOL_MODELS_SETUP: &str = "models_setup";
+const TOOL_ENGINES_SETUP: &str = "engines_setup";
 
 const REFUSE_LOCAL_WRITE: &str = "Este asistente no tiene permiso para preparar ni controlar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar procesamiento y editar el corpus»).";
 const REFUSE_REMOTE_SPEND: &str = "Este asistente no tiene permiso para pedir procesamiento pago: la persona puede dárselo en Configuración › Asistentes («Pedir procesamiento pago»).";
@@ -401,6 +402,22 @@ pub struct ModelsSetupParams {
     /// Component ids to install (`runtime`, `llm`, `glm_ocr`,
     /// `qwen_correct`, `embeddings`, `reranker`); omit for all missing.
     pub components: Option<Vec<String>>,
+}
+
+/// `engines_setup` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnginesSetupParams {
+    /// `status` reads the engines and APIs without changing anything; `set`
+    /// writes the given ones (the same settings Configuración writes).
+    pub action: String,
+    /// Engine setting -> value (`llm_mode`, `embedding_provider`, `stt_mode`,
+    /// `stt_local_engine`, `ocrh_mode`, `ocrh_local_engine`); `status` lists
+    /// the valid values. Pro only.
+    pub engines: Option<std::collections::BTreeMap<String, String>>,
+    /// API id -> switched on (`openrouter`, `vercel`, `assemblyai`,
+    /// `glm_ocr`, `zotero`). Off keeps the key but sends nothing.
+    pub apis: Option<std::collections::BTreeMap<String, bool>>,
 }
 
 /// Arguments that deserialize strictly but fail as a tool error.
@@ -1649,6 +1666,88 @@ impl AgentServer {
             }
             Err(error) => {
                 self.audit_error(caller, TOOL_MODELS_SETUP, ERROR_UNAVAILABLE, None);
+                Err(tool_error(ERROR_UNAVAILABLE, error))
+            }
+        }
+    }
+
+    #[tool(
+        name = "engines_setup",
+        description = "Motores y APIs: `action: status` dice dónde corre cada función (local en el equipo o una API: IA de texto, embeddings, transcripción, OCRH) con sus valores posibles, y qué APIs tienen clave guardada y están encendidas; `action: set` cambia motores (`engines`: {setting: valor}) o enciende/apaga APIs (`apis`: {id: true|false}), igual que Configuración. Apagar una API no borra su clave. Las claves nunca se leen ni se escriben por acá. Cambiar necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn engines_setup(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<EnginesSetupParams>>,
+    ) -> Result<Json<super::engines_setup::EnginesReport>, CallToolResult> {
+        const REFUSE_ENGINES_SETUP_WRITE: &str = "Este asistente no tiene permiso para cambiar motores ni APIs: la persona puede dárselo en Configuración › Asistentes («Preparar procesamiento y editar el corpus»).";
+        // Same shape as `models_setup`: `status` stays available to
+        // read-only clients; only `set` needs the write scope.
+        let params = match args.0 {
+            Ok(params) => params,
+            Err(reason) => {
+                if let Ok(caller) = Self::caller(&context) {
+                    self.audit_error(&caller, TOOL_ENGINES_SETUP, ERROR_INVALID_ARGUMENT, None);
+                }
+                return Err(tool_error(
+                    ERROR_INVALID_ARGUMENT,
+                    format!("Los argumentos de la herramienta no son válidos: {reason}"),
+                ));
+            }
+        };
+        let (caller, result) = match params.action.trim() {
+            "set" => {
+                let caller = self.guard_scope(
+                    &context,
+                    TOOL_ENGINES_SETUP,
+                    Scope::LocalWrite,
+                    REFUSE_ENGINES_SETUP_WRITE,
+                )?;
+                let db_path = self.db_path.clone();
+                let engines = params.engines.unwrap_or_default();
+                let apis = params.apis.unwrap_or_default();
+                if let Err(reason) = super::engines_setup::plan_changes(&engines, &apis) {
+                    self.audit_error(&caller, TOOL_ENGINES_SETUP, ERROR_INVALID_ARGUMENT, None);
+                    return Err(tool_error(ERROR_INVALID_ARGUMENT, reason));
+                }
+                let result = tokio::task::spawn_blocking(move || {
+                    super::engines_setup::apply(&db_path, &engines, &apis)
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("No se pudo guardar: {error}")));
+                (caller, result)
+            }
+            "status" => {
+                let caller = self.guard(&context, TOOL_ENGINES_SETUP)?;
+                let db_path = self.db_path.clone();
+                let result =
+                    tokio::task::spawn_blocking(move || super::engines_setup::status_at(&db_path))
+                        .await
+                        .unwrap_or_else(|error| Err(format!("No se pudo leer: {error}")));
+                (caller, result)
+            }
+            _ => {
+                let caller = self.guard(&context, TOOL_ENGINES_SETUP)?;
+                self.audit_error(&caller, TOOL_ENGINES_SETUP, ERROR_INVALID_ARGUMENT, None);
+                return Err(tool_error(
+                    ERROR_INVALID_ARGUMENT,
+                    "action debe ser `status` o `set`.".to_string(),
+                ));
+            }
+        };
+        match result {
+            Ok(report) => {
+                self.audit_ok(&caller, TOOL_ENGINES_SETUP, report.changed.clone(), None);
+                Ok(Json(report))
+            }
+            Err(error) => {
+                self.audit_error(&caller, TOOL_ENGINES_SETUP, ERROR_UNAVAILABLE, None);
                 Err(tool_error(ERROR_UNAVAILABLE, error))
             }
         }

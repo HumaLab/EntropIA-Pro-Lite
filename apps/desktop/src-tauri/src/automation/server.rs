@@ -961,6 +961,7 @@ mod tests {
                 "documents_import",
                 "documents_index",
                 "documents_text_update",
+                "engines_setup",
                 "entropia_status",
                 "import_sources_list",
                 "items_get",

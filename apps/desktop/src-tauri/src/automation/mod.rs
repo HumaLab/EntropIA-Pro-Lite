@@ -8,6 +8,8 @@
 //! - [`connector`] — where the bundled assistant connector is installed (D15).
 //! - [`corpus_tools`] — the corpus edit tools' adapter over the corpus services.
 //! - [`jobs`] — the processing tools' adapter over the batch services.
+//! - [`engines_setup`] — where each feature runs and which APIs are on, behind
+//!   `engines_setup`.
 //! - [`mcp`] — what the endpoint offers over MCP (one tool per intent).
 //! - [`models_setup`] — local-model inventory and installs behind `models_setup`.
 //! - [`proof`] — the instance key and HMAC that keep a token from reaching a
@@ -21,6 +23,7 @@ pub mod audit;
 pub mod commands;
 pub mod connector;
 pub mod corpus_tools;
+pub mod engines_setup;
 pub mod jobs;
 pub mod mcp;
 pub mod models_setup;

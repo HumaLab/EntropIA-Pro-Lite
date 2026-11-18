@@ -334,7 +334,11 @@ fn set_setting_with_store(
 /// fresh archive connection reads it; a failure is logged and never fails the
 /// save, exactly like the in-lock pass this replaced.
 fn resume_work_after_setting_change_outside_ui_conn(db_path: &std::path::Path, key: &str) {
-    if !is_embedding_engine_setting(key) && !is_ocr_engine_setting(key) {
+    let key = switched_api_key(key).unwrap_or(key);
+    if !is_embedding_engine_setting(key)
+        && !is_ocr_engine_setting(key)
+        && !is_ner_engine_setting(key)
+    {
         return;
     }
     match crate::db::open::open_archive_connection(db_path) {
@@ -414,6 +418,15 @@ fn resume_configuration_blocked_with(
     }
 }
 
+/// The provider key a "Usar esta API" flag switches (`openrouter_api_key`
+/// for `openrouter_api_key_disabled`): switching it changes what can run
+/// exactly like saving or clearing the key.
+fn switched_api_key(setting: &str) -> Option<&str> {
+    setting
+        .strip_suffix("_disabled")
+        .filter(|key| api_disabled_setting(key).is_some())
+}
+
 /// Requeues queue units parked on a configuration a saved setting decides,
 /// once that configuration is now valid: the embedding engine's
 /// (`configuration_required…` on `embedding`/`bibliography_profile` units)
@@ -427,6 +440,7 @@ fn resume_configuration_blocked_with(
 /// the NER model is saved. Best effort: a failure is logged and never fails
 /// the save. Returns how many units were requeued.
 pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key: &str) -> usize {
+    let key = switched_api_key(key).unwrap_or(key);
     let mut resumed = 0;
     if is_embedding_engine_setting(key) {
         resumed += resume_configuration_blocked_with(
@@ -1710,8 +1724,12 @@ mod tests {
             "sk-stored"
         );
 
-        set_setting(&conn.lock().expect("conn"), "openrouter_api_key_disabled", "0")
-            .expect("switch on");
+        set_setting(
+            &conn.lock().expect("conn"),
+            "openrouter_api_key_disabled",
+            "0",
+        )
+        .expect("switch on");
         assert_eq!(
             get_setting(&conn.lock().expect("conn"), OPENROUTER_API_KEY).as_deref(),
             Some("sk-stored")

@@ -293,6 +293,7 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
             "documents_import",
             "documents_index",
             "documents_text_update",
+            "engines_setup",
             "entropia_status",
             "import_sources_list",
             "items_get",
@@ -779,7 +780,7 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         )
         .await;
     let tools = body["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 23);
+    assert_eq!(tools.len(), 24);
     let writes = [
         "processing_prepare",
         "processing_start",
@@ -793,6 +794,7 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         "documents_delete",
         "documents_import",
         "models_setup",
+        "engines_setup",
     ];
     // Deleting is the only thing an assistant may ask for that destroys data.
     let destructive = ["collections_delete", "documents_delete"];
@@ -827,7 +829,7 @@ async fn every_tool_publishes_a_strict_input_schema() {
         .expect("tools/list answers with an array")
         .clone();
 
-    let expected: [(&str, &[&str]); 23] = [
+    let expected: [(&str, &[&str]); 24] = [
         ("approvals_status", &["approvalId"]),
         ("collections_create", &["description", "name", "requestId"]),
         ("collections_delete", &["collectionId"]),
@@ -847,6 +849,7 @@ async fn every_tool_publishes_a_strict_input_schema() {
             "documents_text_update",
             &["assetId", "itemId", "text", "textHash"],
         ),
+        ("engines_setup", &["action", "apis", "engines"]),
         ("entropia_status", &[]),
         ("import_sources_list", &[]),
         ("items_get", &["itemId"]),
@@ -3094,4 +3097,49 @@ async fn models_setup_install_without_app_context_is_unavailable() {
         .refusal(&token, "models_setup", json!({ "action": "install" }))
         .await;
     assert_eq!(refused["error"], "unavailable");
+}
+
+#[tokio::test]
+async fn engines_setup_reads_freely_and_set_needs_the_write_scope() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    let report = harness
+        .payload(&token, "engines_setup", json!({ "action": "status" }))
+        .await;
+    let openrouter = report["apis"]
+        .as_array()
+        .expect("apis array")
+        .iter()
+        .find(|api| api["id"] == "openrouter")
+        .expect("openrouter listed");
+    assert_eq!(openrouter["enabled"], true);
+
+    let switch_off = json!({ "action": "set", "apis": { "openrouter": false } });
+    let refused = harness
+        .refusal(&token, "engines_setup", switch_off.clone())
+        .await;
+    assert_eq!(refused["error"], "forbidden_scope");
+
+    harness.grant(&id, true, false);
+    let report = harness.payload(&token, "engines_setup", switch_off).await;
+    assert_eq!(report["changed"], json!(["openrouter_api_key_disabled=1"]));
+    let report = harness
+        .payload(&token, "engines_setup", json!({ "action": "status" }))
+        .await;
+    let openrouter = report["apis"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|api| api["id"] == "openrouter")
+        .unwrap();
+    assert_eq!(openrouter["enabled"], false, "set must persist: {report}");
+
+    let refused = harness
+        .refusal(
+            &token,
+            "engines_setup",
+            json!({ "action": "set", "apis": { "dropbox": true } }),
+        )
+        .await;
+    assert_eq!(refused["error"], "invalid_argument");
 }
