@@ -45,7 +45,7 @@ fn pending_offer(lookup: impl Fn(&str) -> Option<String>, has_gpu: bool) -> Vec<
         .filter(|(_, _, needs_gpu)| has_gpu || !needs_gpu)
         .filter_map(|(key, cloud, _)| {
             let current = lookup(key)?;
-            (current == *cloud).then(|| ModeOffer {
+            (current == *cloud).then_some(ModeOffer {
                 key,
                 current,
                 local: "local",
