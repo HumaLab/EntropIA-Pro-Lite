@@ -2037,10 +2037,7 @@ impl EngineProfileEmbedder {
     pub fn new(db_path: std::path::PathBuf) -> Self {
         Self {
             db_path,
-            cache: Mutex::new(crate::processing::embedding::EngineCache {
-                cached: None,
-                last_error: None,
-            }),
+            cache: Mutex::new(crate::processing::embedding::EngineCache { last_error: None }),
         }
     }
 
@@ -2052,8 +2049,8 @@ impl EngineProfileEmbedder {
             .cache
             .lock()
             .map_err(|e| format!("Embedding engine lock poisoned: {e}"))?;
-        let crate::processing::embedding::EngineCache { cached, last_error } = &mut *guard;
-        crate::nlp::ensure_embed_engine_for_current_settings(&conn, cached, last_error).ok_or_else(
+        let crate::processing::embedding::EngineCache { last_error } = &mut *guard;
+        crate::nlp::ensure_embed_engine_for_current_settings(&conn, last_error).ok_or_else(
             || crate::nlp::embeddings::embedding_engine_unavailable_reason(last_error.as_deref()),
         )
     }

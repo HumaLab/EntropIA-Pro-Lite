@@ -40,11 +40,6 @@ fn current_epoch_millis() -> i64 {
         .unwrap_or(0)
 }
 
-pub(crate) struct CachedEmbeddingEngine {
-    pub(crate) config_key: String,
-    pub(crate) engine: Arc<EmbeddingEngine>,
-}
-
 // ── Event payloads ───────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize)]
@@ -454,45 +449,31 @@ pub(crate) fn try_init_embed_engine(conn: &rusqlite::Connection) -> Option<Arc<E
     try_init_embed_engine_result(conn).ok()
 }
 
+/// The engine for the current settings, from the process-wide slot
+/// ([`embeddings::get_or_init_engine`]): one engine per process, rebuilt when
+/// the settings change, released when a local one sits idle.
 pub(crate) fn ensure_embed_engine_for_current_settings(
     conn: &rusqlite::Connection,
-    cached: &mut Option<CachedEmbeddingEngine>,
     last_init_error: &mut Option<String>,
 ) -> Option<Arc<EmbeddingEngine>> {
     let config = match embeddings::config_from_settings(conn) {
         Ok(config) => config,
         Err(error) => {
             log::warn!(target: "nlp/embeddings", "Engine init blocked: {error}");
-            *cached = None;
             *last_init_error = Some(error);
             return None;
         }
     };
-
-    let config_key = embeddings::config_cache_key(&config);
-    if let Some(cached_engine) = cached.as_ref() {
-        if cached_engine.config_key == config_key {
-            return Some(Arc::clone(&cached_engine.engine));
-        }
-
-        log::info!(
-            target: "nlp/embeddings",
-            "Embedding settings changed; reinitializing engine"
-        );
-    }
-
-    match init_embed_engine_from_config(config) {
+    match embeddings::get_or_init_engine(config) {
         Ok(engine) => {
             *last_init_error = None;
-            *cached = Some(CachedEmbeddingEngine {
-                config_key,
-                engine: Arc::clone(&engine),
-            });
             Some(engine)
         }
         Err(error) => {
-            log::warn!(target: "nlp/embeddings", "Engine unavailable: {error}");
-            *cached = None;
+            log::warn!(
+                target: "nlp/embeddings",
+                "Engine init failed: {error} — embedding jobs will degrade gracefully"
+            );
             *last_init_error = Some(error);
             None
         }
@@ -503,37 +484,8 @@ pub(crate) fn ensure_embed_engine_for_current_settings(
 pub(crate) fn try_init_embed_engine_result(
     conn: &rusqlite::Connection,
 ) -> Result<Arc<EmbeddingEngine>, String> {
-    let config = match embeddings::config_from_settings(conn) {
-        Ok(config) => config,
-        Err(error) => {
-            log::warn!(target: "nlp/embeddings", "Engine init blocked: {error}");
-            return Err(error);
-        }
-    };
-
-    init_embed_engine_from_config(config)
-}
-
-fn init_embed_engine_from_config(
-    config: embeddings::EmbeddingConfig,
-) -> Result<Arc<EmbeddingEngine>, String> {
-    match EmbeddingEngine::init(config) {
-        Ok(engine) => {
-            log::info!(
-                target: "nlp/embeddings",
-                "{} engine ready (lazy init)",
-                engine.provider_name()
-            );
-            Ok(Arc::new(engine))
-        }
-        Err(e) => {
-            log::warn!(
-                target: "nlp/embeddings",
-                "Engine init failed: {e} — embedding jobs will degrade gracefully"
-            );
-            Err(e)
-        }
-    }
+    let config = embeddings::config_from_settings(conn)?;
+    EmbeddingEngine::init(config).map(Arc::new)
 }
 
 pub(crate) fn ensure_nlp_runtime_ready(app_handle: &AppHandle) -> Result<(), String> {
@@ -1696,22 +1648,28 @@ mod tests {
     }
 
     #[test]
-    fn cached_embed_engine_reinitializes_when_settings_change() {
+    fn every_consumer_shares_one_engine_until_settings_change() {
+        let _serialized = embeddings::ENGINE_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
         // Opt into the API provider (Pro defaults to local BGE-M3) to exercise the
-        // cache-invalidation path without needing local model files on disk.
+        // cache path without needing local model files on disk.
         conn.execute_batch(
             "CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);\
              INSERT INTO app_settings(key, value) VALUES ('embedding_provider', 'api');\
              INSERT INTO app_settings(key, value) VALUES ('openrouter_api_key', 'sk-test');",
         )
         .expect("settings table should be created");
-        let mut cached = None;
-        let mut last_error = None;
+        let (mut batch_error, mut library_error) = (None, None);
 
-        let first = ensure_embed_engine_for_current_settings(&conn, &mut cached, &mut last_error)
+        let batch = ensure_embed_engine_for_current_settings(&conn, &mut batch_error)
             .expect("api engine should initialize");
-        assert_eq!(first.provider_name(), "api");
+        let library = ensure_embed_engine_for_current_settings(&conn, &mut library_error)
+            .expect("api engine should initialize");
+        assert_eq!(batch.provider_name(), "api");
+        // A local engine is ~2.5 GB: one per consumer multiplied it (R7).
+        assert!(Arc::ptr_eq(&batch, &library), "consumers must share the engine");
 
         conn.execute(
             "INSERT INTO app_settings(key, value) VALUES ('openrouter_embedding_model', 'custom/model')",
@@ -1719,14 +1677,14 @@ mod tests {
         )
         .expect("setting insert should succeed");
 
-        let second = ensure_embed_engine_for_current_settings(&conn, &mut cached, &mut last_error)
+        let second = ensure_embed_engine_for_current_settings(&conn, &mut batch_error)
             .expect("api engine should reinitialize after model change");
 
         assert!(
-            !Arc::ptr_eq(&first, &second),
+            !Arc::ptr_eq(&batch, &second),
             "embedding engine cache must be invalidated when settings change"
         );
-        assert!(last_error.is_none());
+        assert!(batch_error.is_none());
     }
 
     // Pro-only: in Lite `local` normalizes to API, so there is no invalid
@@ -1734,6 +1692,9 @@ mod tests {
     #[cfg(feature = "local-ml")]
     #[test]
     fn cached_embed_engine_does_not_use_stale_api_after_switching_to_invalid_local() {
+        let _serialized = embeddings::ENGINE_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp = tempfile::tempdir().expect("temp dir should be created");
         let db_path = temp.path().join("entropia.sqlite");
         let conn = Connection::open(&db_path).expect("sqlite file should open");
@@ -1745,10 +1706,9 @@ mod tests {
              INSERT INTO app_settings(key, value) VALUES ('openrouter_api_key', 'sk-test');",
         )
         .expect("settings table should be created");
-        let mut cached = None;
         let mut last_error = None;
 
-        let first = ensure_embed_engine_for_current_settings(&conn, &mut cached, &mut last_error)
+        let first = ensure_embed_engine_for_current_settings(&conn, &mut last_error)
             .expect("api engine should initialize");
         assert_eq!(first.provider_name(), "api");
 
@@ -1759,13 +1719,12 @@ mod tests {
         .expect("provider update should succeed");
 
         let switched =
-            ensure_embed_engine_for_current_settings(&conn, &mut cached, &mut last_error);
+            ensure_embed_engine_for_current_settings(&conn, &mut last_error);
 
         assert!(
             switched.is_none(),
             "invalid local settings must not silently keep using stale API engine"
         );
-        assert!(cached.is_none());
         let error = last_error.expect("local init error should be recorded");
         assert!(error.contains("Local BGE-M3 model incomplete"));
     }

@@ -431,8 +431,9 @@ fn staged_text(
     )
     .map_err(|e| format!("Source {source_id} vanished before publish: {e}"))
 }
+/// Last engine init failure, for the "unavailable" message; the engine itself
+/// lives in the process-wide slot (`embeddings::get_or_init_engine`).
 pub(crate) struct EngineCache {
-    pub(crate) cached: Option<crate::nlp::CachedEmbeddingEngine>,
     pub(crate) last_error: Option<String>,
 }
 
@@ -453,8 +454,7 @@ pub trait CollectionEmbedder: Send + Sync {
 
 /// Production embedder: the shared, lazily initialized engine behind
 /// `nlp::ensure_embed_engine_for_current_settings`. Exactly one engine exists
-/// per process, and it re-initializes when settings change (same fingerprint
-/// rule as the retired worker).
+/// per process, and it re-initializes when settings change.
 struct EngineCollectionEmbedder {
     db_path: PathBuf,
     cache: Mutex<EngineCache>,
@@ -464,10 +464,7 @@ impl EngineCollectionEmbedder {
     fn new(db_path: PathBuf) -> Self {
         Self {
             db_path,
-            cache: Mutex::new(EngineCache {
-                cached: None,
-                last_error: None,
-            }),
+            cache: Mutex::new(EngineCache { last_error: None }),
         }
     }
 
@@ -477,9 +474,8 @@ impl EngineCollectionEmbedder {
             .cache
             .lock()
             .map_err(|e| format!("Embedding engine lock poisoned: {e}"))?;
-        let EngineCache { cached, last_error } = &mut *guard;
-        let engine =
-            crate::nlp::ensure_embed_engine_for_current_settings(&conn, cached, last_error);
+        let EngineCache { last_error } = &mut *guard;
+        let engine = crate::nlp::ensure_embed_engine_for_current_settings(&conn, last_error);
         engine.ok_or_else(|| embeddings::embedding_engine_unavailable_reason(last_error.as_deref()))
     }
 }
