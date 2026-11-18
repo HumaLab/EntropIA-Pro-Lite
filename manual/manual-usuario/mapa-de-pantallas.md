@@ -27,6 +27,8 @@
 ### Pestañas de Configuración
 
 - «APIs remotas» `settings.remoteApisTab`
+- «Motores» `settings.enginesTab`
+- «Modelos locales» `settings.localModelsTab`
 - «Prompts» `settings.promptsTab`
 - «Model Params» `settings.modelParamsTab`
 - «RAG Params» `settings.ragParamsTab`
@@ -189,12 +191,13 @@
 - «OCRH local» `batch.opOcrLocalHigh`
 - «Omitidos» `batch.stateSkipped`
 - «Opcional. Un modelo de OpenRouter solo para este esquema, por ejemplo anthropic/claude-sonnet-4.5.» `batch.schemaModelHint`
-- «Operaciones» `batch.operations`
-- «Operación» `batch.colOperation`
-- «Paginación de tareas» `batch.pagination`
 
 ### Varios (3/4)
 
+- «OpenRouter está desactivada en Configuración → APIs remotas («Usar esta API»). Activala para pedir embeddings, entidades, tripletes, correcciones o esquemas.» `batch.openrouterDisabled`
+- «Operaciones» `batch.operations`
+- «Operación» `batch.colOperation`
+- «Paginación de tareas» `batch.pagination`
 - «Pasa por OCR también las páginas que solo tienen el texto nativo del PDF y reemplaza ese texto. Las páginas que ya pasaron por OCR se saltean igual.» `batch.opOcrIncludeNativeHint`
 - «Pausado» `batch.batchStatePaused, batch.paused`
 - «Pausando» `batch.batchStatePausing`
@@ -235,14 +238,14 @@
 - «Total remoto: {total}; todavía no hay cursor confirmado» `batch.bibliographyRemoteTotalOnly`
 - «Tripletes» `batch.opTriples`
 - «Ver detalle» `batch.viewDetail`
+
+### Varios (4/4)
+
 - «Ver intentos de {kind} · {asset}» `batch.expandTask`
 - «Ver resultados» `batch.schemaResults`
 - «{count} checkpoints» `batch.checkpointCount`
 - «{count} documentos pasan por el esquema propio.» `batch.schemaCount`
 - «{count} documentos pasan por la búsqueda de entidades.» `batch.nerCount`
-
-### Varios (4/4)
-
 - «{count} documentos pasan por la extracción de tripletes.» `batch.triplesCount`
 - «{count} filas» `batch.schemaResultCount`
 - «{count} intentos» `batch.attempts`
@@ -649,6 +652,89 @@
 - «Última» `dbBrowser.lastPage`
 - «—» `dbBrowser.noValue`
 
+## deps
+
+### models
+
+- «Descargando {name}»
+- «Descargar»
+- «Falta»
+- «Listo»
+- «Lo que usan los motores locales. Los que necesitan GPU NVIDIA se indican y no se descargan en equipos sin ella.»
+- «Modelos y servidores locales»
+- «No aplica en este equipo»
+- «Reintentar»
+- «Revisando los modelos instalados…»
+
+### prepare
+
+- «Descarga la base de IA, instala los paquetes de Python y baja todos los modelos que este equipo puede usar. Las descargas siguen en segundo plano; cada fila muestra su avance.»
+- «Iniciando las descargas de modelos…»
+- «Instalando los paquetes de Python…»
+- «No se pueden instalar los paquetes de Python: la base de IA todavía no está lista.»
+- «Preparando la base de IA…»
+- «Preparar EntropIA Pro»
+- «Prepará EntropIA Pro para trabajar en este equipo»
+
+### reset
+
+- «Borra el entorno de IA administrado y su configuración. Después hay que volver a preparar EntropIA Pro.»
+- «Confirmación requerida»
+- «Confirmar reseteo»
+- «Confirmar reseteo del entorno»
+- «Esta acción borra el entorno de IA administrado y las rutas de Python que usan el OCR, la transcripción y el NLP.»
+- «Para confirmar, escribí»
+- «Resetear entorno»
+
+### runtime
+
+- «Base de IA no disponible»
+- «Capacidades afectadas: {list}»
+- «EntropIA Pro la prepara sola apenas haya una fuente válida disponible.»
+- «EntropIA Pro necesita descargarla y verificarla la primera vez. Conectate a internet y volvé a verificar. Mientras tanto, el OCR, la transcripción y el NLP locales quedan en pausa.»
+- «Esta compilación trae una base de IA de prueba, no la publicada. Las funciones locales que la necesitan no van a funcionar.»
+- «Esta versión de EntropIA Pro todavía no tiene su runtime publicado.»
+- «Hay un entorno de desarrollo disponible para instalar los paquetes de Python en este equipo.»
+- «La lista firmada aún no está publicada, así que no se puede descargar ni verificar de forma segura. No es un problema de tu equipo; la app la toma sola apenas se publique.»
+- «La lista firmada existe, pero no incluye la base de IA para esta versión y sistema. No es un problema de tu equipo: actualizá EntropIA Pro o volvé a verificar más tarde.»
+- «No pudimos llegar a la fuente de la base de IA: parece que estás sin conexión.»
+- «Reintentar conexión»
+- «Reparar runtime»
+- «Tampoco hay un entorno de desarrollo que la reemplace.»
+- «Todavía no hay una fuente de descarga confiable para la base de IA.»
+- «Volver a verificar»
+
+### uv
+
+- «Detectado: uv {version} en {path}»
+- «Fallback dev disponible»
+- «Gestión automática pausada hasta que la base de IA esté lista.»
+- «La base de IA publicada no está lista ({summary}). El entorno de desarrollo no la reemplaza ni la verifica.»
+- «No se pueden instalar paquetes automáticamente: faltan herramientas en este equipo.»
+- «Paquetes de Python detectados; no hace falta hacer nada.»
+- «Revisando uv…»
+- «entorno virtual en {path}»
+- «entorno virtual local en {path}»
+- «runtime embebido · sin venv administrado»
+- «sin entorno virtual»
+- «sin entorno virtual local»
+
+### Varios
+
+- «Instalando {name}» `deps.installing`
+- «Instalar» `deps.install`
+- «Instalar todo» `deps.installAll`
+- «Los paquetes de Python están instalados, pero el runtime de EntropIA Pro necesita atención antes de habilitar OCR, transcripción y NLP.» `deps.installedButRuntime`
+- «Ocultar detalle» `deps.hideDetail`
+- «Paquete que administra EntropIA Pro.» `deps.managedByPro`
+- «Primero tiene que estar lista la base de IA (o un entorno de desarrollo en este equipo).» `deps.installAllNeedsRuntime`
+- «Reintentar» `deps.retry`
+- «Requerido» `deps.required`
+- «Revisando dependencias…» `deps.checking`
+- «Todas las dependencias están instaladas y listas para usar.» `deps.allInstalled`
+- «Ver detalle del error» `deps.showDetail`
+- «{pct}% instalado» `deps.installedPct`
+
 ## Alias
 
 ### dialog
@@ -944,8 +1030,10 @@
 
 ### Varios
 
+- «Cerrar error» `deps.closeError`
 - «Error» `bibliographyAnnotations.stateError`
 - «Error al actualizar la colección» `collections.error.update`
+- «Error al registrar listeners: {error}» `deps.listenersFailed`
 - «Fallado» `research.status.failed`
 - «La búsqueda de pasajes falló.» `bibliography.passagesNotice.failed`
 - «No se pudieron cambiar los modos: {error}» `home.localModes.failed`
@@ -953,6 +1041,7 @@
 - «No se pudieron cargar las obras.» `biblioteca.error`
 - «No se pudieron cargar los documentos de ejemplo: {error}» `home.firstRun.sampleFailed`
 - «No se pudieron cargar los trabajos.» `research.loadError`
+- «No se pudieron revisar las dependencias: {error}» `deps.checkFailed`
 - «No se pudo abrir Microsoft Store.» `storeUpdate.openError`
 - «No se pudo analizar el texto de la colección.» `collectionAnalysis.error`
 - «No se pudo armar el grafo de relaciones.» `collectionAnalysis.graphError`
@@ -1056,14 +1145,17 @@
 - «Enviar» `help.send`
 - «Escribí tu pregunta…» `help.placeholder`
 - «Falló una transcripción, ¿qué hago?» `help.suggestion3`
+- «Falta el modelo de texto local (Gemma): descargalo en Configuración › Modelos locales.» `help.engineLocalMissing`
 - «Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.» `help.documentsHint`
 - «Fuentes y pasos ({count})» `help.metaToggle`
+- «Gemma local no puede leer tus documentos. Marcá «Usar OpenRouter» para esta pregunta.» `help.documentsNeedRemote`
 - «Historial» `help.history`
 - «Historial ({count})» `help.historyCount`
 - «Incluir diagnóstico» `help.includeDiagnostics`
 - «La ayuda pide aprobación» `help.approvalTitle`
 - «La ayuda usa tu cuenta de OpenRouter» `help.noKeyTitle`
 - «Llegó al límite de rondas de herramientas; la respuesta puede estar incompleta.» `help.roundLimitReached`
+- «Lo lee Gemma local en este equipo: no viaja a ningún servicio. No incluye claves.» `help.diagnosticsHintLocal`
 - «Maximizar» `help.maximizePanel`
 - «Más información sobre Buscar en mis documentos» `help.documentsInfo`
 - «Más información sobre Incluir diagnóstico» `help.diagnosticsInfo`
@@ -1074,15 +1166,19 @@
 - «Probá con:» `help.suggestionsLabel`
 - «Rechazado» `help.approvalOutcomeRejected`
 - «Rechazar» `help.reject`
+
+### Varios (2/2)
+
 - «Rechazaste: {summary}» `help.approvalRejected`
+- «Responde Gemma local, en este equipo y solo con el manual: no hace acciones ni lee tus documentos.» `help.engineLocal`
+- «Responde {model} vía OpenRouter.» `help.engineRemote`
+- «Respuesta de Gemma local, solo con el manual» `help.localModelAnswer`
 - «Respuesta local, sin consultar a OpenRouter» `help.localAnswer`
 - «Restaurar» `help.restorePanel`
 - «Se eliminan todas las conversaciones guardadas en este equipo. No se puede deshacer.» `help.clearHistoryMessage`
 - «Todavía no hay conversaciones guardadas.» `help.historyEmpty`
+- «Usar OpenRouter ({model}) para esta pregunta» `help.useRemote`
 - «Usó» `help.stepsUsed`
-
-### Varios (2/2)
-
 - «Venció» `help.approvalOutcomeExpired`
 - «Ver el manual en línea» `help.openManual`
 - «Ver qué se envía» `help.previewToggle`
@@ -2518,6 +2614,15 @@
 - «Usá un nombre terminado en .gguf, sin rutas ni separadores.»
 - «Usá una URL HTTPS válida y absoluta.»
 
+### Modelos locales
+
+- «Embeddings locales (BGE-M3)»
+- «Modelo de OCR de alta precisión que corre en la GPU NVIDIA de este equipo. Se usa cuando el Modo OCRH es Local.»
+- «Modelo que transcribe audio y dictado en este equipo, en 25 idiomas. Se usa cuando el Modo STT está en Local o Automático.»
+- «Modelo que vectoriza el texto en este equipo para la búsqueda semántica y el Chat. Se usa cuando Embeddings está en Local ONNX.»
+- «OCRH local (GLM-OCR)»
+- «Transcripción local (Parakeet)»
+
 ### Mantenimiento
 
 - «Anotar también el origen de {count} layout anterior»
@@ -2746,6 +2851,8 @@
 - «Contraste» `settings.appearance.contrastLabel`
 - «Copias» `settings.backupTab`
 - «Dependencias de IA» `settings.dependenciesTab`
+- «Desactivada: EntropIA no envía nada a {service}. La clave queda guardada; marcá la casilla para volver a usarla.» `settings.apiSwitch.offNow`
+- «Desactivada: EntropIA no envía nada a {service}. La clave queda guardada; marcá la casilla y guardá para volver a usarla.» `settings.apiSwitch.off`
 - «Desactivado» `settings.optionDisabled`
 - «Descargable» `settings.badge.downloadable`
 - «Descartar» `settings.discardConfirm`
@@ -2754,17 +2861,18 @@
 - «Disponible» `settings.badge.available`
 - «Elegí el idioma de la UI. El contenido del usuario no se traduce.» `settings.languageDescription`
 - «English» `settings.languageOptionEn`
+- «EntropIA usa {service} cuando una función lo necesita.» `settings.apiSwitch.on`
 - «Español» `settings.languageOptionEs`
 - «Etiqueta cada segmento con Hablante A, B… (máximo 4, solo Parakeet). Requiere descargar el modelo de diarización (~400 MB).» `settings.sttLocalDiarize.description`
 - «GLM-OCR (z.ai)» `settings.glmOcr.title`
+
+### Varios (2/3)
+
 - «Guardar cambios» `settings.save`
 - «Identificación de hablantes en audio de colección» `settings.assemblyAiSpeakerLabels`
 - «Idioma» `settings.languageLabel`
 - «Idioma de la interfaz» `settings.languageTitle`
 - «Ingresá una API key antes de probar la conexión.» `settings.enterApiKey`
-
-### Varios (2/3)
-
 - «Ingresá una API key de AssemblyAI antes de probar la conexión.» `settings.enterAssemblyAiApiKey`
 - «Ingresá una API key de GLM-OCR antes de probar la conexión.» `settings.enterGlmOcrApiKey`
 - «Ir a Configuración» `settings.modelList.openSettings`
@@ -2774,11 +2882,13 @@
 - «Model Params» `settings.modelParamsTab`
 - «Modelo generativo» `settings.model`
 - «Modelo no encontrado» `settings.badge.notFound`
+- «Modelos locales» `settings.localModelsTab`
 - «Modelos sugeridos desde OpenRouter» `settings.suggestedModels`
 - «Modo LLM» `settings.llmModeTitle`
 - «Modo OCRH» `settings.ocrhModeTitle`
 - «Modo STT» `settings.sttModeTitle`
 - «Mostrar API key» `settings.showApiKey`
+- «Motores» `settings.enginesTab`
 - «No está en el catálogo de OpenRouter: se valida al crear.» `settings.modelList.unknownModel`
 - «No se pudo guardar la clave: el sistema no tiene un llavero disponible. En Linux, instalá gnome-keyring o KWallet y creá un llavero predeterminado (por ejemplo, con la app «Contraseñas y claves»); después volvé a guardar.» `settings.credentialStoreUnavailable`
 - «Obtener API key» `settings.getApiKeyShort`
@@ -2799,16 +2909,17 @@
 - «Se va a eliminar la clave guardada de {service}. Las funciones que dependan de ella van a quedar sin configurar hasta que cargues una nueva.» `settings.clearKeyMessage`
 - «Secciones de configuración» `settings.tabsAria`
 - «Seguir editando» `settings.discardCancel`
+
+### Varios (3/3)
+
 - «Servidor OpenAI-compatible (opcional)» `settings.openaiCompatibleBaseUrl.label`
 - «Si lo completás, la generación remota va a ese servidor (vLLM, Ollama, pasarela propia) en vez de OpenRouter, usando el modelo ya configurado. Sin clave: ideal para un servidor local.» `settings.openaiCompatibleBaseUrl.description`
 - «Sin clave guardada» `settings.keyNotConfigured`
 - «Sincronización» `settings.syncTab`
-
-### Varios (3/3)
-
 - «Sólo aplica a transcripciones STT de audios de colección. El dictado de notas siempre envía speaker_labels=false.» `settings.assemblyAiSpeakerLabelsHint`
 - «Tema» `settings.appearance.themeLabel`
 - «Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y volver?» `settings.discardMessage`
+- «Usar esta API» `settings.apiSwitch.label`
 - «aai-...» `settings.assemblyAiApiKeyPlaceholder`
 - «google/gemma-4-26b-a4b-it» `settings.modelPlaceholder`
 - «sk-or-v1-...» `settings.apiKeyPlaceholder`
