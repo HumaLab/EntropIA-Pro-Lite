@@ -109,14 +109,15 @@ impl SkipReason {
     pub fn describe(&self) -> String {
         match self {
             Self::NotNeeded(mode) => format!("auto_vacuum already {mode}"),
-            Self::FreeBelowFloor { free_bytes } => {
-                format!("only {} free, below the floor", mib(*free_bytes))
-            }
+            Self::FreeBelowFloor { free_bytes } => format!(
+                "only {} of free pages inside the archive, too little to reclaim",
+                mib(*free_bytes)
+            ),
             Self::FreeBelowRatio {
                 free_bytes,
                 total_bytes,
             } => format!(
-                "{} free of {}, below the ratio",
+                "{} of free pages in a {} archive, too small a share to reclaim",
                 mib(*free_bytes),
                 mib(*total_bytes)
             ),
