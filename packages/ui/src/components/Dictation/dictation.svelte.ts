@@ -520,8 +520,11 @@ export function createDictation(options: DictationOptions) {
         }
         recorder.ondataavailable = (event) => {
           accumulatedChunkBytes += event.data.size
+          // The last chunk after stop() is often empty (the recorder is then
+          // inactive): normal. Only an empty chunk while recording is suspect.
+          const suspect = event.data.size === 0 && recorder.state === 'recording'
           logDictation(
-            event.data.size > 0 ? 'info' : 'warn',
+            suspect ? 'warn' : 'info',
             `MediaRecorder dataavailable; chunkBytes=${event.data.size}; accumulatedBytes=${accumulatedChunkBytes}`
           )
           if (event.data.size > 0) {

@@ -882,13 +882,14 @@ pub fn run() {
             // `tauri dev` shows it before anything else happens.
             log::info!(
                 target: "setup",
-                "{}",
+                "{} {}",
                 dev_profile::startup_line(
                     dev_profile::active(),
                     dev_profile::sync_server(),
                     &app_dir,
                     &cache_dir,
-                )
+                ),
+                dev_profile::build_identity(automation::connector::has_package_identity())
             );
             // One EntropIA at a time, before anything touches the archive: a
             // second process on the same database — above all a Store build
@@ -992,11 +993,15 @@ pub fn run() {
             app_logs::info(
                 &app.handle().clone(),
                 "setup",
-                dev_profile::startup_line(
-                    dev_profile::active(),
-                    dev_profile::sync_server(),
-                    &app_dir,
-                    &cache_dir,
+                format!(
+                    "{} {}",
+                    dev_profile::startup_line(
+                        dev_profile::active(),
+                        dev_profile::sync_server(),
+                        &app_dir,
+                        &cache_dir,
+                    ),
+                    dev_profile::build_identity(automation::connector::has_package_identity())
                 ),
             );
             let db_path = app_dir.join("entropia.sqlite");

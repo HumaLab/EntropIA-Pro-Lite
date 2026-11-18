@@ -23,6 +23,27 @@ pub struct RuntimeManager;
 
 const RUNTIME_PACK_ROOT_ENV: &str = "ENTROPIA_RUNTIME_PACK_ROOT";
 
+/// The last runtime status and progress lines written to the app log (R28).
+static LAST_STATUS_LINE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static LAST_PROGRESS_LINE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Remembers `line` (with its details) in `last` and says whether it differs
+/// from what was logged before: a repeated readiness check logs nothing.
+fn log_if_changed(last: &std::sync::Mutex<Option<String>>, line: &str, details: &[String]) -> bool {
+    let key = std::iter::once(line)
+        .chain(details.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(mut last) = last.lock() else {
+        return true;
+    };
+    if last.as_deref() == Some(key.as_str()) {
+        return false;
+    }
+    *last = Some(key);
+    true
+}
+
 impl RuntimeManager {
     pub fn new() -> Self {
         Self
@@ -233,6 +254,21 @@ impl RuntimeManager {
     /// nothing to disarm or re-emit. The single-flight lock and the
     /// cancellable T2 download core are shared, not duplicated.
     pub fn trigger_startup_bootstrap(&self, app_handle: &AppHandle, status: &RuntimeStatus) {
+        // R1: on a metered connection (mobile data, a capped plan) the large
+        // first download waits for the person: the banner says why and its
+        // button starts it.
+        if startup_bootstrap_skip_reason(status, StartupBootstrapGate::live()).is_none()
+            && connection_is_metered()
+        {
+            crate::app_logs::info(
+                app_handle,
+                "runtime",
+                "Conexión medida: la descarga automática del runtime de IA espera confirmación",
+            );
+            METERED_DEFERRED.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = self.emit_status(app_handle, &metered_pending_status(status));
+            return;
+        }
         let worker_app = app_handle.clone();
         match trigger_startup_bootstrap_with(
             status,
@@ -381,13 +417,14 @@ impl RuntimeManager {
         app_handle: &AppHandle,
         status: &RuntimeStatus,
     ) -> Result<(), String> {
-        crate::app_logs::info(
-            app_handle,
-            "runtime",
-            format!("Estado runtime: {:?} · {}", status.state, status.summary),
-        );
-        for detail in &status.details {
-            crate::app_logs::info(app_handle, "runtime", format!("Detalle runtime: {detail}"));
+        // R28: every AI action re-checks readiness; only a change reaches the
+        // log, the event still goes out every time.
+        let line = format!("Estado runtime: {:?} · {}", status.state, status.summary);
+        if log_if_changed(&LAST_STATUS_LINE, &line, &status.details) {
+            crate::app_logs::info(app_handle, "runtime", line);
+            for detail in &status.details {
+                crate::app_logs::info(app_handle, "runtime", format!("Detalle runtime: {detail}"));
+            }
         }
         app_handle
             .emit("runtime://status", status)
@@ -400,20 +437,19 @@ impl RuntimeManager {
         app_handle: &AppHandle,
         operation: &RuntimeOperation,
     ) -> Result<(), String> {
-        crate::app_logs::info(
-            app_handle,
-            "runtime",
-            format!(
-                "Operación {:?}/{:?}: {}{}",
-                operation.kind,
-                operation.stage,
-                operation.summary,
-                operation
-                    .progress_percent
-                    .map(|pct| format!(" ({pct}%)"))
-                    .unwrap_or_default()
-            ),
+        let line = format!(
+            "Operación {:?}/{:?}: {}{}",
+            operation.kind,
+            operation.stage,
+            operation.summary,
+            operation
+                .progress_percent
+                .map(|pct| format!(" ({pct}%)"))
+                .unwrap_or_default()
         );
+        if log_if_changed(&LAST_PROGRESS_LINE, &line, &[]) {
+            crate::app_logs::info(app_handle, "runtime", line);
+        }
         app_handle
             .emit("runtime://progress", operation)
             .map_err(|error| format!("Failed to emit runtime progress event: {error}"))
@@ -729,6 +765,68 @@ pub(crate) fn startup_bootstrap_skip_reason(
         return Some(StartupBootstrapSkip::SourceNotConfigured);
     }
     None
+}
+
+/// Whether Windows reports the internet connection as metered (a fixed or
+/// variable data plan, roaming, or over its data limit). Any failure to read
+/// the cost counts as unmetered: the check only defers a download.
+#[cfg(windows)]
+fn connection_is_metered() -> bool {
+    use windows::Networking::Connectivity::{NetworkCostType, NetworkInformation};
+
+    let Ok(profile) = NetworkInformation::GetInternetConnectionProfile() else {
+        return false;
+    };
+    let Ok(cost) = profile.GetConnectionCost() else {
+        return false;
+    };
+    matches!(
+        cost.NetworkCostType(),
+        Ok(NetworkCostType::Fixed | NetworkCostType::Variable)
+    ) || cost.Roaming().unwrap_or(false)
+        || cost.OverDataLimit().unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn connection_is_metered() -> bool {
+    false
+}
+
+/// Set once the startup download was held back by a metered connection, so
+/// every later status read keeps explaining it while the pack is a fixture.
+static METERED_DEFERRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `status` as the UI should see it: a fixture whose download a metered
+/// connection held back keeps the metered guidance and its start button.
+pub(crate) fn with_metered_deferral(status: RuntimeStatus) -> RuntimeStatus {
+    if status.state == RuntimeState::Fixture
+        && METERED_DEFERRED.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        metered_pending_status(&status)
+    } else {
+        status
+    }
+}
+
+/// The fixture status the banner shows while a metered connection holds the
+/// first download back (R1): the reason as guidance, and a retryable pending
+/// operation so the banner offers the button that starts it.
+fn metered_pending_status(status: &RuntimeStatus) -> RuntimeStatus {
+    let mut pending = status.clone();
+    pending.guidance = vec![
+        "Estás en una conexión medida: la descarga del runtime de IA (varios GB) no empieza sola. Iniciala cuando quieras con el botón."
+            .to_string(),
+    ];
+    pending.active_operation = Some(RuntimeOperation {
+        kind: RuntimeOperationKind::Bootstrap,
+        stage: RuntimeOperationStage::Blocked,
+        summary: "Descarga en espera: conexión medida".to_string(),
+        progress_percent: None,
+        downloaded_bytes: None,
+        total_bytes: None,
+        retryable: true,
+    });
+    pending
 }
 
 /// Outcome of a startup trigger attempt: skipped without side effects,
@@ -1868,6 +1966,45 @@ mod tests {
     use base64::Engine;
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
+
+    #[test]
+    fn a_repeated_runtime_line_is_logged_once() {
+        let last = std::sync::Mutex::new(None);
+        let healthy = "Estado runtime: Healthy · Runtime listo";
+        assert!(log_if_changed(&last, healthy, &[]));
+        assert!(!log_if_changed(&last, healthy, &[]));
+        assert!(log_if_changed(
+            &last,
+            healthy,
+            &["nuevo detalle".to_string()]
+        ));
+        assert!(log_if_changed(&last, "Estado runtime: Damaged · x", &[]));
+        assert!(
+            log_if_changed(&last, healthy, &[]),
+            "a return to healthy is a change"
+        );
+    }
+
+    #[test]
+    fn a_metered_hold_explains_itself_and_offers_the_start_button() {
+        let fixture = healthy_status("2026.05.0");
+        let pending = metered_pending_status(&RuntimeStatus {
+            state: RuntimeState::Fixture,
+            ..fixture
+        });
+        assert_eq!(pending.state, RuntimeState::Fixture);
+        assert!(
+            pending.guidance[0].contains("conexión medida"),
+            "{:?}",
+            pending.guidance
+        );
+        let operation = pending.active_operation.expect("pending operation");
+        assert!(
+            operation.retryable,
+            "the banner shows its button only when retryable"
+        );
+        assert_eq!(operation.stage, RuntimeOperationStage::Blocked);
+    }
 
     #[test]
     fn configured_bootstrap_catalog_returns_source_unavailable_when_not_configured() {
