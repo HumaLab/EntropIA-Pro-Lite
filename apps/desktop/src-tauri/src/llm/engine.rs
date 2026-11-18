@@ -483,34 +483,46 @@ impl LlmEngine {
         log_prefix: &str,
     ) -> Result<String, String> {
         let plan = research_chat_prompt_plan(instruction);
+        let (prompt, add_bos) = match self.model_chat_prompt(&plan) {
+            Ok(prompt) => (prompt, plan.add_bos),
+            Err(error) => {
+                // This llama.cpp revision does not recognize every model's
+                // Jinja template (Gemma 4 fails with `ffi error -1`). Fall
+                // back to the Gemma turn format every other local flow
+                // already uses, with its own BOS.
+                log::warn!(
+                    target: super::log_target(log_prefix),
+                    "{error}; using the Gemma turn format"
+                );
+                (crate::llm::prompt::gemma_wrap(plan.content), AddBos::Always)
+            }
+        };
+        let sampling = sampling_plan(temperature, self.config.seed)?;
+        // Size the KV allocation to this prompt instead of always reserving
+        // the full ceiling: a 3K-token evidence prompt must not pay for a
+        // 131K-token context on every chat turn.
+        let fitted_ctx = match self.fit_n_ctx(&prompt, max_tokens, add_bos, n_ctx) {
+            Ok(fitted) => fitted,
+            Err(FitFailure::TooLong { .. }) => n_ctx,
+            Err(FitFailure::Tokenize(error)) => return Err(error),
+        };
+        let (raw, _hit_budget) = self.generate_raw(
+            &prompt, max_tokens, fitted_ctx, log_prefix, add_bos, sampling,
+        )?;
+        Ok(Self::sanitize_text_output(&raw))
+    }
+
+    /// `plan` rendered with the model's own chat template.
+    fn model_chat_prompt(&self, plan: &ResearchChatPromptPlan<'_>) -> Result<String, String> {
         let template = self
             .model
             .chat_template(None)
             .map_err(|error| format!("Failed to load model chat template: {error}"))?;
         let message = LlamaChatMessage::new(plan.role.to_string(), plan.content.to_string())
             .map_err(|error| format!("Failed to create Research Chat message: {error}"))?;
-        let prompt = self
-            .model
+        self.model
             .apply_chat_template(&template, &[message], plan.add_generation_prompt)
-            .map_err(|error| format!("Failed to apply model chat template: {error}"))?;
-        let sampling = sampling_plan(temperature, self.config.seed)?;
-        // Size the KV allocation to this prompt instead of always reserving
-        // the full ceiling: a 3K-token evidence prompt must not pay for a
-        // 131K-token context on every chat turn.
-        let fitted_ctx = match self.fit_n_ctx(&prompt, max_tokens, plan.add_bos, n_ctx) {
-            Ok(fitted) => fitted,
-            Err(FitFailure::TooLong { .. }) => n_ctx,
-            Err(FitFailure::Tokenize(error)) => return Err(error),
-        };
-        let (raw, _hit_budget) = self.generate_raw(
-            &prompt,
-            max_tokens,
-            fitted_ctx,
-            log_prefix,
-            plan.add_bos,
-            sampling,
-        )?;
-        Ok(Self::sanitize_text_output(&raw))
+            .map_err(|error| format!("Failed to apply model chat template: {error}"))
     }
 
     /// Generate OCR-corrected text and log raw vs sanitized output when the

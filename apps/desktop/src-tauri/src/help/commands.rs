@@ -642,7 +642,19 @@ pub async fn help_ask(
         }
         let prompt = build_help_prompt(&question, &history, &picked, diagnostics.as_deref());
         let answer =
-            local_help_answer(&app, &db.db_path, prompt, help.max_tokens, help.temperature).await?;
+            local_help_answer(&app, &db.db_path, prompt, help.max_tokens, help.temperature)
+                .await
+                .inspect_err(|error| {
+                    // The panel only says «No se pudo responder»; the cause
+                    // has to reach the diagnostic log.
+                    if error != HELP_LOCAL_MODEL_MISSING {
+                        crate::app_logs::warn(
+                            &app,
+                            "help",
+                            format!("Gemma local no respondió: {error}"),
+                        );
+                    }
+                })?;
         return Ok(super::history::attach_history(
             &app,
             conversation_id,
