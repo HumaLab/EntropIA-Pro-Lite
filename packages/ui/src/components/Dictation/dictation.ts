@@ -17,9 +17,13 @@ export function chooseDictationCaptureStrategy(
   const isWebKit = userAgent.includes('applewebkit')
   const isChromium = /(chrome|chromium|crios|edg|opr)\//.test(userAgent)
   const isFirefox = userAgent.includes('firefox/')
+  // The desktop app always records WAV: its local engines (Parakeet) decode
+  // WAV/MP3/FLAC/AAC/OGG but not the WebM/Opus MediaRecorder produces, and
+  // AssemblyAI and Whisper read WAV too. Browsers keep MediaRecorder, except
+  // Linux WebKit, whose recorder is unreliable.
   const shouldPreferWavFallback =
     environment.hasAudioContext &&
-    ((environment.hasTauriRuntime && isLinux) || (isLinux && isWebKit && !isChromium && !isFirefox))
+    (environment.hasTauriRuntime || (isLinux && isWebKit && !isChromium && !isFirefox))
 
   if (shouldPreferWavFallback) {
     return 'pcm-wav'
