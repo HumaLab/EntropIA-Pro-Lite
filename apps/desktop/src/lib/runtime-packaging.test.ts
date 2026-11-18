@@ -119,7 +119,8 @@ describe('runtime pack packaging', () => {
     expect(windowsConfig.bundle?.windows).toBeDefined()
     expect(windowsResources).toContain('resources/lib/pdfium.dll')
     expect(windowsResources).toContain('resources/tools/uv/windows-x86_64/*')
-    expect(windowsResources).toContain('resources/tools/uv/windows-aarch64/*')
+    // Only x64 Windows installers are built: the ARM64 uv would be dead weight (S2).
+    expect(windowsResources).not.toContain('resources/tools/uv/windows-aarch64/*')
     expect(windowsResources).toContain('resources/runtime-pack/windows-x86_64/**/*')
     expect(windowsResources).toContain('target/release/vc-runtime/*')
     expect(windowsResources).not.toContain('resources/lib/linux-x86_64/**/*')

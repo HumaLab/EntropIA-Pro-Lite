@@ -29,7 +29,7 @@ Los modelos `.mnn` y el MSIX base están vendoreados sin fuente pública reprodu
 ## Herramientas bundleadas
 
 - `tools/uv/windows-x86_64/uv.exe` — `uv` 0.6.14 bundleado para Windows x64.
-- `tools/uv/windows-aarch64/uv.exe` — `uv` 0.6.14 bundleado para Windows ARM64.
+- `tools/uv/windows-aarch64/uv.exe` — `uv` 0.6.14 para Windows ARM64. Queda en el repo para un futuro instalador ARM64; los instaladores x64 no lo incluyen (un proceso x64 emulado en ARM64 usa el uv x64).
   La resolución de runtime prefiere recursos Tauri bundleados, luego recursos dev, luego la copia administrada legacy en app-data y finalmente `PATH` del sistema.
 
 ## Fixtures de runtime-pack
