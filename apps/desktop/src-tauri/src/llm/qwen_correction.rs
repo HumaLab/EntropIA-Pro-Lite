@@ -46,6 +46,15 @@ const CHARS_PER_OUTPUT_TOKEN: u64 = 3;
 /// 8K out + template < 16K). Splits happen only at blank lines.
 const CORRECTION_CHUNK_CHARS: usize = 13_000;
 
+/// Chunk size for retrying a page whose single pass ran away: pages of
+/// 2-2.5K chars correct cleanly in one call.
+const RETRY_CHUNK_CHARS: usize = 2_500;
+/// Error texts of a runaway single pass (see [`retries_in_chunks`]).
+const BUDGET_HIT_ERROR: &str =
+    "Local Qwen correction hit the output token budget; refusing a cut correction";
+const LOOP_ERROR: &str = "Local Qwen correction looped instead of correcting; refusing to commit";
+const REPEATED_BLOCK_ERROR: &str = "Local correction loops:";
+
 /// Whether a local correction path exists right now: both GGUF files plus a
 /// usable server binary (managed install or installer-bundled resources).
 pub(crate) fn local_correction_available(db_path: &Path, resource_dir: Option<&Path>) -> bool {
@@ -104,16 +113,35 @@ pub(crate) fn correct_ocr_via_local_qwen(
     let corrected = if fits_single {
         drop(conn);
         let url = qwen_local::ensure_server(&assets, db_path)?;
-        correct_one_pass(
-            &url,
-            &request.prompt,
-            image.as_ref(),
-            max_tokens,
-            "pass",
-            &expected_extraction,
+        single_pass_or_chunks(
+            || {
+                correct_one_pass(
+                    &url,
+                    &request.prompt,
+                    image.as_ref(),
+                    max_tokens,
+                    "pass",
+                    &expected_extraction,
+                )
+            },
+            || {
+                let chunks = split_text_for_correction(&expected_extraction, RETRY_CHUNK_CHARS);
+                if chunks.len() <= 1 {
+                    return None;
+                }
+                log::warn!(
+                    target: "llm-local",
+                    "local Qwen correction: single pass ran out of budget or looped; retrying in {} chunks",
+                    chunks.len()
+                );
+                Some(
+                    crate::db::open::open_archive_connection(db_path).and_then(|conn| {
+                        correct_in_chunks(conn, &assets, db_path, &chunks, max_tokens)
+                    }),
+                )
+            },
         )?
     } else {
-        // Render per-chunk prompts while the settings connection is alive.
         let chunks = split_text_for_correction(&expected_extraction, CORRECTION_CHUNK_CHARS);
         if chunks.len() <= 1 {
             return Err(format!(
@@ -126,90 +154,7 @@ pub(crate) fn correct_ocr_via_local_qwen(
             chunks.len(),
             expected_extraction.chars().count(),
         );
-        // Each chunk prompt names its place in the page so the model stops
-        // at the fragment's end instead of continuing the article.
-        let prompts: Vec<String> = chunks
-            .iter()
-            .enumerate()
-            .map(|(index, chunk)| {
-                let scoped = format!(
-                    "(Fragmento {}/{} de la página. Corregí ÚNICAMENTE este fragmento y detenete exactamente donde termina: no continúes la redacción ni agregues cierre. Devolvé ÚNICAMENTE el fragmento corregido, nada más.)\n\n{}",
-                    index + 1,
-                    chunks.len(),
-                    chunk
-                );
-                super::generation::render_prompt_from_settings(
-                    &conn,
-                    super::generation::GenerationFlow::OcrCorrection,
-                    &scoped,
-                )
-            })
-            .collect();
-        // Full output budget per chunk: chunks are small enough that prompt
-        // plus the largest plausible correction fits the 16K slot; loop and
-        // length guards below turn degeneration into a loud failure.
-        drop(conn);
-        let url = qwen_local::ensure_server(&assets, db_path)?;
-        // No image on chunk calls: with the whole page in context the model
-        // retranscribes the page per chunk and blows every budget. The text
-        // already carries the content; single passes keep the image.
-        let mut partials = Vec::with_capacity(chunks.len());
-        let mut failed: Vec<usize> = Vec::new();
-        for (index, prompt) in prompts.iter().enumerate() {
-            let part_log = format!("[chunk {}/{}]", index + 1, chunks.len());
-            log::info!(
-                target: "llm-local",
-                "local Qwen correction {part_log}: {} input chars",
-                chunks[index].chars().count(),
-            );
-            match correct_one_pass(&url, prompt, None, max_tokens, &part_log, &chunks[index]) {
-                Ok(fixed) => {
-                    log::info!(
-                        target: "llm-local",
-                        "local Qwen correction {part_log}: {} output chars",
-                        fixed.chars().count()
-                    );
-                    if let Err(error) = check_word_retention(&fixed, &chunks[index]) {
-                        log::warn!(
-                            target: "llm-local",
-                            "local Qwen correction {part_log} kept as original: {error}"
-                        );
-                        failed.push(index + 1);
-                        partials.push(chunks[index].clone());
-                    } else {
-                        partials.push(fixed);
-                    }
-                }
-                Err(error) => {
-                    // A failed chunk never blocks the page: keep the original
-                    // text for it (same as no correction) and say so loudly.
-                    // Committing a partial correction would delete content;
-                    // committing nothing would waste the chunks that worked.
-                    log::warn!(
-                        target: "llm-local",
-                        "local Qwen correction {part_log} kept as original: {error}"
-                    );
-                    failed.push(index + 1);
-                    partials.push(chunks[index].clone());
-                }
-            }
-        }
-        if failed.len() == chunks.len() {
-            return Err(format!(
-                "local Qwen correction failed on all {} chunks; nothing committed",
-                chunks.len()
-            ));
-        }
-        if !failed.is_empty() {
-            log::warn!(
-                target: "llm-local",
-                "local Qwen correction committed with {} of {} chunks uncorrected: {:?}",
-                failed.len(),
-                chunks.len(),
-                failed
-            );
-        }
-        partials.join("\n\n")
+        correct_in_chunks(conn, &assets, db_path, &chunks, max_tokens)?
     };
     check_word_retention(&corrected, &expected_extraction)?;
     check_no_repetition_loops(&corrected)?;
@@ -219,6 +164,124 @@ pub(crate) fn correct_ocr_via_local_qwen(
         corrected,
         engine: super::CorrectionEngine::local_qwen(qwen_local::MODEL_FILENAME),
     })
+}
+
+/// Run the single pass; when it ran out of output budget or looped, retry
+/// through `chunks` (smaller paragraph chunks). `chunks` returns `None` when
+/// the page cannot be split, and the single-pass error stands. Other
+/// failures (server down, bad response) are not retried.
+fn single_pass_or_chunks(
+    single: impl FnOnce() -> Result<String, String>,
+    chunks: impl FnOnce() -> Option<Result<String, String>>,
+) -> Result<String, String> {
+    match single() {
+        Ok(corrected) => Ok(corrected),
+        Err(error) if retries_in_chunks(&error) => chunks().unwrap_or(Err(error)),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether a single-pass failure is the model running away (budget hit or
+/// a loop), which a smaller input usually avoids.
+fn retries_in_chunks(error: &str) -> bool {
+    [BUDGET_HIT_ERROR, LOOP_ERROR, REPEATED_BLOCK_ERROR]
+        .iter()
+        .any(|marker| error.contains(marker))
+}
+
+/// Correct `chunks` one by one and rejoin them in order. A chunk that fails
+/// keeps its original text; all chunks failing is an error.
+fn correct_in_chunks(
+    conn: rusqlite::Connection,
+    assets: &qwen_local::QwenLocalAssets,
+    db_path: &Path,
+    chunks: &[String],
+    max_tokens: i32,
+) -> Result<String, String> {
+    // Each chunk prompt names its place in the page so the model stops
+    // at the fragment's end instead of continuing the article.
+    let prompts: Vec<String> = chunks
+        .iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            let scoped = format!(
+                "(Fragmento {}/{} de la página. Corregí ÚNICAMENTE este fragmento y detenete exactamente donde termina: no continúes la redacción ni agregues cierre. Devolvé ÚNICAMENTE el fragmento corregido, nada más.)\n\n{}",
+                index + 1,
+                chunks.len(),
+                chunk
+            );
+            super::generation::render_prompt_from_settings(
+                &conn,
+                super::generation::GenerationFlow::OcrCorrection,
+                &scoped,
+            )
+        })
+        .collect();
+    // Full output budget per chunk: chunks are small enough that prompt
+    // plus the largest plausible correction fits the 16K slot; loop and
+    // length guards below turn degeneration into a loud failure.
+    drop(conn);
+    let url = qwen_local::ensure_server(assets, db_path)?;
+    // No image on chunk calls: with the whole page in context the model
+    // retranscribes the page per chunk and blows every budget. The text
+    // already carries the content; single passes keep the image.
+    let mut partials = Vec::with_capacity(chunks.len());
+    let mut failed: Vec<usize> = Vec::new();
+    for (index, prompt) in prompts.iter().enumerate() {
+        let part_log = format!("[chunk {}/{}]", index + 1, chunks.len());
+        log::info!(
+            target: "llm-local",
+            "local Qwen correction {part_log}: {} input chars",
+            chunks[index].chars().count(),
+        );
+        match correct_one_pass(&url, prompt, None, max_tokens, &part_log, &chunks[index]) {
+            Ok(fixed) => {
+                log::info!(
+                    target: "llm-local",
+                    "local Qwen correction {part_log}: {} output chars",
+                    fixed.chars().count()
+                );
+                if let Err(error) = check_word_retention(&fixed, &chunks[index]) {
+                    log::warn!(
+                        target: "llm-local",
+                        "local Qwen correction {part_log} kept as original: {error}"
+                    );
+                    failed.push(index + 1);
+                    partials.push(chunks[index].clone());
+                } else {
+                    partials.push(fixed);
+                }
+            }
+            Err(error) => {
+                // A failed chunk never blocks the page: keep the original
+                // text for it (same as no correction) and say so loudly.
+                // Committing a partial correction would delete content;
+                // committing nothing would waste the chunks that worked.
+                log::warn!(
+                    target: "llm-local",
+                    "local Qwen correction {part_log} kept as original: {error}"
+                );
+                failed.push(index + 1);
+                partials.push(chunks[index].clone());
+            }
+        }
+    }
+    if failed.len() == chunks.len() {
+        return Err(format!(
+            "local Qwen correction failed on all {} chunks; nothing committed",
+            chunks.len()
+        ));
+    }
+    if !failed.is_empty() {
+        log::warn!(
+            target: "llm-local",
+            "local Qwen correction committed with {} of {} chunks uncorrected: {:?}",
+            failed.len(),
+            chunks.len(),
+            failed
+        );
+    }
+    Ok(partials.join("\n\n"))
 }
 
 /// One server call: correct `prompt`, strip the preamble, and refuse loops
@@ -487,15 +550,9 @@ fn chat_completion(
             "local Qwen correction hit the {max_tokens}-token output budget ({out_chars} chars, loop={looped}); head: {preview:?} tail: {tail:?}"
         );
         if looped {
-            return Err(
-                "Local Qwen correction looped instead of correcting; refusing to commit"
-                    .to_string(),
-            );
+            return Err(LOOP_ERROR.to_string());
         }
-        return Err(
-            "Local Qwen correction hit the output token budget; refusing a cut correction"
-                .to_string(),
-        );
+        return Err(BUDGET_HIT_ERROR.to_string());
     }
     payload
         .pointer("/choices/0/message/content")
@@ -509,6 +566,90 @@ fn chat_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn page_of_paragraphs(total_chars: usize) -> String {
+        let paragraph =
+            "La asamblea de la Intersindical Marítima resolvió continuar la huelga en el puerto. "
+                .repeat(4);
+        let mut page = String::new();
+        while page.chars().count() < total_chars {
+            if !page.is_empty() {
+                page.push_str("\n\n");
+            }
+            page.push_str(paragraph.trim());
+        }
+        page
+    }
+
+    #[test]
+    fn a_dense_page_splits_into_several_retry_chunks() {
+        let page = page_of_paragraphs(6_920);
+        let chunks = split_text_for_correction(&page, RETRY_CHUNK_CHARS);
+        assert!(chunks.len() > 1, "got {} chunk(s)", chunks.len());
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= RETRY_CHUNK_CHARS * 5 / 4));
+        let rejoined: String = chunks.join("\n\n").split_whitespace().collect();
+        let original: String = page.split_whitespace().collect();
+        assert_eq!(rejoined, original);
+    }
+
+    #[test]
+    fn a_budget_hit_or_looped_single_pass_retries_in_chunks() {
+        for error in [
+            format!("pass local Qwen correction failed: {BUDGET_HIT_ERROR}"),
+            format!("pass local Qwen correction failed: {LOOP_ERROR}"),
+        ] {
+            let mut retried = false;
+            let result = single_pass_or_chunks(
+                || Err(error.clone()),
+                || {
+                    retried = true;
+                    Some(Ok("corregido".to_string()))
+                },
+            );
+            assert_eq!(result, Ok("corregido".to_string()));
+            assert!(retried, "{error}");
+        }
+    }
+
+    #[test]
+    fn other_single_pass_failures_do_not_retry() {
+        let mut retried = false;
+        let result = single_pass_or_chunks(
+            || Err("pass local Qwen correction failed: HTTP 500".to_string()),
+            || {
+                retried = true;
+                Some(Ok("corregido".to_string()))
+            },
+        );
+        assert_eq!(
+            result,
+            Err("pass local Qwen correction failed: HTTP 500".to_string())
+        );
+        assert!(!retried);
+    }
+
+    #[test]
+    fn a_successful_single_pass_skips_the_chunks() {
+        let mut retried = false;
+        let result = single_pass_or_chunks(
+            || Ok("bien".to_string()),
+            || {
+                retried = true;
+                None
+            },
+        );
+        assert_eq!(result, Ok("bien".to_string()));
+        assert!(!retried);
+    }
+
+    #[test]
+    fn an_unsplittable_page_keeps_the_single_pass_error() {
+        let error = format!("pass local Qwen correction failed: {BUDGET_HIT_ERROR}");
+        let result = single_pass_or_chunks(|| Err(error.clone()), || None);
+        assert_eq!(result, Err(error));
+    }
 
     #[test]
     fn unavailable_without_assets() {
