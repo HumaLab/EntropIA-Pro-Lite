@@ -2,9 +2,12 @@
 //! `raw_*` functions return the instruction text without model-specific formatting.
 //! `gemma_prompt` wraps for local Gemma; OpenRouter uses the raw text directly.
 
+/// One user turn in the Gemma 4 chat format, open for the model's answer.
+/// The bundled model's vocabulary has `<|turn>` and `<turn|>` (its EOS) but
+/// no `<start_of_turn>`: the Gemma 2/3 markers reached it as plain text.
 #[cfg(feature = "local-ml")]
 fn gemma_prompt(instruction: &str) -> String {
-    format!("<start_of_turn>user\n{instruction}<end_of_turn>\n<start_of_turn>model\n")
+    format!("<|turn>user\n{instruction}<turn|>\n<|turn>model\n")
 }
 
 /// Wraps configurable prompts used by existing non-chat local LLM flows.
@@ -473,6 +476,18 @@ pub fn question_answer(question: &str, context: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn local_prompts_use_the_gemma_4_turn_tokens() {
+        // The bundled model is Gemma 4: its vocabulary has `<|turn>` (105)
+        // and `<turn|>` (106, EOS) but no `<start_of_turn>`, which would
+        // reach it as plain text.
+        assert_eq!(
+            gemma_wrap("Hola"),
+            "<|turn>user\nHola<turn|>\n<|turn>model\n"
+        );
+    }
 
     #[test]
     fn multimodal_ocr_context_preserves_markup_rules() {

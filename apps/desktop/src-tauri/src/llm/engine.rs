@@ -118,7 +118,16 @@ impl LlmEngine {
     pub(crate) fn sanitize_text_output(raw: &str) -> String {
         let mut text = raw.trim();
 
-        for marker in ["<end_of_turn>", "<start_of_turn>", "<eos>"] {
+        // Gemma 4 turn tokens, then the Gemma 2/3 ones a model may still echo
+        // as text (including a made-up closing `</start_of_turn>`).
+        for marker in [
+            "<turn|>",
+            "<|turn>",
+            "<end_of_turn>",
+            "</start_of_turn>",
+            "<start_of_turn>",
+            "<eos>",
+        ] {
             if let Some(idx) = text.find(marker) {
                 text = &text[..idx];
             }
@@ -488,11 +497,11 @@ impl LlmEngine {
             Err(error) => {
                 // This llama.cpp revision does not recognize every model's
                 // Jinja template (Gemma 4 fails with `ffi error -1`). Fall
-                // back to the Gemma turn format every other local flow
+                // back to the Gemma 4 turn format every other local flow
                 // already uses, with its own BOS.
                 log::warn!(
                     target: super::log_target(log_prefix),
-                    "{error}; using the Gemma turn format"
+                    "{error}; using the Gemma 4 turn format"
                 );
                 (crate::llm::prompt::gemma_wrap(plan.content), AddBos::Always)
             }
@@ -598,6 +607,22 @@ impl LlmEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_output_stops_at_any_turn_marker() {
+        assert_eq!(
+            LlmEngine::sanitize_text_output("Respuesta [1].<turn|>\n<|turn>user\nmás"),
+            "Respuesta [1]."
+        );
+        assert_eq!(
+            LlmEngine::sanitize_text_output("No se puede determinar.\n</start_of_turn>"),
+            "No se puede determinar."
+        );
+        assert_eq!(
+            LlmEngine::sanitize_text_output("Hecho.<end_of_turn>"),
+            "Hecho."
+        );
+    }
 
     #[test]
     fn prefill_chunk_ranges_empty_inputs_yield_no_ranges() {
