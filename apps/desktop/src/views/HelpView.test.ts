@@ -1235,29 +1235,41 @@ describe('HelpView', () => {
       'Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.'
     const DOCS_HINT = 'Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.'
 
-    it('maximized: both opt-ins share one single-line row', async () => {
-      backend({ hasKey: true })
-      render(HelpView, { props: { embedded: true, maximized: true } })
-      await composer()
-
-      const row = document.querySelector('.help-view__optins--single')
-      expect(row).not.toBeNull()
-      expect(
-        within(row as HTMLElement).getByRole('checkbox', { name: 'Incluir diagnóstico' })
-      ).toBeInTheDocument()
-      expect(
-        within(row as HTMLElement).getByRole('checkbox', { name: 'Buscar en mis documentos' })
-      ).toBeInTheDocument()
-    })
-
-    it('normal size: the opt-ins wrap instead of forcing one line', async () => {
-      backend({ hasKey: true })
+    it('the three opt-ins share one row and the engine note sits below the question box', async () => {
+      backend({
+        hasKey: true,
+        status: { localEngine: true, localModelReady: true, model: 'openai/gpt-5.6-luna' },
+      })
       render(HelpView)
       await composer()
 
-      const row = document.querySelector('.help-view__optins')
+      const remote = await screen.findByRole('checkbox', {
+        name: 'Usar OpenRouter (openai/gpt-5.6-luna) para esta pregunta',
+      })
+      const row = document.querySelector('.help-view__optins') as HTMLElement
       expect(row).not.toBeNull()
-      expect(row?.classList.contains('help-view__optins--single')).toBe(false)
+      expect(row.contains(remote)).toBe(true)
+      expect(within(row).getByRole('checkbox', { name: 'Incluir diagnóstico' })).toBeInTheDocument()
+      expect(
+        within(row).getByRole('checkbox', { name: 'Buscar en mis documentos' })
+      ).toBeInTheDocument()
+
+      const note = screen.getByText(/Responde Gemma local, en este equipo y solo con el manual/)
+      const box = screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })
+      expect(box.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('normal and maximized sizes keep the opt-ins on one row', async () => {
+      backend({ hasKey: true })
+      const { unmount } = render(HelpView)
+      await composer()
+      expect(document.querySelectorAll('.help-view__optins')).toHaveLength(1)
+      unmount()
+
+      backend({ hasKey: true })
+      render(HelpView, { props: { embedded: true, maximized: true } })
+      await composer()
+      expect(document.querySelectorAll('.help-view__optins')).toHaveLength(1)
     })
 
     it('hints live on superscript info icons as tooltips, not in paragraphs', async () => {
@@ -1287,7 +1299,7 @@ describe('HelpView', () => {
       expect(docsIcon.querySelector('svg[data-action-icon="info"]')).not.toBeNull()
     })
 
-    it('the maximized panel drives the single-line row (stylesheet contract)', async () => {
+    it('the opt-ins never wrap (stylesheet contract)', async () => {
       const { readFileSync } = await import('node:fs')
       const { resolve } = await import('node:path')
       const styles = readFileSync(resolve(import.meta.dirname, 'HelpView.svelte'), 'utf-8')
@@ -1300,10 +1312,8 @@ describe('HelpView', () => {
         expect(match, `${selector} is no longer in the stylesheet`).not.toBeNull()
         return match?.[2] ?? ''
       }
-      // The row wraps by default (the normal floating size) and only the
-      // maximized contract forces one line.
-      expect(rule('.help-view__optins')).toMatch(/flex-wrap:\s*wrap/)
-      expect(rule('.help-view__optins--single')).toMatch(/flex-wrap:\s*nowrap/)
+      // One line at every panel size: the row never wraps.
+      expect(rule('.help-view__optins')).toMatch(/flex-wrap:\s*nowrap/)
       // The hint icon reads as a superscript, not a paragraph.
       expect(rule('.help-view__info')).toMatch(/vertical-align:\s*super/)
     })

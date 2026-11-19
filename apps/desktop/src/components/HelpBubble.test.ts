@@ -485,15 +485,15 @@ describe('HelpBubble (S13, T17)', () => {
     expect(screen.getByRole('button', { name: 'Restaurar' })).toBeInTheDocument()
   })
 
-  it('maximizing the panel puts the help opt-ins on one single-line row', async () => {
+  it('maximizing the panel keeps the help opt-ins on their one row', async () => {
     render(HelpBubble)
     await openPanel()
 
-    expect(document.querySelector('.help-view__optins--single')).toBeNull()
+    expect(document.querySelectorAll('.help-view__optins')).toHaveLength(1)
 
     await fireEvent.click(screen.getByRole('button', { name: 'Maximizar' }))
 
-    const row = document.querySelector('.help-view__optins--single')
+    const row = document.querySelector('.help-view__optins')
     expect(row).not.toBeNull()
     expect(
       within(row as HTMLElement).getByRole('checkbox', { name: 'Incluir diagnóstico' })
@@ -501,9 +501,6 @@ describe('HelpBubble (S13, T17)', () => {
     expect(
       within(row as HTMLElement).getByRole('checkbox', { name: 'Buscar en mis documentos' })
     ).toBeInTheDocument()
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Restaurar' }))
-    expect(document.querySelector('.help-view__optins--single')).toBeNull()
   })
 
   it('toggling maximize keeps the conversation: a typed draft survives', async () => {
