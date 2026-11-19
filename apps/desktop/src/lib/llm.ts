@@ -122,6 +122,16 @@ export class LlmStore {
     }
   }
 
+  /**
+   * Shows a job that is still running after the view was recreated: it keeps
+   * any state that already says pending or running.
+   */
+  restoreActiveJob(id: string, job: LlmJobType): void {
+    const current = this.getState(id)
+    if (current.status === 'pending' || current.status === 'running') return
+    this.update(id, { status: 'running', activeJob: job, error: null })
+  }
+
   onChange(fn: () => void) {
     this.listeners.push(fn)
   }

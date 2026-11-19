@@ -476,6 +476,33 @@ describe('SyncSettingsCard — full resync', () => {
     expect(mockInvoke).toHaveBeenCalledWith('sync_full_resync')
   })
 
+  // Audit item 17: the resync keeps running after the user leaves the card.
+  it('keeps a full resync in progress after leaving and coming back, until it ends', async () => {
+    let finishResync: (value: unknown) => void = () => {}
+    routeInvoke({
+      sync_full_resync: () =>
+        new Promise((resolve) => {
+          finishResync = resolve
+        }),
+    })
+
+    const first = render(SyncSettingsCard)
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Rehacer sincronización completa' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Rehacer sincronización' }))
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith('sync_full_resync'))
+    first.unmount()
+
+    render(SyncSettingsCard)
+    const again = await screen.findByRole('dialog')
+    expect(within(again).getByRole('button', { name: /Rehacer sincronización/ })).toBeDisabled()
+
+    finishResync(status())
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
   it('invokes nothing when the confirm dialog is cancelled', async () => {
     const fullResyncSpy = vi.fn().mockResolvedValue(status())
     routeInvoke({ sync_full_resync: () => fullResyncSpy() })

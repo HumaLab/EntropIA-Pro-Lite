@@ -54,6 +54,7 @@
   import HelpBubble from '../components/HelpBubble.svelte'
   import WorkPane from './WorkPane.svelte'
   import SplitDivider from './SplitDivider.svelte'
+  import { startInflightEventTracking } from '../lib/inflight.svelte'
 
   const HLAB_URL = 'https://hlab.com.ar/'
 
@@ -501,6 +502,9 @@
     // The browser outlives its view; closing its tab is what ends it.
     stopNavegadorLifecycle = installNavegadorLifecycle(workspace)
 
+    // Running processes keep their "in progress" state across views.
+    void startInflightEventTracking()
+
     // The local dependency manager and managed runtime only exist in the
     // local-ML (Pro) build. Skip the dead deps/runtime wiring under the
     // API-only variant — the kept-stubs return inert values anyway.
@@ -789,7 +793,7 @@
           <div class="deps-banner" role="alert">
             <div class="deps-banner__copy">
               <strong>{bannerSummary}</strong>
-              {#if runtimeStatus?.state === 'fixture'}
+              {#if runtimeStatus?.state === 'fixture' && uvStatus?.dev_fallback_available}
                 <span>
                   La app no se cayó: estás viendo un runtime-pack de desarrollo que todavía requiere
                   payloads externos para habilitar OCR, NLP y transcripción.

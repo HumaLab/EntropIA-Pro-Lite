@@ -106,6 +106,14 @@
   import ImageVersionsPanel from '../components/ImageVersionsPanel.svelte'
   import { assetHasImageVersions, type ImageVersion } from '$lib/image-versions'
   import { runPendingAssetJob } from '$lib/item-view-media-jobs'
+  import {
+    clearInflight,
+    isInflight,
+    llmJobKey,
+    markInflight,
+    nlpJobKey,
+    transcriptionJobKey,
+  } from '$lib/inflight.svelte'
   import { recordAssetProcess, type RendererProcess } from '$lib/asset-history'
   import {
     OcrStore,
@@ -159,6 +167,7 @@
   import { getNavigation } from '$lib/pane-context'
   import { registerEscapeInterceptor } from '$lib/keyboard'
   import { LOCAL_ML } from '$lib/capabilities'
+  import { dictationHelp } from '$lib/dictation-help'
   import {
     DOCUMENT_ASSET_DELETED_EVENT,
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
@@ -767,6 +776,7 @@
       dictationInserted: translate('item.noteEditor.inserted'),
       dictationNoText: translate('item.noteEditor.noText'),
       dictationTranscriptionFailed: translate('item.noteEditor.transcriptionFailed'),
+      dictationOpenDependencies: translate('item.noteEditor.openDependencies'),
       linkInvalidUrl: translate('item.noteEditor.linkInvalidUrl'),
       linkInvalidHttp: translate('item.noteEditor.linkInvalidHttp'),
       linkInvalidExample: translate('item.noteEditor.linkInvalidExample'),
@@ -878,6 +888,11 @@
 
   async function handleLlmSummarize() {
     error = null
+    const key = llmJobKey(
+      'summarize',
+      getActiveLlmTarget({ itemId, selectedAssetId: selectedAsset?.id ?? null }).targetId
+    )
+    markInflight(key)
     try {
       await runScopedLlmAction({
         itemId,
@@ -887,6 +902,7 @@
       })
     } catch (e) {
       console.error('[LLM] summarize failed:', e)
+      clearInflight(key)
       error = translate('item.error.summarize')
     }
   }
@@ -959,6 +975,7 @@
       }
 
       try {
+        markInflight(llmJobKey('correct_ocr', asset.id))
         await llmCorrectOcrAsset(asset.id)
         enqueued = true
       } catch (correctionError) {
@@ -972,6 +989,7 @@
         }
       }
     } finally {
+      if (!enqueued) clearInflight(llmJobKey('correct_ocr', asset.id))
       if (!enqueued && correctingOcrAssetId === asset.id) {
         correctingOcrAssetId = null
       }
@@ -1016,6 +1034,11 @@
   async function handleLlmExtractTriples() {
     nlpStore._setJobStatus(itemId, 'triples', 'pending')
     nlpTick++
+    const key = llmJobKey(
+      'extract_triples',
+      getActiveLlmTarget({ itemId, selectedAssetId: selectedAsset?.id ?? null }).targetId
+    )
+    markInflight(key)
     try {
       await runScopedLlmAction({
         itemId,
@@ -1025,6 +1048,7 @@
       })
     } catch (e) {
       console.error('[LLM] extract triples failed:', e)
+      clearInflight(key)
       nlpStore._setJobStatus(itemId, 'triples', 'error', getErrorMessage(e))
       nlpTick++
     }
@@ -2101,7 +2125,13 @@
       execute: async () => {
         // Finish debounced edits before the automatic writer can replace them.
         await transcriptionTextPersistor.flushAndWait(asset.id)
-        await transcribeAudio(asset.id, asset.path)
+        markInflight(transcriptionJobKey(asset.id))
+        try {
+          await transcribeAudio(asset.id, asset.path)
+        } catch (transcriptionError) {
+          clearInflight(transcriptionJobKey(asset.id))
+          throw transcriptionError
+        }
         const nextEditedText = new Map(transEditedText)
         nextEditedText.delete(asset.id)
         transEditedText = nextEditedText
@@ -2130,12 +2160,52 @@
     return nlpStore.getState(itemId, assetId)
   }
 
+  /**
+   * Shows again the jobs that kept running while the user was on another
+   * screen: the stores below are created with the view, so they start idle.
+   * `assetId` null restores the item-level runs only.
+   */
+  function restoreInflightJobs(assetId: string | null) {
+    const busy = (status: string) => status === 'pending' || status === 'running'
+    const nlpState = nlpStore.getState(itemId, assetId)
+    for (const job of ['embed', 'ner', 'fts'] as const) {
+      const scopedAssetId = job === 'fts' ? null : assetId
+      if (busy(nlpState[job]) || !isInflight(nlpJobKey(job, itemId, scopedAssetId))) continue
+      nlpStore._setJobStatus(itemId, job, 'pending', undefined, scopedAssetId)
+    }
+    const targetId = assetId ?? itemId
+    if (
+      !busy(nlpStore.getState(itemId).triples) &&
+      isInflight(llmJobKey('extract_triples', targetId))
+    ) {
+      nlpStore._setJobStatus(itemId, 'triples', 'pending')
+    }
+    if (isInflight(llmJobKey('summarize', targetId))) {
+      llmStore.restoreActiveJob(targetId, 'summarize')
+    }
+    if (assetId && isInflight(llmJobKey('correct_ocr', assetId)) && !correctingOcrAssetId) {
+      correctingOcrAssetId = assetId
+    }
+    if (
+      assetId &&
+      isInflight(transcriptionJobKey(assetId)) &&
+      !busy(transcriptionStore.getState(assetId).status)
+    ) {
+      transcriptionStore._updateState(assetId, { status: 'pending', progress: 0 })
+    }
+    nlpTick++
+    llmTick++
+    transcriptionTick++
+  }
+
   async function handleIndexFts() {
     nlpStore._setJobStatus(itemId, 'fts', 'pending')
     nlpTick++
+    markInflight(nlpJobKey('fts', itemId))
     try {
       await indexFts(itemId)
     } catch (e) {
+      clearInflight(nlpJobKey('fts', itemId))
       nlpStore._setJobStatus(itemId, 'fts', 'error', e instanceof Error ? e.message : 'Failed')
       nlpTick++
     }
@@ -2166,9 +2236,11 @@
     const assetId = selectedAsset.id
     nlpStore._setJobStatus(itemId, 'embed', 'pending', undefined, assetId)
     nlpTick++
+    markInflight(nlpJobKey('embed', itemId, assetId))
     try {
       await embedAsset(itemId, assetId)
     } catch (e) {
+      clearInflight(nlpJobKey('embed', itemId, assetId))
       nlpStore._setJobStatus(
         itemId,
         'embed',
@@ -2184,6 +2256,7 @@
     const assetId = selectedAsset?.id ?? null
     nlpStore._setJobStatus(itemId, 'ner', 'pending', undefined, assetId)
     nlpTick++
+    markInflight(nlpJobKey('ner', itemId, assetId))
     try {
       if (assetId) {
         await extractEntitiesForAsset(itemId, assetId)
@@ -2191,6 +2264,7 @@
         await extractEntities(itemId)
       }
     } catch (e) {
+      clearInflight(nlpJobKey('ner', itemId, assetId))
       nlpStore._setJobStatus(
         itemId,
         'ner',
@@ -3265,6 +3339,7 @@
     const asset = untrack(() => selectedAsset)
     if (!asset) return
     const requestToken = selectedAssetStateLoadGuard.next()
+    untrack(() => restoreInflightJobs(asset.id))
 
     rightPanelTab = 'notes'
 
@@ -3348,7 +3423,10 @@
     void loadAssetEmbedded(asset)
     // Load persisted LLM results for this asset so previous
     // asset-level results (summarize, correct_ocr, etc.) are visible.
-    llmStore.loadPersistedResults(asset.id, 'asset')
+    // A persisted result marks its job done; one still running wins.
+    void llmStore.loadPersistedResults(asset.id, 'asset').then(() => {
+      if (isCurrentSelectedAsset(asset)) restoreInflightJobs(asset.id)
+    })
     const restoreStateGuard = ocrRestoreStateLoadGuardFor(asset.id)
     const restoreRequestToken = restoreStateGuard.next()
     void llmCanRestoreOriginalOcrAsset(asset.id)
@@ -3478,7 +3556,9 @@
         })
         // Load persisted LLM results for the item (legacy item-level results).
         // Asset-level results are loaded in the selectedAsset effect below.
-        llmStore.loadPersistedResults(itemId, 'item')
+        void llmStore
+          .loadPersistedResults(itemId, 'item')
+          .then(() => restoreInflightJobs(selectedAsset?.id ?? null))
       })
       .catch((e) => console.error('[ItemView] LLM listener setup failed:', e))
 
@@ -3840,6 +3920,7 @@
               onTopicsChange={handleTopicsChange}
               onSaveNote={handleSaveNote}
               onTranscribeDictation={handleTranscribeDictation}
+              onDictationHelp={dictationHelp}
               onSaveEdit={handleSaveEdit}
               onCancelEdit={handleCancelEdit}
               onEditNote={handleEditNote}

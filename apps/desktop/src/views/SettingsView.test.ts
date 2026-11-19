@@ -142,6 +142,15 @@ async function openTab(name: string) {
   await fireEvent.click(await screen.findByRole('tab', { name }))
 }
 
+/**
+ * Renders Configuración and waits for its saved values: the settings tabs stay
+ * hidden, and saving stays off, until they load.
+ */
+async function renderLoadedSettingsView() {
+  render(SettingsView)
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Guardar cambios' })).toBeEnabled())
+}
+
 /** The tab a plain visit opens on. */
 const DEFAULT_TAB = LOCAL_ML ? 'Motores' : 'APIs remotas'
 
@@ -615,8 +624,53 @@ describe('SettingsView', () => {
     expect(rerankerDownloadModelMock).toHaveBeenCalledOnce()
   })
 
+  // Audit item 17: the download keeps running while the user is elsewhere.
+  it.runIf(LOCAL_ML)(
+    'keeps a model download in progress after leaving and coming back, until it ends',
+    async () => {
+      const handlers = new Map<string, Array<(event: unknown) => unknown>>()
+      vi.mocked(listen).mockImplementation((async (
+        name: string,
+        handler: (event: unknown) => unknown
+      ) => {
+        handlers.set(name, [...(handlers.get(name) ?? []), handler])
+        return () => {
+          handlers.set(
+            name,
+            (handlers.get(name) ?? []).filter((candidate) => candidate !== handler)
+          )
+        }
+      }) as unknown as typeof listen)
+      try {
+        const first = render(SettingsView)
+        await openTab('Modelos locales')
+        await fireEvent.click(
+          await screen.findByRole('button', { name: 'Instalar reranker local' })
+        )
+        expect(rerankerDownloadModelMock).toHaveBeenCalledOnce()
+        first.unmount()
+
+        render(SettingsView)
+        await openTab('Modelos locales')
+        expect(
+          await screen.findByRole('progressbar', { name: 'Instalando reranker…' })
+        ).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Instalar reranker local' })).toBeNull()
+
+        for (const handler of handlers.get('reranker:download_complete') ?? []) {
+          await handler({ payload: { path: 'C:/models/reranker' } })
+        }
+        expect(
+          await screen.findByRole('button', { name: 'Instalar reranker local' })
+        ).toBeInTheDocument()
+      } finally {
+        vi.mocked(listen).mockImplementation(() => Promise.resolve(vi.fn()))
+      }
+    }
+  )
+
   it('edits and saves prompt and model parameter settings', async () => {
-    render(SettingsView)
+    await renderLoadedSettingsView()
 
     await fireEvent.click(await screen.findByRole('tab', { name: 'Prompts' }))
     const ocrPrompt = screen.getByLabelText('OCR correction prompt')
@@ -662,7 +716,7 @@ describe('SettingsView', () => {
       if (key === 'language') return 'es'
       return null
     })
-    render(SettingsView)
+    await renderLoadedSettingsView()
 
     await fireEvent.click(await screen.findByRole('tab', { name: 'Model Params' }))
 
@@ -698,7 +752,7 @@ describe('SettingsView', () => {
       { key: 'llm_triplets_model', value: 'vendor/triplets' },
       { key: 'llm_triplets_max_tokens', value: '1800' },
     ])
-    render(SettingsView)
+    await renderLoadedSettingsView()
 
     await fireEvent.click(await screen.findByRole('tab', { name: 'Model Params' }))
 
@@ -1227,7 +1281,7 @@ describe('SettingsView', () => {
   })
 
   it('blocks saving OCR and Summary prompts without the text placeholder', async () => {
-    render(SettingsView)
+    await renderLoadedSettingsView()
 
     await fireEvent.click(await screen.findByRole('tab', { name: 'Prompts' }))
     await fireEvent.input(screen.getByLabelText('OCR correction prompt'), {
@@ -1257,7 +1311,7 @@ describe('SettingsView', () => {
   })
 
   it('blocks saving NER prompts missing required labels', async () => {
-    render(SettingsView)
+    await renderLoadedSettingsView()
 
     await fireEvent.click(await screen.findByRole('tab', { name: 'Prompts' }))
     await fireEvent.input(screen.getByLabelText('NER prompt'), {
@@ -1273,7 +1327,7 @@ describe('SettingsView', () => {
   })
 
   it('blocks saving Triplets prompts missing required JSON keys', async () => {
-    render(SettingsView)
+    await renderLoadedSettingsView()
 
     await fireEvent.click(await screen.findByRole('tab', { name: 'Prompts' }))
     await fireEvent.input(screen.getByLabelText('Triplets prompt'), {
@@ -1289,7 +1343,7 @@ describe('SettingsView', () => {
   })
 
   it('validates prompt edits without saving settings', async () => {
-    render(SettingsView)
+    await renderLoadedSettingsView()
 
     await fireEvent.click(await screen.findByRole('tab', { name: 'Prompts' }))
     const ocrPrompt = screen.getByLabelText('OCR correction prompt')
@@ -1318,7 +1372,7 @@ describe('SettingsView', () => {
   })
 
   it('restores and saves the default prompt for an edited flow', async () => {
-    render(SettingsView)
+    await renderLoadedSettingsView()
 
     await fireEvent.click(await screen.findByRole('tab', { name: 'Prompts' }))
     const ocrPrompt = screen.getByLabelText('OCR correction prompt')
@@ -1746,6 +1800,67 @@ describe('SettingsView', () => {
     }
   )
 
+  describe('before the saved settings arrive', () => {
+    function holdSettingsLoad() {
+      let release: () => void = () => {}
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const backend = settingsGetMock.getMockImplementation()
+      settingsGetMock.mockImplementation(async (key: string) => {
+        await gate
+        return backend?.(key) ?? null
+      })
+      return () => release()
+    }
+
+    it('shows no settings values and cannot save until they load', async () => {
+      const release = holdSettingsLoad()
+      render(SettingsView)
+      await openTab(DEFAULT_TAB)
+
+      expect(await screen.findByText('Cargando la configuración…')).toBeInTheDocument()
+      expect(screen.queryByText('Modelo no encontrado')).not.toBeInTheDocument()
+      expect(screen.queryByText('Disponible')).not.toBeInTheDocument()
+      const save = screen.getByRole('button', { name: 'Guardar cambios' })
+      expect(save).toBeDisabled()
+      await fireEvent.click(save)
+      expect(settingsSetMock).not.toHaveBeenCalled()
+
+      release()
+
+      await waitFor(() => expect(save).toBeEnabled())
+      expect(screen.queryByText('Cargando la configuración…')).not.toBeInTheDocument()
+      if (LOCAL_ML) {
+        expect(await screen.findByText('Disponible')).toBeInTheDocument()
+        expect(screen.queryByText('Modelo no encontrado')).not.toBeInTheDocument()
+      }
+    })
+
+    it('offers to retry when the load fails, without showing default values', async () => {
+      settingsGetAllMock.mockReset().mockRejectedValueOnce(new Error('db locked'))
+      render(SettingsView)
+      await openTab(DEFAULT_TAB)
+
+      expect(
+        await screen.findByText('No se pudo cargar la configuración guardada: db locked')
+      ).toBeInTheDocument()
+      expect(screen.queryByText('Modelo no encontrado')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Guardar cambios' })).toBeDisabled()
+
+      settingsGetAllMock.mockResolvedValue([])
+      await fireEvent.click(screen.getByRole('button', { name: 'Reintentar carga' }))
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Guardar cambios' })).toBeEnabled()
+      )
+      expect(
+        screen.queryByText('No se pudo cargar la configuración guardada: db locked')
+      ).not.toBeInTheDocument()
+      if (LOCAL_ML) expect(await screen.findByText('Disponible')).toBeInTheDocument()
+    })
+  })
+
   describe('Zotero Web API key card', () => {
     const FULL_ACCESS = {
       state: 'valid',
@@ -2028,7 +2143,7 @@ describe('SettingsView', () => {
 
   describe('the prompt and parameter tabs draw their fields with the design system', () => {
     it('renders each prompt as a Textarea named by its label', async () => {
-      render(SettingsView)
+      await renderLoadedSettingsView()
 
       await fireEvent.click(await screen.findByRole('tab', { name: 'Prompts' }))
       for (const name of [
@@ -2042,7 +2157,7 @@ describe('SettingsView', () => {
     })
 
     it('renders each flow’s stop sequences as a Textarea with its hint', async () => {
-      render(SettingsView)
+      await renderLoadedSettingsView()
 
       await fireEvent.click(await screen.findByRole('tab', { name: 'Model Params' }))
       const fields = screen.getAllByLabelText('stopSequences')

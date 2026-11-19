@@ -26,6 +26,7 @@
     oncancel,
     ondictate,
     ondictationlog,
+    ondictationhelp,
     dictationMaxSeconds = 300,
     clearOnSave = true,
     saveLabel = 'Save',
@@ -63,6 +64,7 @@
     dictationInserted: 'Text inserted from the microphone.',
     dictationNoText: 'No text was detected in the audio.',
     dictationTranscriptionFailed: 'Could not transcribe the audio.',
+    dictationOpenDependencies: 'Open AI dependencies',
     linkInvalidUrl: 'Enter a valid URL.',
     linkInvalidHttp: 'Use a valid http or https URL.',
     linkInvalidExample: 'Enter a valid URL, for example https://entropia.app.',
@@ -528,6 +530,16 @@
       data-testid="note-editor-dictation-message"
     >
       {dictation.message}
+      {#if dictation.state === 'error' && ondictationhelp}
+        <Button
+          size="sm"
+          variant="ghost"
+          data-testid="note-editor-dictation-help"
+          onclick={() => ondictationhelp?.()}
+        >
+          {labels.dictationOpenDependencies}
+        </Button>
+      {/if}
     </p>
   {/if}
 

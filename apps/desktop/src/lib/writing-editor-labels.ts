@@ -107,5 +107,6 @@ export function writingEditorLabels(): WritingEditorLabels {
     dictationInserted: t('item.noteEditor.inserted'),
     dictationNoText: t('item.noteEditor.noText'),
     dictationTranscriptionFailed: t('item.noteEditor.transcriptionFailed'),
+    dictationOpenDependencies: t('item.noteEditor.openDependencies'),
   }
 }

@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom'
-import { vi } from 'vitest'
+import { afterEach, vi } from 'vitest'
 
 // Mock Tauri APIs globally — tests run in happy-dom, not Tauri
 vi.mock('@tauri-apps/api/core', () => ({
@@ -36,3 +36,12 @@ vi.mock('@tauri-apps/api/event', () => ({
     .fn()
     .mockImplementation((_eventName: string, _callback: unknown) => Promise.resolve(vi.fn())),
 }))
+
+// The in-progress registry is app-wide state: a process one test started and
+// never finished must not show as running in the next test.
+// Imported late on purpose: a static import here would load the registry with
+// this file's `listen` mock, before a test file installs its own.
+afterEach(async () => {
+  const { resetInflightForTests } = await import('$lib/inflight.svelte')
+  resetInflightForTests()
+})

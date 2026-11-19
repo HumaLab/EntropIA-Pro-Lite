@@ -54,6 +54,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { locale, t } from '$lib/i18n'
+  import {
+    downloadKey,
+    isInflight,
+    mirrorInflight,
+    registerModelDownloads,
+  } from '$lib/inflight.svelte'
+  import { DOWNLOAD_SCOPES } from '$lib/local-setup'
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { registerEscapeInterceptor } from '$lib/keyboard'
   import { openExternalUrlFromClick } from '$lib/external-links'
@@ -540,7 +547,7 @@
   } as const
 
   // Local model download state
-  let downloading = $state(false)
+  let downloading = $state(isInflight(downloadKey('llm')))
   let downloadPct = $state(0)
   let downloadError = $state<string | null>(null)
   let localModelSourceUrl = $state('')
@@ -551,28 +558,39 @@
   // destroyed meanwhile releases the ones that land afterwards, and every
   // handler ignores what Tauri still delivers in between (drop-dup fix).
   let destroyed = false
-  let embeddingDownloading = $state(false)
+  let embeddingDownloading = $state(isInflight(downloadKey('embedding')))
   let embeddingDownloadPct = $state(0)
   let embeddingDownloadFile = $state('')
   let embeddingDownloadError = $state<string | null>(null)
   let localRerankerModel = $state<LocalRerankerModelInfo | null>(null)
-  let rerankerDownloading = $state(false)
+  let rerankerDownloading = $state(isInflight(downloadKey('reranker')))
   let rerankerDownloadPct = $state(0)
   let rerankerDownloadFile = $state('')
   let rerankerDownloadError = $state<string | null>(null)
-  let glmOcrDownloading = $state(false)
+  let glmOcrDownloading = $state(isInflight(downloadKey('glm-ocr')))
   let glmOcrDownloadPct = $state(0)
   let glmOcrDownloadError = $state<string | null>(null)
-  let qwenDownloading = $state(false)
+  let qwenDownloading = $state(isInflight(downloadKey('qwen-correct')))
   let qwenDownloadPct = $state(0)
   let qwenDownloadError = $state<string | null>(null)
-  let llamaServerDownloading = $state(false)
+  let llamaServerDownloading = $state(isInflight(downloadKey('llama-server')))
   let llamaServerDownloadPct = $state(0)
   let llamaServerDownloadError = $state<string | null>(null)
   let parakeetModel = $state<ParakeetModelInfo | null>(null)
-  let parakeetDownloading = $state(false)
+  let parakeetDownloading = $state(isInflight(downloadKey('parakeet')))
   let parakeetDownloadPct = $state(0)
   let parakeetDownloadError = $state<string | null>(null)
+
+  // A download keeps running while the user is on another screen; these
+  // flags start from, and keep, the app-wide record of what is running.
+  mirrorInflight(downloadKey('llm'), () => downloading)
+  mirrorInflight(downloadKey('embedding'), () => embeddingDownloading)
+  mirrorInflight(downloadKey('reranker'), () => rerankerDownloading)
+  mirrorInflight(downloadKey('glm-ocr'), () => glmOcrDownloading)
+  mirrorInflight(downloadKey('qwen-correct'), () => qwenDownloading)
+  mirrorInflight(downloadKey('llama-server'), () => llamaServerDownloading)
+  mirrorInflight(downloadKey('parakeet'), () => parakeetDownloading)
+  if (LOCAL_ML) registerModelDownloads(Object.keys(DOWNLOAD_SCOPES))
 
   // Save state
   let saving = $state(false)
@@ -642,6 +660,22 @@
     })
   )
   const isDirty = $derived(hasUnsavedSettingsChanges(savedSnapshot, currentSnapshot))
+  // The snapshot exists only once the saved values have loaded. Until then
+  // every field holds its default, so these tabs stay hidden and saving stays
+  // off: a badge read before the load said "Modelo no encontrado" for a model
+  // that was there, and a save would have written the defaults over the user's
+  // settings.
+  const settingsLoaded = $derived(savedSnapshot !== null)
+  const SETTINGS_BACKED_TABS: readonly SettingsTab[] = [
+    'api',
+    'engines',
+    'localModels',
+    'prompts',
+    'modelParams',
+    'ragParams',
+    'agentParams',
+  ]
+  const waitingForSettings = $derived(!settingsLoaded && SETTINGS_BACKED_TABS.includes(activeTab))
 
   const activeLocale = $derived($locale)
 
@@ -824,6 +858,9 @@
       localRerankerModel = rerankerModelInfo
       glmOcrLocal = glmOcrModelInfo
       qwenLocal = qwenModelInfo
+      // A two-file download that finished while the user was elsewhere.
+      if (glmOcrLocal?.model_present && glmOcrLocal?.mmproj_present) glmOcrDownloading = false
+      if (qwenLocal?.model_present && qwenLocal?.mmproj_present) qwenDownloading = false
       parakeetModel = parakeetInfo
       parakeetDownloading = parakeetInfo?.downloading ?? false
       ocrCorrectionPrompt = storedOcrCorrectionPrompt?.trim() || DEFAULT_PROMPTS.ocrCorrectionPrompt
@@ -1645,6 +1682,7 @@
   }
 
   async function handleSave() {
+    if (!settingsLoaded) return
     saving = true
     saveFeedback = null
     const promptError = validateAllPrompts()
@@ -2140,7 +2178,7 @@
             aria-label={t('settings.save')}
             title={t('settings.save')}
             onclick={handleSave}
-            disabled={saving}
+            disabled={saving || !settingsLoaded}
           >
             <ActionIcon name="save" size={20} />
           </Button>
@@ -2215,7 +2253,18 @@
       </TabList>
     </div>
 
-    {#if activeTab === 'api' || activeTab === 'engines' || activeTab === 'localModels'}
+    {#if waitingForSettings}
+      {#if loadSettingsError}
+        <div class="surface-message surface-message--error settings__load-error" role="alert">
+          <span>{t('settings.loadError', { error: loadSettingsError })}</span>
+          <Button variant="secondary" size="sm" onclick={loadInitialSettings}>
+            {t('settings.retryLoad')}
+          </Button>
+        </div>
+      {:else}
+        <p class="surface-message" role="status">{t('settings.loading')}</p>
+      {/if}
+    {:else if activeTab === 'api' || activeTab === 'engines' || activeTab === 'localModels'}
       {#if saveFeedback}
         <p
           class="surface-message"

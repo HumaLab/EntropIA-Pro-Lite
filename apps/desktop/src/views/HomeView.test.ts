@@ -1223,6 +1223,32 @@ describe('HomeView', () => {
       expect(sampleRef.loadSampleCollection).toHaveBeenCalledTimes(1)
     })
 
+    // Audit item 17: loading the samples keeps running after leaving Inicio.
+    it('keeps the sample loading in progress after leaving and coming back', async () => {
+      let finishSample: (value: { id: string; name: string }) => void = () => {}
+      sampleRef.loadSampleCollection.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishSample = resolve
+          })
+      )
+      const first = render(HomeView)
+      await fireEvent.click(
+        await screen.findByRole('button', { name: 'Probar con documentos de ejemplo' })
+      )
+      first.unmount()
+
+      render(HomeView)
+      const again = await screen.findByRole('button', { name: 'Cargando los ejemplos…' })
+      expect(again).toBeDisabled()
+
+      finishSample({ id: 'sample', name: 'Ejemplo' })
+      expect(
+        await screen.findByRole('button', { name: 'Probar con documentos de ejemplo' })
+      ).toBeEnabled()
+      expect(sampleRef.loadSampleCollection).toHaveBeenCalledTimes(1)
+    })
+
     it('shows "Inicio rápido" instead of Continuar', async () => {
       render(HomeView)
 

@@ -308,8 +308,18 @@ export function createDictation(options: DictationOptions) {
       }
     } catch (error) {
       logDictation('error', `transcription callback failed; error=${describeDictationError(error)}`)
+      // Tauri rejects `invoke` with the backend's message as a plain string,
+      // not an Error: show it instead of the generic label.
+      const reason =
+        error instanceof Error
+          ? error.message.trim()
+          : typeof error === 'string'
+            ? error.trim()
+            : ''
       setDictationMessage(
-        error instanceof Error ? error.message : options.labels.dictationTranscriptionFailed,
+        reason
+          ? `${options.labels.dictationTranscriptionFailed} ${reason}`
+          : options.labels.dictationTranscriptionFailed,
         'error'
       )
     } finally {

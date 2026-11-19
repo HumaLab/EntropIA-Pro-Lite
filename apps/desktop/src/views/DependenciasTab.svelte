@@ -51,6 +51,15 @@
     type LocalSetupStatus,
   } from '$lib/local-setup'
   import { t } from '$lib/i18n'
+  import {
+    clearInflight,
+    downloadKey,
+    isInflight,
+    markInflight,
+    registerModelDownloads,
+    trackInflight,
+    whenInflightSettles,
+  } from '$lib/inflight.svelte'
 
   // ---------------------------------------------------------------------------
   // State
@@ -58,7 +67,15 @@
 
   let deps = $state<DepCheckResult[]>([])
   let uvStatus = $state<UvStatusResult | null>(null)
-  let installing = $state(false)
+  // Installs, the preparation and model downloads keep running while the user
+  // is on another screen; these flags start from the app-wide record.
+  const INSTALL_KEY = 'deps:install'
+  const PREPARE_KEY = 'deps:prepare'
+  const SCOPE_BY_COMPONENT = Object.fromEntries(
+    Object.entries(DOWNLOAD_SCOPES).map(([scope, id]) => [id, scope])
+  ) as Partial<Record<LocalComponentId, string>>
+  registerModelDownloads(Object.keys(DOWNLOAD_SCOPES))
+  let installing = $state(isInflight(INSTALL_KEY))
   let errorBanner = $state<string | null>(null)
   let expandedErrors = $state<Set<DependencyId>>(new Set())
   let runtimeStatus = $state<RuntimeStatus | null>(null)
@@ -69,7 +86,7 @@
   let setup = $state<LocalSetupStatus | null>(null)
   let setupProgress = $state<Partial<Record<LocalComponentId, number>>>({})
   let setupErrors = $state<Partial<Record<LocalComponentId, string>>>({})
-  let preparingEntropia = $state(false)
+  let preparingEntropia = $state(isInflight(PREPARE_KEY))
   let prepareStep = $state<string | null>(null)
   let resetConfirmationOpen = $state(false)
   let resetConfirmationText = $state('')
@@ -136,12 +153,22 @@
   onMount(async () => {
     errorBanner = null
     runtimeOperation = null
+    // Started on an earlier visit: refresh once it ends.
+    for (const key of [INSTALL_KEY, PREPARE_KEY]) {
+      void whenInflightSettles(key)?.then(() => {
+        if (destroyed) return
+        if (key === INSTALL_KEY) installing = false
+        else preparingEntropia = false
+        void refreshAllState().catch(() => undefined)
+      })
+    }
     try {
       await refreshAllState()
     } catch (e) {
       errorBanner = t('deps.checkFailed', { error: String(e) })
     }
     if (destroyed) return
+    restoreDownloadProgress()
 
     try {
       const registered = await registerListeners(
@@ -233,7 +260,7 @@
       dep.status.type === 'installed' ? dep : { ...dep, status: { type: 'installing', percent: 0 } }
     )
     try {
-      await installAllDeps()
+      await trackInflight(INSTALL_KEY, installAllDeps)
       await refreshAllState()
     } catch (e) {
       errorBanner = String(e)
@@ -280,7 +307,27 @@
     setup = next
     // A finished component no longer shows a progress bar.
     for (const component of next.components) {
-      if (component.ready) setupProgress = { ...setupProgress, [component.id]: undefined }
+      if (!component.ready) continue
+      setupProgress = { ...setupProgress, [component.id]: undefined }
+      const scope = SCOPE_BY_COMPONENT[component.id]
+      if (scope) clearInflight(downloadKey(scope))
+    }
+  }
+
+  function markDownload(id: LocalComponentId) {
+    const scope = SCOPE_BY_COMPONENT[id]
+    if (scope) markInflight(downloadKey(scope))
+  }
+
+  /** Shows again the model downloads that kept running while the user was away. */
+  function restoreDownloadProgress() {
+    for (const [scope, id] of Object.entries(DOWNLOAD_SCOPES)) {
+      if (!isInflight(downloadKey(scope))) continue
+      if (setup?.components.find((component) => component.id === id)?.ready) {
+        clearInflight(downloadKey(scope))
+      } else if (setupProgress[id] === undefined) {
+        setupProgress = { ...setupProgress, [id]: 0 }
+      }
     }
   }
 
@@ -298,6 +345,7 @@
     setupProgress = { ...setupProgress, [component.id]: 0 }
     try {
       const [outcome] = await localSetupInstall([component.id])
+      if (outcome?.started) markDownload(component.id)
       if (outcome && !outcome.started) {
         setupProgress = { ...setupProgress, [component.id]: undefined }
         setupErrors = { ...setupErrors, [component.id]: outcome.message }
@@ -312,6 +360,10 @@
     if (preparingEntropia) return
     preparingEntropia = true
     errorBanner = null
+    await trackInflight(PREPARE_KEY, runPrepareEntropia)
+  }
+
+  async function runPrepareEntropia() {
     try {
       prepareStep = t('deps.prepare.stepRuntime')
       if (
@@ -330,7 +382,7 @@
           throw new Error(t('deps.prepare.noRuntimeForPython'))
         }
         installing = true
-        await installAllDeps()
+        await trackInflight(INSTALL_KEY, installAllDeps)
         installing = false
         await refreshAllState()
       }
@@ -343,7 +395,10 @@
         for (const id of pending) setupProgress = { ...setupProgress, [id]: 0 }
         const outcomes = await localSetupInstall(pending)
         for (const outcome of outcomes) {
-          if (outcome.started) continue
+          if (outcome.started) {
+            markDownload(outcome.id)
+            continue
+          }
           setupProgress = { ...setupProgress, [outcome.id]: undefined }
           setupErrors = { ...setupErrors, [outcome.id]: outcome.message }
         }

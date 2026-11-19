@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { LOCAL_ML } from '$lib/capabilities'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import DependenciasTab from './DependenciasTab.svelte'
 
@@ -55,54 +56,15 @@ vi.mock('$lib/deps', () => ({
   CRITICAL_DEPS: ['Python', 'PaddlePaddle', 'PaddleOcr'],
 }))
 
-vi.mock('$lib/runtime', () => ({
+// The pure status rules (`runtimeNeedsAttention`, `runtimeBlocksCurrentUse`,
+// `shouldShowRuntimeRepairAction`) stay real, so these tests break when the
+// rules change; only the Tauri calls are faked.
+vi.mock('$lib/runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/runtime')>()),
   getRuntimeStatus: depsMocks.getRuntimeStatus,
   repairRuntime: depsMocks.repairRuntime,
   onRuntimeStatus: depsMocks.onRuntimeStatus,
   onRuntimeProgress: depsMocks.onRuntimeProgress,
-  runtimeNeedsAttention: (status: { state?: string } | null | undefined) =>
-    status != null &&
-    [
-      'repairing',
-      'damaged',
-      'fixture',
-      'incompatible',
-      'blocked_source_unavailable',
-      'blocked_offline',
-      'checking',
-      'hydrating',
-      'verifying',
-      'downloading',
-    ].includes(status.state ?? ''),
-  runtimeBlocksCurrentUse: (
-    status: { state?: string } | null | undefined,
-    localDepsReady: boolean
-  ) =>
-    !(status?.state === 'fixture' && localDepsReady) &&
-    status != null &&
-    [
-      'repairing',
-      'damaged',
-      'fixture',
-      'incompatible',
-      'blocked_source_unavailable',
-      'blocked_offline',
-      'checking',
-      'hydrating',
-      'verifying',
-      'downloading',
-    ].includes(status.state ?? ''),
-  shouldShowRuntimeRepairAction: (
-    status: { state?: string; repairAvailable?: boolean } | null | undefined
-  ) =>
-    status?.repairAvailable === true &&
-    ![
-      'repairing',
-      'fixture',
-      'incompatible',
-      'blocked_source_unavailable',
-      'blocked_offline',
-    ].includes(status?.state ?? ''),
   runtimeCanBootstrapAutomatically: depsMocks.runtimeCanBootstrapAutomatically,
 }))
 
@@ -132,7 +94,8 @@ const READY_SETUP = {
   ],
 }
 
-describe('DependenciasTab', () => {
+// The tab exists only in Pro; in Lite `lib/runtime` turns its rules off on purpose.
+describe.runIf(LOCAL_ML)('DependenciasTab', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     depsMocks.checkAllDeps.mockResolvedValue([
@@ -479,7 +442,61 @@ describe('DependenciasTab', () => {
     expect(screen.getByText(/Gestión automática pausada/i)).toBeInTheDocument()
   })
 
-  it('does not surface fixture runtime messaging when local deps are installed', async () => {
+  it('in a dev build, does not surface fixture runtime messaging when local deps are installed', async () => {
+    depsMocks.checkAllDeps.mockResolvedValueOnce([
+      { id: 'Python', status: { type: 'installed', version: '3.11.9' }, version: '3.11.9' },
+      { id: 'Fastembed', status: { type: 'installed', version: '0.7.0' }, version: '0.7.0' },
+      {
+        id: 'PaddlePaddle',
+        status: { type: 'installed', version: '3.2.2' },
+        version: '3.2.2',
+      },
+      { id: 'PaddleOcr', status: { type: 'installed', version: '3.5.0' }, version: '3.5.0' },
+      { id: 'FasterWhisper', status: { type: 'installed', version: '1.2.1' }, version: '1.2.1' },
+      { id: 'Spacy', status: { type: 'installed', version: '3.8.7' }, version: '3.8.7' },
+      { id: 'SpacyModelEs', status: { type: 'installed', version: '3.8.0' }, version: '3.8.0' },
+    ])
+    depsMocks.getRuntimeStatus.mockResolvedValueOnce({
+      state: 'fixture',
+      packVersion: '2026.05.0',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'Runtime de IA pendiente de descarga para linux-x86_64',
+      blockedCapabilities: ['ocr', 'transcription', 'nlp'],
+      details: ['La app funciona localmente, pero el runtime-pack offline sigue pendiente.'],
+      guidance: ['Inyectar payloads externos antes de distribuir offline.'],
+      bootstrapEligible: false,
+      bootstrapRequired: true,
+      activeOperation: null,
+    })
+    depsMocks.getUvStatus.mockResolvedValueOnce({
+      uv_ready: false,
+      uv_path: null,
+      uv_version: null,
+      uv_source: null,
+      uv_compatible_for_dev: false,
+      venv_exists: true,
+      venv_path: '/runtime/venv',
+      uv_warning: null,
+      release_runtime_ready: false,
+      release_runtime_state: 'fixture',
+      dev_fallback_available: true,
+      dev_fallback_reason: null,
+    })
+
+    render(DependenciasTab)
+
+    expect(
+      await screen.findByText('Todas las dependencias están instaladas y listas para usar.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Runtime de IA pendiente de descarga/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/payloads externos/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/runtime-pack release pendiente/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Capacidades afectadas:/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/antes de habilitar OCR/i)).not.toBeInTheDocument()
+  })
+
+  it('in a release, does not claim ready while the fixture pack still needs its download (audit 6)', async () => {
     depsMocks.checkAllDeps.mockResolvedValueOnce([
       { id: 'Python', status: { type: 'installed', version: '3.11.9' }, version: '3.11.9' },
       { id: 'Fastembed', status: { type: 'installed', version: '0.7.0' }, version: '0.7.0' },
@@ -523,14 +540,12 @@ describe('DependenciasTab', () => {
 
     render(DependenciasTab)
 
+    // An old venv answers the dependency probe, but the runtime the app will
+    // use is still the fixture pack: the block must be visible.
+    expect(await screen.findByText(/Runtime de IA pendiente de descarga/i)).toBeInTheDocument()
     expect(
-      await screen.findByText('Todas las dependencias están instaladas y listas para usar.')
-    ).toBeInTheDocument()
-    expect(screen.queryByText(/Runtime de IA pendiente de descarga/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/payloads externos/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/runtime-pack release pendiente/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/^Capacidades afectadas:/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/antes de habilitar OCR/i)).not.toBeInTheDocument()
+      screen.queryByText('Todas las dependencias están instaladas y listas para usar.')
+    ).not.toBeInTheDocument()
   })
 
   it('shows release bootstrap blockers when the runtime wiring actually fails', async () => {
@@ -1040,6 +1055,59 @@ describe('DependenciasTab', () => {
 
     const bar = await screen.findByRole('progressbar', { name: '50% instalado' })
     expect(bar).toHaveAttribute('aria-valuenow', '50')
+  })
+
+  // Audit item 17: installs and downloads keep running while the user is away.
+  it('keeps Instalar todo in progress after leaving and coming back, until it ends', async () => {
+    depsMocks.checkAllDeps.mockResolvedValue([
+      { id: 'Python', status: { type: 'installed', version: '3.11.9' }, version: '3.11.9' },
+      { id: 'Spacy', status: { type: 'missing' }, version: null },
+    ])
+    let finishInstall: () => void = () => {}
+    depsMocks.installAllDeps.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishInstall = resolve
+      })
+    )
+
+    const first = render(DependenciasTab)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Instalar todo' }))
+    first.unmount()
+
+    render(DependenciasTab)
+    expect(await screen.findByRole('progressbar', { name: /instalado$/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Instalar todo' })).toBeNull()
+
+    finishInstall()
+    expect(await screen.findByRole('button', { name: 'Instalar todo' })).toBeInTheDocument()
+    expect(depsMocks.installAllDeps).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a model download in progress after leaving and coming back', async () => {
+    depsMocks.localSetupStatus.mockResolvedValue({
+      localMl: true,
+      components: [
+        {
+          id: 'reranker',
+          label: 'Reranker local (BGE v2 M3)',
+          ready: false,
+          detail: 'Falta descargar (unos 560 MB).',
+          enables: 'Chat',
+        },
+      ],
+    })
+    depsMocks.localSetupInstall.mockResolvedValue([
+      { id: 'reranker', started: true, message: 'descarga iniciada' },
+    ])
+
+    const first = render(DependenciasTab)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Descargar' }))
+    await waitFor(() => expect(depsMocks.localSetupInstall).toHaveBeenCalledWith(['reranker']))
+    first.unmount()
+
+    render(DependenciasTab)
+    expect(await screen.findByText('Reranker local (BGE v2 M3)')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Descargar' })).toBeNull())
   })
 
   it('renders the required and version labels as status badges', async () => {

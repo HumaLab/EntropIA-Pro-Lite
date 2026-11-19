@@ -579,12 +579,60 @@ describe('AppShell', () => {
     expect(
       await screen.findByText('Runtime de IA pendiente de descarga para linux-x86_64')
     ).toBeInTheDocument()
-    expect(screen.getByText(/app no se cay/i)).toBeInTheDocument()
+    // The dev-pack copy ("La app no se cayó…") is for dev builds only; a
+    // release with no dev fallback must not claim it (audit 1.8.1, item 7).
+    expect(screen.queryByText(/app no se cay/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reparar runtime →' })).not.toBeInTheDocument()
   })
 
   it.runIf(LOCAL_ML)(
-    'does not show a global runtime alert when deps are installed and only fixture release packaging is pending',
+    'in a dev build, does not show a global runtime alert when deps are installed and only fixture packaging is pending',
+    async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses') {
+          return Promise.resolve([
+            { id: 'Python', status: { type: 'installed' } },
+            { id: 'Fastembed', status: { type: 'installed' } },
+            { id: 'PaddlePaddle', status: { type: 'installed' } },
+            { id: 'PaddleOcr', status: { type: 'installed' } },
+          ])
+        }
+
+        if (command === 'deps_get_uv_status') {
+          return Promise.resolve({ dev_fallback_available: true })
+        }
+
+        if (command === 'runtime_get_status') {
+          return Promise.resolve({
+            state: 'fixture',
+            packVersion: '2026.05.0',
+            repairNeeded: false,
+            repairAvailable: false,
+            summary: 'Runtime de IA pendiente de descarga para linux-x86_64',
+            blockedCapabilities: ['ocr', 'transcription', 'nlp'],
+            details: ['payloads offline pendientes'],
+            guidance: ['Inyectar payloads externos antes de distribuir offline'],
+            bootstrapEligible: false,
+            bootstrapRequired: true,
+            activeOperation: null,
+          })
+        }
+
+        return Promise.resolve(undefined)
+      })
+
+      render(AppShellHost)
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith('deps_get_cached_statuses')
+        expect(invokeMock).toHaveBeenCalledWith('runtime_get_status')
+      })
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    }
+  )
+
+  it.runIf(LOCAL_ML)(
+    'in a release, shows the runtime alert while the fixture pack needs its download, even with deps installed (audit 7)',
     async () => {
       invokeMock.mockImplementation((command: string) => {
         if (command === 'deps_get_cached_statuses') {
@@ -621,7 +669,9 @@ describe('AppShell', () => {
         expect(invokeMock).toHaveBeenCalledWith('deps_get_cached_statuses')
         expect(invokeMock).toHaveBeenCalledWith('runtime_get_status')
       })
-      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Runtime de IA pendiente de descarga'
+      )
     }
   )
 

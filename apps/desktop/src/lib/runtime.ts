@@ -165,7 +165,11 @@ export function runtimeBlocksCurrentUse(
   devFallbackAvailable = false
 ): boolean {
   if (OFF) return false
-  if (status?.state === 'fixture' && localDepsReady) return false
+  // A fixture pack is only "packaging-only" in a dev build, where the local
+  // venv fallback really runs the work. A release (the Store ships a fixture
+  // pack that must be replaced by a download) is blocked until the download
+  // lands, even when an old venv still answers the dependency probe.
+  if (status?.state === 'fixture' && localDepsReady && devFallbackAvailable) return false
   if (
     localDepsReady &&
     devFallbackAvailable &&
