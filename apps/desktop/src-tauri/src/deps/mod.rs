@@ -316,6 +316,20 @@ fn managed_runtime_probe_context(app_data_dir: &std::path::Path) -> ManagedRunti
     }
 }
 
+/// The folder the dependency probe looks for hydrated runtimes in.
+///
+/// The runtime is cache, not data: it lives under the cache directory, which
+/// the installed app keeps apart from the archive's folder. Looking beside the
+/// database never found it, so the probe kept an old runtime's venv and never
+/// forgot its paths. Without a recorded cache directory (unit tests, a process
+/// that never ran setup) it is the database's folder, the layout before the
+/// split, as in `python_discovery::hydrated_runtime_python_path`.
+fn probe_runtime_dir(db_path: &std::path::Path) -> PathBuf {
+    crate::path_utils::remembered_cache_dir()
+        .or_else(|| db_path.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 pub async fn probe_all_once(
     state: &DepsState,
     db: &crate::db::state::AppDbState,
@@ -341,9 +355,7 @@ pub async fn probe_all_once(
         };
 
         if let Some(probe_generation) = probe_generation {
-            let runtime = managed_runtime_probe_context(
-                db.db_path.parent().unwrap_or(std::path::Path::new(".")),
-            );
+            let runtime = managed_runtime_probe_context(&probe_runtime_dir(&db.db_path));
             // The settings read is SQL: run it on the blocking pool so the
             // async worker never locks `ui_conn` (A-05b).
             let db = db.clone();
@@ -1217,10 +1229,10 @@ mod tests {
         assert!(!paths.contains(&install::venv_path(app_data_dir.path())));
     }
 
-    #[test]
-    fn managed_runtime_probe_context_prefers_hydrated_runtime_python() {
-        let app_data_dir = tempdir().expect("app data dir");
-        let managed_root = app_data_dir.path().join("runtime").join("2026.05.0");
+    /// Writes a healthy hydrated runtime under `<dir>/runtime/2026.05.0`, with
+    /// its venv Python, and returns its root.
+    fn write_healthy_runtime(dir: &std::path::Path) -> PathBuf {
+        let managed_root = dir.join("runtime").join("2026.05.0");
         let python_relpath = if cfg!(windows) {
             "python/python.exe"
         } else {
@@ -1270,6 +1282,36 @@ mod tests {
             .expect("serialize manifest"),
         )
         .expect("write manifest");
+        managed_root
+    }
+
+    #[test]
+    fn the_dependency_probe_looks_for_the_runtime_in_the_cache_dir() {
+        // The installed app keeps the archive in the data directory and the
+        // hydrated runtime in the cache directory: two different folders.
+        let data_dir = tempdir().expect("data dir");
+        let cache_dir = tempdir().expect("cache dir");
+        let db_path = data_dir.path().join("entropia.sqlite");
+        let managed_root = write_healthy_runtime(cache_dir.path());
+
+        crate::path_utils::set_test_cache_dir(Some(cache_dir.path().to_path_buf()));
+        let probe = managed_runtime_probe_context(&probe_runtime_dir(&db_path));
+        crate::path_utils::set_test_cache_dir(None);
+
+        assert_eq!(probe.root, Some(managed_root));
+        assert_eq!(
+            probe.status.map(|status| status.state),
+            Some(RuntimeState::Healthy)
+        );
+        // Without a recorded cache directory it is the database's folder,
+        // the layout before the split.
+        assert_eq!(probe_runtime_dir(&db_path), data_dir.path());
+    }
+
+    #[test]
+    fn managed_runtime_probe_context_prefers_hydrated_runtime_python() {
+        let app_data_dir = tempdir().expect("app data dir");
+        let managed_root = write_healthy_runtime(app_data_dir.path());
 
         let probe = managed_runtime_probe_context(app_data_dir.path());
 
