@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::process::Command;
 use tokio::task;
@@ -22,9 +22,7 @@ use crate::runtime::status::{RuntimeState, RuntimeStatus};
 
 const PROBE_TIMEOUT_SECS: u64 = 45;
 const GLOBAL_PROBE_TIMEOUT_SECS: u64 = 90;
-const GPU_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-const PROBE_PADDLEPADDLE_CUDA: &str = "import paddle; assert paddle.device.is_compiled_with_cuda(), 'PaddlePaddle CPU wheel installed on NVIDIA hardware'; print('ok')";
 const PROBE_PADDLE_VL: &str = "from paddleocr import PaddleOCRVL; print('ok')";
 const PROBE_FASTER_WHISPER: &str = "import faster_whisper; print('ok')";
 const RUNTIME_PYTHON_KEYS: &[&str] = &["python.paddle_vl.path", "python.faster_whisper.path"];
@@ -224,124 +222,11 @@ pub async fn probe_all(python_path: &Path) -> HashMap<DependencyId, DependencySt
     results
 }
 
+/// The probe for `dep`. PaddlePaddle passes with the CPU wheel on any hardware:
+/// the managed runtime ships only that wheel, and PaddleOCR-VL falls back to
+/// CPU when CUDA is missing.
 fn probe_code_for(dep: &crate::deps::registry::DependencySpec) -> &'static str {
-    if dep.id == DependencyId::PaddlePaddle && detect_nvidia_gpu_hardware() {
-        return PROBE_PADDLEPADDLE_CUDA;
-    }
-
     dep.probe_code
-}
-
-fn detect_nvidia_gpu_hardware() -> bool {
-    let mut cmd = std::process::Command::new("nvidia-smi");
-    cmd.arg("-L");
-    match std_command_output_with_timeout(cmd, GPU_PROBE_TIMEOUT, "nvidia-smi -L") {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if !stdout.trim().is_empty() && stdout.contains("GPU") {
-                return true;
-            }
-        }
-        _ => {}
-    }
-
-    detect_nvidia_gpu_from_system_inventory()
-}
-
-fn std_command_output_with_timeout(
-    mut cmd: std::process::Command,
-    timeout: Duration,
-    label: &str,
-) -> Result<std::process::Output, String> {
-    let mut child = cmd
-        .spawn()
-        .map_err(|error| format!("{label} failed to start: {error}"))?;
-    let started_at = Instant::now();
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|error| format!("{label} failed to collect output: {error}"));
-            }
-            Ok(None) if started_at.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("{label} timed out after {}s", timeout.as_secs()));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("{label} failed while waiting: {error}"));
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn detect_nvidia_gpu_from_system_inventory() -> bool {
-    if std::fs::read_dir("/proc/driver/nvidia/gpus")
-        .map(|mut entries| entries.next().is_some())
-        .unwrap_or(false)
-    {
-        return true;
-    }
-
-    let Ok(entries) = std::fs::read_dir("/sys/bus/pci/devices") else {
-        return false;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let vendor = std::fs::read_to_string(path.join("vendor")).unwrap_or_default();
-        if vendor.trim() != "0x10de" {
-            continue;
-        }
-
-        let class = std::fs::read_to_string(path.join("class")).unwrap_or_default();
-        if class.trim().starts_with("0x03") {
-            return true;
-        }
-    }
-
-    false
-}
-
-#[cfg(windows)]
-fn detect_nvidia_gpu_from_system_inventory() -> bool {
-    let candidates = [
-        std::env::var_os("ProgramFiles").map(PathBuf::from),
-        std::env::var_os("ProgramW6432").map(PathBuf::from),
-    ];
-
-    for base in candidates.into_iter().flatten() {
-        let smi = base
-            .join("NVIDIA Corporation")
-            .join("NVSMI")
-            .join("nvidia-smi.exe");
-        if !smi.exists() {
-            continue;
-        }
-        let mut cmd = std::process::Command::new(&smi);
-        cmd.arg("-L");
-        if let Ok(output) =
-            std_command_output_with_timeout(cmd, GPU_PROBE_TIMEOUT, "nvidia-smi.exe -L")
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if output.status.success() && stdout.contains("GPU") {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn detect_nvidia_gpu_from_system_inventory() -> bool {
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -794,5 +679,21 @@ mod tests {
             ),
             None
         );
+    }
+    /// The managed runtime ships the CPU PaddlePaddle wheel on every platform
+    /// (build-runtime-pack.yml), and paddle_vl.py falls back to CPU when CUDA is
+    /// missing. Demanding a CUDA build on NVIDIA hardware marked that wheel
+    /// failed forever on any machine with an NVIDIA card.
+    #[test]
+    fn paddlepaddle_probe_accepts_the_cpu_wheel_on_any_hardware() {
+        let paddle = all_deps()
+            .iter()
+            .find(|dep| dep.id == DependencyId::PaddlePaddle)
+            .expect("PaddlePaddle is registered");
+
+        let probe = probe_code_for(paddle);
+
+        assert_eq!(probe, paddle.probe_code);
+        assert!(!probe.contains("is_compiled_with_cuda"), "{probe}");
     }
 }
