@@ -97,7 +97,7 @@ fn decode_to_pcm16_wav(source: &Path, output: &Path) -> Result<(), String> {
             (params.codec != CODEC_ID_NULL_AUDIO).then(|| (track.id, params.clone()))
         })
         .ok_or_else(|| "No decodable audio track found".to_string())?;
-    let mut decoder = symphonia::default::get_codecs()
+    let mut decoder = crate::audio_codecs::codecs()
         .make_audio_decoder(&codec_params, &AudioDecoderOptions::default())
         .map_err(|e| format!("Unsupported audio codec: {e}"))?;
 
@@ -215,6 +215,26 @@ mod tests {
                 .all(|(index, sample)| *sample == test_sample(index)),
             "16-bit PCM passes through unchanged"
         );
+    }
+
+    #[test]
+    fn prepares_a_wav_preview_from_an_opus_voice_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("voice-note.ogg");
+        std::fs::write(
+            &source,
+            include_bytes!("transcription/testdata/tone-opus.ogg"),
+        )
+        .unwrap();
+
+        let preview_path =
+            prepare_audio_preview_file(source.to_str().unwrap(), dir.path()).unwrap();
+
+        let reader = hound::WavReader::open(preview_path).unwrap();
+        assert_eq!(reader.spec().channels, 1);
+        assert_eq!(reader.spec().sample_rate, 48_000);
+        let seconds = reader.duration() as f32 / 48_000.0;
+        assert!((0.9..=1.1).contains(&seconds), "{seconds} s of audio");
     }
 
     fn test_sample(index: usize) -> i16 {

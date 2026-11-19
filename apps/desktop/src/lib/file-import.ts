@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getAssetPathLabel } from './item-metadata'
 
 const SUPPORTED_IMAGES = ['png', 'jpg', 'jpeg', 'webp', 'tiff', 'tif']
-const SUPPORTED_AUDIO = ['wav', 'mp3', 'flac', 'm4a', 'aac', 'ogg']
+const SUPPORTED_AUDIO = ['wav', 'mp3', 'flac', 'm4a', 'aac', 'ogg', 'opus']
 export const SUPPORTED_FORMATS = [...SUPPORTED_IMAGES, 'pdf', ...SUPPORTED_AUDIO]
 
 /** A single rendered PDF page returned by the backend. */

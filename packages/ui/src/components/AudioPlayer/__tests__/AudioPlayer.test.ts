@@ -46,6 +46,23 @@ describe('AudioPlayer', () => {
     expect(screen.getByTestId('audio-duration')).toHaveTextContent('0:00')
   })
 
+  it('types a .opus voice note as Ogg audio in the fallback blob', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: () => Promise.resolve(new Blob(['audio'], { type: 'application/octet-stream' })),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(AudioPlayer, { props: { src: '/audio/nota-de-voz.opus' } })
+    const audio = screen.getByTestId('audio-player').querySelector('audio') as HTMLAudioElement
+    await fireEvent.error(audio)
+
+    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(1))
+    expect((URL.createObjectURL as ReturnType<typeof vi.fn>).mock.calls[0]![0].type).toBe(
+      'audio/ogg'
+    )
+  })
+
   it('uses a custom fallback blob loader before fetch', async () => {
     const fetchMock = vi.fn()
     const fallbackBlobLoader = vi.fn().mockResolvedValue(new Blob(['audio'], { type: 'audio/wav' }))
