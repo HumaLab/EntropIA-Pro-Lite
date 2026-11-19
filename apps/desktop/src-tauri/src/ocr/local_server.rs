@@ -59,8 +59,10 @@ pub(crate) struct ServerAssets {
 /// Optional override for the `llama-server` binary (dev and custom builds).
 pub(crate) const SERVER_BINARY_ENV: &str = "ENTROPIA_LLAMA_SERVER";
 
-/// `tools/llama-server` inside the bundled installer resources.
-pub(crate) const BUNDLED_SERVER_SUBDIR: &str = "tools/llama-server";
+/// Where the installer puts `llama-server`, relative to Tauri's resource dir.
+/// The bundle keeps each resource's source path, so the `.deb` entry
+/// `resources/tools/llama-server/*` lands under `<resource_dir>/resources/`.
+pub(crate) const BUNDLED_SERVER_SUBDIR: &str = "resources/tools/llama-server";
 
 /// `<data>/tools/llama-server`, the managed location of the server build.
 pub(crate) fn server_dir(db_path: &Path) -> PathBuf {
