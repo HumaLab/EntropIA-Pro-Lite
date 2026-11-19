@@ -281,6 +281,14 @@ fn find_wheel_in_dir(dir: &Path, prefix: &str) -> Option<PathBuf> {
 ///
 /// The caller (`install_package`) passes `--extra-index-url` when an index
 /// is returned, so PyPI remains available for transitive dependencies.
+/// PaddlePaddle imports `setuptools` without declaring it, and `uv venv`
+/// creates the managed venv without it, so the import check right after the
+/// install failed ("No module named 'setuptools'") and PaddleOCR was skipped.
+/// Install both together; the wheelhouse ships a setuptools wheel.
+fn paddlepaddle_install_spec(target: &str) -> String {
+    format!("{target} setuptools")
+}
+
 fn resolve_paddlepaddle_install_target(wheelhouse_dir: Option<&Path>) -> (String, Option<String>) {
     const VERSION_SPEC: &str = ">=3.2.1,<3.3.0";
 
@@ -936,7 +944,8 @@ pub async fn install_package(
     let _ = std::fs::remove_file(&write_probe);
 
     let (spec, extra_index_url) = if dep.id == DependencyId::PaddlePaddle {
-        resolve_paddlepaddle_install_target(wheelhouse_dir)
+        let (target, index) = resolve_paddlepaddle_install_target(wheelhouse_dir);
+        (paddlepaddle_install_spec(&target), index)
     } else {
         let spec = managed_install_spec(dep, wheelhouse_dir)
             .ok_or_else(|| format!("Sin spec de instalación para {}", dep.display_name))?;
@@ -2431,6 +2440,22 @@ print(json.dumps(registered))
     fn test_find_wheel_in_dir_returns_none_for_empty_dir() {
         let dir = tempdir().expect("temp dir");
         assert_eq!(find_wheel_in_dir(dir.path(), "paddlepaddle_gpu"), None);
+    }
+
+    #[test]
+    fn test_paddlepaddle_install_also_installs_setuptools() {
+        let wheelhouse = tempdir().expect("wheelhouse");
+        let cpu_wheel = wheelhouse
+            .path()
+            .join("paddlepaddle-3.2.2-cp311-cp311-win_amd64.whl");
+        std::fs::write(&cpu_wheel, b"cpu wheel").expect("write cpu wheel");
+
+        let (target, _) = resolve_paddlepaddle_install_target(Some(wheelhouse.path()));
+        let spec = paddlepaddle_install_spec(&target);
+        let packages: Vec<&str> = spec.split_whitespace().collect();
+
+        assert_eq!(packages.first().copied(), Some(target.as_str()));
+        assert!(packages.contains(&"setuptools"), "{packages:?}");
     }
 
     #[test]

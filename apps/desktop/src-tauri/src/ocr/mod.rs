@@ -1020,16 +1020,18 @@ pub enum OcrMode {
 
 // ── Model directory resolution ──────────────────────────────────────────────
 
-/// Resolve the PaddleOCR model directory.
-///
-/// In production (bundled Tauri app), uses `BaseDirectory::Resource`.
-/// In dev mode, falls back to `CARGO_MANIFEST_DIR` so models can be loaded
-/// from the project's `resources/models/ocr/` directory.
+/// Resolve the PaddleOCR model directory, in order: the hydrated managed
+/// runtime, the installed app's resource directory (every installer bundles
+/// `resources/models/ocr`, so the light OCR works without the AI runtime),
+/// and `CARGO_MANIFEST_DIR` for dev builds.
 #[cfg(feature = "paddle-ocr")]
 pub(crate) fn resolve_paddle_model_dir(app_handle: &AppHandle) -> std::path::PathBuf {
+    use tauri::Manager;
     let runtime_root = managed_runtime_root_for_ocr(app_handle).ok().flatten();
+    let resource_dir = app_handle.path().resource_dir().ok();
     resolve_paddle_model_dir_from_roots(
         runtime_root.as_deref(),
+        resource_dir.as_deref(),
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
     )
 }
@@ -1037,12 +1039,20 @@ pub(crate) fn resolve_paddle_model_dir(app_handle: &AppHandle) -> std::path::Pat
 #[cfg(feature = "paddle-ocr")]
 fn resolve_paddle_model_dir_from_roots(
     managed_root: Option<&std::path::Path>,
+    resource_dir: Option<&std::path::Path>,
     manifest_dir: &std::path::Path,
 ) -> std::path::PathBuf {
     if let Some(root) = managed_root {
         let managed = managed_resource_path(root, "models/ocr");
         if managed.exists() {
             return managed;
+        }
+    }
+
+    if let Some(resource_dir) = resource_dir {
+        let bundled = resource_dir.join("resources").join("models").join("ocr");
+        if bundled.exists() {
+            return bundled;
         }
     }
 
@@ -3576,10 +3586,34 @@ mod tests {
             .join("ocr");
         std::fs::create_dir_all(&managed_models).expect("create model dir");
 
-        let resolved =
-            resolve_paddle_model_dir_from_roots(Some(runtime_dir.path()), manifest_dir.path());
+        let resolved = resolve_paddle_model_dir_from_roots(
+            Some(runtime_dir.path()),
+            None,
+            manifest_dir.path(),
+        );
 
         assert_eq!(resolved, managed_models);
+    }
+
+    #[cfg(feature = "paddle-ocr")]
+    #[test]
+    fn resolve_paddle_model_dir_uses_installed_resources_without_runtime() {
+        let install_dir = tempfile::tempdir().expect("install dir");
+        let manifest_dir = tempfile::tempdir().expect("manifest dir");
+        let bundled_models = install_dir
+            .path()
+            .join("resources")
+            .join("models")
+            .join("ocr");
+        std::fs::create_dir_all(&bundled_models).expect("create model dir");
+
+        let resolved = resolve_paddle_model_dir_from_roots(
+            None,
+            Some(install_dir.path()),
+            manifest_dir.path(),
+        );
+
+        assert_eq!(resolved, bundled_models);
     }
 
     #[test]

@@ -177,7 +177,7 @@ fn admit_manual_ocr(conn: &rusqlite::Connection, asset_id: &str, mode: &str) -> 
             |row| row.get::<_, String>(0),
         )
         .map_err(|_| format!("invalid_selection: unknown asset {asset_id}"))?;
-    repository::admit_or_attach(
+    let outcome = repository::admit_or_attach(
         conn,
         &batch,
         "ocr",
@@ -187,6 +187,11 @@ fn admit_manual_ocr(conn: &rusqlite::Connection, asset_id: &str, mode: &str) -> 
         &crate::processing::ocr::ocr_task_contract(mode),
         None,
     )?;
+    // Asking again retries a unit an earlier configuration failure parked
+    // (audit 1.8.1, item 8); attaching alone left it blocked.
+    if !outcome.created {
+        repository::requeue_ocr_configuration_blocked_task(conn, &outcome.task_id)?;
+    }
     Ok(())
 }
 /// Materialize a normalized region from one PDF page as a standalone PDF.
