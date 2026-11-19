@@ -46,8 +46,8 @@
    * Compact mode for the floating panel (T15): the panel header replaces the
    * full-page header card, and the view fills the panel body with its own
    * scrolling middle and fixed footer. Standalone use keeps the header card.
-   * `maximized` (T28) drives the single-line opt-in row: the panel owns the
-   * state (HelpBubble) and the view only renders the contract.
+   * `maximized` (S21) centres the conversation in one column: the panel owns
+   * the state (HelpBubble) and the view only renders the contract.
    */
   let { embedded = false, maximized = false }: { embedded?: boolean; maximized?: boolean } =
     $props()
@@ -796,13 +796,9 @@
         void send()
       }}
     >
-      {#if localEngine}
-        <div class="help-view__engine">
-          <p class="help-view__note">
-            {$currentLocale &&
-              (localModelReady ? t('help.engineLocal') : t('help.engineLocalMissing'))}
-          </p>
-          {#if hasOpenrouterKey}
+      <div class="help-view__optins">
+        {#if localEngine && hasOpenrouterKey}
+          <div class="help-view__optin">
             <Checkbox
               bind:checked={useRemote}
               disabled={sending}
@@ -810,14 +806,8 @@
             >
               {$currentLocale && t('help.useRemote', { model: remoteModel })}
             </Checkbox>
-          {/if}
-        </div>
-      {:else if remoteModel}
-        <p class="help-view__note">
-          {$currentLocale && t('help.engineRemote', { model: remoteModel })}
-        </p>
-      {/if}
-      <div class="help-view__optins" class:help-view__optins--single={maximized}>
+          </div>
+        {/if}
         <div class="help-view__optin">
           <Checkbox
             bind:checked={includeDiagnostics}
@@ -911,6 +901,16 @@
           </Button>
         {/if}
       </div>
+      {#if localEngine}
+        <p class="help-view__note">
+          {$currentLocale &&
+            (localModelReady ? t('help.engineLocal') : t('help.engineLocalMissing'))}
+        </p>
+      {:else if remoteModel}
+        <p class="help-view__note">
+          {$currentLocale && t('help.engineRemote', { model: remoteModel })}
+        </p>
+      {/if}
     </form>
 
     <!-- Inline LOCAL_WRITE approval (T27, D12): a modal dialog like the MCP
@@ -1303,32 +1303,29 @@
 
   /* Where the question goes (R22): the local Gemma line and its one-question
      OpenRouter switch, above the opt-ins. */
-  .help-view__engine {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  /* Opt-ins (T28): one wrapping row by default; a single line only with the
-     maximized contract below. The maximized panel is wide enough for both. */
+  /* Opt-ins (T28): the OpenRouter switch, the diagnostics and the documents
+     share one line at every panel size. A narrow panel scrolls the row
+     sideways instead of wrapping it. */
   .help-view__optins {
     display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: var(--space-1) var(--space-3);
-  }
-
-  .help-view__optins--single {
     flex-wrap: nowrap;
     align-items: center;
+    gap: var(--space-1) var(--space-3);
     overflow-x: auto;
   }
 
   .help-view__optin {
     display: flex;
+    flex-shrink: 0;
     align-items: baseline;
     gap: var(--space-1);
-    min-width: 0;
+    white-space: nowrap;
+  }
+
+  /* The engine note closes the composer, under the question box; the
+     composer gap already spaces it. */
+  .help-view__composer .help-view__note {
+    margin: 0;
   }
 
   /* The small superscript hint (T28): the hint paragraph is gone and the
