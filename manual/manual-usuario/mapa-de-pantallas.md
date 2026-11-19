@@ -1659,6 +1659,7 @@
 
 ### noteEditor
 
+- «Abrir Dependencias de IA»
 - «Agregar link»
 - «Barra de formato»
 - «Cancelar»
@@ -2837,6 +2838,7 @@
 - «Asistentes» `settings.assistantsTab`
 - «AssemblyAI» `settings.assemblyai.title`
 - «Ayuda» `settings.helpTab`
+- «Cargando la configuración…» `settings.loading`
 - «Clave cargada: {key}» `settings.loadedKey`
 - «Clave en formato anterior (texto plano); guardá de nuevo para protegerla en el almacén de credenciales» `settings.keyStoredLegacyPlaintext`
 - «Clave guardada en el almacén del sistema» `settings.keyStoredInCredentialManager`
@@ -2863,11 +2865,11 @@
 - «English» `settings.languageOptionEn`
 - «EntropIA usa {service} cuando una función lo necesita.» `settings.apiSwitch.on`
 - «Español» `settings.languageOptionEs`
-- «Etiqueta cada segmento con Hablante A, B… (máximo 4, solo Parakeet). Requiere descargar el modelo de diarización (~400 MB).» `settings.sttLocalDiarize.description`
-- «GLM-OCR (z.ai)» `settings.glmOcr.title`
 
 ### Varios (2/3)
 
+- «Etiqueta cada segmento con Hablante A, B… (máximo 4, solo Parakeet). Requiere descargar el modelo de diarización (~400 MB).» `settings.sttLocalDiarize.description`
+- «GLM-OCR (z.ai)» `settings.glmOcr.title`
 - «Guardar cambios» `settings.save`
 - «Identificación de hablantes en audio de colección» `settings.assemblyAiSpeakerLabels`
 - «Idioma» `settings.languageLabel`
@@ -2906,12 +2908,12 @@
 - «Quitar clave de {service}» `settings.clearKey`
 - «RAG Params» `settings.ragParamsTab`
 - «Reintentar carga» `settings.retryLoad`
-- «Se va a eliminar la clave guardada de {service}. Las funciones que dependan de ella van a quedar sin configurar hasta que cargues una nueva.» `settings.clearKeyMessage`
-- «Secciones de configuración» `settings.tabsAria`
-- «Seguir editando» `settings.discardCancel`
 
 ### Varios (3/3)
 
+- «Se va a eliminar la clave guardada de {service}. Las funciones que dependan de ella van a quedar sin configurar hasta que cargues una nueva.» `settings.clearKeyMessage`
+- «Secciones de configuración» `settings.tabsAria`
+- «Seguir editando» `settings.discardCancel`
 - «Servidor OpenAI-compatible (opcional)» `settings.openaiCompatibleBaseUrl.label`
 - «Si lo completás, la generación remota va a ese servidor (vLLM, Ollama, pasarela propia) en vez de OpenRouter, usando el modelo ya configurado. Sin clave: ideal para un servidor local.» `settings.openaiCompatibleBaseUrl.description`
 - «Sin clave guardada» `settings.keyNotConfigured`

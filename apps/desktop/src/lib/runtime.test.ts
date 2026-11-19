@@ -172,10 +172,13 @@ describe('runtime client', () => {
   )
 
   it.runIf(LOCAL_ML)(
-    'runtimeBlocksCurrentUse treats fixture as packaging-only only when local deps are ready',
+    'runtimeBlocksCurrentUse treats fixture as packaging-only only in dev with local deps ready',
     () => {
-      expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, true)).toBe(false)
-      expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, false)).toBe(true)
+      expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, true, true)).toBe(false)
+      expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, false, true)).toBe(true)
+      // Release (no dev fallback): an old venv answering the probe does not
+      // make a fixture pack usable (audit 1.8.1, items 6 and 7).
+      expect(runtimeBlocksCurrentUse({ state: 'fixture' } as RuntimeStatus, true)).toBe(true)
       expect(
         runtimeBlocksCurrentUse({ state: 'blocked_source_unavailable' } as RuntimeStatus, true)
       ).toBe(true)

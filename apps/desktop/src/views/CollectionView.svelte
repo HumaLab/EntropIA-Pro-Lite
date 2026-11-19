@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getStore } from '$lib/db'
+  import { isInflight, trackInflight, whenInflightSettles } from '$lib/inflight.svelte'
   import { CollectionSearchPlanner } from '$lib/collection-search-plan'
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { workspace } from '$lib/workspace'
@@ -73,8 +74,13 @@
   let searchQuery = $state('')
   let loading = $state(true)
   let error = $state<string | null>(null)
-  let importing = $state(false)
-  let exporting = $state(false)
+  // An import or export keeps running after the user leaves the collection.
+  const importKey = $derived(`collection:import:${collectionId}`)
+  const exportKey = $derived(`collection:export:${collectionId}`)
+  let ownImporting = $state(false)
+  let ownExporting = $state(false)
+  const importing = $derived(ownImporting || isInflight(importKey))
+  const exporting = $derived(ownExporting || isInflight(exportKey))
   let textExportMenuOpen = $state(false)
   let textExportContainerEl = $state<HTMLDivElement | null>(null)
   const textExportMenuId = `collection-text-export-${Math.random().toString(36).slice(2)}`
@@ -806,7 +812,7 @@
   }
 
   async function handleImport() {
-    importing = true
+    ownImporting = true
     error = null
     importSummary = null
     importProgress = null
@@ -817,27 +823,29 @@
       selectedPaths = await pickFiles()
     } catch (e) {
       error = formatImportStageError('Failed to import files', 'selecting files', e)
-      importing = false
+      ownImporting = false
       return
     }
 
     if (selectedPaths.length === 0) {
-      importing = false
+      ownImporting = false
       return
     }
 
-    await importClassifiedPaths(selectedPaths, 'Failed to import files')
-    importing = false
+    const key = importKey
+    await trackInflight(key, () => importClassifiedPaths(selectedPaths, 'Failed to import files'))
+    ownImporting = false
   }
 
   async function handleImportFromDroppedPaths(paths: string[]) {
-    importing = true
+    ownImporting = true
     error = null
     importSummary = null
     importProgress = null
 
-    await importClassifiedPaths(paths, 'Failed to import dropped files')
-    importing = false
+    const key = importKey
+    await trackInflight(key, () => importClassifiedPaths(paths, 'Failed to import dropped files'))
+    ownImporting = false
     dragActive = false
   }
 
@@ -854,30 +862,32 @@
 
   async function handleExportJson() {
     try {
-      exporting = true
+      ownExporting = true
       error = null
       const store = getStore()
-      await exportCollectionById(store, collectionId)
+      await trackInflight(exportKey, () => exportCollectionById(store, collectionId))
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to export collection'
     } finally {
-      exporting = false
+      ownExporting = false
     }
   }
 
   async function handleExportText(format: CollectionOcrExportFormat) {
     textExportMenuOpen = false
     try {
-      exporting = true
+      ownExporting = true
       error = null
-      await exportCollectionOcrText(getStore(), collectionId, format)
+      await trackInflight(exportKey, () =>
+        exportCollectionOcrText(getStore(), collectionId, format)
+      )
     } catch (e) {
       error =
         e instanceof CollectionOcrExportEmptyError
           ? t('collection.ocrExport.empty')
           : t('collection.ocrExport.error')
     } finally {
-      exporting = false
+      ownExporting = false
     }
   }
 
@@ -990,6 +1000,8 @@
   })
 
   onMount(() => {
+    // An import started on an earlier visit: list its items once it ends.
+    void whenInflightSettles(importKey)?.then(() => loadItems())
     // Consume the restore: a later Back into this entry (after leaving some
     // other way) must not bring back a stale camera.
     const current = navigation.current

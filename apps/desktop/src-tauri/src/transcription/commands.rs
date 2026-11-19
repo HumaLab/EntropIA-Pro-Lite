@@ -20,9 +20,23 @@ fn ensure_selected_cloud_key_blocking(db: &AppDbState) -> Result<(), String> {
 /// async-context thread — the command's future dies mid-flight and the invoke
 /// never resolves. Running it on the blocking pool (the same context the OCR
 /// executor already uses) keeps the drop legal.
+///
+/// Only the provider that runs on the runtime (local faster-whisper) waits for
+/// it: Parakeet and AssemblyAI must keep working while the runtime is missing
+/// or its bootstrap fails.
 async fn ensure_transcription_runtime_ready_off_thread(
     app_handle: &AppHandle,
+    db: &AppDbState,
 ) -> Result<(), String> {
+    let db_path = db.db_path.clone();
+    let needs_runtime = run_blocking_db_task(move || {
+        let conn = crate::db::open::open_archive_connection(&db_path)?;
+        Ok(super::selected_provider_needs_runtime(&conn))
+    })
+    .await?;
+    if !needs_runtime {
+        return Ok(());
+    }
     let app_handle = app_handle.clone();
     tokio::task::spawn_blocking(move || super::ensure_transcription_runtime_ready(&app_handle))
         .await
@@ -71,7 +85,7 @@ pub async fn transcribe_audio(
     // by the worker and by each provider.
     let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
 
-    ensure_transcription_runtime_ready_off_thread(&app_handle).await?;
+    ensure_transcription_runtime_ready_off_thread(&app_handle, db.inner()).await?;
     {
         let db = db.inner().clone();
         run_blocking_db_task(move || ensure_selected_cloud_key_blocking(&db)).await?;
@@ -163,7 +177,7 @@ pub async fn transcribe_dictation(
     app_handle: AppHandle,
     db: State<'_, AppDbState>,
 ) -> Result<String, String> {
-    ensure_transcription_runtime_ready_off_thread(&app_handle).await?;
+    ensure_transcription_runtime_ready_off_thread(&app_handle, db.inner()).await?;
     crate::app_logs::info(
         &app_handle,
         "transcription",

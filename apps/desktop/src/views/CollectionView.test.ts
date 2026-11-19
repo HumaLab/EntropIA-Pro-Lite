@@ -887,6 +887,33 @@ describe('CollectionView import flow', () => {
     expect(screen.getByText('Errores')).toBeInTheDocument()
   })
 
+  // Audit item 17: the import keeps running after the user leaves the collection.
+  it('keeps the import in progress after leaving and coming back, until it ends', async () => {
+    const sourcePath = 'C:\\tmp\\photo.png'
+    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
+    classifyOne(sourcePath, 'photo.png')
+    let finishImport: (value: unknown) => void = () => {}
+    vi.mocked(invoke).mockImplementation((async (command: string) => {
+      if (command === 'resolve_data_dir') return '/mock/app-data'
+      if (command !== 'corpus_import_path') return undefined
+      return new Promise((resolve) => {
+        finishImport = resolve
+      })
+    }) as never)
+
+    const first = render(CollectionView, { collectionId: 'col-1' })
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+    await waitFor(() => expect(importRequests()).toHaveLength(1))
+    first.unmount()
+
+    render(CollectionView, { collectionId: 'col-1' })
+    const again = screen.getByRole('button', { name: /Importar documento/ })
+    expect(again).toBeDisabled()
+
+    finishImport({ outcome: 'imported', itemId: 'item-new', title: 'photo', assets: 1 })
+    await waitFor(() => expect(again).toBeEnabled())
+  })
+
   it('imports a PDF through the backend and opens the document it created', async () => {
     // The original plus one single-page asset per page is pinned in Rust
     // (`corpus::ingest_tests`); the view only reads the answer.

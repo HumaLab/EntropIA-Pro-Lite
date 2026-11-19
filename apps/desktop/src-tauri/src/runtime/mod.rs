@@ -44,6 +44,7 @@ pub fn runtime_get_status(app_handle: tauri::AppHandle) -> Result<status::Runtim
     RuntimeManager::new()
         .status(&app_handle)
         .map(manager::with_metered_deferral)
+        .map(manager::with_last_bootstrap_error)
 }
 
 #[cfg(not(feature = "local-ml"))]

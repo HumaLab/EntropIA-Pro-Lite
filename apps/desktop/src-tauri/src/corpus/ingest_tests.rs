@@ -438,11 +438,50 @@ fn file_kinds_follow_the_apps_own_list() {
         // The app's own audio list includes `ogg`, so an import that used to
         // accept it keeps accepting it now that the service does the work.
         ("entrevista.ogg", Some(FileKind::Audio)),
+        // A WhatsApp voice note saved on its own (audit 1.8.1, item 15).
+        ("nota-de-voz.OPUS", Some(FileKind::Audio)),
         ("notas.txt", None),
         ("sin_extension", None),
     ] {
         assert_eq!(classify(Path::new(name)), kind, "{name}");
     }
+}
+
+/// The frontend's lists in `lib/file-import.ts` and [`classify`] must agree:
+/// a file the picker offers and the service refuses (or the reverse) is a
+/// silent import failure.
+#[test]
+fn classify_agrees_with_the_frontend_lists() {
+    let source = include_str!("../../../src/lib/file-import.ts");
+    let list = |name: &str| -> Vec<String> {
+        let start = source
+            .find(&format!("const {name} = ["))
+            .unwrap_or_else(|| panic!("{name} is no longer in file-import.ts"));
+        let rest = &source[start..];
+        let body = &rest[rest.find('[').unwrap() + 1..rest.find(']').unwrap()];
+        body.split(',')
+            .map(|entry| entry.trim().trim_matches('\'').to_string())
+            .filter(|entry| !entry.is_empty())
+            .collect()
+    };
+    let images = list("SUPPORTED_IMAGES");
+    let audio = list("SUPPORTED_AUDIO");
+    assert!(audio.contains(&"opus".to_string()), "{audio:?}");
+    for ext in &images {
+        assert_eq!(
+            classify(Path::new(&format!("a.{ext}"))),
+            Some(FileKind::Image),
+            "{ext}"
+        );
+    }
+    for ext in &audio {
+        assert_eq!(
+            classify(Path::new(&format!("a.{ext}"))),
+            Some(FileKind::Audio),
+            "{ext}"
+        );
+    }
+    assert_eq!(classify(Path::new("a.pdf")), Some(FileKind::Pdf));
 }
 
 #[test]

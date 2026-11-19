@@ -241,6 +241,37 @@ describe('AssistantsTab', () => {
     ).toBeInTheDocument()
   })
 
+  // Audit item 17: the backend keeps pairing after the user leaves the tab.
+  it('keeps a one-click connection in progress after leaving and coming back', async () => {
+    const routes = reconnectRoutes()
+    let finishPairing: (value: unknown) => void = () => {}
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'agent_assistant_connect') {
+        return new Promise((resolve) => {
+          finishPairing = resolve
+        })
+      }
+      if (command === 'agent_connector_location') return Promise.resolve(MISSING_CONNECTOR)
+      if (command in routes) return Promise.resolve(routes[command])
+      return Promise.reject(new Error(`unexpected command ${command}`))
+    })
+
+    const first = render(AssistantsTab)
+    const button = await screen.findByRole('button', { name: 'Conectar Claude Code' })
+    await waitFor(() => expect(button).toBeEnabled())
+    await fireEvent.click(button)
+    first.unmount()
+
+    render(AssistantsTab)
+    const again = await screen.findByRole('button', { name: 'Conectar Claude Code' })
+    // Loaded: the endpoint line only shows once the access status arrives.
+    await waitFor(() => expect(endpointState()).toHaveTextContent('Activo en 127.0.0.1'))
+    expect(again).toBeDisabled()
+
+    finishPairing(routes.agent_client_create)
+    await waitFor(() => expect(again).toBeEnabled())
+  })
+
   it.each([null, 'delete refused'])(
     'shows the backend failure and rollback detail %s without frontend revocation',
     async (rollback) => {

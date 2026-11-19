@@ -858,8 +858,10 @@ pub fn create_paddle_vl_engine_result(
     let runtime_root = managed_runtime_root_for_paddle_vl(app_handle)
         .ok()
         .flatten();
+    let resource_dir = bundled_resource_dir(app_handle);
     let script_path = resolve_paddle_vl_script_path_from_roots(
         runtime_root.as_deref(),
+        resource_dir.as_deref(),
         Path::new(env!("CARGO_MANIFEST_DIR")),
     );
     let app_data_dir = crate::path_utils::cache_dir(app_handle)
@@ -917,11 +919,8 @@ pub fn create_paddle_vl_engine_result(
     // Auto-detect GPU and prefer it, but let the Python subprocess validate
     // software-level support and fall back to CPU if GPU init fails.
     let has_gpu = detect_nvidia_gpu();
-    let glm_assets = resolve_desired_backend_with_gpu(
-        settings_db_path,
-        bundled_resource_dir(app_handle).as_deref(),
-        has_gpu,
-    )?;
+    let glm_assets =
+        resolve_desired_backend_with_gpu(settings_db_path, resource_dir.as_deref(), has_gpu)?;
     if let Some(assets) = glm_assets {
         crate::app_logs::info(
             app_handle,
@@ -935,11 +934,13 @@ pub fn create_paddle_vl_engine_result(
             python_path,
             script_path: resolve_ocrh_script_path_from_roots(
                 runtime_root.as_deref(),
+                resource_dir.as_deref(),
                 Path::new(env!("CARGO_MANIFEST_DIR")),
                 "glm_ocr_local.py",
             ),
             layout_script_path: resolve_ocrh_script_path_from_roots(
                 runtime_root.as_deref(),
+                resource_dir.as_deref(),
                 Path::new(env!("CARGO_MANIFEST_DIR")),
                 "layout_v3.py",
             ),
@@ -970,6 +971,7 @@ pub fn create_paddle_vl_engine_result(
         script_path,
         layout_script_path: resolve_ocrh_script_path_from_roots(
             runtime_root.as_deref(),
+            resource_dir.as_deref(),
             Path::new(env!("CARGO_MANIFEST_DIR")),
             "layout_v3.py",
         ),
@@ -1060,13 +1062,21 @@ fn resolve_desired_backend_with_gpu(
 
 fn resolve_paddle_vl_script_path_from_roots(
     managed_root: Option<&Path>,
+    resource_dir: Option<&Path>,
     manifest_dir: &Path,
 ) -> PathBuf {
-    resolve_ocrh_script_path_from_roots(managed_root, manifest_dir, "paddle_vl.py")
+    resolve_ocrh_script_path_from_roots(managed_root, resource_dir, manifest_dir, "paddle_vl.py")
 }
 
+/// Find an OCRH helper script: the managed runtime first, then the scripts the
+/// installer ships under the resource directory, then the source tree (dev).
+/// The runtime pack carries only some of them (`layout_v3.py` and
+/// `glm_ocr_local.py` come with the installer alone), and `manifest_dir` is the
+/// build machine's path in a release, so skipping the resource directory left
+/// OCRH and the light-OCR layout without their script.
 fn resolve_ocrh_script_path_from_roots(
     managed_root: Option<&Path>,
+    resource_dir: Option<&Path>,
     manifest_dir: &Path,
     script_name: &str,
 ) -> PathBuf {
@@ -1074,6 +1084,12 @@ fn resolve_ocrh_script_path_from_roots(
         let managed = managed_script_path(root, script_name);
         if managed.exists() {
             return managed;
+        }
+    }
+    if let Some(resource_dir) = resource_dir {
+        let bundled = resource_dir.join("scripts").join(script_name);
+        if bundled.exists() {
+            return normalize_windows_path(bundled);
         }
     }
 
@@ -1243,8 +1259,11 @@ mod tests {
             .expect("create script dir");
         std::fs::write(&managed_script, "print('ok')").expect("write managed script");
 
-        let resolved =
-            resolve_paddle_vl_script_path_from_roots(Some(runtime_dir.path()), manifest_dir.path());
+        let resolved = resolve_paddle_vl_script_path_from_roots(
+            Some(runtime_dir.path()),
+            None,
+            manifest_dir.path(),
+        );
 
         assert_eq!(resolved, managed_script);
     }
@@ -1261,9 +1280,40 @@ mod tests {
         std::fs::write(&legacy_script, "print('legacy')").expect("write legacy script");
         std::fs::write(&canonical_script, "print('canonical')").expect("write canonical script");
 
-        let resolved = resolve_paddle_vl_script_path_from_roots(None, manifest_dir.path());
+        let resolved = resolve_paddle_vl_script_path_from_roots(None, None, manifest_dir.path());
 
         assert_eq!(resolved, canonical_script);
+    }
+
+    #[test]
+    fn resolves_installer_layout_script_when_the_runtime_lacks_it() {
+        let runtime_dir = tempdir().expect("runtime dir");
+        let resource_dir = tempdir().expect("resource dir");
+        let manifest_dir = tempdir().expect("manifest dir");
+        let runtime_scripts = runtime_dir.path().join("scripts");
+        std::fs::create_dir_all(&runtime_scripts).expect("create runtime scripts");
+        std::fs::write(runtime_scripts.join("paddle_vl.py"), "print('runtime')")
+            .expect("write runtime script");
+        let bundled = resource_dir.path().join("scripts").join("layout_v3.py");
+        std::fs::create_dir_all(bundled.parent().expect("bundled parent"))
+            .expect("create bundled scripts");
+        std::fs::write(&bundled, "print('bundled')").expect("write bundled script");
+
+        let layout = resolve_ocrh_script_path_from_roots(
+            Some(runtime_dir.path()),
+            Some(resource_dir.path()),
+            manifest_dir.path(),
+            "layout_v3.py",
+        );
+        let paddle_vl = resolve_ocrh_script_path_from_roots(
+            Some(runtime_dir.path()),
+            Some(resource_dir.path()),
+            manifest_dir.path(),
+            "paddle_vl.py",
+        );
+
+        assert_eq!(layout, normalize_windows_path(bundled));
+        assert_eq!(paddle_vl, runtime_scripts.join("paddle_vl.py"));
     }
 
     #[test]

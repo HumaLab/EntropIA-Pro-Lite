@@ -397,9 +397,13 @@ pub fn resolve_probe_python_from_settings(
     }
 }
 
+/// The Python the app itself owns: the healthy runtime pack's, or the venv
+/// the app created. It never looks at other Pythons on the machine: the
+/// dependency check reports the runtime the app will use, and a system Python
+/// that happens to have the libraries does not make them installed (audit
+/// 1.8.1, item 6). Only [`ProbePythonMode::RuntimeFallback`] goes further.
 fn resolve_runtime_python_choice(
     managed_path: Option<&Path>,
-    runtime_candidates: Vec<PathBuf>,
     managed_runtime_python: Option<&Path>,
     managed_runtime_status: Option<&RuntimeStatus>,
 ) -> Option<PathBuf> {
@@ -425,7 +429,6 @@ fn resolve_runtime_python_choice(
                 None
             }
         })
-        .or_else(|| resolve_runtime_python_candidates(runtime_candidates))
 }
 
 fn runtime_status_is_healthy(status: Option<&RuntimeStatus>) -> bool {
@@ -443,7 +446,6 @@ pub fn resolve_probe_python_with_runtime(
 ) -> Option<PathBuf> {
     if let Some(path) = resolve_runtime_python_choice(
         settings.managed_path.as_deref(),
-        settings.runtime_candidates.clone(),
         managed_runtime_python,
         managed_runtime_status,
     ) {
@@ -706,7 +708,6 @@ mod tests {
 
         let resolution = resolve_runtime_python_choice(
             None,
-            vec![],
             Some(&runtime_python),
             Some(&crate::runtime::status::RuntimeStatus {
                 state: crate::runtime::status::RuntimeState::Healthy,
@@ -737,7 +738,6 @@ mod tests {
 
         let resolution = resolve_runtime_python_choice(
             Some(managed_python.as_path()),
-            vec![],
             Some(&runtime_python),
             Some(&crate::runtime::status::RuntimeStatus {
                 state: crate::runtime::status::RuntimeState::Damaged,
@@ -756,5 +756,43 @@ mod tests {
         );
 
         assert_eq!(resolution, Some(managed_python));
+    }
+
+    #[test]
+    fn the_dependency_check_ignores_pythons_the_app_does_not_own() {
+        // A fixture pack, no venv of the app's own: whatever other Python is
+        // on the machine, the dependency check has nothing to probe, so it
+        // reports the dependencies missing instead of ready (audit 1.8.1).
+        let dir = tempdir().expect("temp dir");
+        let runtime_python = dir.path().join("runtime-python");
+        std::fs::write(&runtime_python, b"runtime").expect("write runtime python");
+        let settings = ProbePythonSettings {
+            managed_path: None,
+            runtime_candidates: vec![dir.path().join("system-python")],
+        };
+        let fixture = crate::runtime::status::RuntimeStatus {
+            state: crate::runtime::status::RuntimeState::Fixture,
+            pack_version: Some("2026.05.0".to_string()),
+            repair_needed: false,
+            repair_available: false,
+            summary: "Runtime de IA pendiente de descarga".to_string(),
+            blocked_capabilities: vec![],
+            details: vec![],
+            guidance: vec![],
+            bootstrap_eligible: true,
+            bootstrap_required: true,
+            blocked_reason: None,
+            active_operation: None,
+        };
+
+        assert_eq!(
+            resolve_probe_python_with_runtime(
+                settings,
+                ProbePythonMode::DependencyManager,
+                Some(&runtime_python),
+                Some(&fixture),
+            ),
+            None
+        );
     }
 }

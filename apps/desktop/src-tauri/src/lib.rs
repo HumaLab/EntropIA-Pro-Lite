@@ -4,6 +4,7 @@ pub(crate) mod asset_history;
 mod asset_integrity;
 pub mod asset_scope;
 mod asset_sweep;
+mod audio_codecs;
 mod audio_preview;
 mod exit_watchdog;
 // `pub` so the assistant endpoint's surface is real crate API between tasks

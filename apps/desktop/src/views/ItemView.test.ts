@@ -10,6 +10,7 @@ import type { View } from '$lib/navigation'
 import { setupKeyboardShortcuts } from '$lib/keyboard'
 import { DOCUMENT_ASSET_DELETED_EVENT } from '$lib/document-explorer'
 import type { OcrCorrectionEngine } from '$lib/llm'
+import { resetInflightForTests } from '$lib/inflight.svelte'
 
 const {
   nlpEventHandlers,
@@ -419,7 +420,11 @@ vi.mock('$lib/llm', async () => {
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn((eventName: string, callback: (event: { payload: unknown }) => void) => {
-    nlpEventHandlers.set(eventName, callback)
+    // Every live listener of the event hears it: the view's stores and the
+    // app-wide in-progress registry both listen to the same events.
+    nlpEventHandlers.set(eventName, (event) => {
+      for (const listener of [...(tauriListeners.get(eventName) ?? [])]) listener(event)
+    })
     const listeners = tauriListeners.get(eventName) ?? new Set()
     listeners.add(callback)
     tauriListeners.set(eventName, listeners)
@@ -597,6 +602,7 @@ beforeEach(() => {
   llmCanRestoreOriginalOcrAssetMock.mockReset().mockResolvedValue(false)
   llmRestoreOriginalOcrAssetMock.mockReset().mockResolvedValue('OCR original')
   emitMock.mockReset().mockResolvedValue(undefined)
+  resetInflightForTests()
   tauriListeners.clear()
   duplicateAssetFileMock.mockReset()
   deleteAssetFileMock.mockReset().mockResolvedValue(undefined)
@@ -1852,6 +1858,43 @@ describe('ItemView semantic triples panel', () => {
     await fireEvent.click(triplesBtn)
     expect(llmExtractTriplesAssetMock).toHaveBeenCalledTimes(2)
   })
+
+  // Audit item 17: the job keeps running in the backend queue while the user
+  // is on another screen, so coming back must still show it in progress.
+  it('keeps TRIPLET in progress after leaving and coming back, until the job ends', async () => {
+    storeRef.current = createStore({ triplesRows: [] })
+    const first = render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(await screen.findByRole('tab', { name: /Análisis/i }))
+    await fireEvent.click(await screen.findByRole('button', { name: /^TRIPLET\b/ }))
+    first.unmount()
+
+    await renderItemViewWith([])
+    const triplesBtn = await screen.findByRole('button', { name: /^TRIPLET\b/ })
+    await waitFor(() => expect(triplesBtn).toBeDisabled())
+    expect(within(triplesBtn).getByText('pending')).toBeInTheDocument()
+
+    nlpEventHandlers.get('llm:complete')?.({
+      payload: { id: 'asset-1', job: 'extract_triples', result: '[]' },
+    })
+    await waitFor(() => expect(triplesBtn).toBeEnabled())
+  })
+
+  it('shows TRIPLET idle after coming back when the job ended while away', async () => {
+    storeRef.current = createStore({ triplesRows: [] })
+    const first = render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(await screen.findByRole('tab', { name: /Análisis/i }))
+    await fireEvent.click(await screen.findByRole('button', { name: /^TRIPLET\b/ }))
+    first.unmount()
+
+    nlpEventHandlers.get('llm:error')?.({
+      payload: { id: 'asset-1', job: 'extract_triples', error: 'queue full' },
+    })
+
+    await renderItemViewWith([])
+    const triplesBtn = await screen.findByRole('button', { name: /^TRIPLET\b/ })
+    await waitFor(() => expect(triplesBtn).toBeEnabled())
+    expect(within(triplesBtn).queryByText('pending')).toBeNull()
+  })
 })
 
 describe('ItemView header hierarchy', () => {
@@ -1923,6 +1966,35 @@ describe('ItemView asset-level embedding and similarity', () => {
     await fireEvent.click(await screen.findByRole('button', { name: /EMBED/i }))
 
     expect(embedAssetMock).toHaveBeenCalledWith('item-1', 'asset-embed-1')
+  })
+
+  it('keeps EMBED in progress after leaving and coming back, until the job ends', async () => {
+    const store = () =>
+      createStore({
+        assetsRows: [
+          {
+            id: 'asset-embed-1',
+            itemId: 'item-1',
+            path: 'docs/acta-1.pdf',
+            type: 'pdf',
+            createdAt: 1,
+          },
+        ],
+      })
+    storeRef.current = store()
+    const first = render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(await screen.findByRole('tab', { name: /Análisis/i }))
+    await fireEvent.click(await screen.findByRole('button', { name: /EMBED/i }))
+    first.unmount()
+
+    await openAnalysis(store())
+    const embedBtn = await screen.findByRole('button', { name: /EMBED/i })
+    await waitFor(() => expect(within(embedBtn).getByText('pending')).toBeInTheDocument())
+
+    nlpEventHandlers.get('nlp:complete')?.({
+      payload: { item_id: 'item-1', asset_id: 'asset-embed-1', job: 'embed' },
+    })
+    await waitFor(() => expect(within(embedBtn).getByText('done')).toBeInTheDocument())
   })
 
   it('does not show asset A embedding completion as ready on asset B', async () => {

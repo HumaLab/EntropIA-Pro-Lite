@@ -4473,17 +4473,47 @@ pub fn resume_ocr_configuration_blocked(conn: &Connection) -> Result<usize, Stri
         return Ok(0);
     }
     conn.execute(
-        "UPDATE processing_tasks SET state = 'pending', outcome = '', owner_session = NULL,
-           next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
-           updated_at = strftime('%s', 'now') * 1000
-         WHERE state = 'blocked'
-           AND (last_error_code = 'configuration_required_ocr'
-                OR (last_error_code = 'configuration_required'
-                    AND kind IN ('ocr', 'bibliography_extract')
-                    AND last_error_message LIKE 'configuration:%'))",
+        &format!(
+            "UPDATE processing_tasks SET {REQUEUE_BLOCKED_SET}
+             WHERE {OCR_CONFIGURATION_BLOCKED}"
+        ),
         [],
     )
     .map_err(|e| format!("Failed to resume OCR configuration-blocked units: {e}"))
+}
+
+/// What a resumed blocked unit is reset to.
+const REQUEUE_BLOCKED_SET: &str = "state = 'pending', outcome = '', owner_session = NULL,
+           next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
+           updated_at = strftime('%s', 'now') * 1000";
+
+/// A unit the OCR engine parked on its configuration (shared by the
+/// settings-change resume and the manual retry, so the two cannot drift).
+const OCR_CONFIGURATION_BLOCKED: &str = "state = 'blocked'
+           AND (last_error_code = 'configuration_required_ocr'
+                OR (last_error_code = 'configuration_required'
+                    AND kind IN ('ocr', 'bibliography_extract')
+                    AND last_error_message LIKE 'configuration:%'))";
+
+/// A person asking for the OCR again is the retry (audit 1.8.1, item 8): the
+/// unit an earlier configuration failure parked goes back to `pending`, so
+/// it runs now instead of waiting for a settings change that may never come
+/// (the cause can be a missing file the app itself repairs). If the
+/// configuration is still wrong it fails again at once and says so. Returns
+/// whether the task was requeued; any other state is left alone.
+pub fn requeue_ocr_configuration_blocked_task(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<bool, String> {
+    conn.execute(
+        &format!(
+            "UPDATE processing_tasks SET {REQUEUE_BLOCKED_SET}
+             WHERE id = ?1 AND {OCR_CONFIGURATION_BLOCKED}"
+        ),
+        [task_id],
+    )
+    .map(|changed| changed > 0)
+    .map_err(|e| format!("Failed to requeue OCR task {task_id}: {e}"))
 }
 
 /// Requeues the NER units parked `configuration_required` once the NER chain
@@ -11971,6 +12001,41 @@ mod tests {
         assert_eq!(task_state(&conn, "t-contract"), "blocked");
         assert_eq!(task_state(&conn, "t-embed"), "blocked");
         assert_eq!(resume_ocr_configuration_blocked(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_manual_retry_requeues_only_the_ocr_unit_parked_on_its_configuration() {
+        let (_dir, conn) = batch_db();
+        insert_blocked_unit(
+            &conn,
+            "t-ocr",
+            "ocr",
+            "configuration_required_ocr",
+            "configuration: PaddleOCR liviano no está disponible",
+        );
+        insert_blocked_unit(
+            &conn,
+            "t-contract",
+            "ocr",
+            "configuration_required_extract_contract",
+            "contract changed",
+        );
+
+        assert!(requeue_ocr_configuration_blocked_task(&conn, "t-ocr").unwrap());
+        assert_eq!(task_state(&conn, "t-ocr"), "pending");
+        let (code, message): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT last_error_code, last_error_message FROM processing_tasks WHERE id = 't-ocr'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((code, message), (None, None));
+
+        // Another block reason, and a unit already pending, stay as they are.
+        assert!(!requeue_ocr_configuration_blocked_task(&conn, "t-contract").unwrap());
+        assert_eq!(task_state(&conn, "t-contract"), "blocked");
+        assert!(!requeue_ocr_configuration_blocked_task(&conn, "t-ocr").unwrap());
     }
 
     #[test]

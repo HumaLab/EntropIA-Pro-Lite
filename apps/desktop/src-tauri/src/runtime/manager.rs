@@ -191,6 +191,25 @@ impl RuntimeManager {
         &self,
         app_handle: &AppHandle,
     ) -> Result<RuntimeStatus, String> {
+        // A new attempt starts clean: a stale error must not sit on a live
+        // download's banner.
+        record_bootstrap_error(None);
+        let result = self.ensure_ready_or_bootstrap_attempt(app_handle);
+        if let Err(error) = &result {
+            record_bootstrap_error(Some(error.clone()));
+            // Re-emit so the banner and Dependencias show the failure now,
+            // not on the next status poll.
+            if let Ok(status) = self.status(app_handle) {
+                let _ = self.emit_status(app_handle, &status);
+            }
+        }
+        result
+    }
+
+    fn ensure_ready_or_bootstrap_attempt(
+        &self,
+        app_handle: &AppHandle,
+    ) -> Result<RuntimeStatus, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
         let app_data_dir = crate::path_utils::cache_dir(app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
@@ -451,8 +470,9 @@ impl RuntimeManager {
                 crate::app_logs::info(app_handle, "runtime", format!("Detalle runtime: {detail}"));
             }
         }
+        let status = with_last_bootstrap_error(status.clone());
         app_handle
-            .emit("runtime://status", status)
+            .emit("runtime://status", &status)
             .map_err(|error| format!("Failed to emit runtime status event: {error}"))
     }
 
@@ -588,7 +608,13 @@ impl RuntimeManager {
         };
 
         invalidate_stale_managed_runtime(app_data_dir, &manifest)?;
-        invalidate_stale_managed_runtime_dirs(app_data_dir, &manifest)?;
+        // Removing runtimes of other app versions is housekeeping: a folder
+        // that cannot be deleted (a packaged MSIX install cannot remove files
+        // another install created; an antivirus may hold one) must not stop
+        // the current runtime from being checked, downloaded or hydrated.
+        for warning in invalidate_stale_managed_runtime_dirs(app_data_dir, &manifest) {
+            log::warn!(target: "runtime", "{warning}");
+        }
 
         let current_status =
             inspect_runtime(bundle_root, app_data_dir, &manifest, remote_catalog.clone())?;
@@ -830,6 +856,42 @@ static METERED_DEFERRED: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 
 /// `status` as the UI should see it: a fixture whose download a metered
 /// connection held back keeps the metered guidance and its start button.
+/// The last failed bootstrap attempt (audit 1.8.1, item 7): while the runtime
+/// is not healthy the banner and Dependencias show this reason first, instead
+/// of a generic "downloads automatically" line that never comes true.
+static LAST_BOOTSTRAP_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+const BOOTSTRAP_ERROR_PREFIX: &str = "El último intento de preparar el runtime de IA falló: ";
+
+fn record_bootstrap_error(error: Option<String>) {
+    if let Ok(mut last) = LAST_BOOTSTRAP_ERROR.lock() {
+        *last = error;
+    }
+}
+
+/// Puts `error` first in the guidance of a status that is not healthy.
+fn annotate_with_bootstrap_error(mut status: RuntimeStatus, error: Option<&str>) -> RuntimeStatus {
+    let Some(error) = error else {
+        return status;
+    };
+    if status.state == RuntimeState::Healthy {
+        return status;
+    }
+    let line = format!("{BOOTSTRAP_ERROR_PREFIX}{error}");
+    if status.guidance.first() != Some(&line) {
+        status.guidance.insert(0, line);
+    }
+    status
+}
+
+pub(crate) fn with_last_bootstrap_error(status: RuntimeStatus) -> RuntimeStatus {
+    let error = LAST_BOOTSTRAP_ERROR
+        .lock()
+        .ok()
+        .and_then(|last| last.clone());
+    annotate_with_bootstrap_error(status, error.as_deref())
+}
+
 pub(crate) fn with_metered_deferral(status: RuntimeStatus) -> RuntimeStatus {
     if status.state == RuntimeState::Fixture
         && METERED_DEFERRED.load(std::sync::atomic::Ordering::SeqCst)
@@ -1212,13 +1274,30 @@ fn invalidate_stale_managed_runtime(
     })
 }
 
+/// Best-effort removal of the managed runtimes other app versions left
+/// behind. Returns one message per folder that could not be removed; it never
+/// fails, so a leftover folder cannot block the current runtime.
 fn invalidate_stale_managed_runtime_dirs(
     app_data_dir: &Path,
     current_manifest: &RuntimeManifest,
-) -> Result<(), String> {
+) -> Vec<String> {
+    invalidate_stale_managed_runtime_dirs_with(app_data_dir, current_manifest, |path| {
+        fs::remove_dir_all(path)
+    })
+}
+
+fn invalidate_stale_managed_runtime_dirs_with<R>(
+    app_data_dir: &Path,
+    current_manifest: &RuntimeManifest,
+    mut remove_dir_all: R,
+) -> Vec<String>
+where
+    R: FnMut(&Path) -> std::io::Result<()>,
+{
+    let mut warnings = Vec::new();
     let runtime_dir = runtime_root(app_data_dir);
     let Ok(entries) = fs::read_dir(&runtime_dir) else {
-        return Ok(());
+        return warnings;
     };
 
     let current_root = managed_pack_dir(app_data_dir, &current_manifest.pack_version);
@@ -1243,15 +1322,15 @@ fn invalidate_stale_managed_runtime_dirs(
             continue;
         }
 
-        fs::remove_dir_all(&path).map_err(|error| {
-            format!(
-                "Failed to invalidate stale runtime {}: {error}",
+        if let Err(error) = remove_dir_all(&path) {
+            warnings.push(format!(
+                "Could not remove stale runtime {} (kept, ignored): {error}",
                 path.display()
-            )
-        })?;
+            ));
+        }
     }
 
-    Ok(())
+    warnings
 }
 
 fn hydrate_runtime_with_progress<F>(
@@ -2034,6 +2113,41 @@ mod tests {
         assert!(
             stage_line_is_new(&recent, checking, later),
             "after the quiet window the stage logs again"
+        );
+    }
+
+    #[test]
+    fn a_failed_bootstrap_leads_the_guidance_of_an_unhealthy_status() {
+        let fixture = RuntimeStatus {
+            state: RuntimeState::Fixture,
+            guidance: vec!["Se descarga automáticamente".to_string()],
+            ..healthy_status("2026.05.0")
+        };
+        let error = "Failed to invalidate stale runtime: os error 32";
+        let annotated = annotate_with_bootstrap_error(fixture.clone(), Some(error));
+        assert_eq!(
+            annotated.guidance,
+            vec![
+                format!("{BOOTSTRAP_ERROR_PREFIX}{error}"),
+                "Se descarga automáticamente".to_string()
+            ]
+        );
+        // Emitting the same status twice must not stack the line.
+        let again = annotate_with_bootstrap_error(annotated.clone(), Some(error));
+        assert_eq!(again.guidance, annotated.guidance);
+        // Nothing recorded: the status is untouched.
+        assert_eq!(
+            annotate_with_bootstrap_error(fixture.clone(), None),
+            fixture
+        );
+    }
+
+    #[test]
+    fn a_healthy_runtime_never_shows_an_old_bootstrap_error() {
+        let healthy = healthy_status("2026.11.5");
+        assert_eq!(
+            annotate_with_bootstrap_error(healthy.clone(), Some("old failure")),
+            healthy
         );
     }
 
@@ -2953,6 +3067,42 @@ mod tests {
             )
             .expect("read repaired python"),
             b"python"
+        );
+    }
+
+    #[test]
+    fn stale_runtime_that_cannot_be_removed_is_kept_and_reported_not_fatal() {
+        let app_data_dir = tempdir().expect("app data dir");
+        let current_manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            "python-sha",
+            "uv-sha",
+        );
+        let mut stale_manifest = current_manifest.clone();
+        stale_manifest.app_version = "0.0.11".to_string();
+        let locked = app_data_dir.path().join("runtime").join("2026.11.4");
+        let removable = app_data_dir.path().join("runtime").join("2026.10.0");
+        write_manifest(&locked, &stale_manifest);
+        write_manifest(&removable, &stale_manifest);
+
+        let warnings = invalidate_stale_managed_runtime_dirs_with(
+            app_data_dir.path(),
+            &current_manifest,
+            |path| {
+                if path == locked {
+                    Err(std::io::Error::from_raw_os_error(32))
+                } else {
+                    fs::remove_dir_all(path)
+                }
+            },
+        );
+
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("2026.11.4"), "{warnings:?}");
+        assert!(locked.exists(), "the folder that failed is left in place");
+        assert!(
+            !removable.exists(),
+            "the other stale folder is still removed"
         );
     }
 

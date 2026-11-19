@@ -12,6 +12,7 @@
   import { onMount } from 'svelte'
   import { locale, t } from '$lib/i18n'
   import { open as openFolderDialog } from '@tauri-apps/plugin-dialog'
+  import { isInflight, trackInflight, whenInflightSettles } from '$lib/inflight.svelte'
   import {
     ActionIcon,
     Button,
@@ -58,7 +59,10 @@
   /** The client created in this visit; its connection lines stay until revoked. */
   let created = $state<CreatedAgentClient | null>(null)
   let name = $state('')
-  let busy = $state(false)
+  let ownBusy = $state(false)
+  // Pairing an assistant keeps running after the user leaves this tab.
+  const CONNECT_KEY = 'assistants:connect'
+  const busy = $derived(ownBusy || isInflight(CONNECT_KEY))
   let errorMessage = $state<string | null>(null)
   let pendingRevoke = $state<AgentClient | null>(null)
   /** A grant waiting for the owner's confirmation; withdrawing never waits. */
@@ -112,6 +116,10 @@
   onMount(() => {
     void refresh()
     void refreshConnector()
+    // Started on an earlier visit: show the new client once it is paired.
+    void whenInflightSettles(CONNECT_KEY)?.then(() => {
+      if (!destroyed) void refresh()
+    })
     return () => {
       destroyed = true
     }
@@ -139,7 +147,7 @@
   async function toggleAccess() {
     if (!status || busy) return
     const enabled = !status.enabled
-    busy = true
+    ownBusy = true
     errorMessage = null
     copiedLabel = null
     try {
@@ -150,7 +158,7 @@
       // start: show what the backend really holds instead of a guess.
       await refresh()
     } finally {
-      busy = false
+      ownBusy = false
       accessChecked = status?.enabled ?? false
     }
   }
@@ -160,7 +168,7 @@
     if (!trimmed || busy) return
     connectedAssistant = null
     instructionCopied = null
-    busy = true
+    ownBusy = true
     errorMessage = null
     copiedLabel = null
     try {
@@ -192,7 +200,7 @@
     } catch (error) {
       if (!destroyed) errorMessage = String(error)
     } finally {
-      busy = false
+      ownBusy = false
     }
   }
 
@@ -228,12 +236,14 @@
   /** The backend owns pairing and rollback, even after this tab closes. */
   async function connectAssistant(assistant: ConnectorRecipe) {
     if (busy || !status) return
-    busy = true
+    ownBusy = true
     errorMessage = null
     connectedAssistant = null
     copiedLabel = null
     try {
-      const pairing = await agentAssistantConnect(assistant.id, assistant.label)
+      const pairing = await trackInflight(CONNECT_KEY, () =>
+        agentAssistantConnect(assistant.id, assistant.label)
+      )
       if (!destroyed) {
         created = pairing
         status = pairing.status
@@ -245,14 +255,14 @@
         errorMessage = installError(error)
       }
     } finally {
-      if (!destroyed) busy = false
+      if (!destroyed) ownBusy = false
     }
   }
 
   async function confirmRevoke() {
     const client = pendingRevoke
     if (!client || busy) return
-    busy = true
+    ownBusy = true
     errorMessage = null
     copiedLabel = null
     try {
@@ -268,7 +278,7 @@
       await refresh()
     } finally {
       pendingRevoke = null
-      busy = false
+      ownBusy = false
     }
   }
 
@@ -299,7 +309,7 @@
   }
 
   async function applyGrants(client: AgentClient, grants: AgentGrants) {
-    busy = true
+    ownBusy = true
     errorMessage = null
     copiedLabel = null
     try {
@@ -308,7 +318,7 @@
       errorMessage = String(error)
       await refresh()
     } finally {
-      busy = false
+      ownBusy = false
       grantRender += 1
     }
   }
@@ -330,20 +340,20 @@
     }
     const path = Array.isArray(picked) ? picked[0] : picked
     if (!path) return
-    busy = true
+    ownBusy = true
     try {
       status = await agentImportFolderAdd(path)
     } catch (error) {
       errorMessage = String(error)
     } finally {
-      busy = false
+      ownBusy = false
     }
   }
 
   /** Removing only takes a permission away, so it applies at once. */
   async function removeImportFolder(path: string) {
     if (busy) return
-    busy = true
+    ownBusy = true
     errorMessage = null
     try {
       status = await agentImportFolderRemove(path)
@@ -351,7 +361,7 @@
       errorMessage = String(error)
       await refresh()
     } finally {
-      busy = false
+      ownBusy = false
     }
   }
 

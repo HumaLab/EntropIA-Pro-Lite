@@ -1793,3 +1793,70 @@ describe('conversation history (S19)', () => {
     )
   })
 })
+
+describe('messages follow the newest answer', () => {
+  beforeEach(() => {
+    locale.set('es')
+    navigationRef.navigate.mockReset()
+    navigationRef.openRootSection.mockReset()
+    mockInvoke.mockReset()
+  })
+
+  // happy-dom does no layout: the region is given a fixed box whose content
+  // is taller than it, and scrollTop is clamped like a browser's.
+  const VIEW_PX = 300
+  const CONTENT_PX = 2000
+  function simulateOverflow(): HTMLElement {
+    const region = document.querySelector('.help-view__messages') as HTMLElement
+    let top = 0
+    Object.defineProperty(region, 'clientHeight', { get: () => VIEW_PX })
+    Object.defineProperty(region, 'scrollHeight', { get: () => CONTENT_PX })
+    Object.defineProperty(region, 'scrollTop', {
+      get: () => top,
+      set: (value: number) => {
+        top = Math.max(0, Math.min(value, CONTENT_PX - VIEW_PX))
+      },
+    })
+    return region
+  }
+  function readerScrollsTo(region: HTMLElement, top: number) {
+    region.scrollTop = top
+    region.dispatchEvent(new Event('scroll'))
+  }
+
+  it('shows the whole answer: sending scrolls to the end and the answer keeps it there', async () => {
+    backend({ hasKey: true, ask: answer('Respuesta completa', []) })
+    render(HelpView, { props: { embedded: true } })
+    await composer()
+    const region = simulateOverflow()
+    readerScrollsTo(region, 0)
+
+    await sendQuestion('¿Cómo importo?')
+    expect(region.scrollTop).toBe(CONTENT_PX - VIEW_PX)
+
+    expect(await screen.findByText('Respuesta completa')).toBeInTheDocument()
+    await waitFor(() => expect(region.scrollTop).toBe(CONTENT_PX - VIEW_PX))
+  })
+
+  it('leaves the reader in older messages when they scroll up while the answer is generated', async () => {
+    let release!: (value: unknown) => void
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'help_status') return { hasOpenrouterKey: true }
+      if (command === 'help_faq_list') return DEFAULT_FAQ
+      if (command === 'help_ask') return new Promise((resolve) => (release = resolve))
+      return undefined
+    })
+    render(HelpView, { props: { embedded: true } })
+    await composer()
+    const region = simulateOverflow()
+
+    await sendQuestion('¿Cómo importo?')
+    expect(await screen.findByText('Buscando en el manual…')).toBeInTheDocument()
+    readerScrollsTo(region, 120)
+
+    release(answer('Respuesta tardía', []))
+    expect(await screen.findByText('Respuesta tardía')).toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(region.scrollTop).toBe(120)
+  })
+})

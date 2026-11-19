@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, type InvokeArgs } from '@tauri-apps/api/core'
 import { locale } from '$lib/i18n'
 import BibliographyWorkView from './BibliographyWorkView.svelte'
 
@@ -610,6 +610,35 @@ describe('BibliographyWorkView', () => {
         libraryRowId: 'lib-row-1',
         parentKey: 'ATT1',
       })
+    })
+
+    // Audit item 17: the sync keeps running after the user leaves the work.
+    it('keeps the Zotero sync in progress after leaving and coming back, without a second one', async () => {
+      backend({ annotations: { status: 'ready', annotations: [annotation()] } })
+      const answer = mockInvoke.getMockImplementation()
+      let finishSync: (value: unknown) => void = () => {}
+      mockInvoke.mockImplementation(async (command: string, payload?: InvokeArgs) =>
+        command === 'bibliography_annotations_sync'
+          ? new Promise((resolve) => {
+              finishSync = resolve
+            })
+          : answer?.(command, payload)
+      )
+
+      const first = render(BibliographyWorkView, { props })
+      await waitFor(() => expect(callsFor('bibliography_annotations_sync')).toHaveLength(1))
+      first.unmount()
+
+      render(BibliographyWorkView, { props })
+      const syncButton = await screen.findByRole('button', { name: 'Sincronizando…' })
+      expect(syncButton).toBeDisabled()
+      await screen.findByTestId('annotation-entry')
+      expect(callsFor('bibliography_annotations_sync')).toHaveLength(1)
+
+      finishSync({ status: 'synced', report: null })
+      expect(
+        await screen.findByRole('button', { name: 'Sincronizar con Zotero' })
+      ).toBeInTheDocument()
     })
 
     it('saves an edited comment as the full desired object', async () => {

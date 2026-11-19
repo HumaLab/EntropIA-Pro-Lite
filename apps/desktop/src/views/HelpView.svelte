@@ -3,6 +3,7 @@
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { locale, t } from '$lib/i18n'
   import { renderMarkdown } from '$lib/markdown'
+  import { followBottom } from '$lib/follow-bottom'
   import {
     HELP_HISTORY_MAX_TURNS,
     describeHelpStep,
@@ -93,6 +94,9 @@
   // `help://step` events and `helpStop`. Steps accumulate here as they
   // arrive and are replaced by the answer's final list at the end.
   let liveSteps = $state<HelpStep[]>([])
+  // Bumped when the reader starts or opens a conversation: the messages
+  // region re-pins to its end even if it was scrolled up before.
+  let scrollPin = $state(0)
   let currentRequestId = $state<string | null>(null)
   let stopping = $state(false)
   let error = $state<string | null>(null)
@@ -271,6 +275,7 @@
       const detail = await helpHistoryGet(id)
       conversationId = detail.id
       messages = (detail.messages ?? []).map(historyMessageToMessage)
+      scrollPin += 1
       error = null
       historyOpen = false
     } catch {
@@ -434,6 +439,7 @@
       .slice(-HELP_HISTORY_MAX_TURNS)
       .map((message) => ({ role: message.role, content: message.content }))
     messages = [...messages, { role: 'user', content: question }]
+    scrollPin += 1
     if (fromDraft) draft = ''
     // Same pattern as diagnostics (S5): every send starts unsubscribed again.
     const withDocuments = includeDocuments && documentsAvailable
@@ -764,6 +770,7 @@
     </div>
     <div
       class="help-view__messages"
+      use:followBottom={{ pin: scrollPin }}
       role="log"
       aria-live="polite"
       aria-label={$currentLocale && t('help.title')}
@@ -1020,7 +1027,10 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--space-2) var(--space-1);
+    /* The bottom padding keeps the last bubble clear of the composer's top
+       border once the region is scrolled to its end. */
+    padding: var(--space-2) var(--space-1) var(--space-4);
+    scroll-padding-block-end: var(--space-4);
   }
 
   /* The empty state (S20): one quiet card holding the invitation and the

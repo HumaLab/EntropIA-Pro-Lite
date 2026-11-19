@@ -42,6 +42,7 @@
   import { syncStore } from '$lib/sync-store'
   import { writing } from '$lib/writing'
   import { appendLog } from '$lib/logs'
+  import { isInflight, trackInflight, whenInflightSettles } from '$lib/inflight.svelte'
   import {
     ActionIcon,
     Button,
@@ -117,8 +118,16 @@
   let showDeleteAccount = $state(false)
   let deletePassword = $state('')
   let deleting = $state(false)
-  let showFullResync = $state(false)
-  let fullResyncing = $state(false)
+  // A full resync keeps running after the user leaves Configuración: coming
+  // back reopens its dialog, still confirming, until it ends.
+  const FULL_RESYNC_KEY = 'sync:full-resync'
+  let showFullResync = $state(isInflight(FULL_RESYNC_KEY))
+  void whenInflightSettles(FULL_RESYNC_KEY)?.then(() => {
+    showFullResync = false
+    void syncStore.refresh()
+  })
+  let ownFullResyncing = $state(false)
+  const fullResyncing = $derived(ownFullResyncing || isInflight(FULL_RESYNC_KEY))
   let pendingPreflightBytes = $state<number | null>(null)
 
   // ── Plan change request (NOTIFICATIONS.md §1) ──
@@ -439,16 +448,16 @@
   }
 
   async function confirmFullResync() {
-    fullResyncing = true
+    ownFullResyncing = true
     try {
-      await syncFullResync()
+      await trackInflight(FULL_RESYNC_KEY, syncFullResync)
       await syncStore.refresh()
       showFullResync = false
       setSuccess(t('sync.card.fullResyncDone'))
     } catch (error) {
       setError(error)
     } finally {
-      fullResyncing = false
+      ownFullResyncing = false
     }
   }
 

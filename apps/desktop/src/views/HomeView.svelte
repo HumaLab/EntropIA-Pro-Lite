@@ -18,6 +18,7 @@
    */
   import { onMount } from 'svelte'
   import { locale, t, type I18nKey } from '$lib/i18n'
+  import { isInflight, trackInflight } from '$lib/inflight.svelte'
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { workspace } from '$lib/workspace'
   import {
@@ -238,20 +239,23 @@
   }
 
   /** T-37: nine invented documents with their text, to try the app on. */
-  let loadingSample = $state(false)
+  // Loading the samples keeps running after the user leaves Inicio.
+  const SAMPLE_KEY = 'home:sample'
+  let ownLoadingSample = $state(false)
+  const loadingSample = $derived(ownLoadingSample || isInflight(SAMPLE_KEY))
   async function openSampleCollection() {
     if (loadingSample) return
-    loadingSample = true
+    ownLoadingSample = true
     actionError = null
     try {
-      const sample = await loadSampleCollection()
+      const sample = await trackInflight(SAMPLE_KEY, loadSampleCollection)
       navigation.navigate({ name: 'collection', id: sample.id, collectionName: sample.name })
     } catch (failure) {
       actionError = t('home.firstRun.sampleFailed', {
         error: failure instanceof Error ? failure.message : String(failure),
       })
     } finally {
-      loadingSample = false
+      ownLoadingSample = false
     }
   }
 

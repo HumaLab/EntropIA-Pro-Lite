@@ -1,6 +1,7 @@
 /// Audio decoding and resampling for Whisper transcription.
 ///
-/// Supports WAV (via hound), MP3, FLAC, M4A/AAC (via symphonia).
+/// Supports WAV (via hound), MP3, FLAC, M4A/AAC, Ogg Vorbis (via symphonia) and
+/// Opus (via libopus, see `crate::audio_codecs`).
 /// All audio is converted to 16kHz mono f32 PCM for Whisper-compatible input.
 use std::path::Path;
 
@@ -30,7 +31,7 @@ const WHISPER_SAMPLE_RATE: usize = 16_000;
 
 /// Decode an audio file to 16kHz mono f32 PCM samples suitable for Whisper.
 ///
-/// Supports: WAV, MP3, FLAC, M4A/AAC, OGG.
+/// Supports: WAV, MP3, FLAC, M4A/AAC, OGG (Vorbis or Opus), OPUS.
 /// Returns an error for unsupported formats.
 pub fn decode_audio_file(path: &str) -> Result<AudioData, String> {
     let ext = Path::new(path)
@@ -41,9 +42,9 @@ pub fn decode_audio_file(path: &str) -> Result<AudioData, String> {
 
     match ext.as_str() {
         "wav" => decode_wav(path),
-        "mp3" | "flac" | "m4a" | "aac" | "ogg" | "wma" => decode_symphonia(path),
+        "mp3" | "flac" | "m4a" | "aac" | "ogg" | "opus" | "wma" => decode_symphonia(path),
         _ => Err(format!(
-            "Unsupported audio format: .{ext}. Supported: wav, mp3, flac, m4a, aac, ogg"
+            "Unsupported audio format: .{ext}. Supported: wav, mp3, flac, m4a, aac, ogg, opus"
         )),
     }
 }
@@ -131,7 +132,7 @@ fn decode_symphonia(path: &str) -> Result<AudioData, String> {
         .as_ref()
         .map(|c| c.count())
         .unwrap_or(1) as u16;
-    let mut decoder = symphonia::default::get_codecs()
+    let mut decoder = crate::audio_codecs::codecs()
         .make_audio_decoder(audio_params, &decoder_opts)
         .map_err(|e| format!("Failed to create audio decoder: {e}"))?;
 
@@ -234,6 +235,45 @@ fn resample(samples: &[f32], from_rate: usize, to_rate: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One second of a 440 Hz tone, encoded like a WhatsApp voice note: Ogg
+    /// container, Opus codec, mono, 48 kHz (ffmpeg libopus, 16 kbit/s, voip).
+    const OPUS_VOICE_NOTE: &[u8] = include_bytes!("testdata/tone-opus.ogg");
+
+    fn decode_fixture(extension: &str) -> Result<AudioData, String> {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(format!("voice-note.{extension}"));
+        std::fs::write(&path, OPUS_VOICE_NOTE).expect("write fixture");
+        decode_audio_file(path.to_str().expect("utf-8 path"))
+    }
+
+    fn assert_is_the_one_second_tone(audio: &AudioData) {
+        assert!(
+            (900..=1100).contains(&audio.duration_ms),
+            "duration {} ms",
+            audio.duration_ms
+        );
+        assert!(
+            (14_400..=17_600).contains(&audio.samples.len()),
+            "{} samples at 16 kHz",
+            audio.samples.len()
+        );
+        let rms =
+            (audio.samples.iter().map(|s| s * s).sum::<f32>() / audio.samples.len() as f32).sqrt();
+        assert!(rms > 0.05, "decoded signal is silent (rms {rms})");
+    }
+
+    #[test]
+    fn decodes_an_opus_voice_note_in_ogg() {
+        let audio = decode_fixture("ogg").expect("Opus in Ogg must decode");
+        assert_is_the_one_second_tone(&audio);
+    }
+
+    #[test]
+    fn decodes_an_opus_file_with_the_opus_extension() {
+        let audio = decode_fixture("opus").expect(".opus must decode");
+        assert_is_the_one_second_tone(&audio);
+    }
 
     #[test]
     fn test_mix_to_mono_stereo() {

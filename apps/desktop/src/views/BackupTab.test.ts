@@ -51,4 +51,36 @@ describe('BackupTab', () => {
       ).toBeInTheDocument()
     )
   })
+
+  // Audit item 17: the backup keeps running after the user leaves the tab.
+  it('keeps the backup in progress after leaving and coming back, until it ends', async () => {
+    stored['backend_grant.backup_dir'] = 'D:/copias'
+    let finishBackup: (path: string) => void = () => {}
+    invokeMock.mockImplementation((command: string, args?: { key?: string }) => {
+      if (command === 'settings_get') return Promise.resolve(stored[args?.key ?? ''] ?? null)
+      if (command === 'backup_run_now') {
+        return new Promise<string>((resolve) => {
+          finishBackup = resolve
+        })
+      }
+      return Promise.resolve(undefined)
+    })
+
+    const first = render(BackupTab)
+    const runNow = await screen.findByRole('button', { name: 'Hacer una copia ahora' })
+    await waitFor(() => expect(runNow).toBeEnabled())
+    await fireEvent.click(runNow)
+    first.unmount()
+
+    render(BackupTab)
+    const again = await screen.findByRole('button', { name: 'Hacer una copia ahora' })
+    await waitFor(() => expect(again).toBeDisabled())
+
+    stored['backend_grant.backup_last_at'] = '1700000000000'
+    finishBackup('D:/copias/entropia.zip')
+    await waitFor(() => expect(again).toBeEnabled())
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'backup_run_now')).toHaveLength(
+      1
+    )
+  })
 })

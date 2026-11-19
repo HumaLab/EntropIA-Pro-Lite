@@ -54,6 +54,7 @@
   import type { View } from '$lib/navigation'
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { workspace } from '$lib/workspace'
+  import { dictationHelp } from '$lib/dictation-help'
   import { resolveDropPaneId } from '$lib/pane-drop-target'
   import { currentPaneRects } from '$lib/pane-rects'
   import {
@@ -1503,6 +1504,7 @@
             importImage={importWritingImageBytes}
             ondictate={transcribeDictation}
             ondictationlog={logDictation}
+            ondictationhelp={dictationHelp}
             labels={editorLabels}
           />
         {:else if snapshot.refusal}

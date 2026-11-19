@@ -166,6 +166,21 @@ fn reset_candidate_paths(app_data_dir: &std::path::Path) -> Vec<PathBuf> {
     reset_paths
 }
 
+/// The locked paths that make a reset fail. Only the venv of the runtime the
+/// app runs now matters: a leftover dev fallback, an old runtime's venv or the
+/// cache is never used again once the Python settings are cleared, so failing
+/// on it left the user retrying a reset that could never finish.
+fn reset_blocking_paths(
+    locked: &[(PathBuf, String)],
+    active_venv: Option<&std::path::Path>,
+) -> Vec<String> {
+    locked
+        .iter()
+        .filter(|(path, _)| Some(path.as_path()) == active_venv)
+        .map(|(path, error)| format!("{} ({error})", path.display()))
+        .collect()
+}
+
 impl DepsState {
     /// Create a new state map with all dependencies initialised to `Unknown`.
     pub fn new() -> Self {
@@ -321,6 +336,9 @@ pub async fn probe_all_once(
                     .ui_conn
                     .lock()
                     .map_err(|err| format!("DB lock error: {err}"))?;
+                for message in clear_missing_python_paths(&conn) {
+                    log::warn!(target: "deps", "{message}");
+                }
                 Ok(checks::load_probe_python_settings(&conn))
             })
             .await
@@ -364,6 +382,37 @@ pub async fn probe_all_once(
 
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
+}
+
+/// Every setting that stores the path of a Python interpreter the AI
+/// features run. `python.spacy_ner_es.path` is the discovery cache of the NER
+/// engine (`python_discovery::python_setting_key`).
+const PYTHON_PATH_SETTING_KEYS: [&str; 4] = [
+    "deps_venv_python_path",
+    "python.paddle_vl.path",
+    "python.faster_whisper.path",
+    "python.spacy_ner_es.path",
+];
+
+/// Forget the Python paths whose interpreter is gone. A runtime update or a
+/// manual cleanup removes the old venv; a path left pointing at it kept the
+/// dependencies looking installed, so the new venv was never built. Returns
+/// one message per setting it removed.
+fn clear_missing_python_paths(conn: &rusqlite::Connection) -> Vec<String> {
+    let mut messages = Vec::new();
+    for key in PYTHON_PATH_SETTING_KEYS {
+        let Some(raw) = crate::settings::get_raw_setting(conn, key) else {
+            continue;
+        };
+        if raw.trim().is_empty() || std::path::Path::new(raw.trim()).is_file() {
+            continue;
+        }
+        match crate::settings::delete_setting(conn, key) {
+            Ok(()) => messages.push(format!("Forgot missing Python path {key}: {raw}")),
+            Err(error) => messages.push(format!("Could not forget {key}: {error}")),
+        }
+    }
+    messages
 }
 
 // ---------------------------------------------------------------------------
@@ -898,7 +947,10 @@ pub async fn deps_reset(
     // first one (a live OCR/transcription child or AV can hold a venv DLL). Each
     // path is retried with backoff; persistent failures are collected and
     // reported at the end so the settings/state are still cleared.
-    let mut locked_paths: Vec<String> = Vec::new();
+    let active_venv = RuntimeManager::new()
+        .discover_hydrated_runtime_root_for_tests(&app_data_dir)
+        .map(|root| install::venv_path(&root));
+    let mut locked_paths: Vec<(PathBuf, String)> = Vec::new();
     for path in reset_candidate_paths(&app_data_dir) {
         if !path.exists() {
             continue;
@@ -917,7 +969,7 @@ pub async fn deps_reset(
                     "deps",
                     format!("Reset no pudo eliminar {}: {e}", path.display()),
                 );
-                locked_paths.push(format!("{} ({e})", path.display()));
+                locked_paths.push((path, e));
             }
         }
     }
@@ -932,12 +984,10 @@ pub async fn deps_reset(
                 .ui_conn
                 .lock()
                 .map_err(|e| format!("DB lock error: {e}"))?;
-            let keys = [
-                "deps_venv_python_path",
-                "python.runtime_selection",
-                "python.paddle_vl.path",
-                "python.faster_whisper.path",
-            ];
+            let keys = PYTHON_PATH_SETTING_KEYS
+                .iter()
+                .copied()
+                .chain(["python.runtime_selection"]);
             for key in keys {
                 crate::settings::delete_setting(&conn, key)
                     .map_err(|e| format!("Error eliminando configuración '{key}': {e}"))?;
@@ -963,15 +1013,25 @@ pub async fn deps_reset(
         map.probe_generation = map.probe_generation.saturating_add(1);
     }
 
-    if !locked_paths.is_empty() {
-        let detail = locked_paths.join("; ");
+    let blocking = reset_blocking_paths(&locked_paths, active_venv.as_deref());
+    if !blocking.is_empty() {
+        let detail = blocking.join("; ");
         crate::app_logs::warn(&app, "deps", format!("Reset: rutas bloqueadas: {detail}"));
         return Err(format!(
-            "El reset limpió la configuración pero no pudo eliminar {} ruta(s) bloqueada(s) \
-             (posible OCR/transcripción en curso o antivirus): {detail}. Cerrá los trabajos en \
-             curso y volvé a intentar.",
-            locked_paths.len()
+            "El reset limpió la configuración pero no pudo eliminar el entorno de Python \
+             (otro proceso lo tiene abierto: un trabajo de OCR o transcripción en curso, o el \
+             antivirus): {detail}. Esperá a que termine el trabajo y volvé a intentar."
         ));
+    }
+    if !locked_paths.is_empty() {
+        crate::app_logs::warn(
+            &app,
+            "deps",
+            format!(
+                "Reset: {} ruta(s) en desuso quedaron sin borrar; no afectan al entorno",
+                locked_paths.len()
+            ),
+        );
     }
 
     crate::app_logs::warn(&app, "deps", "Reset de dependencias completado");
@@ -984,6 +1044,42 @@ mod tests {
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
+    #[test]
+    fn clear_missing_python_paths_forgets_only_paths_that_no_longer_exist() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let live = dir.path().join("python.exe");
+        std::fs::write(&live, b"python").expect("write python");
+        let gone = dir.path().join("old-runtime").join("python.exe");
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        let insert = |key: &str, value: &str| {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES (?1, ?2)",
+                rusqlite::params![key, value],
+            )
+            .expect("insert");
+        };
+        insert("deps_venv_python_path", &gone.to_string_lossy());
+        insert("python.paddle_vl.path", &gone.to_string_lossy());
+        insert("python.faster_whisper.path", &live.to_string_lossy());
+        insert("python.spacy_ner_es.path", &gone.to_string_lossy());
+        insert("stt_local_engine", "parakeet");
+
+        let messages = clear_missing_python_paths(&conn);
+
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        let get = |key: &str| crate::settings::get_raw_setting(&conn, key);
+        assert_eq!(get("deps_venv_python_path"), None);
+        assert_eq!(get("python.paddle_vl.path"), None);
+        assert_eq!(get("python.spacy_ner_es.path"), None);
+        assert_eq!(
+            get("python.faster_whisper.path").as_deref(),
+            Some(live.to_string_lossy().as_ref())
+        );
+        assert_eq!(get("stt_local_engine").as_deref(), Some("parakeet"));
+    }
+
     fn write_file(root: &std::path::Path, relpath: &str, bytes: &[u8]) -> String {
         let path = root.join(relpath);
         if let Some(parent) = path.parent() {
@@ -991,6 +1087,24 @@ mod tests {
         }
         std::fs::write(&path, bytes).expect("write file");
         hex::encode(Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn reset_fails_only_when_the_active_venv_stays_locked() {
+        let active = PathBuf::from("runtime/2026.11.5/venv/entropia-env");
+        let dev = PathBuf::from("runtime-dev");
+        let locked = vec![(dev.clone(), "os error 32".to_string())];
+
+        assert!(reset_blocking_paths(&locked, Some(&active)).is_empty());
+        assert!(reset_blocking_paths(&locked, None).is_empty());
+
+        let locked = vec![
+            (dev, "os error 32".to_string()),
+            (active.clone(), "os error 32".to_string()),
+        ];
+        let blocking = reset_blocking_paths(&locked, Some(&active));
+        assert_eq!(blocking.len(), 1);
+        assert!(blocking[0].contains("entropia-env"), "{blocking:?}");
     }
 
     #[test]

@@ -288,7 +288,9 @@
         return 'audio/mp4'
       case 'aac':
         return 'audio/aac'
+      // A WhatsApp voice note saved as `.opus` is Opus in an Ogg container.
       case 'ogg':
+      case 'opus':
         return 'audio/ogg'
       default:
         return null

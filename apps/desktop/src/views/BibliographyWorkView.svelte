@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte'
   import { convertFileSrc } from '@tauri-apps/api/core'
   import { locale, t } from '$lib/i18n'
+  import { isInflight, trackInflight, whenInflightSettles } from '$lib/inflight.svelte'
   import ZoteroTags from '../components/ZoteroTags.svelte'
   import {
     bibliographyOpenWorkAttachment,
@@ -174,7 +175,11 @@
   let annotationViews = $state<AnnotationView[]>([])
   let annotationStatus = $state<AnnotationList['status']>('ready')
   let syncResult = $state<AnnotationSyncResult | null>(null)
-  let syncing = $state(false)
+  // A Zotero sync keeps running after the user leaves the work; coming back
+  // must not start a second one while it runs.
+  const syncKey = $derived(`bibliography:sync:${libraryRowId}`)
+  let ownSyncing = $state(false)
+  const syncing = $derived(ownSyncing || isInflight(syncKey))
   let annotationError = $state<string | null>(null)
   let selectedMarkupId = $state<string | null>(null)
   let otherFormatCount = $state(0)
@@ -240,13 +245,13 @@
 
   async function runSync(reason: AnnotationSyncReason): Promise<void> {
     if (syncing) return
-    syncing = true
+    ownSyncing = true
     try {
-      syncResult = await syncAnnotations(libraryRowId, reason)
+      syncResult = await trackInflight(syncKey, () => syncAnnotations(libraryRowId, reason))
     } catch (error) {
       annotationError = String(error)
     } finally {
-      syncing = false
+      ownSyncing = false
     }
     if (!destroyed) {
       await loadAnnotations()
@@ -410,6 +415,10 @@
   })
 
   onMount(() => {
+    // Started on an earlier visit: list what it pulled once it ends.
+    void whenInflightSettles(syncKey)?.then(() => {
+      if (!destroyed) void loadAnnotations()
+    })
     void onAnnotationsChanged((changedLibrary) => {
       if (changedLibrary === libraryRowId) void loadAnnotations()
     }).then((unlisten) => {

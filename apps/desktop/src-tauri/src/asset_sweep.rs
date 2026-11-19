@@ -25,6 +25,10 @@
 //! beside files on disk), otherwise it touches nothing and stays pending.
 //! Completion is recorded in `app_settings` ([`SETTING_KEY`]) only when the run
 //! saw everything and nothing failed or was too young.
+//!
+//! An EMPTY folder of a gone item or collection is removed outright: it holds
+//! nothing to lose. A delete whose files went but whose folder Windows still
+//! held (os error 32) leaves exactly that, and no move would ever empty it.
 
 use std::collections::HashSet;
 use std::fs;
@@ -34,7 +38,11 @@ use std::time::{Duration, SystemTime};
 use rusqlite::Connection;
 
 /// `app_settings` key that records a completed sweep.
-pub const SETTING_KEY: &str = "assets_orphan_sweep_v2";
+///
+/// v3 runs the sweep once more on archives v2 already finished: deletes made
+/// before the sweep was re-armed after a held file (1.8.0) left empty folders
+/// of gone items that v2 never removed.
+pub const SETTING_KEY: &str = "assets_orphan_sweep_v3";
 
 /// Quarantine folder under the data directory.
 pub const QUARANTINE_DIR: &str = "orphaned-assets";
@@ -73,6 +81,8 @@ pub struct Report {
     pub moved: usize,
     /// Bytes moved.
     pub moved_bytes: u64,
+    /// Empty folders of gone items or collections removed.
+    pub removed_empty_dirs: usize,
     /// Moves and reads that failed.
     pub errors: usize,
     /// The database could not answer completely; nothing was touched.
@@ -89,6 +99,8 @@ pub struct Report {
 #[derive(Debug, Default)]
 pub struct Plan {
     pub moves: Vec<Move>,
+    /// Relative paths of empty folders under a gone item or collection.
+    pub empty_dirs: Vec<String>,
     pub report: Report,
 }
 
@@ -107,7 +119,7 @@ impl Report {
         let mut line = format!(
             "assets orphan sweep: {} file(s) examined, {} kept under live items; moved {} \
              orphan file(s) ({} bytes) to {QUARANTINE_DIR}/; kept {} for a doubt, {} young, \
-             {} refused; {} error(s)",
+             {} refused; removed {} empty orphan folder(s); {} error(s)",
             self.examined,
             self.kept_live,
             self.moved,
@@ -115,6 +127,7 @@ impl Report {
             self.kept_doubt,
             self.young,
             self.refused,
+            self.removed_empty_dirs,
             self.errors
         );
         if self.db_skipped {
@@ -354,7 +367,15 @@ pub fn plan(data_dir: &Path, conn: &Connection, now: SystemTime, min_age: Durati
                 continue;
             }
             if kind.is_dir() {
-                stack.push((entry.path(), rel));
+                let path = entry.path();
+                let is_empty = fs::read_dir(&path).is_ok_and(|mut it| it.next().is_none());
+                // The rule for a file inside it decides: a folder of a gone
+                // item or collection is an orphan, anything else stays.
+                if is_empty && matches!(place_of(&known, &format!("{rel}/_")), Place::Orphan) {
+                    plan.empty_dirs.push(rel);
+                    continue;
+                }
+                stack.push((path, rel));
                 continue;
             }
             if !kind.is_file() {
@@ -396,6 +417,10 @@ pub fn plan(data_dir: &Path, conn: &Connection, now: SystemTime, min_age: Durati
     if empty && files_seen > 0 {
         plan.report.empty_table_guard = true;
         plan.moves.clear();
+    }
+    // An empty table says the database is not to be trusted yet, files or not.
+    if empty || plan.report.incomplete {
+        plan.empty_dirs.clear();
     }
     if plan.report.incomplete {
         plan.moves.clear();
@@ -469,6 +494,32 @@ pub fn apply(data_dir: &Path, plan: &mut Plan, date: &str) {
             }
             Err(error) => {
                 log::warn!(target: "assets", "could not quarantine {}: {error}", item.rel);
+                plan.report.errors += 1;
+            }
+        }
+    }
+    // Empty folders of gone items or collections: `remove_dir` refuses any
+    // folder that holds something, so nothing can be lost here.
+    for rel in &plan.empty_dirs {
+        let Ok(path) = crate::sync::apply::validate_inbound_rel_path(rel, data_dir) else {
+            plan.report.refused += 1;
+            continue;
+        };
+        if crate::path_utils::ensure_within_dir(&path, &assets_root).is_err()
+            || !fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir())
+        {
+            plan.report.refused += 1;
+            continue;
+        }
+        match fs::remove_dir(&path) {
+            Ok(()) => {
+                plan.report.removed_empty_dirs += 1;
+                if let Some(parent) = path.parent() {
+                    parents.push(parent.to_path_buf());
+                }
+            }
+            Err(error) => {
+                log::warn!(target: "assets", "could not remove empty folder {rel}: {error}");
                 plan.report.errors += 1;
             }
         }
@@ -629,6 +680,83 @@ mod tests {
         assert_eq!(report.moved_bytes, 5);
         assert_eq!(report.kept_live, 6);
         assert!(report.complete());
+    }
+
+    #[test]
+    fn an_empty_folder_of_a_gone_item_is_removed_and_a_live_one_stays() {
+        // Audit 1.8.1, item 11: a delete removed the files but Windows held
+        // the folder, so an empty folder of a gone item stayed behind.
+        let dir = tempfile::tempdir().unwrap();
+        put(dir.path(), "assets/c1/i1/keep.png");
+        let live_empty = dir.path().join("assets/c1/i1/empty-sub");
+        let gone_item = dir.path().join("assets/c1/dead-item");
+        let gone_collection = dir.path().join("assets/dead-col");
+        let odd_shape = dir.path().join("assets/c1/not a plain id");
+        for folder in [&live_empty, &gone_item, &gone_collection, &odd_shape] {
+            fs::create_dir_all(folder).unwrap();
+        }
+        let conn = db(&["assets/c1/i1/keep.png"]);
+
+        let report = sweep(dir.path(), &conn, later(), MIN_AGE);
+
+        assert!(!gone_item.exists(), "empty folder of a gone item goes");
+        assert!(
+            !gone_collection.exists(),
+            "empty folder of a gone collection goes"
+        );
+        assert!(live_empty.exists(), "a live item's folder is never touched");
+        assert!(odd_shape.exists(), "a shape the rule does not cover stays");
+        assert_eq!(report.removed_empty_dirs, 2);
+        assert_eq!(report.moved, 0);
+        assert!(report.complete());
+    }
+
+    #[test]
+    fn a_folder_of_a_gone_item_that_still_holds_a_file_is_moved_not_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        put(dir.path(), "assets/c1/i1/keep.png");
+        put(dir.path(), "assets/c1/dead-item/sub/old.jpg");
+        fs::create_dir_all(dir.path().join("assets/c1/dead-item/empty")).unwrap();
+        let conn = db(&["assets/c1/i1/keep.png"]);
+
+        let report = sweep(dir.path(), &conn, later(), MIN_AGE);
+
+        assert!(quarantined(dir.path(), "assets/c1/dead-item/sub/old.jpg"));
+        assert_eq!(report.moved, 1);
+        assert_eq!(report.removed_empty_dirs, 1);
+        assert!(!dir.path().join("assets/c1/dead-item").exists());
+    }
+
+    #[test]
+    fn empty_folders_stay_while_a_table_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone_item = dir.path().join("assets/c1/dead-item");
+        fs::create_dir_all(&gone_item).unwrap();
+        let conn = db(&[]);
+
+        let report = sweep(dir.path(), &conn, later(), MIN_AGE);
+
+        assert!(gone_item.exists());
+        assert_eq!(report.removed_empty_dirs, 0);
+    }
+
+    #[test]
+    fn an_archive_v2_finished_runs_the_sweep_once_more() {
+        let dir = tempfile::tempdir().unwrap();
+        put(dir.path(), "assets/c1/i1/keep.png");
+        let gone_item = dir.path().join("assets/c1/dead-item");
+        fs::create_dir_all(&gone_item).unwrap();
+        let conn = db(&["assets/c1/i1/keep.png"]);
+        conn.execute(
+            "INSERT INTO app_settings(key, value) VALUES ('assets_orphan_sweep_v2', 'done')",
+            [],
+        )
+        .unwrap();
+
+        let line = run_once(dir.path(), &conn, later(), MIN_AGE);
+
+        assert!(!gone_item.exists(), "{line}");
+        assert!(line.contains("removed 1 empty orphan folder(s)"), "{line}");
     }
 
     #[test]
@@ -847,6 +975,9 @@ mod tests {
         }
         for d in &plan.report.doubts {
             println!("DOUBT {d}");
+        }
+        for d in &plan.empty_dirs {
+            println!("EMPTY {d}");
         }
     }
 }
