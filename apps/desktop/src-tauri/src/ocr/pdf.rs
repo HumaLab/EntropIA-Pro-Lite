@@ -2514,7 +2514,7 @@ pub fn edit_pdf_page_to_single_page_bytes(
             _ => (page.width().value, page.height().value),
         };
         (
-            render_pdf_page_image(&page, page_index, false)?,
+            render_pdf_page_image(&page, page_index)?,
             page_width,
             page_height,
         )
@@ -2639,7 +2639,7 @@ pub fn render_pdf_page_to_image(bytes: &[u8], page_index: usize) -> Result<Vec<u
 /// Render a single PDF page to PNG bytes at full OCR resolution.
 ///
 /// Same 300-DPI-equivalent raster as [`render_pdf_page_to_image`] (target
-/// width 2550px, landscape rotation applied), but WITHOUT the 10 MB shrink
+/// width 2550px, page orientation kept), but WITHOUT the 10 MB shrink
 /// loop: dense newspaper pages exceed 10 MB at full resolution, and shrinking
 /// them to fit loses the small print local models could otherwise read
 /// (measured: a 1965 newspaper page went from 93% to 100% reference recall
@@ -2670,7 +2670,7 @@ pub fn render_pdf_page_to_image_full_res(
         .get(page_idx)
         .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
 
-    let image = render_pdf_page_image(&page, page_index, true)?;
+    let image = render_pdf_page_image(&page, page_index)?;
     let mut png_bytes = Vec::new();
     image
         .write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
@@ -2678,9 +2678,9 @@ pub fn render_pdf_page_to_image_full_res(
     Ok(png_bytes)
 }
 
-/// Renders one page at the OCR resolution WITHOUT the landscape rotation the
-/// OCR render applies, so the image keeps the page's own orientation and a
-/// layout box drawn over the viewer maps onto it by scaling alone.
+/// Renders one page at the OCR resolution as an image, in the page's own
+/// orientation, so a layout box drawn over the viewer maps onto it by scaling
+/// alone.
 pub(crate) fn render_pdf_page_to_unrotated_image(
     bytes: &[u8],
     page_index: usize,
@@ -2699,7 +2699,7 @@ pub(crate) fn render_pdf_page_to_unrotated_image(
     let page = pages
         .get(pdfium_page_index(page_index)?)
         .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
-    render_pdf_page_image(&page, page_index, false)
+    render_pdf_page_image(&page, page_index)
 }
 
 /// Visit all PDF pages from one loaded Pdfium document.
@@ -2724,21 +2724,17 @@ where
 }
 
 fn render_pdf_page(page: &PdfPage<'_>, page_index: usize) -> Result<Vec<u8>, String> {
-    let image = render_pdf_page_image(page, page_index, true)?;
+    let image = render_pdf_page_image(page, page_index)?;
     encode_png_with_max_size(&image, MAX_RENDERED_PAGE_IMAGE_BYTES)
 }
 
-fn render_pdf_page_image(
-    page: &PdfPage<'_>,
-    page_index: usize,
-    rotate_landscape: bool,
-) -> Result<DynamicImage, String> {
+/// Renders a page in its own orientation. A landscape page (a double-folio
+/// scan, a wide newspaper spread) stays landscape: turning it 90° left its
+/// text sideways for OCR, and the orientation model rarely turned it back.
+fn render_pdf_page_image(page: &PdfPage<'_>, page_index: usize) -> Result<DynamicImage, String> {
     // Render at 300 DPI equivalent. A typical letter-size page is 8.5" × 11"
     // which at 300 DPI gives 2550 × 3300 pixels.
-    let mut render_config = PdfRenderConfig::new().set_target_width(2550);
-    if rotate_landscape {
-        render_config = render_config.rotate_if_landscape(PdfPageRenderRotation::Degrees90, true);
-    }
+    let render_config = PdfRenderConfig::new().set_target_width(2550);
     let bitmap = page
         .render_with_config(&render_config)
         .map_err(|e| format!("Failed to render PDF page {page_index}: {e}"))?;
@@ -3608,6 +3604,43 @@ mod tests {
             })
             .collect::<Vec<_>>();
         (values[2], values[3])
+    }
+
+    #[test]
+    fn ocr_render_keeps_landscape_pages_upright() {
+        let dll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("lib")
+            .join(Pdfium::pdfium_platform_library_name());
+        if !dll.exists() {
+            println!("pdfium native library not available — skipping landscape render test");
+            return;
+        }
+        use_dev_pdfium();
+
+        // A double-folio scan is landscape. Turning it 90° leaves the text
+        // sideways, and the orientation model rarely turns it back.
+        let landscape = one_page_pdf_bytes(842, 595);
+        let png = render_pdf_page_to_image(&landscape, 0).expect("render landscape page");
+        let image = image::load_from_memory(&png).expect("decode render");
+        assert!(
+            image.width() > image.height(),
+            "OCR render must keep the page landscape, got {}x{}",
+            image.width(),
+            image.height()
+        );
+
+        #[cfg(feature = "paddle-ocr")]
+        {
+            let png = render_pdf_page_to_image_full_res(&landscape, 0).expect("full-res render");
+            let image = image::load_from_memory(&png).expect("decode full-res render");
+            assert!(
+                image.width() > image.height(),
+                "full-res OCR render must keep the page landscape, got {}x{}",
+                image.width(),
+                image.height()
+            );
+        }
     }
 
     #[test]

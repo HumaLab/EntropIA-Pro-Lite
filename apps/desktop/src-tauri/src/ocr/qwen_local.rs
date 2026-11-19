@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::local_server::{env_server_override, resolve_server, ServerSource};
 #[cfg(test)]
-use super::local_server::{server_binary_name, server_dir, BUNDLED_SERVER_SUBDIR};
+use super::local_server::{server_binary_name, server_dir};
 
 /// Qwen3-VL-4B instruct, Q4_K_M: fits next to a 2 GB KV cache on an 8 GB card.
 /// The Q8_0 build needs ~2 GB more VRAM and measures no better on correction.
@@ -178,8 +178,10 @@ mod tests {
     fn bundled_server_is_used_when_managed_is_missing() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("entropia.sqlite");
-        let resources = dir.path().join("resources");
-        let bundled_dir = resources.join(BUNDLED_SERVER_SUBDIR);
+        // Tauri's resource dir on Linux is `/usr/lib/<product>`; the bundle
+        // keeps each resource's relative path under it.
+        let resources = dir.path().join("usr-lib-product");
+        let bundled_dir = resources.join("resources/tools/llama-server");
         std::fs::create_dir_all(models_dir(&db)).unwrap();
         std::fs::create_dir_all(&bundled_dir).unwrap();
         std::fs::write(models_dir(&db).join(MODEL_FILENAME), b"m").unwrap();
