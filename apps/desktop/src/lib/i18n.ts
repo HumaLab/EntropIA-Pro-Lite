@@ -277,6 +277,8 @@ const es = {
   'deps.models.checking': 'Revisando los modelos instalados…',
   'deps.runtime.fixture':
     'Esta compilación trae una base de IA de prueba, no la publicada. Las funciones locales que la necesitan no van a funcionar.',
+  'deps.runtime.fixtureDownloading':
+    'La base de IA se descarga sola la primera vez. Hasta que esté lista, las funciones locales que la necesitan quedan en pausa.',
   'deps.runtime.devFallbackAvailable':
     'Hay un entorno de desarrollo disponible para instalar los paquetes de Python en este equipo.',
   'deps.runtime.noFallback': 'Tampoco hay un entorno de desarrollo que la reemplace.',
@@ -4473,6 +4475,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'deps.models.checking': 'Checking the installed models…',
   'deps.runtime.fixture':
     'This build carries a test AI base, not the published one. The local features that need it will not work.',
+  'deps.runtime.fixtureDownloading':
+    'The AI base downloads on its own the first time. Until it is ready, the local features that need it are paused.',
   'deps.runtime.devFallbackAvailable':
     'A development environment is available to install the Python packages on this computer.',
   'deps.runtime.noFallback': 'There is no development environment to stand in for it either.',

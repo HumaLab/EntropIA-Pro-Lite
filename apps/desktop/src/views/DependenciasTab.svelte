@@ -194,6 +194,15 @@
           () =>
             onRuntimeStatus((status) => {
               if (destroyed) return
+              // uv's status reads the runtime too (`release_runtime_ready`,
+              // the release fallback note): a new runtime state makes it stale.
+              if (status.state !== runtimeStatus?.state) {
+                void getUvStatus()
+                  .then((uv) => {
+                    if (!destroyed) uvStatus = uv
+                  })
+                  .catch(() => undefined)
+              }
               runtimeStatus = status
               runtimeOperation = status.activeOperation
               runtimeOperationInFlight = status.activeOperation != null
@@ -567,7 +576,9 @@
     <div class="deps-runtime-panel" role="status">
       <div class="deps-runtime-panel__copy">
         <strong>{runtimeStatus?.summary}</strong>
-        {#if isRuntimeFixture(runtimeStatus)}
+        {#if isRuntimeFixture(runtimeStatus) && runtimeStatus?.bootstrapEligible}
+          <span>{t('deps.runtime.fixtureDownloading')}</span>
+        {:else if isRuntimeFixture(runtimeStatus)}
           <span>
             {t('deps.runtime.fixture')}
             {#if shouldExplainDevFallback()}
