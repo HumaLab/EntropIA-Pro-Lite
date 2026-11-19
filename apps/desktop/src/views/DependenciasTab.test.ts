@@ -94,6 +94,23 @@ const READY_SETUP = {
   ],
 }
 
+/** A release build whose runtime pack has not been downloaded yet. */
+const RELEASE_RUNTIME_PENDING_UV = {
+  uv_ready: false,
+  uv_path: null,
+  uv_version: null,
+  uv_source: null,
+  uv_compatible_for_dev: false,
+  venv_exists: false,
+  venv_path: null,
+  uv_warning: null,
+  release_runtime_ready: false,
+  release_runtime_state: 'fixture',
+  dev_fallback_available: false,
+  dev_fallback_reason:
+    'En release no hay fallback de desarrollo: necesitás un runtime-pack hidratado/compatible o una fuente bootstrap confiable.',
+}
+
 // The tab exists only in Pro; in Lite `lib/runtime` turns its rules off on purpose.
 describe.runIf(LOCAL_ML)('DependenciasTab', () => {
   beforeEach(() => {
@@ -1028,6 +1045,106 @@ describe.runIf(LOCAL_ML)('DependenciasTab', () => {
         screen.queryByText(/35% · Descargando runtime remoto confiable/i)
       ).not.toBeInTheDocument()
     })
+  })
+
+  // Store 1.8.2: while the runtime downloaded on its own, the card said the
+  // local features "no van a funcionar" and that no dev environment replaced it.
+  it('says a downloading runtime only pauses the local features', async () => {
+    depsMocks.getRuntimeStatus.mockResolvedValueOnce({
+      state: 'fixture',
+      packVersion: '2026.11.6',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'Runtime de IA pendiente de descarga para windows-x86_64',
+      blockedCapabilities: ['ocr', 'transcription', 'nlp'],
+      details: [],
+      guidance: [],
+      bootstrapEligible: true,
+      bootstrapRequired: true,
+      activeOperation: null,
+    })
+    depsMocks.getUvStatus.mockResolvedValueOnce({
+      ...RELEASE_RUNTIME_PENDING_UV,
+    })
+
+    render(DependenciasTab)
+
+    expect(await screen.findByText(/se descarga sola la primera vez/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no van a funcionar/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Tampoco hay un entorno de desarrollo/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps the no-fallback note when the runtime cannot download on its own', async () => {
+    depsMocks.getRuntimeStatus.mockResolvedValueOnce({
+      state: 'fixture',
+      packVersion: '2026.11.6',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'Runtime fixture',
+      blockedCapabilities: ['ocr'],
+      details: [],
+      guidance: [],
+      bootstrapEligible: false,
+      bootstrapRequired: true,
+      activeOperation: null,
+    })
+    depsMocks.getUvStatus.mockResolvedValueOnce({ ...RELEASE_RUNTIME_PENDING_UV })
+
+    render(DependenciasTab)
+
+    expect(await screen.findByText(/Tampoco hay un entorno de desarrollo/i)).toBeInTheDocument()
+  })
+
+  // Store 1.8.2: the release no-fallback line stayed on screen after the
+  // runtime turned healthy, until the tab was opened again.
+  it('drops the release no-fallback line once the runtime turns healthy', async () => {
+    let statusHandler: (status: unknown) => void = vi.fn()
+    depsMocks.onRuntimeStatus.mockImplementation(async (handler) => {
+      statusHandler = handler
+      return vi.fn()
+    })
+    depsMocks.getRuntimeStatus.mockResolvedValueOnce({
+      state: 'fixture',
+      packVersion: '2026.11.6',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'Runtime de IA pendiente de descarga',
+      blockedCapabilities: ['ocr'],
+      details: [],
+      guidance: [],
+      bootstrapEligible: true,
+      bootstrapRequired: true,
+      activeOperation: null,
+    })
+    depsMocks.getUvStatus.mockResolvedValueOnce({ ...RELEASE_RUNTIME_PENDING_UV })
+
+    render(DependenciasTab)
+
+    await waitFor(() => {
+      expect(depsMocks.onRuntimeStatus).toHaveBeenCalled()
+    })
+    statusHandler?.({
+      state: 'healthy',
+      packVersion: '2026.11.6',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'Runtime listo',
+      blockedCapabilities: [],
+      details: [],
+      guidance: [],
+      bootstrapEligible: false,
+      bootstrapRequired: false,
+      activeOperation: null,
+    })
+
+    // The healthy status has landed once the pending card is gone.
+    await waitFor(() => {
+      expect(screen.queryByText(/Runtime de IA pendiente de descarga/i)).not.toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(screen.queryByText(/no hay fallback de desarrollo/i)).not.toBeInTheDocument()
+    })
+    expect(depsMocks.getUvStatus).toHaveBeenCalledTimes(2)
   })
 
   it('shows per-dependency install progress as a labelled progress bar', async () => {

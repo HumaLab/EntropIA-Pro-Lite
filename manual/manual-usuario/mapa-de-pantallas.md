@@ -695,6 +695,7 @@
 - «Esta compilación trae una base de IA de prueba, no la publicada. Las funciones locales que la necesitan no van a funcionar.»
 - «Esta versión de EntropIA Pro todavía no tiene su runtime publicado.»
 - «Hay un entorno de desarrollo disponible para instalar los paquetes de Python en este equipo.»
+- «La base de IA se descarga sola la primera vez. Hasta que esté lista, las funciones locales que la necesitan quedan en pausa.»
 - «La lista firmada aún no está publicada, así que no se puede descargar ni verificar de forma segura. No es un problema de tu equipo; la app la toma sola apenas se publique.»
 - «La lista firmada existe, pero no incluye la base de IA para esta versión y sistema. No es un problema de tu equipo: actualizá EntropIA Pro o volvé a verificar más tarde.»
 - «No pudimos llegar a la fuente de la base de IA: parece que estás sin conexión.»
