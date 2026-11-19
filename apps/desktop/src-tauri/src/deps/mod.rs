@@ -272,35 +272,48 @@ async fn finish_probe_attempt(
     }
 }
 
-fn managed_runtime_probe_context(
-    app_data_dir: &std::path::Path,
-) -> (
-    Option<PathBuf>,
-    Option<crate::runtime::status::RuntimeStatus>,
-) {
+/// The healthy hydrated runtime, as the dependency probe sees it.
+struct ManagedRuntimeProbe {
+    /// The runtime's root folder, only when it is healthy.
+    root: Option<PathBuf>,
+    /// The runtime's venv Python, only when it is healthy.
+    python: Option<PathBuf>,
+    status: Option<crate::runtime::status::RuntimeStatus>,
+}
+
+fn managed_runtime_probe_context(app_data_dir: &std::path::Path) -> ManagedRuntimeProbe {
+    let none = ManagedRuntimeProbe {
+        root: None,
+        python: None,
+        status: None,
+    };
     let manager = crate::runtime::RuntimeManager::new();
     let Some(managed_root) = manager.discover_hydrated_runtime_root_for_tests(app_data_dir) else {
-        return (None, None);
+        return none;
     };
     let Ok(manifest) = crate::runtime::manifest::RuntimeManifest::load_from_path(
         &managed_root.join("manifest.json"),
     ) else {
-        return (None, None);
+        return none;
     };
     let Some(status) =
         manager.inspect_hydrated_runtime_for_tests(app_data_dir, &managed_root, &manifest)
     else {
-        return (None, None);
+        return none;
     };
 
     if status.state != RuntimeState::Healthy {
-        return (None, Some(status));
+        return ManagedRuntimeProbe {
+            status: Some(status),
+            ..none
+        };
     }
 
-    (
-        Some(crate::runtime::managed_venv_python_path(&managed_root)),
-        Some(status),
-    )
+    ManagedRuntimeProbe {
+        python: Some(crate::runtime::managed_venv_python_path(&managed_root)),
+        root: Some(managed_root),
+        status: Some(status),
+    }
 }
 
 pub async fn probe_all_once(
@@ -328,15 +341,19 @@ pub async fn probe_all_once(
         };
 
         if let Some(probe_generation) = probe_generation {
+            let runtime = managed_runtime_probe_context(
+                db.db_path.parent().unwrap_or(std::path::Path::new(".")),
+            );
             // The settings read is SQL: run it on the blocking pool so the
             // async worker never locks `ui_conn` (A-05b).
             let db = db.clone();
+            let active_runtime_root = runtime.root.clone();
             let probe_settings = tokio::task::spawn_blocking(move || -> Result<_, String> {
                 let conn = db
                     .ui_conn
                     .lock()
                     .map_err(|err| format!("DB lock error: {err}"))?;
-                for message in clear_missing_python_paths(&conn) {
+                for message in forget_stale_python_paths(&conn, active_runtime_root.as_deref()) {
                     log::warn!(target: "deps", "{message}");
                 }
                 Ok(checks::load_probe_python_settings(&conn))
@@ -353,15 +370,11 @@ pub async fn probe_all_once(
                     .unwrap_or_else(|| "DB lock error".to_string()));
             };
 
-            let (managed_runtime_python, managed_runtime_status) = managed_runtime_probe_context(
-                db.db_path.parent().unwrap_or(std::path::Path::new(".")),
-            );
-
             let python_path = checks::resolve_probe_python_with_runtime(
                 probe_settings,
                 checks::ProbePythonMode::DependencyManager,
-                managed_runtime_python.as_deref(),
-                managed_runtime_status.as_ref(),
+                runtime.python.as_deref(),
+                runtime.status.as_ref(),
             );
 
             let results_map = match python_path.clone() {
@@ -394,21 +407,44 @@ const PYTHON_PATH_SETTING_KEYS: [&str; 4] = [
     "python.spacy_ner_es.path",
 ];
 
-/// Forget the Python paths whose interpreter is gone. A runtime update or a
-/// manual cleanup removes the old venv; a path left pointing at it kept the
-/// dependencies looking installed, so the new venv was never built. Returns
-/// one message per setting it removed.
-fn clear_missing_python_paths(conn: &rusqlite::Connection) -> Vec<String> {
+/// Forget the Python paths the app should no longer run. A runtime update or
+/// a manual cleanup removes the old venv; a path left pointing at it kept the
+/// dependencies looking installed, so the new venv was never built.
+///
+/// Two kinds of path go:
+/// - an interpreter that is gone;
+/// - with a healthy runtime active (`active_runtime_root`), an interpreter
+///   inside another version of that runtime folder. Windows can refuse to
+///   delete the old version (a file in use), and its venv then still exists.
+///
+/// A Python outside the runtime folder is the user's own and stays. With no
+/// healthy runtime, the old venv is still the best Python there is and stays
+/// too. Returns one message per setting it removed.
+fn forget_stale_python_paths(
+    conn: &rusqlite::Connection,
+    active_runtime_root: Option<&std::path::Path>,
+) -> Vec<String> {
+    let runtime_folder = active_runtime_root.and_then(std::path::Path::parent);
     let mut messages = Vec::new();
     for key in PYTHON_PATH_SETTING_KEYS {
         let Some(raw) = crate::settings::get_raw_setting(conn, key) else {
             continue;
         };
-        if raw.trim().is_empty() || std::path::Path::new(raw.trim()).is_file() {
+        let path = std::path::Path::new(raw.trim());
+        if raw.trim().is_empty() {
             continue;
         }
+        let reason = if !path.is_file() {
+            "missing"
+        } else if runtime_folder.is_some_and(|folder| path.starts_with(folder))
+            && active_runtime_root.is_some_and(|active| !path.starts_with(active))
+        {
+            "another runtime version's"
+        } else {
+            continue;
+        };
         match crate::settings::delete_setting(conn, key) {
-            Ok(()) => messages.push(format!("Forgot missing Python path {key}: {raw}")),
+            Ok(()) => messages.push(format!("Forgot {reason} Python path {key}: {raw}")),
             Err(error) => messages.push(format!("Could not forget {key}: {error}")),
         }
     }
@@ -1066,7 +1102,7 @@ mod tests {
         insert("python.spacy_ner_es.path", &gone.to_string_lossy());
         insert("stt_local_engine", "parakeet");
 
-        let messages = clear_missing_python_paths(&conn);
+        let messages = forget_stale_python_paths(&conn, None);
 
         assert_eq!(messages.len(), 3, "{messages:?}");
         let get = |key: &str| crate::settings::get_raw_setting(&conn, key);
@@ -1078,6 +1114,63 @@ mod tests {
             Some(live.to_string_lossy().as_ref())
         );
         assert_eq!(get("stt_local_engine").as_deref(), Some("parakeet"));
+    }
+
+    /// Store 1.8.2: the new runtime hydrated next to an old one Windows would
+    /// not let the app delete. The saved paths still named the old runtime's
+    /// venv, so the dependencies looked installed and the new venv was never
+    /// built. With a healthy runtime active, a path inside another runtime
+    /// version is as stale as a missing one.
+    #[test]
+    fn forget_stale_python_paths_drops_paths_into_another_runtime_version() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let runtime = dir.path().join("runtime");
+        let active = runtime.join("2026.11.6");
+        let old_python = runtime.join("2026.11.5/venv/entropia-env/Scripts/python.exe");
+        let active_python = active.join("venv/entropia-env/Scripts/python.exe");
+        let custom_python = dir.path().join("custom/python.exe");
+        for path in [&old_python, &active_python, &custom_python] {
+            std::fs::create_dir_all(path.parent().unwrap()).expect("create parent");
+            std::fs::write(path, b"python").expect("write python");
+        }
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        let set = |key: &str, path: &std::path::Path| {
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings(key, value) VALUES (?1, ?2)",
+                rusqlite::params![key, path.to_string_lossy()],
+            )
+            .expect("insert");
+        };
+        let get = |key: &str| crate::settings::get_raw_setting(&conn, key);
+        let seed = || {
+            set("deps_venv_python_path", &old_python);
+            set("python.paddle_vl.path", &old_python);
+            set("python.faster_whisper.path", &custom_python);
+            set("python.spacy_ner_es.path", &active_python);
+        };
+
+        // No healthy runtime: the old venv is still the best Python there is.
+        seed();
+        assert!(forget_stale_python_paths(&conn, None).is_empty());
+        assert!(get("deps_venv_python_path").is_some());
+
+        seed();
+        let messages = forget_stale_python_paths(&conn, Some(&active));
+
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert_eq!(get("deps_venv_python_path"), None);
+        assert_eq!(get("python.paddle_vl.path"), None);
+        assert_eq!(
+            get("python.faster_whisper.path").as_deref(),
+            Some(custom_python.to_string_lossy().as_ref()),
+            "a Python outside the runtime folder is the user's own"
+        );
+        assert_eq!(
+            get("python.spacy_ner_es.path").as_deref(),
+            Some(active_python.to_string_lossy().as_ref())
+        );
     }
 
     fn write_file(root: &std::path::Path, relpath: &str, bytes: &[u8]) -> String {
@@ -1178,16 +1271,17 @@ mod tests {
         )
         .expect("write manifest");
 
-        let (python, status) = managed_runtime_probe_context(app_data_dir.path());
+        let probe = managed_runtime_probe_context(app_data_dir.path());
 
         assert_eq!(
-            status.map(|status| status.state),
+            probe.status.map(|status| status.state),
             Some(RuntimeState::Healthy)
         );
         assert_eq!(
-            python,
+            probe.python,
             Some(crate::runtime::managed_venv_python_path(&managed_root))
         );
+        assert_eq!(probe.root, Some(managed_root));
     }
 
     #[test]
