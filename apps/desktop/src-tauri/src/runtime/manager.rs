@@ -1382,6 +1382,13 @@ fn retire_unused_runtimes_after_ready(app_data_dir: &Path, status: &RuntimeStatu
     for message in &report.kept {
         log::warn!(target: "runtime", "{message}");
     }
+    let downloads = crate::runtime::sweep::remove_finished_downloads(app_data_dir);
+    for path in &downloads.removed {
+        log::info!(target: "runtime", "Finished runtime download deleted: {}", path.display());
+    }
+    for message in &downloads.failed {
+        log::warn!(target: "runtime", "{message}");
+    }
 }
 
 /// Deletes the retired runtime folders on a thread of its own: a runtime is
@@ -3263,6 +3270,12 @@ mod tests {
             "venv/entropia-env/x.pyd",
             b"x",
         );
+        // Every runtime ever downloaded left its 2.3 GB archive behind.
+        let finished_download = runtime_dir.join(".downloads").join("2026.04.0");
+        write_file(&finished_download, "runtime-pack.zip.part000", b"zip");
+        write_file(&finished_download, "resume.json", b"{}");
+        let paused_download = runtime_dir.join(".downloads").join("2026.06.0");
+        write_file(&paused_download, "runtime-pack.zip.download.tmp", b"part");
 
         let status = RuntimeManager::new()
             .ensure_ready_or_bootstrap_for_tests(
@@ -3273,6 +3286,16 @@ mod tests {
             )
             .expect("runtime should hydrate");
         assert_eq!(status.state, RuntimeState::Healthy);
+        assert!(
+            !finished_download.exists(),
+            "a finished download's archive is deleted once the runtime is healthy"
+        );
+        assert!(
+            paused_download
+                .join("runtime-pack.zip.download.tmp")
+                .exists(),
+            "a paused download stays so it can resume"
+        );
 
         let names = runtime_folder_names(app_data_dir.path());
         assert!(names.contains(&"2026.05.0".to_string()), "{names:?}");
@@ -3294,7 +3317,8 @@ mod tests {
         crate::runtime::sweep::purge_retired_runtimes(app_data_dir.path());
         assert_eq!(
             runtime_folder_names(app_data_dir.path()),
-            vec!["2026.05.0".to_string()]
+            // `.downloads` holds the paused download.
+            vec![".downloads".to_string(), "2026.05.0".to_string()]
         );
     }
 

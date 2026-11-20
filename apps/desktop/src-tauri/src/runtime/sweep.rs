@@ -28,6 +28,11 @@
 //!
 //! A folder without `manifest.json` is the leftover of a deletion that stopped
 //! halfway (the code before this module deleted in place); it is retired too.
+//!
+//! Each download also leaves its archive (about 2.3 GB) under
+//! `.downloads/<pack>`, which nothing reads once the runtime is active.
+//! [`remove_finished_downloads`] deletes those, under the same lock as the
+//! retire phase, and keeps a paused download so it can resume.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -278,6 +283,57 @@ where
     report
 }
 
+/// Deletes every `.downloads/<pack>` folder that holds no download in
+/// progress.
+///
+/// A finished download keeps its archive (about 2.3 GB) and `resume.json`,
+/// and nothing reads either once the runtime is active: an interrupted
+/// download resumes from its `*.download.tmp` file and
+/// `resume-state.json`. So a folder without those two is dead weight, one per
+/// runtime version ever installed. A folder with them is a paused download
+/// and stays, so it can resume.
+///
+/// The caller must hold the runtime operations lock, so no download is
+/// writing under `.downloads` meanwhile.
+pub(crate) fn remove_finished_downloads(app_data_dir: &Path) -> PurgeReport {
+    let mut report = PurgeReport::default();
+    let Ok(entries) = std::fs::read_dir(runtime_root(app_data_dir).join(".downloads")) else {
+        return report;
+    };
+    let mut finished: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .map(|entry| entry.path())
+        .filter(|folder| !holds_a_download_in_progress(folder))
+        .collect();
+    finished.sort();
+    for folder in finished {
+        match crate::path_utils::remove_dir_all_robust(&folder) {
+            Ok(()) => report.removed.push(folder),
+            Err(error) => report.failed.push(format!(
+                "Finished runtime download {} stays for a later cleanup: {error}",
+                folder.display()
+            )),
+        }
+    }
+    report
+}
+
+/// Whether a `.downloads/<pack>` folder holds the staged bytes or the resume
+/// state of a download that has not finished. A folder that cannot be listed
+/// counts as one, so it is left alone.
+fn holds_a_download_in_progress(folder: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return true;
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        name == crate::runtime::download_state::RESUME_STATE_FILE_NAME
+            || name.ends_with(".download.tmp")
+    })
+}
+
 /// Whether one of `images` (executable paths) lies inside `folder`.
 /// Compared as Windows paths: case-insensitive, either slash, with or
 /// without the `\\?\` prefix.
@@ -448,6 +504,89 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    /// A finished download, as the bootstrap leaves it.
+    fn write_finished_download(app_data_dir: &Path, pack: &str) -> PathBuf {
+        let folder = runtime(app_data_dir, ".downloads").join(pack);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join(format!("runtime-pack-windows-x86_64-{pack}.zip.part000")),
+            b"zip",
+        )
+        .unwrap();
+        fs::write(folder.join("resume.json"), b"{}").unwrap();
+        folder
+    }
+
+    #[test]
+    fn finished_downloads_are_deleted() {
+        let dir = tempdir().unwrap();
+        let old = write_finished_download(dir.path(), "2026.11.8");
+        let active = write_finished_download(dir.path(), "2026.11.10");
+
+        let report = remove_finished_downloads(dir.path());
+
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        assert_eq!(report.removed, vec![active.clone(), old.clone()]);
+        assert!(!old.exists());
+        assert!(!active.exists());
+    }
+
+    #[test]
+    fn a_paused_download_stays_so_it_can_resume() {
+        let dir = tempdir().unwrap();
+        let paused = runtime(dir.path(), ".downloads").join("2026.11.11");
+        fs::create_dir_all(&paused).unwrap();
+        fs::write(
+            paused.join("runtime-pack-windows-x86_64-2026.11.11.zip.download.tmp"),
+            b"part",
+        )
+        .unwrap();
+        fs::write(
+            paused.join(crate::runtime::download_state::RESUME_STATE_FILE_NAME),
+            b"{}",
+        )
+        .unwrap();
+        // Only the staged bytes, before the first state write.
+        let starting = runtime(dir.path(), ".downloads").join("2026.11.12");
+        fs::create_dir_all(&starting).unwrap();
+        fs::write(
+            starting.join("runtime-pack-windows-x86_64-2026.11.12.zip.download.tmp"),
+            b"p",
+        )
+        .unwrap();
+        let finished = write_finished_download(dir.path(), "2026.11.9");
+
+        let report = remove_finished_downloads(dir.path());
+
+        assert_eq!(report.removed, vec![finished]);
+        assert!(paused
+            .join("runtime-pack-windows-x86_64-2026.11.11.zip.download.tmp")
+            .exists());
+        assert!(starting.exists());
+    }
+
+    #[test]
+    fn removing_finished_downloads_leaves_the_runtimes_alone() {
+        let dir = tempdir().unwrap();
+        let current = write_runtime(dir.path(), "2026.11.10", PLATFORM, RUNNING);
+        let old = write_runtime(dir.path(), "2026.11.9", PLATFORM, "1.8.5");
+        write_finished_download(dir.path(), "2026.11.10");
+
+        remove_finished_downloads(dir.path());
+
+        assert!(current.join("manifest.json").exists());
+        assert!(old.join("manifest.json").exists());
+        assert!(runtime(dir.path(), ".downloads").exists());
+    }
+
+    #[test]
+    fn no_downloads_folder_is_nothing_to_remove() {
+        let dir = tempdir().unwrap();
+        let report = remove_finished_downloads(dir.path());
+        assert!(report.removed.is_empty());
+        assert!(report.failed.is_empty());
     }
 
     #[test]
