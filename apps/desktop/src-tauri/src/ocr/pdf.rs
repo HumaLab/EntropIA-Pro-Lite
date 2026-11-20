@@ -2798,9 +2798,9 @@ pub fn render_pdf_thumbnail(bytes: &[u8]) -> Result<Vec<u8>, String> {
         .get(0)
         .map_err(|e| format!("Failed to get first page from PDF: {e}"))?;
 
-    let render_config = PdfRenderConfig::new()
-        .set_target_width(400)
-        .rotate_if_landscape(PdfPageRenderRotation::Degrees90, true);
+    // The page keeps its own orientation, as in the viewer and the OCR render:
+    // a landscape page (a newspaper spread) stays landscape on the card.
+    let render_config = PdfRenderConfig::new().set_target_width(400);
 
     let bitmap = page
         .render_with_config(&render_config)
@@ -3641,6 +3641,40 @@ mod tests {
                 image.height()
             );
         }
+    }
+
+    #[test]
+    fn thumbnail_keeps_landscape_pages_upright() {
+        let dll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("lib")
+            .join(Pdfium::pdfium_platform_library_name());
+        if !dll.exists() {
+            println!("pdfium native library not available — skipping landscape thumbnail test");
+            return;
+        }
+        use_dev_pdfium();
+
+        // The collection card showed a newspaper spread turned 90°, while the
+        // viewer and the OCR text had it upright.
+        let landscape = one_page_pdf_bytes(842, 595);
+        let png = render_pdf_thumbnail(&landscape).expect("render landscape thumbnail");
+        let image = image::load_from_memory(&png).expect("decode thumbnail");
+        assert!(
+            image.width() > image.height(),
+            "thumbnail must keep the page landscape, got {}x{}",
+            image.width(),
+            image.height()
+        );
+
+        let portrait = one_page_pdf_bytes(595, 842);
+        let png = render_pdf_thumbnail(&portrait).expect("render portrait thumbnail");
+        let image = image::load_from_memory(&png).expect("decode thumbnail");
+        assert!(
+            image.height() > image.width(),
+            "a portrait page stays portrait"
+        );
+        assert_eq!(image.width(), 400, "thumbnails stay 400px wide");
     }
 
     #[test]

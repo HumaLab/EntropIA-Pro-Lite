@@ -763,6 +763,35 @@ pub async fn update_extraction_text_cmd(
     .await
 }
 
+/// Left in `thumbnails/` once the PDF thumbnails older builds rendered are
+/// gone: those builds turned every landscape page 90°.
+const PDF_THUMBNAILS_UPRIGHT_MARKER: &str = ".pdf-thumbnails-upright";
+
+/// Removes, once per cache folder, the PDF thumbnails (`{asset_id}.png`) that
+/// older builds rendered, so each card renders again in the page's own
+/// orientation. Image thumbnails (`image-…`) are not PDF renders and stay.
+/// Best-effort: a thumbnail that cannot be removed is only a stale picture.
+fn purge_pdf_thumbnails_rendered_sideways(thumb_dir: &std::path::Path) {
+    let marker = thumb_dir.join(PDF_THUMBNAILS_UPRIGHT_MARKER);
+    if marker.exists() {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(thumb_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(stem) = name.to_str().and_then(|name| name.strip_suffix(".png")) else {
+                continue;
+            };
+            if uuid::Uuid::parse_str(stem).is_ok() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    if let Err(error) = std::fs::write(&marker, b"") {
+        log::warn!("could not record the PDF thumbnail purge: {error}");
+    }
+}
+
 /// Generate a thumbnail PNG for the first page of a PDF.
 ///
 /// Returns the filesystem path to the cached thumbnail. The frontend should
@@ -793,6 +822,7 @@ pub async fn generate_pdf_thumbnail(
     std::fs::create_dir_all(&thumb_dir)
         .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
 
+    purge_pdf_thumbnails_rendered_sideways(&thumb_dir);
     let thumb_path = thumb_dir.join(format!("{asset_id}.png"));
 
     // Return cached thumbnail immediately if it exists
@@ -1365,6 +1395,34 @@ mod tests {
             .expect("image-{asset_id}-{hash}.png");
         assert_eq!(hash.len(), 64, "{name}");
         assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+    }
+
+    #[test]
+    fn pdf_thumbnails_rendered_sideways_are_purged_once() {
+        let dir = tempdir().expect("tempdir");
+        let thumb_dir = dir.path().join("thumbnails");
+        std::fs::create_dir_all(&thumb_dir).expect("thumb dir");
+        let pdf_thumb = thumb_dir.join("0644e951-f15c-4eb6-bae4-f96f35632120.png");
+        let image_thumb = thumb_dir.join(image_thumbnail_file_name(
+            "0644e951-f15c-4eb6-bae4-f96f35632120",
+            "/a/scan.png",
+        ));
+        let not_ours = thumb_dir.join("notes.png");
+        for path in [&pdf_thumb, &image_thumb, &not_ours] {
+            std::fs::write(path, b"png").expect("seed");
+        }
+
+        purge_pdf_thumbnails_rendered_sideways(&thumb_dir);
+
+        // Older builds turned landscape pages 90°: those cards render again.
+        assert!(!pdf_thumb.exists(), "the PDF thumbnail is rendered again");
+        assert!(image_thumb.exists(), "image thumbnails are not PDF renders");
+        assert!(not_ours.exists(), "a name that is not an asset id stays");
+
+        // Once purged, a thumbnail rendered upright is a cache hit for good.
+        std::fs::write(&pdf_thumb, b"upright").expect("new thumbnail");
+        purge_pdf_thumbnails_rendered_sideways(&thumb_dir);
+        assert_eq!(std::fs::read(&pdf_thumb).expect("read"), b"upright");
     }
 
     #[test]
