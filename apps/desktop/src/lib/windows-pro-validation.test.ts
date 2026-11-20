@@ -209,7 +209,7 @@ describe('windows pro validation build', () => {
     expect(workflow).toContain('pnpm/action-setup')
     expect(workflow).toContain('actions/setup-node')
     expect(workflow).toContain('dtolnay/rust-toolchain')
-    expect(workflow).toContain('1.90.0')
+    expect(workflow).toContain('1.92.0')
     expect(workflow).toContain('Swatinem/rust-cache')
     // windows-feature-contract.ps1 runs DEBUG cargo builds for local-ml AND
     // the lean baseline (not unit tests); excluded here to avoid an
