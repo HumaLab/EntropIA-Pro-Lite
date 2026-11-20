@@ -150,6 +150,17 @@ Ejemplo mínimo de `manifest.overrides.json` para una inyección completa:
 }
 ```
 
+## Reusar el runtime entre versiones de la app (`runtime_abi`)
+
+Cada pack registra la `app_version` para la que se armó. Un runtime instalado para otra versión de la app se sigue usando, sin descargar nada, cuando se cumplen las dos condiciones:
+
+- su `runtime_abi` es igual al `runtime_abi` del `manifest.json` empaquetado con esta app;
+- sus `script_files` son exactamente los empaquetados (mismas rutas y sha256). La app ejecuta la copia de los scripts del runtime, así que un script modificado siempre exige un pack nuevo.
+
+Subí `runtime_abi` en **los dos** manifests empaquetados cada vez que cambien la versión de Python, el wheelhouse o las bibliotecas nativas de una forma de la que dependa la app. `build_runtime_pack.py` lo copia del manifest empaquetado a cada pack que arma. Los packs armados antes de que existiera el campo solo sirven a su `app_version` exacta.
+
+Por eso una release que no cambia el runtime no necesita un pack nuevo: los runtimes instalados siguen funcionando. Las instalaciones nuevas siguen buscando el índice bootstrap firmado por `app_version` exacta, así que la release igual publica una entrada para la versión nueva; puede apuntar al archivo del pack existente.
+
 ## Regla de verdad
 
 Si `payload_profile != release` o `release_injection_required = true`, el runtime NO debe presentarse como listo para flujo offline core.
