@@ -42,7 +42,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: 1.90.0
+          toolchain: 1.92.0
 
       # Only a moved pin is a bump. cargo also re-wires ranged windows-sys
       # edges on every update, engine or not; that churn alone is discarded.

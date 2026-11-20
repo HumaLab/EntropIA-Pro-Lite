@@ -27,7 +27,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 use super::provider::{BoundingBox, LayoutCategory, LayoutRegion};
 use crate::runtime::{managed_resource_path, RuntimeManager};
@@ -74,21 +74,15 @@ const LABEL_MAP: &[(usize, &str, LayoutCategory)] = &[
 /// (S variant uses 480×480, V3 variant uses 800×800 — we don't ship those.)
 const DEFAULT_INPUT_SIZE: u32 = 640;
 
-/// Shared ONNX Runtime initialization.
-/// Reuses the same ORT DLL as the NER module via OnceLock.
-static ORT_INIT: OnceLock<Result<(), String>> = OnceLock::new();
-
-/// Ensure ONNX Runtime is initialized exactly once.
-fn ensure_ort_init(model_dir: &Path) -> Result<(), String> {
-    ORT_INIT
-        .get_or_init(|| initialize_ort(model_dir.to_path_buf()))
-        .clone()
+/// The process-wide ONNX Runtime environment, shared with embeddings and
+/// transcription (`crate::ort_env`).
+fn ensure_ort_init(model_dir: &Path) -> Result<ort::environment::Environment, String> {
+    crate::ort_env::get_or_init(|| ort_builder(model_dir.to_path_buf()))
 }
 
-fn initialize_ort(model_dir: PathBuf) -> Result<(), String> {
+fn ort_builder(model_dir: PathBuf) -> Result<ort::environment::EnvironmentBuilder, String> {
     if std::env::var_os("ORT_DYLIB_PATH").is_some() {
-        ort::init().commit();
-        return Ok(());
+        return Ok(ort::init());
     }
 
     let dylib_path = find_ort_dylib(&model_dir).ok_or_else(|| {
@@ -98,16 +92,12 @@ fn initialize_ort(model_dir: PathBuf) -> Result<(), String> {
          )
      })?;
 
-    ort::init_from(dylib_path.display().to_string())
-        .map_err(|e| {
-            format!(
-                "Failed to initialize ORT from {}: {e}",
-                dylib_path.display()
-            )
-        })?
-        .commit();
-
-    Ok(())
+    ort::init_from(dylib_path.display().to_string()).map_err(|e| {
+        format!(
+            "Failed to initialize ORT from {}: {e}",
+            dylib_path.display()
+        )
+    })
 }
 
 fn find_ort_dylib(model_dir: &Path) -> Option<PathBuf> {
@@ -287,9 +277,9 @@ impl OnnxLayoutEngine {
             })?
             .to_path_buf();
 
-        ensure_ort_init(&model_dir)?;
+        let environment = ensure_ort_init(&model_dir)?;
 
-        let session = Session::builder()
+        let session = Session::builder(&environment)
             .map_err(|e| format!("Failed to create layout session builder: {e}"))?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
             .map_err(|e| format!("Failed to set layout optimization level: {e}"))?
