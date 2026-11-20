@@ -1261,24 +1261,24 @@ An action request ("Delete…", "Create…", "Import…") never gets a fixed ans
 
 **Without a key.** If you have not loaded the OpenRouter key, the help still answers frequent questions, first steps and greetings; for the rest it shows **Help runs on your OpenRouter account** with **Open Settings** (to load it in **Remote APIs → OpenRouter**, with credit in the account) and **View the online manual**.
 
-**Local help (Pro).** With **LLM mode** set to **Local** (Settings → Engines), Gemma answers on the computer: it needs no key and no connection, and the diagnostics do not leave the computer either, but it only uses the manual, takes no actions and does not read your documents. The line above the text box says so. If you have the OpenRouter key, **Use OpenRouter for this question** sends just that question to the full agent (and enables **Search my documents**). If the model is missing, the help tells you: download it in **Settings → Local models**. In the other modes, the line names the OpenRouter model that answers.
+**Local help (Pro).** With **LLM mode** set to **Local** (Settings → Engines), Gemma answers on the computer: it needs no key and no connection, and the diagnostics do not leave the computer either, but it only uses the manual, takes no actions and does not read your documents. The line above the text box says so. If you have the OpenRouter key, **OpenRouter** sends just that question to the full agent (and enables **My documents**). If the model is missing, the help tells you: download it in **Settings → Local models**. In the other modes, the line names the OpenRouter model that answers.
 
-#### When something fails: "Include diagnostics"
+#### When something fails: "Diagnostics"
 
-For the help to understand an error, tick **Include diagnostics** before sending. Added to your question:
+For the help to understand an error, tick **Diagnostics** before sending. Added to your question:
 
 - the version, the variant (Lite or Pro) and the system;
 - the modes and models chosen in Settings;
 - which keys are loaded, only as **yes** or **no** (never the key);
 - the latest warnings and errors from the log, **without paths, file names or quoted text**, which is where your documents' titles and fragments usually appear.
 
-**See what is sent** shows the exact text before sending; **Hide** closes it. What you see is what travels: EntropIA cleans it again before it leaves. A document title written in the log without quotes or extension cannot be told apart from an ordinary word: if that worries you, check the preview.
+**View input** shows the exact text before sending; **Hide** closes it. What you see is what travels: EntropIA cleans it again before it leaves. A document title written in the log without quotes or extension cannot be told apart from an ordinary word: if that worries you, check the preview.
 
 #### Search your documents
 
-By default, the help can see collections, titles and processing states, but **not the text** of your documents. If you want it to read it —for example, "which document in *Minutes 1891* talks about the port?"— tick **Search my documents** before asking. For that question only, the assistant can search passages and read the text it needs, and those fragments travel to OpenRouter. The answer lists **From your documents** with the titles used.
+By default, the help can see collections, titles and processing states, but **not the text** of your documents. If you want it to read it —for example, "which document in *Minutes 1891* talks about the port?"— tick **My documents** before asking. For that question only, the assistant can search passages and read the text it needs, and those fragments travel to OpenRouter. The answer lists **From your documents** with the titles used.
 
-Both boxes —**Include diagnostics** and **Search my documents**— **turn themselves off** after each question. The **i** icon next to each explains what travels.
+Both boxes —**Diagnostics** and **My documents**— **turn themselves off** after each question. The **i** icon next to each explains what travels.
 
 #### Ask it to do something
 
@@ -1298,7 +1298,7 @@ For questions about EntropIA this manual does not cover, the help can consult �
 
 #### Conversation history
 
-Conversations are stored **only on this computer** (they do not travel with sync yet). **History**, collapsed by default, shows how many there are; open it to see each one's title and date, click one to continue where you left off or delete it with **Delete conversation**. **New conversation** starts another and **Clear history** deletes them all, with confirmation. Everything shown is stored, including fragments of your documents when you used **Search my documents**.
+Conversations are stored **only on this computer** (they do not travel with sync yet). **History**, collapsed by default, shows how many there are; open it to see each one's title and date, click one to continue where you left off or delete it with **Delete conversation**. **New conversation** starts another and **Clear history** deletes them all, with confirmation. Everything shown is stored, including fragments of your documents when you used **My documents**.
 
 #### Settings → Help
 
@@ -1323,7 +1323,7 @@ The help carries this manual, its frequent questions and the screen map **inside
 | Symptom | What to do |
 |---|---|
 | It only answers frequent questions or shows **Help runs on your OpenRouter account** | Load the key in **Settings → Remote APIs → OpenRouter** and check that the account has credit. |
-| **Could not answer. Try again.** | Check the connection and OpenRouter credit; if it persists, ask with **Include diagnostics**. |
+| **Could not answer. Try again.** | Check the connection and OpenRouter credit; if it persists, ask with **Diagnostics**. |
 | It reached the tool-round limit | Rephrase the question in smaller steps or raise **Maximum agent rounds**. |
 | The model could not use tools this turn | The chosen model does not support tools: choose another in **Settings → Help → Model**. |
 | It answers about another version | If it cited the GitHub repository, it may describe a newer version: compare with the status bar. |
@@ -1761,7 +1761,7 @@ The link keeps a snapshot and lets you consult the note again; it does not autom
 
 1. Note what you were doing and the message you saw.
 2. Click the **help** bubble on the status bar.
-3. Tick **Include diagnostics** and, if you like, click **See what is sent** to review the exact text.
+3. Tick **Diagnostics** and, if you like, click **View input** to review the exact text.
 4. Write what happened, for example "The transcription of an interview failed", and click **Send**.
 5. Follow the steps in the answer and open **Sources and steps** to see which manual section they came from. If the help offers to do something for you, read the **Help asks for approval** dialog before clicking **Approve**.
 
@@ -1828,7 +1828,7 @@ The link keeps a snapshot and lets you consult the note again; it does not autom
 | **3D relations** shows nothing | The collection has no triples yet. Extract them with **TRIPLET** or a **Triples** batch. |
 | The backup fails | Check that the chosen folder exists and has space (for example, that the disk is connected). If another backup is running, wait for it to finish. |
 | **Optimizing the archive…** appears when closing | EntropIA is reclaiming disk space from its database. Do not turn the computer off: the window closes by itself when it finishes. |
-| I do not know how to do something and cannot find it in the manual | Open the [help](#ayuda-en-la-app) with the bubble on the status bar and ask. For an error, tick **Include diagnostics**. |
+| I do not know how to do something and cannot find it in the manual | Open the [help](#ayuda-en-la-app) with the bubble on the status bar and ask. For an error, tick **Diagnostics**. |
 | The help only answers frequent questions | It is missing the OpenRouter key or the account has no credit. Load it in **Settings → Remote APIs → OpenRouter** ([13.5](#ayuda-en-la-app)). |
 | **Conectar Claude Code** (or another) says it cannot find it or it does not respond | Use **or copy the command** and paste the line by hand, or **Copy setup instruction for any assistant**. Check the connection with `--check` ([13.4](#asistentes-externos)). |
 | My assistant is not Claude Code, Codex, OpenCode or Pi | Use **Copy setup instruction for any assistant** and paste it into its chat ([13.4](#asistentes-externos)). |
@@ -1895,7 +1895,7 @@ Before asking for help, note the screen name, the step, the exact message, the f
 - **Help chat:** the assistant in the status-bar bubble that explains how to use EntropIA from this manual and can take actions with your approval.
 - **Connector:** the `entropia-agent-connector` (or `entropia-pro-agent-connector`) program installed with EntropIA that connects an external assistant to the open application.
 - **Context for the AI:** a description of a collection read by the Chat, Investigate, correction and the Writing agent.
-- **Diagnostics:** a summary of the configuration and the latest errors, without keys or document content, that the help sends only if you tick **Include diagnostics**.
+- **Diagnostics:** a summary of the configuration and the latest errors, without keys or document content, that the help sends only if you tick **Diagnostics**.
 - **G² (log-likelihood):** a measure of how much more than expected two words appear together; used by **Phrases → Associated words**.
 - **GEXF:** a network file format that Gephi opens; 3D relations produces it.
 - **Lite / Pro:** the two variants of EntropIA; Lite uses AI over the Internet and Pro adds local engines.

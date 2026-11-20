@@ -86,7 +86,7 @@ Las API keys de OpenRouter, Vercel AI Gateway, AssemblyAI, GLM-OCR, Zotero y la 
 - Quitá API keys de proveedores desde Configuración (botón **Quitar clave**) para deshabilitar esos caminos remotos. Sin API key de OpenRouter tampoco se genera el título automático de conversaciones ni se procesa la Biblioteca por significado; sin clave de Vercel no hay respaldo.
 - No sincronices bibliotecas de Zotero en la Biblioteca si no querés que el texto de sus obras se envíe a OpenRouter y GLM-OCR.
 - No marques entidades como lugar, o no las guardes, si no querés que su texto se consulte contra Nominatim.
-- Dejá apagado **Permitir asistentes externos** si no usás asistentes, revocá los que ya no uses, y en la ayuda no marques **Incluir diagnóstico** ni **Buscar en mis documentos** si no querés que esa información viaje a OpenRouter.
+- Dejá apagado **Permitir asistentes externos** si no usás asistentes, revocá los que ya no uses, y en la ayuda no marques **Diagnóstico** ni **Mis documentos** si no querés que esa información viaje a OpenRouter.
 - Cerrá la sesión de sincronización para que nada salga por ese camino.
 - Las copias de seguridad contienen todo tu archivo: guardalas en una carpeta protegida.
 - Eliminá el directorio local de datos de la app si querés borrar bases locales, logs, archivos de runtime y salidas generadas. Las API keys y el token de sincronización no viven ahí: se quitan desde Configuración o cerrando la sesión.

@@ -1259,24 +1259,24 @@ Un pedido de acción («Borrá…», «Creá…», «Importá…») nunca recibe
 
 **Sin clave.** Si no cargaste la clave de OpenRouter, la ayuda sigue respondiendo las preguntas frecuentes, los primeros pasos y los saludos; para el resto muestra **La ayuda usa tu cuenta de OpenRouter** con **Abrir Configuración** (para cargarla en **APIs remotas → OpenRouter**, con crédito disponible en la cuenta) y **Ver el manual en línea**.
 
-**Ayuda local (Pro).** Con el **Modo LLM** en **Local** (Configuración → Motores), responde Gemma en el equipo: no necesita clave ni conexión y el diagnóstico tampoco sale del equipo, pero solo usa el manual, no hace acciones y no lee tus documentos. Arriba de la caja de texto lo dice. Si tenés la clave de OpenRouter, **Usar OpenRouter para esta pregunta** manda solo esa pregunta al agente completo (y habilita **Buscar en mis documentos**). Si falta el modelo, la ayuda te lo indica: descargalo en **Configuración → Modelos locales**. En los demás modos, la línea dice qué modelo de OpenRouter responde.
+**Ayuda local (Pro).** Con el **Modo LLM** en **Local** (Configuración → Motores), responde Gemma en el equipo: no necesita clave ni conexión y el diagnóstico tampoco sale del equipo, pero solo usa el manual, no hace acciones y no lee tus documentos. Arriba de la caja de texto lo dice. Si tenés la clave de OpenRouter, **OpenRouter** manda solo esa pregunta al agente completo (y habilita **Mis documentos**). Si falta el modelo, la ayuda te lo indica: descargalo en **Configuración → Modelos locales**. En los demás modos, la línea dice qué modelo de OpenRouter responde.
 
-#### Cuando algo falla: «Incluir diagnóstico»
+#### Cuando algo falla: «Diagnóstico»
 
-Para que la ayuda entienda un error, marcá **Incluir diagnóstico** antes de enviar. Se agrega a tu pregunta:
+Para que la ayuda entienda un error, marcá **Diagnóstico** antes de enviar. Se agrega a tu pregunta:
 
 - la versión, la variante (Lite o Pro) y el sistema;
 - los modos y modelos elegidos en Configuración;
 - qué claves están cargadas, solo como **sí** o **no** (nunca la clave);
 - los últimos avisos y errores del registro, **sin rutas, nombres de archivo ni textos entre comillas**, que es donde suelen aparecer los títulos y fragmentos de tus documentos.
 
-**Ver qué se envía** muestra el texto exacto antes de mandarlo; **Ocultar** lo cierra. Lo que ves es lo que viaja: EntropIA lo vuelve a limpiar antes de que salga. Un título de documento escrito en el registro sin comillas ni extensión no se puede distinguir de una palabra común: si eso te preocupa, revisá la vista previa.
+**Ver input** muestra el texto exacto antes de mandarlo; **Ocultar** lo cierra. Lo que ves es lo que viaja: EntropIA lo vuelve a limpiar antes de que salga. Un título de documento escrito en el registro sin comillas ni extensión no se puede distinguir de una palabra común: si eso te preocupa, revisá la vista previa.
 
 #### Buscar en tus documentos
 
-Por defecto, la ayuda puede ver colecciones, títulos y estados de procesamiento, pero **no el texto** de tus documentos. Si querés que lo lea —por ejemplo, «¿en qué documento de *Actas 1891* se habla del puerto?»—, marcá **Buscar en mis documentos** antes de preguntar. Solo para esa pregunta, el asistente puede buscar pasajes y leer el texto que necesite, y esos fragmentos viajan a OpenRouter. La respuesta lista **De tus documentos** con los títulos usados.
+Por defecto, la ayuda puede ver colecciones, títulos y estados de procesamiento, pero **no el texto** de tus documentos. Si querés que lo lea —por ejemplo, «¿en qué documento de *Actas 1891* se habla del puerto?»—, marcá **Mis documentos** antes de preguntar. Solo para esa pregunta, el asistente puede buscar pasajes y leer el texto que necesite, y esos fragmentos viajan a OpenRouter. La respuesta lista **De tus documentos** con los títulos usados.
 
-Las dos casillas —**Incluir diagnóstico** y **Buscar en mis documentos**— **se apagan solas** después de cada pregunta. El ícono **i** junto a cada una explica qué viaja.
+Las dos casillas —**Diagnóstico** y **Mis documentos**— **se apagan solas** después de cada pregunta. El ícono **i** junto a cada una explica qué viaja.
 
 #### Pedirle que haga algo
 
@@ -1296,7 +1296,7 @@ Para dudas sobre EntropIA que este manual no cubre, la ayuda puede consultar —
 
 #### Historial de conversaciones
 
-Las conversaciones se guardan **solo en este equipo** (todavía no viajan con la sincronización). **Historial**, plegado por defecto, muestra cuántas hay; abrilo para ver el título y la fecha de cada una, tocá una para seguirla donde quedó o borrala con **Eliminar conversación**. **Nueva conversación** empieza otra y **Borrar historial** las elimina todas, con confirmación. Se guarda todo lo que se muestra, también los fragmentos de tus documentos cuando usaste **Buscar en mis documentos**.
+Las conversaciones se guardan **solo en este equipo** (todavía no viajan con la sincronización). **Historial**, plegado por defecto, muestra cuántas hay; abrilo para ver el título y la fecha de cada una, tocá una para seguirla donde quedó o borrala con **Eliminar conversación**. **Nueva conversación** empieza otra y **Borrar historial** las elimina todas, con confirmación. Se guarda todo lo que se muestra, también los fragmentos de tus documentos cuando usaste **Mis documentos**.
 
 #### Configuración → Ayuda
 
@@ -1321,7 +1321,7 @@ La ayuda trae este manual, sus preguntas frecuentes y el mapa de pantallas **den
 | Síntoma | Qué hacer |
 |---|---|
 | Solo contesta preguntas frecuentes o muestra **La ayuda usa tu cuenta de OpenRouter** | Cargá la clave en **Configuración → APIs remotas → OpenRouter** y comprobá que la cuenta tenga crédito. |
-| **No se pudo responder. Probá de nuevo.** | Revisá la conexión y el crédito de OpenRouter; si persiste, preguntá con **Incluir diagnóstico**. |
+| **No se pudo responder. Probá de nuevo.** | Revisá la conexión y el crédito de OpenRouter; si persiste, preguntá con **Diagnóstico**. |
 | **Llegó al límite de rondas de herramientas** | Reformulá la pregunta en pasos más chicos o subí **Vueltas máximas del agente**. |
 | **El modelo no pudo usar herramientas en este turno** | El modelo elegido no admite herramientas: elegí otro en **Configuración → Ayuda → Modelo**. |
 | Responde sobre otra versión | Si citó el repositorio de GitHub, puede describir una versión más nueva: comparala con la barra inferior. |
@@ -1760,7 +1760,7 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 
 1. Anotá qué estabas haciendo y el mensaje que viste.
 2. Pulsá la burbuja de **ayuda** de la barra inferior.
-3. Marcá **Incluir diagnóstico** y, si querés, pulsá **Ver qué se envía** para revisar el texto exacto.
+3. Marcá **Diagnóstico** y, si querés, pulsá **Ver input** para revisar el texto exacto.
 4. Escribí qué pasó, por ejemplo «Falló la transcripción de una entrevista» y pulsá **Enviar**.
 5. Seguí los pasos de la respuesta y abrí **Fuentes y pasos** para ver de qué sección del manual salieron. Si la ayuda propone hacer algo por vos, revisá el cuadro **La ayuda pide aprobación** antes de pulsar **Aprobar**.
 
@@ -1827,7 +1827,7 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 | **Relaciones 3D** no muestra nada | La colección todavía no tiene tripletas. Extraelas con **TRIPLET** o con un lote de **Tripletes**. |
 | La copia de seguridad falla | Comprobá que la carpeta elegida exista y tenga espacio (por ejemplo, que el disco esté conectado). Si hay otra copia en curso, esperá a que termine. |
 | Al cerrar aparece **Optimizando el archivo…** | EntropIA recupera espacio en disco de su base. No apagues el equipo: la ventana se cierra sola al terminar. |
-| No sé cómo hacer algo y no lo encuentro en el manual | Abrí la [ayuda](#ayuda-en-la-app) con la burbuja de la barra inferior y preguntale. Para un error, marcá **Incluir diagnóstico**. |
+| No sé cómo hacer algo y no lo encuentro en el manual | Abrí la [ayuda](#ayuda-en-la-app) con la burbuja de la barra inferior y preguntale. Para un error, marcá **Diagnóstico**. |
 | La ayuda solo responde preguntas frecuentes | Le falta la clave de OpenRouter o la cuenta no tiene crédito. Cargala en **Configuración → APIs remotas → OpenRouter** ([13.5](#ayuda-en-la-app)). |
 | **Conectar Claude Code** (u otro) dice que no lo encuentra o no responde | Usá **o copiá el comando** y pegá la línea a mano, o **Copiar instrucción para cualquier asistente**. Comprobá la conexión con `--check` ([13.4](#asistentes-externos)). |
 | Mi asistente no es Claude Code, Codex, OpenCode ni Pi | Usá **Copiar instrucción para cualquier asistente** y pegala en su chat ([13.4](#asistentes-externos)). |
@@ -1894,7 +1894,7 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 - **Chat de ayuda:** asistente de la burbuja de la barra inferior que responde cómo usar EntropIA a partir de este manual y puede hacer acciones con tu aprobación.
 - **Conector:** programa `entropia-agent-connector` (o `entropia-pro-agent-connector`) que se instala con EntropIA y comunica a un asistente externo con la aplicación abierta.
 - **Contexto para la IA:** descripción de una colección que leen el Chat, Investigar, la corrección y el agente de Escritura.
-- **Diagnóstico:** resumen de la configuración y de los últimos errores, sin claves ni contenido de documentos, que la ayuda envía solo si marcás **Incluir diagnóstico**.
+- **Diagnóstico:** resumen de la configuración y de los últimos errores, sin claves ni contenido de documentos, que la ayuda envía solo si marcás **Diagnóstico**.
 - **G² (log-verosimilitud):** medida de cuánto más de lo esperable aparecen juntas dos palabras; la usa **Frases → Palabras asociadas**.
 - **GEXF:** formato de archivo de redes que abre Gephi; lo genera Relaciones 3D.
 - **Lite / Pro:** las dos variantes de EntropIA; Lite usa IA por Internet y Pro suma motores locales.

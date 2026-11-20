@@ -1129,7 +1129,6 @@
 - «Borrar» `help.confirmDelete`
 - «Borrar historial» `help.clearHistory`
 - «Buscando en el manual…» `help.thinking`
-- «Buscar en mis documentos» `help.includeDocuments`
 - «Cancelar» `help.cancel`
 - «Cargando el diagnóstico…» `help.diagnosticsLoading`
 - «Cargando el historial…» `help.historyLoading`
@@ -1141,6 +1140,7 @@
 - «Del mapa de pantallas» `help.sourceScreenMap`
 - «Detalle de fuentes y pasos» `help.metaDetails`
 - «Detener» `help.stop`
+- «Diagnóstico» `help.includeDiagnostics`
 - «El modelo no pudo usar herramientas en este turno; respondió sin usar herramientas.» `help.toolsUnavailable`
 - «Eliminar conversación» `help.deleteConversation`
 - «Enviar» `help.send`
@@ -1152,16 +1152,17 @@
 - «Gemma local no puede leer tus documentos. Marcá «Usar OpenRouter» para esta pregunta.» `help.documentsNeedRemote`
 - «Historial» `help.history`
 - «Historial ({count})» `help.historyCount`
-- «Incluir diagnóstico» `help.includeDiagnostics`
 - «La ayuda pide aprobación» `help.approvalTitle`
 - «La ayuda usa tu cuenta de OpenRouter» `help.noKeyTitle`
 - «Llegó al límite de rondas de herramientas; la respuesta puede estar incompleta.» `help.roundLimitReached`
 - «Lo lee Gemma local en este equipo: no viaja a ningún servicio. No incluye claves.» `help.diagnosticsHintLocal`
 - «Maximizar» `help.maximizePanel`
-- «Más información sobre Buscar en mis documentos» `help.documentsInfo`
-- «Más información sobre Incluir diagnóstico» `help.diagnosticsInfo`
+- «Mis documentos» `help.includeDocuments`
+- «Más información sobre Diagnóstico» `help.diagnosticsInfo`
+- «Más información sobre Mis documentos» `help.documentsInfo`
 - «Nueva conversación» `help.newConversation`
 - «Ocultar» `help.previewHide`
+- «OpenRouter» `help.useRemote`
 - «Preguntá cómo usar EntropIA o qué hacer cuando algo falla» `help.subtitle`
 - «Preguntá, por ejemplo, cómo importar un PDF o qué hacer si falla una transcripción.» `help.emptyState`
 - «Probá con:» `help.suggestionsLabel`
@@ -1178,11 +1179,11 @@
 - «Restaurar» `help.restorePanel`
 - «Se eliminan todas las conversaciones guardadas en este equipo. No se puede deshacer.» `help.clearHistoryMessage`
 - «Todavía no hay conversaciones guardadas.» `help.historyEmpty`
-- «Usar OpenRouter ({model}) para esta pregunta» `help.useRemote`
+- «Usar OpenRouter ({model}) para esta pregunta» `help.useRemoteHint`
 - «Usó» `help.stepsUsed`
 - «Venció» `help.approvalOutcomeExpired`
 - «Ver el manual en línea» `help.openManual`
-- «Ver qué se envía» `help.previewToggle`
+- «Ver input» `help.previewToggle`
 - «Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.» `help.diagnosticsHint`
 - «ahora mismo» `help.historyNow`
 - «¿Borrar el historial?» `help.clearHistoryTitle`
