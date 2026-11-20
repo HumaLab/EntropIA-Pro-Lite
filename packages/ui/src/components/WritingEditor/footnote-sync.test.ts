@@ -94,3 +94,27 @@ describe('footnote sync', () => {
     expect(footnotesOf(instance)).toHaveLength(0)
   })
 })
+
+describe('footnote markers through HTML', () => {
+  it('keep the drawn number as plain text, as version 3 stored it', () => {
+    const source = mount({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Cuerpo' }] }],
+    })
+    source.chain().setTextSelection(7).addFootnote().run()
+    const [original] = referencesOf(source)
+
+    const copy = mount({ type: 'doc', content: [{ type: 'paragraph' }] })
+    copy.commands.setContent(source.getHTML())
+    const [parsed] = referencesOf(copy)
+
+    expect(parsed?.content).toEqual([{ type: 'text', text: '1' }])
+    expect(Object.keys(parsed?.attrs ?? {})).toEqual([
+      'class',
+      'data-id',
+      'referenceNumber',
+      'href',
+    ])
+    expect(parsed?.attrs).toEqual(original?.attrs)
+  })
+})

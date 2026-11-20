@@ -997,10 +997,19 @@ const WritingFootnotes = Footnotes.extend({
  */
 const WritingFootnoteReference = FootnoteReference.extend({
   content: 'text*',
+  // Version 3 took the marker's content from the `<a>` inside `<sup>`; without
+  // this the `<a>` itself parses as a link mark around the number.
+  parseHTML() {
+    return (this.parent?.() ?? []).map((rule) => ({
+      ...rule,
+      contentElement: (node: HTMLElement) => node.firstChild as HTMLElement,
+    }))
+  },
   addAttributes() {
+    // Version 3's key order, so a marker serializes to the same bytes.
     return {
-      ...this.parent?.(),
       class: { default: 'footnote-ref', rendered: false },
+      ...this.parent?.(),
       href: { default: null, rendered: false },
     }
   },
