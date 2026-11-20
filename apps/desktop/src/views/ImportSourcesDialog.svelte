@@ -288,9 +288,9 @@
           {#each collections as collection (collection.id)}
             <RadioCard value={collection.id} label={collection.name}>
               {#snippet description()}
-                <span class="import-dialog__option-count" aria-hidden="true"
-                  >{formatCount(collection.count)}</span
-                >
+                <span class="import-dialog__option-count" aria-hidden="true">
+                  {formatCount(collection.count)}
+                </span>
                 <span class="sr-only">{itemCountLabel(collection.count)}</span>
               {/snippet}
             </RadioCard>

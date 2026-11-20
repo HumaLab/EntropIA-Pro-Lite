@@ -1120,8 +1120,10 @@
                               itemTitle: document.itemTitle,
                               assetId: task.assetId,
                               assetLabel: label,
-                            })}>{label}</button
+                            })}
                         >
+                          {label}
+                        </button>
                       {:else}
                         <span class="batch-tasks__missing">—</span>
                       {/if}
@@ -1267,13 +1269,13 @@
              flex item that the row can actually lay out. -->
         <div class="batch-field" role="group" aria-labelledby="batch-collections-label">
           <div class="batch-field__head">
-            <span class="batch-field__legend" id="batch-collections-label"
-              >{t('batch.collections')}</span
-            >
+            <span class="batch-field__legend" id="batch-collections-label">
+              {t('batch.collections')}
+            </span>
             <Checkbox size="sm" checked={allSelected} onchange={toggleSelectAll}>
-              <span class="batch-field__select-all"
-                >{t('batch.selectAll')} · {t('batch.selectedCount', { count: selectedCount })}</span
-              >
+              <span class="batch-field__select-all">
+                {t('batch.selectAll')} · {t('batch.selectedCount', { count: selectedCount })}
+              </span>
             </Checkbox>
           </div>
           <div class="batch-field__scope-list">
@@ -1285,9 +1287,9 @@
                   onchange={() => toggleCollection(collection.id)}
                 >
                   <span class="batch-field__scope-row">
-                    <span class="batch-field__scope-name" use:tooltip={collection.name}
-                      >{collection.name}</span
-                    >
+                    <span class="batch-field__scope-name" use:tooltip={collection.name}>
+                      {collection.name}
+                    </span>
                     <span class="batch-field__count">{collection.items}</span>
                   </span>
                 </Checkbox>
@@ -1300,15 +1302,15 @@
           <span class="batch-field__legend" id="batch-ops-label">{t('batch.operations')}</span>
           <Checkbox variant="card" size="sm" bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrIncludeNativeHint')}>
-            <Checkbox variant="card" size="sm" bind:checked={ocrIncludeNative} disabled={!runOcr}
-              >{t('batch.opOcrIncludeNative')}</Checkbox
-            >
+            <Checkbox variant="card" size="sm" bind:checked={ocrIncludeNative} disabled={!runOcr}>
+              {t('batch.opOcrIncludeNative')}
+            </Checkbox>
           </span>
           {#if LOCAL_ML && ocrhInfo.local_mode}
             <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrLocalHighHint')}>
-              <Checkbox variant="card" size="sm" bind:checked={ocrLocalHigh} disabled={!runOcr}
-                >{t('batch.opOcrLocalHigh')}</Checkbox
-              >
+              <Checkbox variant="card" size="sm" bind:checked={ocrLocalHigh} disabled={!runOcr}>
+                {t('batch.opOcrLocalHigh')}
+              </Checkbox>
             </span>
           {/if}
           <!-- The hint used to be a paragraph under the row, which is the one
@@ -1316,27 +1318,27 @@
                action also wires `aria-describedby`, so the sentence still
                reaches a screen reader off the checkbox it explains. -->
           <span class="batch-ops__hinted" use:tooltip={t('batch.opEmbeddingsHint')}>
-            <Checkbox variant="card" size="sm" bind:checked={runEmbeddings}
-              >{t('batch.opEmbeddings')}</Checkbox
-            >
+            <Checkbox variant="card" size="sm" bind:checked={runEmbeddings}>
+              {t('batch.opEmbeddings')}
+            </Checkbox>
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opNerHint')}>
             <Checkbox variant="card" size="sm" bind:checked={runNer}>{t('batch.opNer')}</Checkbox>
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opTriplesHint')}>
-            <Checkbox variant="card" size="sm" bind:checked={runTriples}
-              >{t('batch.opTriples')}</Checkbox
-            >
+            <Checkbox variant="card" size="sm" bind:checked={runTriples}>
+              {t('batch.opTriples')}
+            </Checkbox>
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrCorrectionHint')}>
-            <Checkbox variant="card" size="sm" bind:checked={runOcrCorrection}
-              >{t('batch.opOcrCorrection')}</Checkbox
-            >
+            <Checkbox variant="card" size="sm" bind:checked={runOcrCorrection}>
+              {t('batch.opOcrCorrection')}
+            </Checkbox>
           </span>
           <span class="batch-ops__hinted" use:tooltip={t('batch.opSummaryHint')}>
-            <Checkbox variant="card" size="sm" bind:checked={runSummary}
-              >{t('batch.opSummary')}</Checkbox
-            >
+            <Checkbox variant="card" size="sm" bind:checked={runSummary}>
+              {t('batch.opSummary')}
+            </Checkbox>
           </span>
           <!-- The span carries the tooltip: a disabled button gets no pointer events. -->
           <span
@@ -1432,26 +1434,26 @@
                   <span class="batch-tab__batch-id" use:tooltip={summary.id}>{summary.id}</span>
                   <span class="batch-tab__batch-state">{batchStateLabel(summary.state)}</span>
                   <span class="batch-tab__counts">
-                    <span class="batch-tab__count" use:tooltip={t('batch.stateSucceeded')}
-                      >{summary.succeededUnits}
-                      <ActionIcon name="circle-check" size={12} /><span class="sr-only"
-                        >{t('batch.stateSucceeded')}</span
-                      ></span
-                    >
+                    <span class="batch-tab__count" use:tooltip={t('batch.stateSucceeded')}>
+                      {summary.succeededUnits}
+                      <ActionIcon name="circle-check" size={12} /><span class="sr-only">
+                        {t('batch.stateSucceeded')}
+                      </span>
+                    </span>
                     <span aria-hidden="true">·</span>
-                    <span class="batch-tab__count" use:tooltip={t('batch.stateFailed')}
-                      >{summary.failedUnits}
-                      <ActionIcon name="circle-x" size={12} /><span class="sr-only"
-                        >{t('batch.stateFailed')}</span
-                      ></span
-                    >
+                    <span class="batch-tab__count" use:tooltip={t('batch.stateFailed')}>
+                      {summary.failedUnits}
+                      <ActionIcon name="circle-x" size={12} /><span class="sr-only">
+                        {t('batch.stateFailed')}
+                      </span>
+                    </span>
                     <span aria-hidden="true">·</span>
-                    <span class="batch-tab__count" use:tooltip={t('batch.stateRunning')}
-                      >{summary.activeUnits}
-                      <ActionIcon name="loader" size={12} /><span class="sr-only"
-                        >{t('batch.stateRunning')}</span
-                      ></span
-                    >
+                    <span class="batch-tab__count" use:tooltip={t('batch.stateRunning')}>
+                      {summary.activeUnits}
+                      <ActionIcon name="loader" size={12} /><span class="sr-only">
+                        {t('batch.stateRunning')}
+                      </span>
+                    </span>
                   </span>
                 </button>
                 <div class="batch-tab__batch-actions">

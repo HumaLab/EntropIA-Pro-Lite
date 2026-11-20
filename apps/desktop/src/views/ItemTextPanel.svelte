@@ -342,12 +342,12 @@
     </h3>
     <div class="ocr-item">
       <div class="ocr-item-header">
-        <span class="ocr-filename"
-          ><ActionIcon name="volume" size={16} />
+        <span class="ocr-filename">
+          <ActionIcon name="volume" size={16} />
           <span class="ocr-filename__text">
             {getAssetFilename(selectedAsset) ?? translate('item.audioLabel')}
-          </span></span
-        >
+          </span>
+        </span>
         <span class="ocr-status">
           <StatusBadge variant={getJobStatusBadgeVariant(transcriptionState.status)} size="sm">
             {transcriptionState.status}

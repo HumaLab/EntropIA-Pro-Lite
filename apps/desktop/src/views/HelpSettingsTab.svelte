@@ -79,9 +79,9 @@
             />
           </div>
           <label class="help-settings-tab__field">
-            <span class="help-settings-tab__label number-field-label"
-              >{t('settings.help.label.contextChars')}</span
-            >
+            <span class="help-settings-tab__label number-field-label">
+              {t('settings.help.label.contextChars')}
+            </span>
             <NumberField
               bind:value={form.contextChars}
               min="4000"
@@ -94,9 +94,9 @@
             <span class="help-settings-tab__hint">{t('settings.help.hint.contextChars')}</span>
           </label>
           <label class="help-settings-tab__field">
-            <span class="help-settings-tab__label number-field-label"
-              >{t('settings.help.label.maxTokens')}</span
-            >
+            <span class="help-settings-tab__label number-field-label">
+              {t('settings.help.label.maxTokens')}
+            </span>
             <NumberField
               bind:value={form.maxTokens}
               min="200"
@@ -109,9 +109,9 @@
             <span class="help-settings-tab__hint">{t('settings.help.hint.maxTokens')}</span>
           </label>
           <label class="help-settings-tab__field">
-            <span class="help-settings-tab__label number-field-label"
-              >{t('settings.help.label.temperature')}</span
-            >
+            <span class="help-settings-tab__label number-field-label">
+              {t('settings.help.label.temperature')}
+            </span>
             <NumberField
               bind:value={form.temperature}
               min="0"
@@ -124,9 +124,9 @@
             <span class="help-settings-tab__hint">{t('settings.help.hint.temperature')}</span>
           </label>
           <label class="help-settings-tab__field">
-            <span class="help-settings-tab__label number-field-label"
-              >{t('settings.help.label.historyTurns')}</span
-            >
+            <span class="help-settings-tab__label number-field-label">
+              {t('settings.help.label.historyTurns')}
+            </span>
             <NumberField
               bind:value={form.historyTurns}
               min="0"
@@ -139,9 +139,9 @@
             <span class="help-settings-tab__hint">{t('settings.help.hint.historyTurns')}</span>
           </label>
           <label class="help-settings-tab__field">
-            <span class="help-settings-tab__label number-field-label"
-              >{t('settings.help.label.maxRounds')}</span
-            >
+            <span class="help-settings-tab__label number-field-label">
+              {t('settings.help.label.maxRounds')}
+            </span>
             <NumberField
               bind:value={form.maxRounds}
               min="1"
@@ -163,9 +163,9 @@
           </Checkbox>
         </div>
         <p class="help-settings-tab__note">{t('settings.help.paidNote')}</p>
-        <Button variant="secondary" size="sm" onclick={onrestore}
-          >{t('settings.help.restoreDefaults')}</Button
-        >
+        <Button variant="secondary" size="sm" onclick={onrestore}>
+          {t('settings.help.restoreDefaults')}
+        </Button>
       </div>
     </div>
   </section>

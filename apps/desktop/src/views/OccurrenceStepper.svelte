@@ -54,17 +54,21 @@
       variant="secondary"
       size="sm"
       disabled={index <= 0 || status === 'loading'}
-      onclick={() => onchange(index - 1)}>{translate('occurrence.previous')}</Button
+      onclick={() => onchange(index - 1)}
     >
-    <span aria-live="polite"
-      >{translate('occurrence.count', { index: total ? index + 1 : 0, total })}</span
-    >
+      {translate('occurrence.previous')}
+    </Button>
+    <span aria-live="polite">
+      {translate('occurrence.count', { index: total ? index + 1 : 0, total })}
+    </span>
     <Button
       variant="secondary"
       size="sm"
       disabled={index >= total - 1 || status === 'loading'}
-      onclick={() => onchange(index + 1)}>{translate('occurrence.next')}</Button
+      onclick={() => onchange(index + 1)}
     >
+      {translate('occurrence.next')}
+    </Button>
   </div>
   {#if kind === 'relation'}
     <div class="legend">

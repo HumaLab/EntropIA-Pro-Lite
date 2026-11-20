@@ -194,9 +194,9 @@
       <h3>{t('writing.historyTitle')}</h3>
       {#if sections.length > 0}
         <div class="history-panel__picker">
-          <span class="history-panel__hint" id="{uid}-section-label"
-            >{t('writing.historySectionLabel')}:</span
-          >
+          <span class="history-panel__hint" id="{uid}-section-label">
+            {t('writing.historySectionLabel')}:
+          </span>
           <ToolbarMenu
             label={t('writing.historySectionLabel')}
             items={sectionItems}

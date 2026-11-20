@@ -207,8 +207,9 @@
 
         <div class="cite__row">
           <div class="cite__field">
-            <label class="cite__label" for="{uid}-locator-{index}">{t('writing.citeLocator')}</label
-            >
+            <label class="cite__label" for="{uid}-locator-{index}">
+              {t('writing.citeLocator')}
+            </label>
             <Input
               id="{uid}-locator-{index}"
               size="sm"
@@ -221,9 +222,9 @@
             />
           </div>
           <div class="cite__field">
-            <span class="cite__label" id="cite-locator-kind-label-{index}"
-              >{t('writing.citeLocatorKind')}</span
-            >
+            <span class="cite__label" id="cite-locator-kind-label-{index}">
+              {t('writing.citeLocatorKind')}
+            </span>
             <ToolbarMenu
               label={t('writing.citeLocatorKind')}
               items={locatorKindItems(work)}
@@ -249,8 +250,10 @@
           onchange={(checked) => {
             work.suppressAuthor = checked
             changed()
-          }}>{t('writing.citeSuppress')}</Checkbox
+          }}
         >
+          {t('writing.citeSuppress')}
+        </Checkbox>
         {#if unsuppressed.includes(index)}
           <p class="cite__warning" role="status">{t('writing.citeSuppressFailed')}</p>
         {/if}

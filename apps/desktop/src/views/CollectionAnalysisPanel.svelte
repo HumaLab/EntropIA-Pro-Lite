@@ -439,8 +439,10 @@
                     dominant-baseline="middle"
                     transform={placedWord.rotated
                       ? `rotate(-90 ${placedWord.x} ${placedWord.y})`
-                      : undefined}>{placedWord.word}</text
+                      : undefined}
                   >
+                    {placedWord.word}
+                  </text>
                 </g>
               {/each}
             </svg>

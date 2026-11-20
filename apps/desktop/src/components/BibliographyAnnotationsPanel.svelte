@@ -299,9 +299,9 @@
                   class="annotation-entry__jump"
                   onclick={() => onSelect(view.key, viewPage(view))}
                 >
-                  <span class="annotation-entry__kind"
-                    >{$currentLocale && kindLabel(view.data?.annotationType)}</span
-                  >
+                  <span class="annotation-entry__kind">
+                    {$currentLocale && kindLabel(view.data?.annotationType)}
+                  </span>
                   {#if typeof view.data?.annotationText === 'string' && view.data.annotationText}
                     <q class="annotation-entry__quote">{view.data.annotationText}</q>
                   {/if}
@@ -310,8 +310,10 @@
                   <StatusBadge
                     variant={stateTone(view)}
                     size="xs"
-                    data-testid="annotation-sync-badge">{state}</StatusBadge
+                    data-testid="annotation-sync-badge"
                   >
+                    {state}
+                  </StatusBadge>
                 {/if}
                 <IconButton
                   size="sm"
@@ -383,16 +385,18 @@
                             variant={chosen === 'keep' ? 'primary' : 'secondary'}
                             aria-pressed={chosen === 'keep'}
                             onclick={() => decide(view.key, field, 'keep')}
-                            >{$currentLocale && t('bibliographyAnnotations.conflictKeep')}</Button
                           >
+                            {$currentLocale && t('bibliographyAnnotations.conflictKeep')}
+                          </Button>
                         {/if}
                         <Button
                           size="sm"
                           variant={chosen === 'delete' ? 'primary' : 'secondary'}
                           aria-pressed={chosen === 'delete'}
                           onclick={() => decide(view.key, field, 'delete')}
-                          >{$currentLocale && t('bibliographyAnnotations.conflictDiscard')}</Button
                         >
+                          {$currentLocale && t('bibliographyAnnotations.conflictDiscard')}
+                        </Button>
                       </div>
                     {:else}
                       <p class="annotation-conflict__field">
@@ -411,8 +415,9 @@
                             value: display(view.data?.[field]),
                           })}
                           onclick={() => decide(view.key, field, 'local')}
-                          >{$currentLocale && t('bibliographyAnnotations.conflictLocal')}</Button
                         >
+                          {$currentLocale && t('bibliographyAnnotations.conflictLocal')}
+                        </Button>
                         <Button
                           size="sm"
                           variant={chosen === 'zotero' ? 'primary' : 'secondary'}
@@ -421,8 +426,9 @@
                             value: display(view.conflictRemote?.[field]),
                           })}
                           onclick={() => decide(view.key, field, 'zotero')}
-                          >{$currentLocale && t('bibliographyAnnotations.conflictZotero')}</Button
                         >
+                          {$currentLocale && t('bibliographyAnnotations.conflictZotero')}
+                        </Button>
                       </div>
                       <p class="annotation-conflict__values">
                         {$currentLocale &&
@@ -442,8 +448,9 @@
                     variant="primary"
                     disabled={!complete(view)}
                     onclick={() => apply(view)}
-                    >{$currentLocale && t('bibliographyAnnotations.conflictApply')}</Button
                   >
+                    {$currentLocale && t('bibliographyAnnotations.conflictApply')}
+                  </Button>
                 </div>
               {/if}
             </div>
@@ -471,9 +478,9 @@
               <span class="annotation-entry__bar" aria-hidden="true"></span>
               <div class="annotation-entry__body">
                 <div class="annotation-entry__head">
-                  <span class="annotation-entry__kind"
-                    >{$currentLocale && kindLabel(view.data?.annotationType)}</span
-                  >
+                  <span class="annotation-entry__kind">
+                    {$currentLocale && kindLabel(view.data?.annotationType)}
+                  </span>
                   {#if typeof view.data?.annotationText === 'string' && view.data.annotationText}
                     <q class="annotation-entry__quote">{view.data.annotationText}</q>
                   {/if}

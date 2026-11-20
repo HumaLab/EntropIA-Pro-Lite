@@ -96,8 +96,10 @@
           onclick={() => {
             selectedTable = table.name
             tableMenuOpen = false
-          }}>{table.name}</button
+          }}
         >
+          {table.name}
+        </button>
       {/each}
     </div>
   {/if}

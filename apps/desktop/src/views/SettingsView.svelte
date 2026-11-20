@@ -2318,17 +2318,17 @@
                     {#snippet description()}
                       {t('settings.llmMode.local.description')}
                       {#if localModel?.exists}
-                        <StatusBadge variant="success" size="xs"
-                          >{t('settings.badge.available')}</StatusBadge
-                        >
+                        <StatusBadge variant="success" size="xs">
+                          {t('settings.badge.available')}
+                        </StatusBadge>
                       {:else if localModel?.can_auto_download || localAvailable}
-                        <StatusBadge variant="warning" size="xs"
-                          >{t('settings.badge.downloadable')}</StatusBadge
-                        >
+                        <StatusBadge variant="warning" size="xs">
+                          {t('settings.badge.downloadable')}
+                        </StatusBadge>
                       {:else}
-                        <StatusBadge variant="warning" size="xs"
-                          >{t('settings.badge.notFound')}</StatusBadge
-                        >
+                        <StatusBadge variant="warning" size="xs">
+                          {t('settings.badge.notFound')}
+                        </StatusBadge>
                       {/if}
                     {/snippet}
                   </RadioCard>
@@ -2450,9 +2450,9 @@
                       <!-- Checkbox is its own label: no wrapping label around it. -->
                       <Checkbox bind:checked={sttLocalDiarize}>
                         <strong>{t('settings.sttLocalDiarize.label')}</strong>
-                        <span class="settings__check-desc"
-                          >{t('settings.sttLocalDiarize.description')}</span
-                        >
+                        <span class="settings__check-desc">
+                          {t('settings.sttLocalDiarize.description')}
+                        </span>
                       </Checkbox>
                     {/if}
                   </div>
@@ -2557,20 +2557,20 @@
                     <div class="settings__local-model-row">
                       <span class="settings__label">{t('settings.localModel.status')}</span>
                       {#if localModel.exists}
-                        <StatusBadge variant="success" size="xs"
-                          >{t('settings.localModel.found')}</StatusBadge
-                        >
-                        <span class="settings__local-model-size"
-                          >{formatBytes(localModel.size_bytes)}</span
-                        >
+                        <StatusBadge variant="success" size="xs">
+                          {t('settings.localModel.found')}
+                        </StatusBadge>
+                        <span class="settings__local-model-size">
+                          {formatBytes(localModel.size_bytes)}
+                        </span>
                       {:else if localModel.can_auto_download}
-                        <StatusBadge variant="warning" size="xs"
-                          >{t('settings.localModel.downloadable')}</StatusBadge
-                        >
+                        <StatusBadge variant="warning" size="xs">
+                          {t('settings.localModel.downloadable')}
+                        </StatusBadge>
                       {:else}
-                        <StatusBadge variant="warning" size="xs"
-                          >{t('settings.localModel.missing')}</StatusBadge
-                        >
+                        <StatusBadge variant="warning" size="xs">
+                          {t('settings.localModel.missing')}
+                        </StatusBadge>
                       {/if}
                     </div>
 
@@ -2586,9 +2586,9 @@
                       </p>
 
                       <div class="settings__field settings__field--stacked">
-                        <label class="settings__label" for="local-model-filename-{paneId}"
-                          >{t('settings.localModel.filename')}</label
-                        >
+                        <label class="settings__label" for="local-model-filename-{paneId}">
+                          {t('settings.localModel.filename')}
+                        </label>
                         <Input
                           id="local-model-filename-{paneId}"
                           size="sm"
@@ -2599,9 +2599,9 @@
                       </div>
 
                       <div class="settings__field settings__field--stacked">
-                        <label class="settings__label" for="local-model-source-{paneId}"
-                          >{t('settings.localModel.sourceUrl')}</label
-                        >
+                        <label class="settings__label" for="local-model-source-{paneId}">
+                          {t('settings.localModel.sourceUrl')}
+                        </label>
                         <Input
                           id="local-model-source-{paneId}"
                           size="sm"
@@ -2617,9 +2617,9 @@
                             value={downloadPct}
                             label={t('settings.localModel.downloading')}
                           />
-                          <span class="settings__download-progress-text"
-                            >{downloadPct}% — {t('settings.localModel.downloading')}</span
-                          >
+                          <span class="settings__download-progress-text">
+                            {downloadPct}% — {t('settings.localModel.downloading')}
+                          </span>
                         </div>
                       {:else}
                         <Button
@@ -2672,17 +2672,17 @@
               {#if localEmbeddingModel}
                 <div class="settings__local-model">
                   <div class="settings__local-model-row">
-                    <span class="settings__label"
-                      >{t('settings.embeddingProvider.localStatus')}</span
-                    >
+                    <span class="settings__label">
+                      {t('settings.embeddingProvider.localStatus')}
+                    </span>
                     {#if localEmbeddingModel.available}
-                      <StatusBadge variant="success" size="xs"
-                        >{t('settings.embeddingProvider.localComplete')}</StatusBadge
-                      >
+                      <StatusBadge variant="success" size="xs">
+                        {t('settings.embeddingProvider.localComplete')}
+                      </StatusBadge>
                     {:else}
-                      <StatusBadge variant="warning" size="xs"
-                        >{t('settings.embeddingProvider.localIncomplete')}</StatusBadge
-                      >
+                      <StatusBadge variant="warning" size="xs">
+                        {t('settings.embeddingProvider.localIncomplete')}
+                      </StatusBadge>
                     {/if}
                   </div>
 
@@ -2751,20 +2751,20 @@
                     <div class="settings__local-model-row">
                       <span class="settings__label">{t('settings.reranker.title')}</span>
                       {#if localRerankerModel.available}
-                        <StatusBadge variant="success" size="xs"
-                          >{t('settings.reranker.ready')}</StatusBadge
-                        >
+                        <StatusBadge variant="success" size="xs">
+                          {t('settings.reranker.ready')}
+                        </StatusBadge>
                       {:else}
-                        <StatusBadge variant="warning" size="xs"
-                          >{t('settings.reranker.missing')}</StatusBadge
-                        >
+                        <StatusBadge variant="warning" size="xs">
+                          {t('settings.reranker.missing')}
+                        </StatusBadge>
                       {/if}
                     </div>
 
                     <div class="settings__local-model-row">
-                      <span class="settings__label"
-                        >{t('settings.embeddingProvider.localPath')}</span
-                      >
+                      <span class="settings__label">
+                        {t('settings.embeddingProvider.localPath')}
+                      </span>
                       <code class="settings__local-model-path">{localRerankerModel.directory}</code>
                     </div>
 
@@ -2891,23 +2891,23 @@
                 <div class="settings__local-model">
                   <div class="settings__local-model-row">
                     {#if glmOcrLocal.model_present && glmOcrLocal.mmproj_present}
-                      <StatusBadge variant="success" size="xs"
-                        >{t('settings.glmOcrLocal.modelsReady')}</StatusBadge
-                      >
+                      <StatusBadge variant="success" size="xs">
+                        {t('settings.glmOcrLocal.modelsReady')}
+                      </StatusBadge>
                     {:else}
                       <!-- The badge holds the state; the file names, long enough to
                              overflow a one-line pill, sit beside it. -->
-                      <StatusBadge variant="warning" size="xs"
-                        >{t('settings.glmOcrLocal.modelsMissing')}</StatusBadge
-                      >
-                      <code class="settings__local-model-path"
-                        >{[
+                      <StatusBadge variant="warning" size="xs">
+                        {t('settings.glmOcrLocal.modelsMissing')}
+                      </StatusBadge>
+                      <code class="settings__local-model-path">
+                        {[
                           !glmOcrLocal.model_present && 'GLM-OCR-Q8_0.gguf',
                           !glmOcrLocal.mmproj_present && 'mmproj-GLM-OCR-Q8_0.gguf',
                         ]
                           .filter(Boolean)
-                          .join(' ')}</code
-                      >
+                          .join(' ')}
+                      </code>
                     {/if}
                   </div>
 
@@ -2951,21 +2951,21 @@
                 <div class="settings__local-model">
                   <div class="settings__local-model-row">
                     {#if qwenLocal.model_present && qwenLocal.mmproj_present}
-                      <StatusBadge variant="success" size="xs"
-                        >{t('settings.qwenCorrectLocal.modelsReady')}</StatusBadge
-                      >
+                      <StatusBadge variant="success" size="xs">
+                        {t('settings.qwenCorrectLocal.modelsReady')}
+                      </StatusBadge>
                     {:else}
-                      <StatusBadge variant="warning" size="xs"
-                        >{t('settings.qwenCorrectLocal.modelsMissing')}</StatusBadge
-                      >
-                      <code class="settings__local-model-path"
-                        >{[
+                      <StatusBadge variant="warning" size="xs">
+                        {t('settings.qwenCorrectLocal.modelsMissing')}
+                      </StatusBadge>
+                      <code class="settings__local-model-path">
+                        {[
                           !qwenLocal.model_present && 'Qwen3VL-4B-Instruct-Q4_K_M.gguf',
                           !qwenLocal.mmproj_present && 'mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf',
                         ]
                           .filter(Boolean)
-                          .join(' ')}</code
-                      >
+                          .join(' ')}
+                      </code>
                     {/if}
                   </div>
                   {@render llamaServerStatus(qwenLocal)}
@@ -3003,11 +3003,11 @@
         {#snippet apiSwitch(provider: ClearableKey)}
           <Checkbox bind:checked={enabledApis[provider]}>
             <strong>{t('settings.apiSwitch.label')}</strong>
-            <span class="settings__check-desc"
-              >{enabledApis[provider]
+            <span class="settings__check-desc">
+              {enabledApis[provider]
                 ? t('settings.apiSwitch.on', { service: CLEARABLE_KEY_SERVICES[provider] })
-                : t('settings.apiSwitch.off', { service: CLEARABLE_KEY_SERVICES[provider] })}</span
-            >
+                : t('settings.apiSwitch.off', { service: CLEARABLE_KEY_SERVICES[provider] })}
+            </span>
           </Checkbox>
         {/snippet}
         <div class="settings__provider-grid">
@@ -3110,9 +3110,9 @@
               </div>
 
               <div class="settings__field settings__field--stacked">
-                <label class="settings__label" for="openai-base-url-{paneId}"
-                  >{t('settings.openaiCompatibleBaseUrl.label')}</label
-                >
+                <label class="settings__label" for="openai-base-url-{paneId}">
+                  {t('settings.openaiCompatibleBaseUrl.label')}
+                </label>
                 <Input
                   id="openai-base-url-{paneId}"
                   size="sm"
@@ -3156,9 +3156,9 @@
                         onclick={() => handleModelSelect(m.id)}
                       >
                         <span class="settings__model-id">{m.id}</span>
-                        <span class="settings__model-ctx"
-                          >{Math.round(m.context_length / 1024)}k ctx</span
-                        >
+                        <span class="settings__model-ctx">
+                          {Math.round(m.context_length / 1024)}k ctx
+                        </span>
                       </button>
                     {/each}
                   </div>
@@ -3197,9 +3197,9 @@
               {@render apiSwitch('assemblyai')}
 
               <div class="settings__field settings__field--stacked">
-                <label class="settings__label" for="assemblyai-api-key-{paneId}"
-                  >{t('settings.apiKey')}</label
-                >
+                <label class="settings__label" for="assemblyai-api-key-{paneId}">
+                  {t('settings.apiKey')}
+                </label>
                 <div class="settings__input-row">
                   <div class="settings__key-field">
                     <Input
@@ -3331,9 +3331,9 @@
               {@render apiSwitch('glmOcr')}
 
               <div class="settings__field settings__field--stacked">
-                <label class="settings__label" for="glm-ocr-api-key-{paneId}"
-                  >{t('settings.apiKey')}</label
-                >
+                <label class="settings__label" for="glm-ocr-api-key-{paneId}">
+                  {t('settings.apiKey')}
+                </label>
                 <div class="settings__input-row">
                   <div class="settings__key-field">
                     <Input
@@ -3427,9 +3427,9 @@
               {@render apiSwitch('zotero')}
 
               <div class="settings__field settings__field--stacked">
-                <label class="settings__label" for="zotero-api-key-{paneId}"
-                  >{t('settings.zotero.keyLabel')}</label
-                >
+                <label class="settings__label" for="zotero-api-key-{paneId}">
+                  {t('settings.zotero.keyLabel')}
+                </label>
                 <div class="settings__input-row">
                   <div class="settings__key-field">
                     <Input
@@ -3560,14 +3560,16 @@
                   variant="secondary"
                   size="sm"
                   onclick={() => validatePrompt('ocrCorrectionPrompt')}
-                  >{t('settings.prompts.validate')}</Button
                 >
+                  {t('settings.prompts.validate')}
+                </Button>
                 <Button
                   variant="secondary"
                   size="sm"
                   onclick={() => resetPrompt('ocrCorrectionPrompt')}
-                  >{t('settings.prompts.restoreDefault')}</Button
                 >
+                  {t('settings.prompts.restoreDefault')}
+                </Button>
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
@@ -3586,11 +3588,12 @@
                   variant="secondary"
                   size="sm"
                   onclick={() => validatePrompt('summaryPrompt')}
-                  >{t('settings.prompts.validate')}</Button
                 >
-                <Button variant="secondary" size="sm" onclick={() => resetPrompt('summaryPrompt')}
-                  >{t('settings.prompts.restoreDefault')}</Button
-                >
+                  {t('settings.prompts.validate')}
+                </Button>
+                <Button variant="secondary" size="sm" onclick={() => resetPrompt('summaryPrompt')}>
+                  {t('settings.prompts.restoreDefault')}
+                </Button>
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
@@ -3605,12 +3608,12 @@
                 </p>
               {/if}
               <div class="settings__button-row">
-                <Button variant="secondary" size="sm" onclick={() => validatePrompt('nerPrompt')}
-                  >{t('settings.prompts.validate')}</Button
-                >
-                <Button variant="secondary" size="sm" onclick={() => resetPrompt('nerPrompt')}
-                  >{t('settings.prompts.restoreDefault')}</Button
-                >
+                <Button variant="secondary" size="sm" onclick={() => validatePrompt('nerPrompt')}>
+                  {t('settings.prompts.validate')}
+                </Button>
+                <Button variant="secondary" size="sm" onclick={() => resetPrompt('nerPrompt')}>
+                  {t('settings.prompts.restoreDefault')}
+                </Button>
               </div>
             </div>
             <div class="settings__field settings__field--stacked settings__prompt-card">
@@ -3629,11 +3632,12 @@
                   variant="secondary"
                   size="sm"
                   onclick={() => validatePrompt('tripletsPrompt')}
-                  >{t('settings.prompts.validate')}</Button
                 >
-                <Button variant="secondary" size="sm" onclick={() => resetPrompt('tripletsPrompt')}
-                  >{t('settings.prompts.restoreDefault')}</Button
-                >
+                  {t('settings.prompts.validate')}
+                </Button>
+                <Button variant="secondary" size="sm" onclick={() => resetPrompt('tripletsPrompt')}>
+                  {t('settings.prompts.restoreDefault')}
+                </Button>
               </div>
             </div>
           </div>
@@ -3725,9 +3729,9 @@
                   </div>
                 </div>
                 <div class="settings__card-actions">
-                  <Button variant="secondary" size="sm" onclick={() => resetModelParams(flow.id)}
-                    >{t('settings.modelParams.restoreDefaults')}</Button
-                  >
+                  <Button variant="secondary" size="sm" onclick={() => resetModelParams(flow.id)}>
+                    {t('settings.modelParams.restoreDefaults')}
+                  </Button>
                 </div>
               </div>
             {/each}
@@ -3859,9 +3863,9 @@
                 />
               </div>
               <div class="settings__card-actions">
-                <Button variant="secondary" size="sm" onclick={resetRagParams}
-                  >{t('settings.ragParams.restoreDefaults')}</Button
-                >
+                <Button variant="secondary" size="sm" onclick={resetRagParams}>
+                  {t('settings.ragParams.restoreDefaults')}
+                </Button>
               </div>
             </div>
           </div>

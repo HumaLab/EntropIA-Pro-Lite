@@ -273,12 +273,12 @@
           bind:value={newDescription}
         />
         <div class="create-form__actions">
-          <Button variant="primary" type="submit" disabled={!newName.trim()}
-            >{t('collections.createAction')}</Button
-          >
-          <Button variant="ghost" onclick={() => (showCreate = false)}
-            >{t('collections.cancel')}</Button
-          >
+          <Button variant="primary" type="submit" disabled={!newName.trim()}>
+            {t('collections.createAction')}
+          </Button>
+          <Button variant="ghost" onclick={() => (showCreate = false)}>
+            {t('collections.cancel')}
+          </Button>
         </div>
       </form>
     </Card>
@@ -325,11 +325,12 @@
                 bind:value={editAiContext}
               />
               <div class="edit-form__actions">
-                <Button variant="primary" type="submit" disabled={!editName.trim()}
-                  >{t('collections.save')}</Button
-                >
-                <Button variant="ghost" onclick={handleCancelEdit}>{t('collections.cancel')}</Button
-                >
+                <Button variant="primary" type="submit" disabled={!editName.trim()}>
+                  {t('collections.save')}
+                </Button>
+                <Button variant="ghost" onclick={handleCancelEdit}>
+                  {t('collections.cancel')}
+                </Button>
               </div>
             </form>
           </Card>

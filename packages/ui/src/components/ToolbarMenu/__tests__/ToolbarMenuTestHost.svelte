@@ -40,8 +40,10 @@
             onclick={() => {
               onswatch?.(swatch)
               menu.close({ returnFocus: false })
-            }}>{swatch}</button
+            }}
           >
+            {swatch}
+          </button>
         {/each}
       </div>
     {/if}

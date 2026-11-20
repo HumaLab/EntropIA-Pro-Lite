@@ -701,14 +701,14 @@
                     <span class="sync-card__device-name">
                       {device.name || device.platform}
                       {#if device.current}
-                        <StatusBadge variant="info" size="xs"
-                          >{t('sync.card.deviceCurrent')}</StatusBadge
-                        >
+                        <StatusBadge variant="info" size="xs">
+                          {t('sync.card.deviceCurrent')}
+                        </StatusBadge>
                       {/if}
                       {#if device.revoked}
-                        <StatusBadge variant="neutral" size="xs"
-                          >{t('sync.card.deviceRevoked')}</StatusBadge
-                        >
+                        <StatusBadge variant="neutral" size="xs">
+                          {t('sync.card.deviceRevoked')}
+                        </StatusBadge>
                       {/if}
                     </span>
                     <span class="settings__hint">

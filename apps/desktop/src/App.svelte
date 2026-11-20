@@ -151,9 +151,9 @@
         <h1 id="startup-error-title">{t('app.initError')}</h1>
         <p>{error}</p>
       </div>
-      <button type="button" class="startup-action" onclick={initializeApp}
-        >{t('app.retryInit')}</button
-      >
+      <button type="button" class="startup-action" onclick={initializeApp}>
+        {t('app.retryInit')}
+      </button>
     </section>
   </main>
 {:else}

@@ -791,31 +791,31 @@
                         >
                           <span class="rag-chat__source-heading">
                             <span class="rag-chat__source-ref">[{source.index}]</span>
-                            <span class="rag-chat__source-scope"
-                              >{$currentLocale && t(sourceScopeKey(source))}</span
-                            >
+                            <span class="rag-chat__source-scope">
+                              {$currentLocale && t(sourceScopeKey(source))}
+                            </span>
                             {#if bibliography}
                               <span class="rag-chat__source-name">{source.itemTitle}</span>
                               {#if bibliography.location}
-                                <span class="rag-chat__source-time"
-                                  >{$currentLocale && locationText(bibliography.location)}</span
-                                >
+                                <span class="rag-chat__source-time">
+                                  {$currentLocale && locationText(bibliography.location)}
+                                </span>
                               {/if}
                             {:else}
-                              <span class="rag-chat__source-name"
-                                >{source.itemTitle} ({source.collectionName})</span
-                              >
+                              <span class="rag-chat__source-name">
+                                {source.itemTitle} ({source.collectionName})
+                              </span>
                               {#if timestamp}
                                 <span class="rag-chat__source-time">{timestamp}</span>
                               {/if}
                             {/if}
                           </span>
                           {#if bibliography}
-                            <span class="rag-chat__source-work"
-                              >{[workLine(bibliography), bibliography.libraryName]
+                            <span class="rag-chat__source-work">
+                              {[workLine(bibliography), bibliography.libraryName]
                                 .filter(Boolean)
-                                .join(' · ')}</span
-                            >
+                                .join(' · ')}
+                            </span>
                           {/if}
                           <span class="rag-chat__source-snippet">{source.snippet}</span>
                         </button>

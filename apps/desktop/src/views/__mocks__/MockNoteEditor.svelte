@@ -25,11 +25,11 @@
   {#if ondictate}
     <div role="group" aria-label={labels?.dictationGroup ?? 'Dictation'}>
       <button type="button" aria-label={labels?.dictationStart ?? 'Iniciar dictado'}>🎙</button>
-      <span data-testid="note-editor-dictation-timer"
-        >0:00 / {Math.floor(dictationMaxSeconds / 60)}:{(dictationMaxSeconds % 60)
+      <span data-testid="note-editor-dictation-timer">
+        0:00 / {Math.floor(dictationMaxSeconds / 60)}:{(dictationMaxSeconds % 60)
           .toString()
-          .padStart(2, '0')}</span
-      >
+          .padStart(2, '0')}
+      </span>
     </div>
   {/if}
   <button type="button" aria-label={labels?.addLink ?? 'Add link'}>Link</button>
@@ -37,8 +37,9 @@
   <div role="textbox">{content}</div>
   <p>{labels?.helperText ?? 'Tip: seleccioná texto para aplicar formato o links.'}</p>
   {#if oncancel}
-    <button type="button" data-testid="note-cancel" onclick={() => oncancel()}>{cancelLabel}</button
-    >
+    <button type="button" data-testid="note-cancel" onclick={() => oncancel()}>
+      {cancelLabel}
+    </button>
   {/if}
   <button
     type="button"

@@ -1198,8 +1198,10 @@
                           title={tool.label}
                           active={open || tool.active}
                           disabled={tool.disabled}
-                          {...props}><ActionIcon name={tool.icon} size={14} /></IconButton
+                          {...props}
                         >
+                          <ActionIcon name={tool.icon} size={14} />
+                        </IconButton>
                       {/snippet}
                       {#snippet children({ close })}
                         {@render colorPalette(tool.label, palette, false, close)}
@@ -1215,8 +1217,10 @@
                           title={tool.label}
                           active={open}
                           disabled={tool.disabled}
-                          {...props}><ActionIcon name={tool.icon} size={14} /></IconButton
+                          {...props}
                         >
+                          <ActionIcon name={tool.icon} size={14} />
+                        </IconButton>
                       {/snippet}
                     </ToolbarMenu>
                   {:else}
@@ -1228,8 +1232,10 @@
                       active={tool.active}
                       disabled={tool.disabled}
                       onmousedown={tool.keepFocus ? (event) => event.preventDefault() : undefined}
-                      onclick={tool.run}><ActionIcon name={tool.icon} size={14} /></IconButton
+                      onclick={tool.run}
                     >
+                      <ActionIcon name={tool.icon} size={14} />
+                    </IconButton>
                   {/if}
                   {#if tool.id === 'dictate' && (dictation.state === 'recording' || dictation.state === 'transcribing')}
                     <span
@@ -1266,8 +1272,10 @@
               title={labels.moreTools}
               active={open}
               data-toolbar-overflow=""
-              {...props}><ActionIcon name="more" size={14} /></IconButton
+              {...props}
             >
+              <ActionIcon name="more" size={14} />
+            </IconButton>
           {/snippet}
           {#snippet children({ close, select })}
             <!-- In toolbar order. The palettes are drawn whole, headed, rather
@@ -1403,15 +1411,19 @@
           variant="ghost"
           label={labels.findPrevious}
           disabled={matches.matches.length === 0}
-          onclick={() => step(-1)}><ActionIcon name="chevron-up" size={14} /></IconButton
+          onclick={() => step(-1)}
         >
+          <ActionIcon name="chevron-up" size={14} />
+        </IconButton>
         <IconButton
           size="sm"
           variant="ghost"
           label={labels.findNext}
           disabled={matches.matches.length === 0}
-          onclick={() => step(1)}><ActionIcon name="chevron-down" size={14} /></IconButton
+          onclick={() => step(1)}
         >
+          <ActionIcon name="chevron-down" size={14} />
+        </IconButton>
 
         <input
           class="writing-editor__link-input writing-editor__replace-field"
@@ -1428,8 +1440,10 @@
           variant="ghost"
           size="sm"
           disabled={matches.matches.length === 0}
-          onclick={replaceEvery}>{labels.replaceAll}</Button
+          onclick={replaceEvery}
         >
+          {labels.replaceAll}
+        </Button>
         <IconButton size="sm" variant="ghost" label={labels.closeSearch} onclick={closeSearch}>
           <ActionIcon name="close" size={14} />
         </IconButton>

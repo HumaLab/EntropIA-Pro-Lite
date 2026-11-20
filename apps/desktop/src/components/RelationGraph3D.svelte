@@ -811,9 +811,9 @@
             <em>{relation.predicate}</em>
             <span class="relation-graph__object">{relation.object}</span>
             {#if relation.count > 1}
-              <span class="relation-graph__count"
-                >{t('collectionAnalysis.graphRelationCount', { count: relation.count })}</span
-              >
+              <span class="relation-graph__count">
+                {t('collectionAnalysis.graphRelationCount', { count: relation.count })}
+              </span>
             {/if}
           </button>
         </li>
@@ -923,9 +923,9 @@
                   <em>{predicate}</em>
                   <span class="relation-graph__object">{targetLabel}</span>
                   {#if count > 1}
-                    <span class="relation-graph__count"
-                      >{t('collectionAnalysis.graphRelationCount', { count })}</span
-                    >
+                    <span class="relation-graph__count">
+                      {t('collectionAnalysis.graphRelationCount', { count })}
+                    </span>
                   {/if}
                 </button>
               </li>

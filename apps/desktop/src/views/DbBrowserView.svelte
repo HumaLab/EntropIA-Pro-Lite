@@ -550,18 +550,18 @@
       <h1>{$currentLocale && translate('dbBrowser.title')}</h1>
       <p>{$currentLocale && translate('dbBrowser.subtitle')}</p>
       {#if selectedTable}
-        <span class="page-header__meta"
-          >{selectedTable} · {$currentLocale &&
-            translate('dbBrowser.columnsCount', { count: columns.length })}</span
-        >
+        <span class="page-header__meta">
+          {selectedTable} · {$currentLocale &&
+            translate('dbBrowser.columnsCount', { count: columns.length })}
+        </span>
       {/if}
     </div>
 
     <div class="page-toolbar db-browser-toolbar">
       <div class="db-browser-toolbar__field db-browser-toolbar__field--table">
-        <span class="db-browser-toolbar__label" id="db-browser-table-label"
-          >{$currentLocale && translate('dbBrowser.tableLabel')}</span
-        >
+        <span class="db-browser-toolbar__label" id="db-browser-table-label">
+          {$currentLocale && translate('dbBrowser.tableLabel')}
+        </span>
         <!-- The app's themed choice menu (the same radio pattern
              WritingZoteroTab and BibliotecaView wear): the operating system
              must never draw this control. -->
@@ -586,9 +586,9 @@
 
       <form class="db-browser-toolbar__search" onsubmit={handleSearchSubmit}>
         <div class="db-browser-toolbar__field">
-          <label for="db-browser-search"
-            >{$currentLocale && translate('dbBrowser.searchLabel')}</label
-          >
+          <label for="db-browser-search">
+            {$currentLocale && translate('dbBrowser.searchLabel')}
+          </label>
           <SearchBar
             id="db-browser-search"
             ariaLabel={$currentLocale && translate('dbBrowser.searchLabel')}
@@ -635,10 +635,10 @@
       <div class="db-browser-card__meta">
         <span>{$currentLocale && translate('dbBrowser.totalRows', { count: total })}</span>
         {#if total > 0}
-          <span
-            >{$currentLocale &&
-              translate('dbBrowser.pageSummary', { from: fromRow, to: toRow, total })}</span
-          >
+          <span>
+            {$currentLocale &&
+              translate('dbBrowser.pageSummary', { from: fromRow, to: toRow, total })}
+          </span>
         {/if}
         {#if sortColumn}
           <span class="db-browser-sort-summary">
@@ -675,9 +675,9 @@
           </Button>
         </div>
         <div class="db-browser-page-size">
-          <span class="db-browser-page-size__label" id="db-browser-page-size-label"
-            >{$currentLocale && translate('dbBrowser.pageSizeLabel')}</span
-          >
+          <span class="db-browser-page-size__label" id="db-browser-page-size-label">
+            {$currentLocale && translate('dbBrowser.pageSizeLabel')}
+          </span>
           <ToolbarMenu
             label={$currentLocale && translate('dbBrowser.pageSizeLabel')}
             items={pageSizeMenuItems}

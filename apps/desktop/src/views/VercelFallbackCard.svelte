@@ -106,11 +106,11 @@
     <p class="vercel-card__text">{$currentLocale && t('settings.vercel.description')}</p>
     <Checkbox checked={enabled} disabled={busy} onchange={(next: boolean) => switchApi(next)}>
       <strong>{t('settings.apiSwitch.label')}</strong>
-      <span class="vercel-card__text"
-        >{enabled
+      <span class="vercel-card__text">
+        {enabled
           ? t('settings.apiSwitch.on', { service: 'Vercel AI Gateway' })
-          : t('settings.apiSwitch.offNow', { service: 'Vercel AI Gateway' })}</span
-      >
+          : t('settings.apiSwitch.offNow', { service: 'Vercel AI Gateway' })}
+      </span>
     </Checkbox>
     <div class="vercel-card__row">
       <div class="vercel-card__field">

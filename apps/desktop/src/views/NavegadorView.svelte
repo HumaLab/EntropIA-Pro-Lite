@@ -525,9 +525,9 @@
     {#if error}
       <span class="navegador-view__problem">{error}</span>
     {:else if status.blocked}
-      <span class="navegador-view__problem"
-        >{$currentLocale && t('navegador.blocked', { reason: status.blocked })}</span
-      >
+      <span class="navegador-view__problem">
+        {$currentLocale && t('navegador.blocked', { reason: status.blocked })}
+      </span>
     {:else if status.url}
       {#if status.title}<strong>{status.title}</strong>{/if}
       <span>{status.url}</span>
@@ -570,9 +570,9 @@
       {#if captureView}
         <header class="navegador-view__panel-head">
           <strong class="navegador-view__panel-title">{captureView.title}</strong>
-          <StatusBadge variant="neutral" size="sm"
-            >{$currentLocale && t(`navegador.capture.kind.${captureView.kind}`)}</StatusBadge
-          >
+          <StatusBadge variant="neutral" size="sm">
+            {$currentLocale && t(`navegador.capture.kind.${captureView.kind}`)}
+          </StatusBadge>
           <IconButton
             size="sm"
             variant="ghost"
@@ -651,12 +651,12 @@
         <ul class="navegador-view__downloads">
           {#each downloadViews as item (item.id)}
             <li>
-              <strong class="navegador-view__download-text" use:tooltip={item.fileName}
-                >{item.fileName}</strong
-              >
-              <StatusBadge variant="neutral" size="sm"
-                >{$currentLocale && t(`navegador.download.status.${item.status}`)}</StatusBadge
-              >
+              <strong class="navegador-view__download-text" use:tooltip={item.fileName}>
+                {item.fileName}
+              </strong>
+              <StatusBadge variant="neutral" size="sm">
+                {$currentLocale && t(`navegador.download.status.${item.status}`)}
+              </StatusBadge>
               {#if item.size}<span>{item.size}</span>{/if}
               {#if item.shortSha}<code>{item.shortSha}</code>{/if}
               {#if item.host}
@@ -676,14 +676,16 @@
                 {@const problem = $currentLocale && t(downloadReasonKey(item.reason))}
                 <span
                   class="navegador-view__problem navegador-view__download-text"
-                  use:tooltip={problem}>{problem}</span
+                  use:tooltip={problem}
                 >
+                  {problem}
+                </span>
               {/if}
               {#if item.status === 'ready' && item.alreadySavedIn}
                 {@const sourceId = item.alreadySavedIn}
-                <StatusBadge variant="neutral" size="sm"
-                  >{$currentLocale && t('navegador.download.alreadySaved')}</StatusBadge
-                >
+                <StatusBadge variant="neutral" size="sm">
+                  {$currentLocale && t('navegador.download.alreadySaved')}
+                </StatusBadge>
                 <Button
                   size="sm"
                   variant="secondary"
@@ -725,8 +727,10 @@
                   <span
                     class="navegador-view__problem navegador-view__download-text"
                     role="alert"
-                    use:tooltip={problem}>{problem}</span
+                    use:tooltip={problem}
                   >
+                    {problem}
+                  </span>
                 {/if}
               {/if}
               <span class="navegador-view__row-end">
