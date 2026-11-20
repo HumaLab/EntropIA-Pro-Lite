@@ -39,6 +39,16 @@ pub struct RuntimeManifest {
     pub caches: Vec<ManifestEntry>,
     #[serde(default)]
     pub native_assets: Vec<ManifestEntry>,
+    /// What the app needs from the runtime, apart from the Python scripts
+    /// (Python ABI, the wheels and native libraries it loads). A runtime built
+    /// for another app version is reused when this and its scripts match the
+    /// app's own bundled manifest, so an app release that leaves the runtime
+    /// unchanged does not download it again. Bump it in both bundled
+    /// manifests whenever the wheelhouse, Python or native libraries change
+    /// in a way the app depends on. Absent (runtimes built before it existed):
+    /// only the exact app version is accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_abi: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -465,11 +465,20 @@ struct WordToken {
     speaker: Option<usize>,
 }
 
-/// Speaker id whose span has the largest overlap with `[start, end)`.
-/// Silence between turns maps to None instead of the nearest voice.
+/// How far (seconds) a word may sit outside every diarization span and still
+/// take the nearest one's speaker. Parakeet's word edges and Sortformer's
+/// turn edges disagree by a few hundred ms, so without this a quarter of the
+/// words of a long interview came out with no speaker.
+#[cfg(feature = "local-ml")]
+const SPEAKER_SNAP_SECS: f32 = 1.5;
+
+/// Speaker id whose span has the largest overlap with `[start, end)`. A word
+/// that overlaps no span (it sits in a gap, or has zero duration) takes the
+/// nearest span within [`SPEAKER_SNAP_SECS`]; farther than that it is
+/// silence between turns and maps to None.
 #[cfg(feature = "local-ml")]
 fn best_speaker(start: f32, end: f32, spans: &[SpeakerSpan]) -> Option<usize> {
-    spans
+    let overlapping = spans
         .iter()
         .map(|s| {
             let overlap = (end.min(s.end) - start.max(s.start)).max(0.0);
@@ -477,7 +486,29 @@ fn best_speaker(start: f32, end: f32, spans: &[SpeakerSpan]) -> Option<usize> {
         })
         .filter(|(overlap, _)| *overlap > 0.0)
         .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(_, speaker)| speaker);
+    if overlapping.is_some() {
+        return overlapping;
+    }
+    spans
+        .iter()
+        .map(|s| {
+            let gap = (s.start - end).max(start - s.end).max(0.0);
+            (gap, s.speaker)
+        })
+        .filter(|(gap, _)| *gap <= SPEAKER_SNAP_SECS)
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(_, speaker)| speaker)
+}
+
+/// Punctuation Parakeet emits as its own word that belongs to the text before
+/// it (the same set parakeet-rs attaches when it formats sentences).
+#[cfg(feature = "local-ml")]
+fn is_trailing_punctuation(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|c| matches!(c, '.' | ',' | '!' | '?' | ';' | ':' | ')' | '…'))
 }
 
 /// Merge consecutive words with the same speaker into [`Segment`]s, labeled
@@ -491,6 +522,9 @@ fn merge_labeled(mut words: Vec<WordToken>) -> Vec<Segment> {
     });
     let mut order: Vec<usize> = Vec::new();
     for word in &words {
+        if is_trailing_punctuation(word.text.trim()) {
+            continue;
+        }
         if let Some(speaker) = word.speaker {
             if !order.contains(&speaker) {
                 order.push(speaker);
@@ -519,6 +553,16 @@ fn merge_labeled(mut words: Vec<WordToken>) -> Vec<Segment> {
     for word in words {
         let text = word.text.trim().to_string();
         if text.is_empty() {
+            continue;
+        }
+        // Punctuation closes the text before it, with no leading space and
+        // whatever speaker its own timestamp got; with nothing before it
+        // (the transcript opens with it) it is dropped.
+        if is_trailing_punctuation(&text) {
+            if let Some(segment) = current.as_mut() {
+                segment.end = segment.end.max(word.end as f64);
+                segment.text.push_str(&text);
+            }
             continue;
         }
         let speaker = label(word.speaker);
@@ -917,6 +961,30 @@ mod tests {
     }
 
     #[test]
+    fn best_speaker_snaps_words_just_outside_a_span_to_the_nearest_voice() {
+        let spans = vec![
+            SpeakerSpan {
+                start: 0.0,
+                end: 5.0,
+                speaker: 0,
+            },
+            SpeakerSpan {
+                start: 8.0,
+                end: 10.0,
+                speaker: 1,
+            },
+        ];
+        // Parakeet's word edges and Sortformer's turn edges disagree by a few
+        // hundred ms: a word in that gap still belongs to the nearest voice.
+        assert_eq!(best_speaker(5.2, 5.5, &spans), Some(0));
+        assert_eq!(best_speaker(7.4, 7.8, &spans), Some(1));
+        // A zero-duration word inside a span has no overlap but is inside it.
+        assert_eq!(best_speaker(9.0, 9.0, &spans), Some(1));
+        // Farther than the snap distance from every span: no speaker.
+        assert_eq!(best_speaker(15.0, 16.0, &spans), None);
+    }
+
+    #[test]
     fn merge_labeled_groups_runs_and_labels_by_appearance() {
         // Speaker 1 speaks first: Hablante A. Speaker 0 second: Hablante B.
         let words = vec![
@@ -1000,9 +1068,58 @@ mod tests {
         ];
         let segments = merge_labeled(words);
         assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0].text, "hola qué");
-        // The lone "." joins the B run instead of standing alone.
-        assert_eq!(segments[1].text, ". tal");
+        // The lone "." closes the sentence it follows, whatever speaker
+        // Sortformer gave its own timestamp, and takes no leading space.
+        assert_eq!(segments[0].text, "hola qué.");
+        assert_eq!(segments[0].end, 1.2_f32 as f64);
+        assert_eq!(segments[1].text, "tal");
+        assert_eq!(segments[1].speaker.as_deref(), Some("Hablante B"));
+    }
+
+    #[test]
+    fn merge_labeled_attaches_punctuation_without_a_leading_space() {
+        let word = |start: f32, text: &str| WordToken {
+            start,
+            end: start + 0.2,
+            text: text.into(),
+            owner: 0,
+            speaker: Some(0),
+        };
+        let words = vec![
+            word(0.0, "Bueno"),
+            word(0.3, ","),
+            word(0.6, "la"),
+            word(0.9, "productividad"),
+            word(1.2, "?"),
+            word(1.5, "sí"),
+            word(1.8, "."),
+        ];
+        let segments = merge_labeled(words);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "Bueno, la productividad? sí.");
+    }
+
+    #[test]
+    fn merge_labeled_drops_punctuation_that_opens_the_transcript() {
+        let words = vec![
+            WordToken {
+                start: 0.0,
+                end: 0.1,
+                text: ",".into(),
+                owner: 0,
+                speaker: Some(0),
+            },
+            WordToken {
+                start: 0.2,
+                end: 0.5,
+                text: "eso".into(),
+                owner: 0,
+                speaker: Some(0),
+            },
+        ];
+        let segments = merge_labeled(words);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "eso");
     }
     #[test]
     fn short_audio_is_one_window() {

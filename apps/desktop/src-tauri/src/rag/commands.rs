@@ -1684,32 +1684,53 @@ fn filter_cited_sources(sources: Vec<RagSource>, answer: &str) -> Vec<RagSource>
         .collect()
 }
 
-/// Extrae los índices `[n]` presentes en el texto de la respuesta.
+/// Extrae los índices citados en la respuesta: `[n]`, y también los grupos
+/// que escriben los modelos locales, `[1, 2, 3]` y rangos `[4-6]` / `[4–6]`.
+/// Un corchete con cualquier elemento que no sea un índice válido no cuenta.
 fn extract_citation_indices(text: &str) -> std::collections::HashSet<u32> {
     let mut indices = std::collections::HashSet::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '[' {
-            let start = i + 1;
-            let mut end = start;
-            while end < chars.len() && chars[end].is_ascii_digit() {
-                end += 1;
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find(']') else {
+            break;
+        };
+        let inner = &rest[..close];
+        if !inner.contains('[') {
+            if let Some(group) = parse_citation_group(inner) {
+                indices.extend(group);
             }
-            if end > start && end < chars.len() && chars[end] == ']' {
-                let num_str: String = chars[start..end].iter().collect();
-                if let Ok(n) = num_str.parse::<u32>() {
-                    if n > 0 {
-                        indices.insert(n);
-                    }
-                }
-            }
-            i = end;
-        } else {
-            i += 1;
         }
     }
     indices
+}
+
+/// Los índices de un grupo de citas (`1`, `1, 3`, `4-6`), o None si algún
+/// elemento no es un índice o un rango creciente de índices mayores que cero.
+fn parse_citation_group(inner: &str) -> Option<Vec<u32>> {
+    /// Un rango más largo que esto no es una cita.
+    const MAX_RANGE: u32 = 50;
+    let parse_index = |s: &str| -> Option<u32> {
+        let s = s.trim();
+        (!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+            .then(|| s.parse::<u32>().ok())
+            .flatten()
+            .filter(|n| *n > 0)
+    };
+    let mut out = Vec::new();
+    for item in inner.split(',') {
+        match item.split_once(['-', '–', '—']) {
+            Some((from, to)) => {
+                let (from, to) = (parse_index(from)?, parse_index(to)?);
+                if to <= from || to - from > MAX_RANGE {
+                    return None;
+                }
+                out.extend(from..=to);
+            }
+            None => out.push(parse_index(item)?),
+        }
+    }
+    Some(out)
 }
 
 // ── Unit tests ───────────────────────────────────────────────────────────────
@@ -2421,6 +2442,31 @@ mod tests {
         assert!(indices.contains(&1));
         assert!(indices.contains(&2));
         assert!(indices.contains(&3));
+    }
+
+    #[test]
+    fn extract_citation_indices_reads_grouped_citations() {
+        // Local models often group citations instead of writing [1], [2].
+        let text =
+            "Se reunió para discutir la Rambla [1, 2, 3]. Pidieron calles [4,6] y luz [7–8].";
+        let indices = extract_citation_indices(text);
+        let mut sorted: Vec<u32> = indices.into_iter().collect();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![1, 2, 3, 4, 6, 7, 8]);
+    }
+
+    #[test]
+    fn extract_citation_indices_ignores_brackets_that_are_not_citation_lists() {
+        let text = "Ver [1, a] o [2,] o [, 3] o [3-1] o [0, 2].";
+        assert!(extract_citation_indices(text).is_empty());
+    }
+
+    #[test]
+    fn filter_cited_sources_keeps_sources_cited_in_a_group() {
+        let sources = (1..=6).map(test_source).collect();
+        let answer = "En 1891, el Concejo discutió el trazado de la Rambla [1, 2, 3, 4, 5, 6].";
+        let filtered = filter_cited_sources(sources, answer);
+        assert_eq!(filtered.len(), 6);
     }
 
     #[test]

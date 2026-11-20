@@ -1274,9 +1274,10 @@ fn invalidate_stale_managed_runtime(
     })
 }
 
-/// Best-effort removal of the managed runtimes other app versions left
-/// behind. Returns one message per folder that could not be removed; it never
-/// fails, so a leftover folder cannot block the current runtime.
+/// Best-effort removal of the managed runtimes the running app cannot use
+/// (see [`runtime_serves_running_app`]). Returns one message per folder that
+/// could not be removed; it never fails, so a leftover folder cannot block
+/// the current runtime.
 fn invalidate_stale_managed_runtime_dirs(
     app_data_dir: &Path,
     current_manifest: &RuntimeManifest,
@@ -1303,24 +1304,33 @@ where
     };
 
     let current_root = managed_pack_dir(app_data_dir, &current_manifest.pack_version);
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() || path == current_root {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
+    let candidates: Vec<(std::path::PathBuf, RuntimeManifest)> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && *path != current_root)
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| !name.starts_with('.') && name != "downloads")
+        })
+        .filter_map(|path| {
+            let manifest = RuntimeManifest::load_from_path(&path.join("manifest.json")).ok()?;
+            (manifest.platform == current_manifest.platform).then_some((path, manifest))
+        })
+        .collect();
+    // A runtime reused from another app version is kept only while no runtime
+    // for this exact version exists: once one does (the reused one was damaged
+    // and startup downloaded a new one), the old folder is dead weight.
+    let exact_version_present = candidates
+        .iter()
+        .any(|(_, manifest)| manifest.app_version == running_app_version());
+    for (path, manifest) in candidates {
+        let keep = if exact_version_present {
+            manifest.app_version == running_app_version()
+        } else {
+            runtime_serves_running_app(&manifest)
         };
-        if name.starts_with('.') || name == "downloads" {
-            continue;
-        }
-        let Ok(manifest) = RuntimeManifest::load_from_path(&path.join("manifest.json")) else {
-            continue;
-        };
-        if manifest.platform != current_manifest.platform {
-            continue;
-        }
-        if manifest.app_version == running_app_version() {
+        if keep {
             continue;
         }
 
@@ -1899,7 +1909,7 @@ fn compatibility_status_with_disk_free(
     app_data_dir: &Path,
     disk_free_bytes: Option<u64>,
 ) -> Option<RuntimeStatus> {
-    if manifest.app_version != running_app_version() {
+    if !runtime_serves_running_app(manifest) {
         return Some(app_version_incompatible_status(
             &manifest.app_version,
             &manifest.pack_version,
@@ -2057,6 +2067,70 @@ fn running_app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// The runtime-pack manifest this build bundles for its platform, embedded at
+/// compile time: what the app expects from a runtime (its `runtime_abi` and
+/// the hash of every Python script). None on a platform without a pack.
+fn bundled_runtime_contract() -> Option<&'static RuntimeManifest> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const BUNDLED: Option<&str> = Some(include_str!(
+        "../../resources/runtime-pack/linux-x86_64/manifest.json"
+    ));
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    const BUNDLED: Option<&str> = Some(include_str!(
+        "../../resources/runtime-pack/windows-x86_64/manifest.json"
+    ));
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
+    const BUNDLED: Option<&str> = None;
+
+    static CONTRACT: std::sync::OnceLock<Option<RuntimeManifest>> = std::sync::OnceLock::new();
+    CONTRACT
+        .get_or_init(|| BUNDLED.and_then(|json| serde_json::from_str(json).ok()))
+        .as_ref()
+}
+
+/// Whether the running app can use a runtime described by `manifest`: one
+/// built for this app version, or a release runtime built for another that
+/// meets this app's contract (see [`reusable_across_app_versions`]).
+fn runtime_serves_running_app(manifest: &RuntimeManifest) -> bool {
+    manifest.app_version == running_app_version()
+        || reusable_across_app_versions(manifest, bundled_runtime_contract())
+}
+
+/// A release runtime built for another app version still serves this one
+/// when it declares the same `runtime_abi` as the app's bundled manifest and
+/// carries exactly the same Python scripts (path and hash). The scripts are
+/// checked because the app runs the runtime's copy, not the installer's;
+/// the ABI covers what a hash of the scripts cannot (Python, wheels, native
+/// libraries). Runtimes without `runtime_abi` never qualify.
+fn reusable_across_app_versions(
+    manifest: &RuntimeManifest,
+    contract: Option<&RuntimeManifest>,
+) -> bool {
+    let Some(contract) = contract else {
+        return false;
+    };
+    if contract.runtime_abi.is_none()
+        || manifest.runtime_abi != contract.runtime_abi
+        || manifest.platform != contract.platform
+        || manifest.payload_profile != "release"
+    {
+        return false;
+    }
+    let scripts = |files: &[crate::runtime::manifest::ManifestEntry]| {
+        let mut set: Vec<(String, String)> = files
+            .iter()
+            .map(|entry| (entry.path.clone(), entry.sha256.to_ascii_lowercase()))
+            .collect();
+        set.sort();
+        set
+    };
+    !contract.script_files.is_empty()
+        && scripts(&manifest.script_files) == scripts(&contract.script_files)
+}
+
 fn blocked_capabilities() -> Vec<RuntimeCapability> {
     vec![
         RuntimeCapability::Ocr,
@@ -2212,6 +2286,7 @@ mod tests {
             wheelhouse: vec![],
             caches: vec![],
             native_assets: vec![],
+            runtime_abi: None,
         };
         let plan = controller.plan(
             &RuntimeStatus {
@@ -2358,6 +2433,7 @@ mod tests {
             wheelhouse: vec![],
             caches: vec![],
             native_assets: vec![],
+            runtime_abi: None,
         }
     }
 
@@ -3106,6 +3182,225 @@ mod tests {
             !removable.exists(),
             "the other stale folder is still removed"
         );
+    }
+
+    /// The app's own bundled manifest, the contract a runtime from another app
+    /// version must meet to be reused.
+    fn bundled_contract_for_tests() -> RuntimeManifest {
+        bundled_runtime_contract()
+            .cloned()
+            .expect("this platform bundles a runtime-pack manifest")
+    }
+
+    /// A hydrated runtime built for another app version (0.0.1) that carries
+    /// the app's runtime ABI and the very scripts the app bundles.
+    fn other_app_version_runtime(app_data_dir: &Path) -> (std::path::PathBuf, RuntimeManifest) {
+        let contract = bundled_contract_for_tests();
+        let root = app_data_dir.join("runtime").join("2026.11.9");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(&root, python_relpath, b"python");
+        let uv_sha = write_file(&root, uv_relpath, b"uv");
+        let mut manifest = sample_manifest(&contract.platform, &python_sha, &uv_sha);
+        manifest.pack_version = "2026.11.9".to_string();
+        manifest.app_version = "0.0.1".to_string();
+        manifest.runtime_abi = contract.runtime_abi;
+        let bundled_scripts = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("runtime-pack")
+            .join(&contract.platform);
+        manifest.script_files = contract
+            .script_files
+            .iter()
+            .map(|entry| {
+                let bytes = fs::read(bundled_scripts.join(&entry.path)).expect("bundled script");
+                assert_eq!(write_file(&root, &entry.path, &bytes), entry.sha256);
+                entry.clone()
+            })
+            .collect();
+        write_manifest(&root, &manifest);
+        (root, manifest)
+    }
+
+    #[test]
+    fn bundled_manifests_declare_a_runtime_abi() {
+        let contract = bundled_contract_for_tests();
+        assert!(contract.runtime_abi.is_some());
+        assert!(!contract.script_files.is_empty());
+        assert_eq!(contract.app_version, running_app_version());
+    }
+
+    #[test]
+    fn a_runtime_from_another_app_version_is_reusable_only_with_the_same_abi_and_scripts() {
+        let app_data_dir = tempdir().expect("app data dir");
+        let contract = bundled_contract_for_tests();
+        let (_root, runtime) = other_app_version_runtime(app_data_dir.path());
+        assert!(reusable_across_app_versions(&runtime, Some(&contract)));
+        assert!(runtime_serves_running_app(&runtime));
+
+        let mut no_abi = runtime.clone();
+        no_abi.runtime_abi = None;
+        assert!(!reusable_across_app_versions(&no_abi, Some(&contract)));
+
+        let mut other_abi = runtime.clone();
+        other_abi.runtime_abi = contract.runtime_abi.map(|abi| abi + 1);
+        assert!(!reusable_across_app_versions(&other_abi, Some(&contract)));
+
+        let mut other_script = runtime.clone();
+        other_script.script_files[0].sha256 = "0".repeat(64);
+        assert!(!reusable_across_app_versions(
+            &other_script,
+            Some(&contract)
+        ));
+
+        let mut missing_script = runtime.clone();
+        missing_script.script_files.pop();
+        assert!(!reusable_across_app_versions(
+            &missing_script,
+            Some(&contract)
+        ));
+
+        let mut fixture = runtime.clone();
+        fixture.payload_profile = "fixture".to_string();
+        assert!(!reusable_across_app_versions(&fixture, Some(&contract)));
+
+        let mut other_platform = runtime.clone();
+        other_platform.platform = "plan9-mips".to_string();
+        assert!(!reusable_across_app_versions(
+            &other_platform,
+            Some(&contract)
+        ));
+
+        assert!(!reusable_across_app_versions(&runtime, None));
+    }
+
+    #[test]
+    fn stale_runtime_sweep_keeps_a_runtime_the_running_app_can_reuse() {
+        let app_data_dir = tempdir().expect("app data dir");
+        let current_manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            "python-sha",
+            "uv-sha",
+        );
+        let (reusable, runtime) = other_app_version_runtime(app_data_dir.path());
+        let other_abi_root = app_data_dir.path().join("runtime").join("2026.10.0");
+        let mut other_abi = runtime.clone();
+        other_abi.runtime_abi = runtime.runtime_abi.map(|abi| abi + 1);
+        write_manifest(&other_abi_root, &other_abi);
+
+        let warnings =
+            invalidate_stale_managed_runtime_dirs(app_data_dir.path(), &current_manifest);
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(reusable.exists(), "the reusable runtime is kept");
+        assert!(
+            !other_abi_root.exists(),
+            "a runtime with another ABI is removed"
+        );
+    }
+
+    #[test]
+    fn stale_runtime_sweep_drops_a_reused_runtime_once_one_for_this_version_exists() {
+        // A reusable runtime that turned out damaged makes startup download a
+        // runtime for this app version; from then on the old one is only dead
+        // weight and goes, as it did before reuse existed.
+        let app_data_dir = tempdir().expect("app data dir");
+        let current_manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            "python-sha",
+            "uv-sha",
+        );
+        let (reusable, _runtime) = other_app_version_runtime(app_data_dir.path());
+        let exact_root = app_data_dir.path().join("runtime").join("2026.12.0");
+        let mut exact = current_manifest.clone();
+        exact.pack_version = "2026.12.0".to_string();
+        write_manifest(&exact_root, &exact);
+
+        let warnings =
+            invalidate_stale_managed_runtime_dirs(app_data_dir.path(), &current_manifest);
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(
+            exact_root.exists(),
+            "the runtime for this app version is kept"
+        );
+        assert!(!reusable.exists(), "the reused runtime is no longer needed");
+    }
+
+    #[test]
+    fn startup_reuses_a_runtime_from_another_app_version_without_downloading() {
+        let bundle_dir = tempdir().expect("bundle dir");
+        let app_data_dir = tempdir().expect("app data dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
+        let mut bundled = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        bundled.payload_profile = "fixture".to_string();
+        bundled.release_injection_required = true;
+        bundled.external_artifacts_required = vec!["relocatable-python".to_string()];
+        write_manifest(bundle_dir.path(), &bundled);
+        let (reused_root, _runtime) = other_app_version_runtime(app_data_dir.path());
+
+        let archive_bytes = runtime_archive_bytes();
+        let (release, public_key) = build_signed_release(&archive_bytes);
+        let downloads = std::sync::atomic::AtomicUsize::new(0);
+        let manager = RuntimeManager::new();
+        let status = manager
+            .ensure_ready_or_bootstrap_for_tests_with_remote_support(
+                bundle_dir.path(),
+                app_data_dir.path(),
+                BootstrapRemoteCatalog::Available {
+                    source: BootstrapRemoteSource {
+                        manifest_url: "https://example.com/bootstrap.json".to_string(),
+                        public_key_id: "entropia-root".to_string(),
+                    },
+                    index: crate::runtime::manifest::BootstrapManifestIndex {
+                        channel: "stable".to_string(),
+                        generated_at: "2026-05-06T00:00:00Z".to_string(),
+                        releases: vec![release.clone()],
+                    },
+                },
+                |_| Ok(public_key.clone()),
+                |source_manifest_url, release, app_data_dir, public_key_base64, on_progress| {
+                    downloads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    crate::runtime::download::download_and_activate_remote_runtime_with_fetch(
+                        source_manifest_url,
+                        release,
+                        app_data_dir,
+                        public_key_base64,
+                        |_| Ok(std::io::Cursor::new(archive_bytes.clone())),
+                        on_progress,
+                    )
+                },
+                |_| {},
+            )
+            .expect("the existing runtime should be reused");
+
+        assert_eq!(status.state, RuntimeState::Healthy);
+        assert_eq!(status.pack_version.as_deref(), Some("2026.11.9"));
+        assert_eq!(downloads.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(reused_root.join("manifest.json").is_file());
     }
 
     #[test]

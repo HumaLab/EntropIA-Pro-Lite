@@ -2183,6 +2183,7 @@ print(json.dumps(registered))
                 wheelhouse: vec![],
                 caches: vec![],
                 native_assets: vec![],
+                runtime_abi: None,
             })
             .expect("serialize manifest"),
         )
@@ -2282,6 +2283,7 @@ print(json.dumps(registered))
                 wheelhouse: vec![],
                 caches: vec![],
                 native_assets: vec![],
+                runtime_abi: None,
             })
             .expect("serialize manifest"),
         )
@@ -2337,6 +2339,7 @@ print(json.dumps(registered))
                 wheelhouse: vec![],
                 caches: vec![],
                 native_assets: vec![],
+                runtime_abi: None,
             })
             .expect("serialize manifest"),
         )

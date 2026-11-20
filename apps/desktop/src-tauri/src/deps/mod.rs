@@ -1323,6 +1323,7 @@ mod tests {
                 wheelhouse: vec![],
                 caches: vec![],
                 native_assets: vec![],
+                runtime_abi: None,
             })
             .expect("serialize manifest"),
         )
