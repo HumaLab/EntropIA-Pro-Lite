@@ -76,8 +76,25 @@ pub struct DepsStateData {
     pub statuses: HashMap<DependencyId, DependencyStatus>,
     pub cached_probe_python: Option<PathBuf>,
     pub cached_probe_results: Option<HashMap<DependencyId, DependencyStatus>>,
+    /// The managed runtime the cached results were probed against: `None`
+    /// when no healthy runtime was active then.
+    pub cached_probe_runtime_root: Option<PathBuf>,
     pub probe_in_flight: bool,
     pub probe_generation: u64,
+}
+
+/// The cached probe results, while the managed runtime they were probed
+/// against is still the active one. A runtime downloaded or activated since
+/// (or one that stopped being healthy) makes them stale: they describe the
+/// previous runtime's Python, so the next probe must run again.
+fn cached_results_for(
+    data: &DepsStateData,
+    current_runtime_root: Option<&std::path::Path>,
+) -> Option<HashMap<DependencyId, DependencyStatus>> {
+    if data.cached_probe_runtime_root.as_deref() != current_runtime_root {
+        return None;
+    }
+    data.cached_probe_results.clone()
 }
 
 #[derive(Clone, Debug)]
@@ -128,9 +145,13 @@ async fn remove_dir_all_with_retry(path: &std::path::Path) -> Result<(), String>
     const ATTEMPTS: u32 = 5;
     let mut last_err = String::new();
     for attempt in 0..ATTEMPTS {
-        match tokio::fs::remove_dir_all(path).await {
+        let target = path.to_path_buf();
+        let outcome =
+            tokio::task::spawn_blocking(move || crate::path_utils::remove_dir_all_robust(&target))
+                .await
+                .unwrap_or_else(|join_error| Err(std::io::Error::other(join_error.to_string())));
+        match outcome {
             Ok(()) => return Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => {
                 last_err = e.to_string();
                 tokio::time::sleep(std::time::Duration::from_millis(
@@ -188,6 +209,7 @@ impl DepsState {
             statuses: default_dependency_statuses(),
             cached_probe_python: None,
             cached_probe_results: None,
+            cached_probe_runtime_root: None,
             probe_in_flight: false,
             probe_generation: 0,
         })))
@@ -239,6 +261,7 @@ pub async fn invalidate_probe_cache(state: &DepsState) {
     let mut data = state.0.lock().await;
     data.cached_probe_python = None;
     data.cached_probe_results = None;
+    data.cached_probe_runtime_root = None;
     data.probe_in_flight = false;
     data.probe_generation = data.probe_generation.saturating_add(1);
     drop(data);
@@ -257,6 +280,7 @@ async fn finish_probe_attempt(
     probe_generation: u64,
     probe_python: Option<PathBuf>,
     results: Option<HashMap<DependencyId, DependencyStatus>>,
+    runtime_root: Option<PathBuf>,
 ) {
     let mut data = state.0.lock().await;
     if data.probe_generation != probe_generation {
@@ -264,6 +288,7 @@ async fn finish_probe_attempt(
     }
     data.cached_probe_python = probe_python;
     data.cached_probe_results = results.clone();
+    data.cached_probe_runtime_root = runtime_root;
     data.probe_in_flight = false;
     if let Some(results_map) = results {
         for (id, status) in results_map {
@@ -376,7 +401,7 @@ pub async fn probe_all_once(
             let probe_settings = if let Ok(settings) = probe_settings {
                 settings
             } else {
-                finish_probe_attempt(state, probe_generation, None, None).await;
+                finish_probe_attempt(state, probe_generation, None, None, None).await;
                 return Err(probe_settings
                     .err()
                     .unwrap_or_else(|| "DB lock error".to_string()));
@@ -399,6 +424,7 @@ pub async fn probe_all_once(
                 probe_generation,
                 python_path,
                 Some(results_map.clone()),
+                runtime.root,
             )
             .await;
 
@@ -672,6 +698,25 @@ pub fn trigger_deps_auto_install(app: tauri::AppHandle) {
         }
         let db = app.state::<crate::db::state::AppDbState>();
         let state = app.state::<DepsState>();
+        // A runtime that finished downloading after the startup probe is not
+        // the one that probe ran against: probe again on the new one, so its
+        // stale Python paths are forgotten and its venv gets installed.
+        let runtime_dir = probe_runtime_dir(&db.db_path);
+        let active_runtime_root =
+            tokio::task::spawn_blocking(move || managed_runtime_probe_context(&runtime_dir).root)
+                .await
+                .ok()
+                .flatten();
+        let cache_is_stale = {
+            let data = state.0.lock().await;
+            data.cached_probe_results.is_some()
+                && cached_results_for(&data, active_runtime_root.as_deref()).is_none()
+        };
+        if cache_is_stale {
+            log::info!(target: "deps", "active runtime changed since the last probe; probing again");
+            crate::python_discovery::invalidate_probe_cache();
+            invalidate_probe_cache(state.inner()).await;
+        }
         let statuses = match probe_all_once(state.inner(), db.inner()).await {
             Ok(statuses) => statuses,
             Err(error) => {
@@ -1283,6 +1328,41 @@ mod tests {
         )
         .expect("write manifest");
         managed_root
+    }
+
+    #[test]
+    fn cached_probe_results_are_dropped_when_the_active_runtime_changes() {
+        // At startup the new runtime was still downloading: the probe ran on
+        // the previous runtime's venv and found everything installed.
+        let installed: HashMap<DependencyId, DependencyStatus> = registry::all_deps()
+            .iter()
+            .map(|dep| {
+                (
+                    dep.id.clone(),
+                    DependencyStatus::Installed { version: None },
+                )
+            })
+            .collect();
+        let new_root = PathBuf::from("runtime").join("2026.11.8");
+        let data = DepsStateData {
+            cached_probe_results: Some(installed.clone()),
+            cached_probe_runtime_root: None,
+            ..DepsStateData::default()
+        };
+
+        // The download finished and the new runtime is now the active one.
+        assert_eq!(cached_results_for(&data, Some(&new_root)), None);
+        // Same runtime as when probed: the cache still answers.
+        assert_eq!(cached_results_for(&data, None), Some(installed.clone()));
+        let probed_on_new = DepsStateData {
+            cached_probe_results: Some(installed.clone()),
+            cached_probe_runtime_root: Some(new_root.clone()),
+            ..DepsStateData::default()
+        };
+        assert_eq!(
+            cached_results_for(&probed_on_new, Some(&new_root)),
+            Some(installed)
+        );
     }
 
     #[test]
