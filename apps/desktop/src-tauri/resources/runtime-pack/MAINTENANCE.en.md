@@ -159,7 +159,7 @@ Every pack records the `app_version` it was built for. An installed runtime buil
 
 Bump `runtime_abi` in **both** bundled manifests whenever the Python version, the wheelhouse or the native libraries change in a way the app depends on. `build_runtime_pack.py` copies it from the bundled manifest into every pack it builds. Packs built before the field existed only serve their exact `app_version`.
 
-A release that does not change the runtime therefore needs no new pack: installed runtimes keep working. New installs still look up the signed bootstrap index by exact `app_version`, so the release still publishes an index entry for the new version; it can point at the existing pack archive.
+A release that does not change the runtime therefore needs no new pack: installed runtimes keep working. New installs still look up the signed bootstrap index by exact `app_version`, so the release still publishes an index entry for the new version; it can point at the existing pack archive. Do that only when the archive's `runtime_abi` and scripts match the new app's bundled manifest: otherwise new installs download it and then refuse it.
 
 ## Rule of truth
 

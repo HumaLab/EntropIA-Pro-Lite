@@ -159,7 +159,7 @@ Cada pack registra la `app_version` para la que se armó. Un runtime instalado p
 
 Subí `runtime_abi` en **los dos** manifests empaquetados cada vez que cambien la versión de Python, el wheelhouse o las bibliotecas nativas de una forma de la que dependa la app. `build_runtime_pack.py` lo copia del manifest empaquetado a cada pack que arma. Los packs armados antes de que existiera el campo solo sirven a su `app_version` exacta.
 
-Por eso una release que no cambia el runtime no necesita un pack nuevo: los runtimes instalados siguen funcionando. Las instalaciones nuevas siguen buscando el índice bootstrap firmado por `app_version` exacta, así que la release igual publica una entrada para la versión nueva; puede apuntar al archivo del pack existente.
+Por eso una release que no cambia el runtime no necesita un pack nuevo: los runtimes instalados siguen funcionando. Las instalaciones nuevas siguen buscando el índice bootstrap firmado por `app_version` exacta, así que la release igual publica una entrada para la versión nueva; puede apuntar al archivo del pack existente. Hacelo solo cuando el `runtime_abi` y los scripts de ese archivo coincidan con el manifest empaquetado de la app nueva: si no, las instalaciones nuevas lo descargan y después lo rechazan.
 
 ## Regla de verdad
 

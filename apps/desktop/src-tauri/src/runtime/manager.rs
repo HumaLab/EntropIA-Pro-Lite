@@ -1304,24 +1304,33 @@ where
     };
 
     let current_root = managed_pack_dir(app_data_dir, &current_manifest.pack_version);
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() || path == current_root {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
+    let candidates: Vec<(std::path::PathBuf, RuntimeManifest)> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && *path != current_root)
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| !name.starts_with('.') && name != "downloads")
+        })
+        .filter_map(|path| {
+            let manifest = RuntimeManifest::load_from_path(&path.join("manifest.json")).ok()?;
+            (manifest.platform == current_manifest.platform).then_some((path, manifest))
+        })
+        .collect();
+    // A runtime reused from another app version is kept only while no runtime
+    // for this exact version exists: once one does (the reused one was damaged
+    // and startup downloaded a new one), the old folder is dead weight.
+    let exact_version_present = candidates
+        .iter()
+        .any(|(_, manifest)| manifest.app_version == running_app_version());
+    for (path, manifest) in candidates {
+        let keep = if exact_version_present {
+            manifest.app_version == running_app_version()
+        } else {
+            runtime_serves_running_app(&manifest)
         };
-        if name.starts_with('.') || name == "downloads" {
-            continue;
-        }
-        let Ok(manifest) = RuntimeManifest::load_from_path(&path.join("manifest.json")) else {
-            continue;
-        };
-        if manifest.platform != current_manifest.platform {
-            continue;
-        }
-        if runtime_serves_running_app(&manifest) {
+        if keep {
             continue;
         }
 
@@ -3296,6 +3305,34 @@ mod tests {
             !other_abi_root.exists(),
             "a runtime with another ABI is removed"
         );
+    }
+
+    #[test]
+    fn stale_runtime_sweep_drops_a_reused_runtime_once_one_for_this_version_exists() {
+        // A reusable runtime that turned out damaged makes startup download a
+        // runtime for this app version; from then on the old one is only dead
+        // weight and goes, as it did before reuse existed.
+        let app_data_dir = tempdir().expect("app data dir");
+        let current_manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            "python-sha",
+            "uv-sha",
+        );
+        let (reusable, _runtime) = other_app_version_runtime(app_data_dir.path());
+        let exact_root = app_data_dir.path().join("runtime").join("2026.12.0");
+        let mut exact = current_manifest.clone();
+        exact.pack_version = "2026.12.0".to_string();
+        write_manifest(&exact_root, &exact);
+
+        let warnings =
+            invalidate_stale_managed_runtime_dirs(app_data_dir.path(), &current_manifest);
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(
+            exact_root.exists(),
+            "the runtime for this app version is kept"
+        );
+        assert!(!reusable.exists(), "the reused runtime is no longer needed");
     }
 
     #[test]
