@@ -609,9 +609,9 @@ impl RuntimeManager {
 
         invalidate_stale_managed_runtime(app_data_dir, &manifest)?;
         // Removing runtimes of other app versions is housekeeping: a folder
-        // that cannot be deleted (a packaged MSIX install cannot remove files
-        // another install created; an antivirus may hold one) must not stop
-        // the current runtime from being checked, downloaded or hydrated.
+        // that cannot be deleted (an antivirus or another process may hold a
+        // file in it) must not stop the current runtime from being checked,
+        // downloaded or hydrated.
         for warning in invalidate_stale_managed_runtime_dirs(app_data_dir, &manifest) {
             log::warn!(target: "runtime", "{warning}");
         }
@@ -1266,7 +1266,7 @@ fn invalidate_stale_managed_runtime(
         return Ok(());
     }
 
-    fs::remove_dir_all(&managed_root).map_err(|error| {
+    crate::path_utils::remove_dir_all_robust(&managed_root).map_err(|error| {
         format!(
             "Failed to invalidate stale runtime {}: {error}",
             managed_root.display()
@@ -1281,9 +1281,11 @@ fn invalidate_stale_managed_runtime_dirs(
     app_data_dir: &Path,
     current_manifest: &RuntimeManifest,
 ) -> Vec<String> {
-    invalidate_stale_managed_runtime_dirs_with(app_data_dir, current_manifest, |path| {
-        fs::remove_dir_all(path)
-    })
+    invalidate_stale_managed_runtime_dirs_with(
+        app_data_dir,
+        current_manifest,
+        crate::path_utils::remove_dir_all_robust,
+    )
 }
 
 fn invalidate_stale_managed_runtime_dirs_with<R>(
