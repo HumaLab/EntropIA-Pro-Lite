@@ -131,8 +131,8 @@ describe('HelpView', () => {
       await screen.findByText(/Responde Gemma local, en este equipo y solo con el manual/)
     ).toBeInTheDocument()
     expect(screen.queryByText('La ayuda usa tu cuenta de OpenRouter')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText(/Usar OpenRouter/)).not.toBeInTheDocument()
-    expect(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })).toBeDisabled()
+    expect(screen.queryByLabelText('OpenRouter')).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Mis documentos' })).toBeDisabled()
 
     await sendQuestion('¿Cómo cambio el idioma?')
 
@@ -152,10 +152,10 @@ describe('HelpView', () => {
 
     await fireEvent.click(
       await screen.findByRole('checkbox', {
-        name: 'Usar OpenRouter (openai/gpt-5.6-luna) para esta pregunta',
+        name: 'OpenRouter',
       })
     )
-    const documents = screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })
+    const documents = screen.getByRole('checkbox', { name: 'Mis documentos' })
     expect(documents).toBeEnabled()
     await fireEvent.click(documents)
     await sendQuestion('¿Qué dice el acta?')
@@ -250,7 +250,7 @@ describe('HelpView', () => {
     render(HelpView)
     await composer()
 
-    expect(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Mis documentos' })).not.toBeChecked()
   })
 
   it('hints at the document opt-in through its info icon tooltip, not a paragraph', async () => {
@@ -259,7 +259,7 @@ describe('HelpView', () => {
     await composer()
 
     expect(
-      screen.getByRole('button', { name: 'Más información sobre Buscar en mis documentos' })
+      screen.getByRole('button', { name: 'Más información sobre Mis documentos' })
     ).toHaveAttribute(
       'data-tooltip',
       'Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.'
@@ -271,7 +271,7 @@ describe('HelpView', () => {
     render(HelpView)
     await composer()
 
-    await fireEvent.click(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' }))
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Mis documentos' }))
     await sendQuestion('¿Qué dice mi acta?')
 
     await waitFor(() => expect(askCalls).toHaveLength(1))
@@ -282,7 +282,7 @@ describe('HelpView', () => {
       requestId: expect.any(String),
       conversationId: expect.any(String),
     })
-    expect(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Mis documentos' })).not.toBeChecked()
   })
 
   it('lists the used document titles under the answer', async () => {
@@ -496,7 +496,7 @@ describe('HelpView', () => {
     render(HelpView)
     await composer()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Ver qué se envía' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Ver input' }))
 
     expect(await previewBlock()).toBeInTheDocument()
     expect(mockInvoke).toHaveBeenCalledWith('help_diagnostics_preview')
@@ -507,8 +507,8 @@ describe('HelpView', () => {
     render(HelpView)
     await composer()
 
-    await fireEvent.click(screen.getByRole('checkbox', { name: 'Incluir diagnóstico' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Ver qué se envía' }))
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Diagnóstico' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Ver input' }))
     await previewBlock()
 
     const previewCalls = mockInvoke.mock.calls.filter(
@@ -529,7 +529,7 @@ describe('HelpView', () => {
     expect(
       mockInvoke.mock.calls.filter(([command]) => command === 'help_diagnostics_preview')
     ).toHaveLength(previewCalls)
-    expect(screen.getByRole('checkbox', { name: 'Incluir diagnóstico' })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Diagnóstico' })).not.toBeChecked()
   })
 
   it('checkbox on without a preview fetches it for the send', async () => {
@@ -537,7 +537,7 @@ describe('HelpView', () => {
     render(HelpView)
     await composer()
 
-    await fireEvent.click(screen.getByRole('checkbox', { name: 'Incluir diagnóstico' }))
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Diagnóstico' }))
     await sendQuestion('Falla algo')
 
     await waitFor(() => expect(askCalls).toHaveLength(1))
@@ -555,7 +555,7 @@ describe('HelpView', () => {
     render(HelpView)
     await composer()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Ver qué se envía' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Ver input' }))
     await previewBlock()
     await sendQuestion('Otra pregunta')
 
@@ -629,7 +629,7 @@ describe('HelpView', () => {
     })
     render(HelpView)
     await composer()
-    await fireEvent.click(screen.getByRole('checkbox', { name: 'Buscar en mis documentos' }))
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Mis documentos' }))
     await sendQuestion('¿Qué dice mi acta?')
     await screen.findByText(secret)
 
@@ -677,7 +677,7 @@ describe('HelpView', () => {
     await composer()
 
     expect(
-      screen.getByRole('button', { name: 'Más información sobre Incluir diagnóstico' })
+      screen.getByRole('button', { name: 'Más información sobre Diagnóstico' })
     ).toHaveAttribute(
       'data-tooltip',
       'Viaja a OpenRouter junto con tu pregunta. No incluye claves ni el contenido de tus documentos.'
@@ -724,7 +724,7 @@ describe('HelpView', () => {
       render(HelpView)
       await composer()
 
-      await fireEvent.click(screen.getByRole('button', { name: 'Ver qué se envía' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Ver input' }))
 
       const pre = await previewBlock()
       expect(pre.closest('.help-view__messages')).not.toBeNull()
@@ -1244,15 +1244,13 @@ describe('HelpView', () => {
       await composer()
 
       const remote = await screen.findByRole('checkbox', {
-        name: 'Usar OpenRouter (openai/gpt-5.6-luna) para esta pregunta',
+        name: 'OpenRouter',
       })
       const row = document.querySelector('.help-view__optins') as HTMLElement
       expect(row).not.toBeNull()
       expect(row.contains(remote)).toBe(true)
-      expect(within(row).getByRole('checkbox', { name: 'Incluir diagnóstico' })).toBeInTheDocument()
-      expect(
-        within(row).getByRole('checkbox', { name: 'Buscar en mis documentos' })
-      ).toBeInTheDocument()
+      expect(within(row).getByRole('checkbox', { name: 'Diagnóstico' })).toBeInTheDocument()
+      expect(within(row).getByRole('checkbox', { name: 'Mis documentos' })).toBeInTheDocument()
 
       const note = screen.getByText(/Responde Gemma local, en este equipo y solo con el manual/)
       const box = screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })
@@ -1280,10 +1278,10 @@ describe('HelpView', () => {
       expect(document.querySelector('.help-view__hint')).toBeNull()
 
       const diagIcon = screen.getByRole('button', {
-        name: 'Más información sobre Incluir diagnóstico',
+        name: 'Más información sobre Diagnóstico',
       })
       const docsIcon = screen.getByRole('button', {
-        name: 'Más información sobre Buscar en mis documentos',
+        name: 'Más información sobre Mis documentos',
       })
       expect(diagIcon).toHaveAttribute('data-tooltip', DIAG_HINT)
       expect(docsIcon).toHaveAttribute('data-tooltip', DOCS_HINT)
@@ -1343,7 +1341,7 @@ describe('HelpView', () => {
       expect(within(column as HTMLElement).getByText('Respuesta de ayuda')).toBeInTheDocument()
 
       // The diagnostics preview renders inside the column too.
-      await fireEvent.click(screen.getByRole('button', { name: 'Ver qué se envía' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Ver input' }))
       const pre = await previewBlock()
       expect(pre.closest('.help-view__column')).not.toBeNull()
     })

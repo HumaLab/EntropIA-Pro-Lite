@@ -573,7 +573,7 @@ fn remove_file_logged(path: &Path) {
 }
 
 fn remove_dir_all_logged(path: &Path) {
-    if let Err(error) = std::fs::remove_dir_all(path) {
+    if let Err(error) = crate::path_utils::remove_dir_all_robust(path) {
         LEFT_BEHIND.with(|left| left.set(left.get() + 1));
         log::warn!(
             "corpus delete: could not remove {}: {error}",

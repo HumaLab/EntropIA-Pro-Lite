@@ -399,7 +399,10 @@ describe('i18n', () => {
       'Parámetro de ayuda inválido: contextChars'
     )
     expect(t('settings.help.restoreDefaults')).toBe('Restaurar defaults')
-    expect(t('help.includeDocuments')).toBe('Buscar en mis documentos')
+    expect(t('help.includeDocuments')).toBe('Mis documentos')
+    expect(t('help.useRemote')).toBe('OpenRouter')
+    expect(t('help.includeDiagnostics')).toBe('Diagnóstico')
+    expect(t('help.previewToggle')).toBe('Ver input')
     expect(t('help.documentsHint')).toBe(
       'Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.'
     )
@@ -419,8 +422,8 @@ describe('i18n', () => {
     expect(t('help.approvalRejected', { summary: 'Crear la colección «SIMAPE»' })).toBe(
       'Rechazaste: Crear la colección «SIMAPE»'
     )
-    expect(t('help.diagnosticsInfo')).toBe('Más información sobre Incluir diagnóstico')
-    expect(t('help.documentsInfo')).toBe('Más información sobre Buscar en mis documentos')
+    expect(t('help.diagnosticsInfo')).toBe('Más información sobre Diagnóstico')
+    expect(t('help.documentsInfo')).toBe('Más información sobre Mis documentos')
 
     locale.set('en')
 
@@ -478,7 +481,10 @@ describe('i18n', () => {
       'Invalid help parameter: contextChars'
     )
     expect(t('settings.help.restoreDefaults')).toBe('Restore defaults')
-    expect(t('help.includeDocuments')).toBe('Search my documents')
+    expect(t('help.includeDocuments')).toBe('My documents')
+    expect(t('help.useRemote')).toBe('OpenRouter')
+    expect(t('help.includeDiagnostics')).toBe('Diagnostics')
+    expect(t('help.previewToggle')).toBe('View input')
     expect(t('help.documentsHint')).toBe(
       'Excerpts from your documents go to OpenRouter for this question only.'
     )
@@ -498,8 +504,8 @@ describe('i18n', () => {
     expect(t('help.approvalRejected', { summary: 'Create the "SIMAPE" collection' })).toBe(
       'You rejected: Create the "SIMAPE" collection'
     )
-    expect(t('help.diagnosticsInfo')).toBe('More about Include diagnostics')
-    expect(t('help.documentsInfo')).toBe('More about Search my documents')
+    expect(t('help.diagnosticsInfo')).toBe('More about Diagnostics')
+    expect(t('help.documentsInfo')).toBe('More about My documents')
   })
 
   it('exposes the API key clearing copy in both locales', async () => {

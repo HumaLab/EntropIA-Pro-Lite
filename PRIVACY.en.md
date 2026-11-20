@@ -86,7 +86,7 @@ The OpenRouter, Vercel AI Gateway, AssemblyAI, GLM-OCR, and Zotero API keys and 
 - Remove provider API keys from Settings (the **Quitar clave** button) to disable those remote paths. Without an OpenRouter API key no automatic conversation title is generated and the Biblioteca is not processed for meaning search; without a Vercel key there is no fallback.
 - Do not sync Zotero libraries into the Biblioteca if you do not want the text of their works sent to OpenRouter and GLM-OCR.
 - Do not mark entities as places, or do not save them, if you do not want their text queried against Nominatim.
-- Leave **Permitir asistentes externos** (allow external assistants) off if you do not use assistants, revoke the ones you no longer use, and in the help do not tick **Include diagnostics** or **Search my documents** if you do not want that information to travel to OpenRouter.
+- Leave **Permitir asistentes externos** (allow external assistants) off if you do not use assistants, revoke the ones you no longer use, and in the help do not tick **Diagnostics** or **My documents** if you do not want that information to travel to OpenRouter.
 - Sign out of sync so nothing leaves through that path.
 - Backups contain your whole archive: keep them in a protected folder.
 - Delete the local app data directory if you want to remove local databases, logs, runtime files, and generated outputs. API keys and the sync token do not live there: remove them from Settings or by signing out.

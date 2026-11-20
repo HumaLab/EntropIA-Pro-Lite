@@ -798,13 +798,16 @@
     >
       <div class="help-view__optins">
         {#if localEngine && hasOpenrouterKey}
-          <div class="help-view__optin">
+          <div
+            class="help-view__optin"
+            use:tooltip={$currentLocale && t('help.useRemoteHint', { model: remoteModel })}
+          >
             <Checkbox
               bind:checked={useRemote}
               disabled={sending}
-              label={$currentLocale && t('help.useRemote', { model: remoteModel })}
+              label={$currentLocale && t('help.useRemote')}
             >
-              {$currentLocale && t('help.useRemote', { model: remoteModel })}
+              {$currentLocale && t('help.useRemote')}
             </Checkbox>
           </div>
         {/if}
