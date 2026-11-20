@@ -29,18 +29,20 @@ describe('a document written by the running app', () => {
   })
 
   /**
-   * Characterises the damage rather than wishing it away: mounted raw, this
-   * document takes the editor down. That is why `parseCanonical` repairs before
-   * handing anything over, and why validation alone was not enough — the
-   * document is schema-valid and still unrenderable.
+   * Under `tiptap-footnotes@3` this document took the editor down when mounted
+   * raw (a `nodeType` error drawing a marker with no footnote): the
+   * blank-editor failure. Version 4 draws such a marker from its own
+   * attributes, so it mounts. `parseCanonical` still repairs before handing
+   * anything over, because builds on version 3 open the same documents.
    */
-  it('cannot be mounted raw, which is exactly the blank-editor failure', () => {
+  it('mounts raw since tiptap-footnotes 4, keeping every top-level node', () => {
     const element = document.createElement('div')
     document.body.appendChild(element)
 
-    expect(() => {
-      editor = new Editor({ element, extensions: createWritingExtensions(), content: REAL.doc })
-    }).toThrow(/nodeType/)
+    editor = new Editor({ element, extensions: createWritingExtensions(), content: REAL.doc })
+
+    expect(editor.state.doc.childCount).toBe(REAL.doc.content!.length)
+    expect(element.querySelectorAll('h1,h2,h3,h4').length).toBeGreaterThanOrEqual(7)
   })
 })
 
