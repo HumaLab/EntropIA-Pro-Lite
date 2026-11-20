@@ -496,10 +496,10 @@ describe('HelpBubble (S13, T17)', () => {
     const row = document.querySelector('.help-view__optins')
     expect(row).not.toBeNull()
     expect(
-      within(row as HTMLElement).getByRole('checkbox', { name: 'Incluir diagnóstico' })
+      within(row as HTMLElement).getByRole('checkbox', { name: 'Diagnóstico' })
     ).toBeInTheDocument()
     expect(
-      within(row as HTMLElement).getByRole('checkbox', { name: 'Buscar en mis documentos' })
+      within(row as HTMLElement).getByRole('checkbox', { name: 'Mis documentos' })
     ).toBeInTheDocument()
   })
 
@@ -722,7 +722,7 @@ describe('HelpBubble (S13, T17)', () => {
         screen.getByRole('button', { name: 'Enviar' }).closest('.help-view__composer')
       ).not.toBeNull()
 
-      await fireEvent.click(screen.getByRole('button', { name: 'Ver qué se envía' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Ver input' }))
       const pre = await screen.findByText(
         (_content, element) => element?.textContent === PREVIEW_TEXT
       )
