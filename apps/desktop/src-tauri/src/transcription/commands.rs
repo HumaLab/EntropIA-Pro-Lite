@@ -20,9 +20,23 @@ fn ensure_selected_cloud_key_blocking(db: &AppDbState) -> Result<(), String> {
 /// async-context thread — the command's future dies mid-flight and the invoke
 /// never resolves. Running it on the blocking pool (the same context the OCR
 /// executor already uses) keeps the drop legal.
+///
+/// Only the provider that runs on the runtime (local faster-whisper) waits for
+/// it: Parakeet and AssemblyAI must keep working while the runtime is missing
+/// or its bootstrap fails.
 async fn ensure_transcription_runtime_ready_off_thread(
     app_handle: &AppHandle,
+    db: &AppDbState,
 ) -> Result<(), String> {
+    let db_path = db.db_path.clone();
+    let needs_runtime = run_blocking_db_task(move || {
+        let conn = crate::db::open::open_archive_connection(&db_path)?;
+        Ok(super::selected_provider_needs_runtime(&conn))
+    })
+    .await?;
+    if !needs_runtime {
+        return Ok(());
+    }
     let app_handle = app_handle.clone();
     tokio::task::spawn_blocking(move || super::ensure_transcription_runtime_ready(&app_handle))
         .await
@@ -71,7 +85,7 @@ pub async fn transcribe_audio(
     // by the worker and by each provider.
     let asset_path = crate::path_utils::resolve_asset_path_at_boundary(&asset_path, &app_handle)?;
 
-    ensure_transcription_runtime_ready_off_thread(&app_handle).await?;
+    ensure_transcription_runtime_ready_off_thread(&app_handle, db.inner()).await?;
     {
         let db = db.inner().clone();
         run_blocking_db_task(move || ensure_selected_cloud_key_blocking(&db)).await?;
@@ -163,7 +177,7 @@ pub async fn transcribe_dictation(
     app_handle: AppHandle,
     db: State<'_, AppDbState>,
 ) -> Result<String, String> {
-    ensure_transcription_runtime_ready_off_thread(&app_handle).await?;
+    ensure_transcription_runtime_ready_off_thread(&app_handle, db.inner()).await?;
     crate::app_logs::info(
         &app_handle,
         "transcription",
@@ -177,6 +191,7 @@ pub async fn transcribe_dictation(
 
     let audio_path_for_worker = audio_path.clone();
     let app_handle_for_worker = app_handle.clone();
+    let started = std::time::Instant::now();
     let transcription_result = tauri::async_runtime::spawn_blocking(move || {
         let conn = crate::db::open::open_archive_connection(&db_path)
             .map_err(|e| format!("Failed to open settings DB for dictation: {e}"))?;
@@ -188,10 +203,23 @@ pub async fn transcribe_dictation(
             None,
             &audio_path_for_worker,
         )
-        .map(|result| result.transcription)
     })
     .await
-    .map_err(|e| format!("Dictation task failed: {e}"))?;
+    .map_err(|e| format!("Dictation task failed: {e}"))?
+    .map(|result| {
+        // R10: a successful dictation used to leave no trace in the log.
+        crate::app_logs::info(
+            &app_handle,
+            "transcription",
+            format!(
+                "Dictado transcripto: motor={}, audio={:.1}s, tardó={}ms",
+                result.model_name,
+                result.transcription.duration_ms as f64 / 1000.0,
+                started.elapsed().as_millis()
+            ),
+        );
+        result.transcription
+    });
 
     let cleanup_result = super::cleanup_temp_audio_file(&audio_path);
 
@@ -226,4 +254,165 @@ pub async fn transcribe_dictation(
             ))
         }
     }
+}
+
+/// What Configuración shows about the local Parakeet model.
+#[derive(Clone, serde::Serialize)]
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
+pub struct ParakeetModelInfo {
+    pub installed: bool,
+    pub downloading: bool,
+    pub missing_bytes: u64,
+    pub total_bytes: u64,
+    pub directory: String,
+}
+
+#[cfg(feature = "local-ml")]
+static PARAKEET_DOWNLOADING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Status of the Parakeet model on disk (R11: dictation no longer downloads
+/// it, so Configuración says whether it is there and how much is left).
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn stt_parakeet_model_info(
+    db: State<'_, AppDbState>,
+) -> Result<ParakeetModelInfo, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || parakeet_info(&db_path))
+        .await
+        .map_err(|e| format!("Parakeet model check failed: {e}"))
+}
+
+/// [`stt_parakeet_model_info`] for blocking callers (`models_setup`).
+#[cfg(feature = "local-ml")]
+pub(crate) fn parakeet_info(db_path: &std::path::Path) -> ParakeetModelInfo {
+    let dir = super::parakeet::parakeet_model_dir(db_path);
+    let (missing_bytes, total_bytes) = super::parakeet::parakeet_download_size(&dir);
+    ParakeetModelInfo {
+        installed: missing_bytes == 0,
+        downloading: PARAKEET_DOWNLOADING.load(std::sync::atomic::Ordering::SeqCst),
+        missing_bytes,
+        total_bytes,
+        directory: dir.display().to_string(),
+    }
+}
+
+/// Start the Parakeet download in the background: `parakeet:download_progress`
+/// while it runs, then `parakeet:download_complete` or
+/// `parakeet:download_error`. A partial file resumes where it stopped.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn stt_parakeet_download_model(
+    db: State<'_, AppDbState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    start_parakeet_download(&db.db_path, app_handle)
+}
+
+/// Shared starter behind the Settings button, Preparar EntropIA Pro and the
+/// assistant `models_setup` tool.
+#[cfg(feature = "local-ml")]
+pub(crate) fn start_parakeet_download(
+    db_path: &std::path::Path,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    use crate::llm::download::{
+        ModelDownloadCompletePayload, ModelDownloadErrorPayload, ModelDownloadProgressPayload,
+    };
+    use std::sync::atomic::Ordering;
+    use tauri::Emitter;
+
+    if PARAKEET_DOWNLOADING.swap(true, Ordering::SeqCst) {
+        return Ok("in_progress".to_string());
+    }
+    let db_path = db_path.to_path_buf();
+    crate::app_logs::info(
+        &app_handle,
+        "parakeet/download",
+        "Inicio descarga de Parakeet",
+    );
+    tauri::async_runtime::spawn(async move {
+        let worker = app_handle.clone();
+        let started = std::time::Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            let dir = super::parakeet::parakeet_model_dir(&db_path);
+            let mut last_pct = None;
+            super::parakeet::download_parakeet_model(&dir, &mut |done, total| {
+                let pct = (done.saturating_mul(100) / total.max(1)).min(100) as u8;
+                if last_pct == Some(pct) {
+                    return;
+                }
+                last_pct = Some(pct);
+                let _ = worker.emit(
+                    "parakeet:download_progress",
+                    ModelDownloadProgressPayload {
+                        pct,
+                        downloaded_bytes: done,
+                        total_bytes: Some(total),
+                    },
+                );
+                if pct.is_multiple_of(10) {
+                    crate::app_logs::info(
+                        &worker,
+                        "parakeet/download",
+                        format!("Descarga de Parakeet {pct}% ({} MB)", done / 1_000_000),
+                    );
+                }
+            })
+            .map(|()| dir)
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("Parakeet download task panicked: {e}")));
+        PARAKEET_DOWNLOADING.store(false, Ordering::SeqCst);
+        match result {
+            Ok(dir) => {
+                crate::app_logs::info(
+                    &app_handle,
+                    "parakeet/download",
+                    format!(
+                        "Descarga de Parakeet completada en {}s: {}",
+                        started.elapsed().as_secs(),
+                        dir.display()
+                    ),
+                );
+                let _ = app_handle.emit(
+                    "parakeet:download_complete",
+                    ModelDownloadCompletePayload {
+                        path: dir.display().to_string(),
+                    },
+                );
+            }
+            Err(error) => {
+                crate::app_logs::error(
+                    &app_handle,
+                    "parakeet/download",
+                    format!("Descarga de Parakeet falló: {error}"),
+                );
+                let _ = app_handle.emit(
+                    "parakeet:download_error",
+                    ModelDownloadErrorPayload { error },
+                );
+            }
+        }
+    });
+    Ok("started".to_string())
+}
+
+/// Lite ships no local transcription engine.
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn stt_parakeet_model_info(
+    _db: State<'_, AppDbState>,
+) -> Result<ParakeetModelInfo, String> {
+    Err("Parakeet solo está disponible en EntropIA Pro".to_string())
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn stt_parakeet_download_model(
+    _db: State<'_, AppDbState>,
+    _app_handle: AppHandle,
+) -> Result<String, String> {
+    Err("Parakeet solo está disponible en EntropIA Pro".to_string())
 }

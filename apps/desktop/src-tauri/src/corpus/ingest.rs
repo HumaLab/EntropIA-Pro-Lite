@@ -48,7 +48,7 @@ pub fn classify(path: &Path) -> Option<FileKind> {
     match extension.as_str() {
         "png" | "jpg" | "jpeg" | "webp" | "tiff" | "tif" => Some(FileKind::Image),
         "pdf" => Some(FileKind::Pdf),
-        "wav" | "mp3" | "flac" | "m4a" | "aac" | "ogg" => Some(FileKind::Audio),
+        "wav" | "mp3" | "flac" | "m4a" | "aac" | "ogg" | "opus" => Some(FileKind::Audio),
         _ => None,
     }
 }

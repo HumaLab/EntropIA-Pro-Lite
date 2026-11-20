@@ -154,10 +154,11 @@ pub(crate) fn ocr_history_event(
 }
 
 /// Resolves the OCR mode a new batch pins for its tasks from the saved OCRH
-/// setting: `local` → light, `glm_ocr`/`auto` → high (auto tries GLM first
-/// and falls back, exactly like the previous worker). Frozen at admission —
-/// a later settings change does not rewrite running batches.
-pub(crate) fn resolve_batch_ocr_mode(conn: &Connection) -> String {
+/// setting: `glm_ocr`/`auto` → high (auto tries GLM first and falls back,
+/// exactly like the previous worker); `local` → light, or high when the batch
+/// asked for local OCRH (`ocr_local_high`). Frozen at admission — a later
+/// settings change does not rewrite running batches.
+pub(crate) fn resolve_batch_ocr_mode(conn: &Connection, local_high: bool) -> String {
     let mode: String = conn
         .query_row(
             "SELECT value FROM app_settings WHERE key = 'ocrh_mode'",
@@ -167,6 +168,7 @@ pub(crate) fn resolve_batch_ocr_mode(conn: &Connection) -> String {
         .unwrap_or_else(|_| "local".to_string());
     match mode.to_lowercase().as_str() {
         "glm_ocr" | "high" | "auto" => "high".to_string(),
+        _ if local_high => "high".to_string(),
         _ => "light".to_string(),
     }
 }
@@ -262,6 +264,17 @@ impl Executor for OcrExecutor {
     }
 
     fn run(&self, ctx: &ExecCtx, task: &ClaimedTask, stop: &StopFlag) -> ExecResult {
+        let started = std::time::Instant::now();
+        let high = task.contract_hash == ocr_task_contract("high");
+        crate::app_logs::info(
+            &self.app,
+            "ocr",
+            format!(
+                "OCR iniciado: asset_id={}, modo={}",
+                task.asset_id,
+                if high { "high" } else { "light" }
+            ),
+        );
         let computed = (|| -> Result<OcrComputeOutput, String> {
             let (stored_path, asset_type) = self.read_asset(&task.asset_id)?;
             let asset_path =
@@ -320,8 +333,21 @@ impl Executor for OcrExecutor {
             }
             merge_pages(outputs)
         })();
+        let seconds = started.elapsed().as_secs_f32();
         match computed {
             Ok(output) => {
+                // R17: a 14-minute PaddleOCR-VL run on CPU left no trace at all.
+                crate::app_logs::info(
+                    &self.app,
+                    "ocr",
+                    format!(
+                        "OCR terminado: asset_id={}, método={}, páginas={}, caracteres={}, duración={seconds:.1}s",
+                        task.asset_id,
+                        output.method,
+                        output.page_count,
+                        output.text.chars().count(),
+                    ),
+                );
                 let outcome = output.outcome.clone();
                 ExecResult {
                     checkpoints: Vec::new(),
@@ -333,16 +359,37 @@ impl Executor for OcrExecutor {
                     },
                 }
             }
-            Err(error) => ExecResult {
-                checkpoints: Vec::new(),
-                progress_total: None,
-                engine_output: None,
-                output: if error == "stopped" {
-                    ExecOutput::Stopped
+            Err(error) => {
+                if error == "stopped" {
+                    crate::app_logs::info(
+                        &self.app,
+                        "ocr",
+                        format!(
+                            "OCR detenido: asset_id={}, tras {seconds:.1}s",
+                            task.asset_id
+                        ),
+                    );
                 } else {
-                    map_ocr_error(&error)
-                },
-            },
+                    crate::app_logs::warn(
+                        &self.app,
+                        "ocr",
+                        format!(
+                            "OCR falló: asset_id={}, tras {seconds:.1}s: {error}",
+                            task.asset_id
+                        ),
+                    );
+                }
+                ExecResult {
+                    checkpoints: Vec::new(),
+                    progress_total: None,
+                    engine_output: None,
+                    output: if error == "stopped" {
+                        ExecOutput::Stopped
+                    } else {
+                        map_ocr_error(&error)
+                    },
+                }
+            }
         }
     }
 }
@@ -795,14 +842,15 @@ mod tests {
             "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )
         .expect("settings table");
-        // No row: legacy default is local → light.
-        assert_eq!(resolve_batch_ocr_mode(&conn), "light");
+        // No row: legacy default is local → light, unless the batch asked for OCRH.
+        assert_eq!(resolve_batch_ocr_mode(&conn, false), "light");
+        assert_eq!(resolve_batch_ocr_mode(&conn, true), "high");
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES ('ocrh_mode', 'glm_ocr')",
             [],
         )
         .expect("insert mode");
-        assert_eq!(resolve_batch_ocr_mode(&conn), "high");
+        assert_eq!(resolve_batch_ocr_mode(&conn, false), "high");
         assert_eq!(ocr_task_contract("high"), "ocr:high");
     }
     #[test]

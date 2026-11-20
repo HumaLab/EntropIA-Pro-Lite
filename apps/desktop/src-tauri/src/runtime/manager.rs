@@ -23,6 +23,52 @@ pub struct RuntimeManager;
 
 const RUNTIME_PACK_ROOT_ENV: &str = "ENTROPIA_RUNTIME_PACK_ROOT";
 
+/// The last runtime status and progress lines written to the app log (R28).
+static LAST_STATUS_LINE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static LAST_PROGRESS_LINE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// Recent stage lines without a percentage (Checking, Blocked…) and when they
+/// were logged: a readiness check answers with an alternating pair, which a
+/// last-line comparison alone does not catch (R28).
+static RECENT_STAGE_LINES: std::sync::Mutex<Vec<(String, std::time::Instant)>> =
+    std::sync::Mutex::new(Vec::new());
+/// A stage line repeated within this window is not logged again.
+const STAGE_LINE_QUIET: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Whether a progress stage line (one without a percentage) is new within
+/// [`STAGE_LINE_QUIET`]; records it when it is.
+fn stage_line_is_new(
+    recent: &std::sync::Mutex<Vec<(String, std::time::Instant)>>,
+    line: &str,
+    now: std::time::Instant,
+) -> bool {
+    let Ok(mut recent) = recent.lock() else {
+        return true;
+    };
+    recent.retain(|(_, at)| now.duration_since(*at) < STAGE_LINE_QUIET);
+    if recent.iter().any(|(seen, _)| seen == line) {
+        return false;
+    }
+    recent.push((line.to_string(), now));
+    true
+}
+
+/// Remembers `line` (with its details) in `last` and says whether it differs
+/// from what was logged before: a repeated readiness check logs nothing.
+fn log_if_changed(last: &std::sync::Mutex<Option<String>>, line: &str, details: &[String]) -> bool {
+    let key = std::iter::once(line)
+        .chain(details.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(mut last) = last.lock() else {
+        return true;
+    };
+    if last.as_deref() == Some(key.as_str()) {
+        return false;
+    }
+    *last = Some(key);
+    true
+}
+
 impl RuntimeManager {
     pub fn new() -> Self {
         Self
@@ -145,6 +191,25 @@ impl RuntimeManager {
         &self,
         app_handle: &AppHandle,
     ) -> Result<RuntimeStatus, String> {
+        // A new attempt starts clean: a stale error must not sit on a live
+        // download's banner.
+        record_bootstrap_error(None);
+        let result = self.ensure_ready_or_bootstrap_attempt(app_handle);
+        if let Err(error) = &result {
+            record_bootstrap_error(Some(error.clone()));
+            // Re-emit so the banner and Dependencias show the failure now,
+            // not on the next status poll.
+            if let Ok(status) = self.status(app_handle) {
+                let _ = self.emit_status(app_handle, &status);
+            }
+        }
+        result
+    }
+
+    fn ensure_ready_or_bootstrap_attempt(
+        &self,
+        app_handle: &AppHandle,
+    ) -> Result<RuntimeStatus, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
         let app_data_dir = crate::path_utils::cache_dir(app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
@@ -233,6 +298,21 @@ impl RuntimeManager {
     /// nothing to disarm or re-emit. The single-flight lock and the
     /// cancellable T2 download core are shared, not duplicated.
     pub fn trigger_startup_bootstrap(&self, app_handle: &AppHandle, status: &RuntimeStatus) {
+        // R1: on a metered connection (mobile data, a capped plan) the large
+        // first download waits for the person: the banner says why and its
+        // button starts it.
+        if startup_bootstrap_skip_reason(status, StartupBootstrapGate::live()).is_none()
+            && connection_is_metered()
+        {
+            crate::app_logs::info(
+                app_handle,
+                "runtime",
+                "Conexión medida: la descarga automática del runtime de IA espera confirmación",
+            );
+            METERED_DEFERRED.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = self.emit_status(app_handle, &metered_pending_status(status));
+            return;
+        }
         let worker_app = app_handle.clone();
         match trigger_startup_bootstrap_with(
             status,
@@ -381,16 +461,18 @@ impl RuntimeManager {
         app_handle: &AppHandle,
         status: &RuntimeStatus,
     ) -> Result<(), String> {
-        crate::app_logs::info(
-            app_handle,
-            "runtime",
-            format!("Estado runtime: {:?} · {}", status.state, status.summary),
-        );
-        for detail in &status.details {
-            crate::app_logs::info(app_handle, "runtime", format!("Detalle runtime: {detail}"));
+        // R28: every AI action re-checks readiness; only a change reaches the
+        // log, the event still goes out every time.
+        let line = format!("Estado runtime: {:?} · {}", status.state, status.summary);
+        if log_if_changed(&LAST_STATUS_LINE, &line, &status.details) {
+            crate::app_logs::info(app_handle, "runtime", line);
+            for detail in &status.details {
+                crate::app_logs::info(app_handle, "runtime", format!("Detalle runtime: {detail}"));
+            }
         }
+        let status = with_last_bootstrap_error(status.clone());
         app_handle
-            .emit("runtime://status", status)
+            .emit("runtime://status", &status)
             .map_err(|error| format!("Failed to emit runtime status event: {error}"))
     }
 
@@ -400,20 +482,26 @@ impl RuntimeManager {
         app_handle: &AppHandle,
         operation: &RuntimeOperation,
     ) -> Result<(), String> {
-        crate::app_logs::info(
-            app_handle,
-            "runtime",
-            format!(
-                "Operación {:?}/{:?}: {}{}",
-                operation.kind,
-                operation.stage,
-                operation.summary,
-                operation
-                    .progress_percent
-                    .map(|pct| format!(" ({pct}%)"))
-                    .unwrap_or_default()
-            ),
+        let line = format!(
+            "Operación {:?}/{:?}: {}{}",
+            operation.kind,
+            operation.stage,
+            operation.summary,
+            operation
+                .progress_percent
+                .map(|pct| format!(" ({pct}%)"))
+                .unwrap_or_default()
         );
+        // Download percentages are compared with the previous line only;
+        // stage lines are deduplicated over a time window.
+        let new = if operation.progress_percent.is_some() {
+            log_if_changed(&LAST_PROGRESS_LINE, &line, &[])
+        } else {
+            stage_line_is_new(&RECENT_STAGE_LINES, &line, std::time::Instant::now())
+        };
+        if new {
+            crate::app_logs::info(app_handle, "runtime", line);
+        }
         app_handle
             .emit("runtime://progress", operation)
             .map_err(|error| format!("Failed to emit runtime progress event: {error}"))
@@ -520,7 +608,13 @@ impl RuntimeManager {
         };
 
         invalidate_stale_managed_runtime(app_data_dir, &manifest)?;
-        invalidate_stale_managed_runtime_dirs(app_data_dir, &manifest)?;
+        // Removing runtimes of other app versions is housekeeping: a folder
+        // that cannot be deleted (an antivirus or another process may hold a
+        // file in it) must not stop the current runtime from being checked,
+        // downloaded or hydrated.
+        for warning in invalidate_stale_managed_runtime_dirs(app_data_dir, &manifest) {
+            log::warn!(target: "runtime", "{warning}");
+        }
 
         let current_status =
             inspect_runtime(bundle_root, app_data_dir, &manifest, remote_catalog.clone())?;
@@ -729,6 +823,104 @@ pub(crate) fn startup_bootstrap_skip_reason(
         return Some(StartupBootstrapSkip::SourceNotConfigured);
     }
     None
+}
+
+/// Whether Windows reports the internet connection as metered (a fixed or
+/// variable data plan, roaming, or over its data limit). Any failure to read
+/// the cost counts as unmetered: the check only defers a download.
+#[cfg(windows)]
+fn connection_is_metered() -> bool {
+    use windows::Networking::Connectivity::{NetworkCostType, NetworkInformation};
+
+    let Ok(profile) = NetworkInformation::GetInternetConnectionProfile() else {
+        return false;
+    };
+    let Ok(cost) = profile.GetConnectionCost() else {
+        return false;
+    };
+    matches!(
+        cost.NetworkCostType(),
+        Ok(NetworkCostType::Fixed | NetworkCostType::Variable)
+    ) || cost.Roaming().unwrap_or(false)
+        || cost.OverDataLimit().unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn connection_is_metered() -> bool {
+    false
+}
+
+/// Set once the startup download was held back by a metered connection, so
+/// every later status read keeps explaining it while the pack is a fixture.
+static METERED_DEFERRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `status` as the UI should see it: a fixture whose download a metered
+/// connection held back keeps the metered guidance and its start button.
+/// The last failed bootstrap attempt (audit 1.8.1, item 7): while the runtime
+/// is not healthy the banner and Dependencias show this reason first, instead
+/// of a generic "downloads automatically" line that never comes true.
+static LAST_BOOTSTRAP_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+const BOOTSTRAP_ERROR_PREFIX: &str = "El último intento de preparar el runtime de IA falló: ";
+
+fn record_bootstrap_error(error: Option<String>) {
+    if let Ok(mut last) = LAST_BOOTSTRAP_ERROR.lock() {
+        *last = error;
+    }
+}
+
+/// Puts `error` first in the guidance of a status that is not healthy.
+fn annotate_with_bootstrap_error(mut status: RuntimeStatus, error: Option<&str>) -> RuntimeStatus {
+    let Some(error) = error else {
+        return status;
+    };
+    if status.state == RuntimeState::Healthy {
+        return status;
+    }
+    let line = format!("{BOOTSTRAP_ERROR_PREFIX}{error}");
+    if status.guidance.first() != Some(&line) {
+        status.guidance.insert(0, line);
+    }
+    status
+}
+
+pub(crate) fn with_last_bootstrap_error(status: RuntimeStatus) -> RuntimeStatus {
+    let error = LAST_BOOTSTRAP_ERROR
+        .lock()
+        .ok()
+        .and_then(|last| last.clone());
+    annotate_with_bootstrap_error(status, error.as_deref())
+}
+
+pub(crate) fn with_metered_deferral(status: RuntimeStatus) -> RuntimeStatus {
+    if status.state == RuntimeState::Fixture
+        && METERED_DEFERRED.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        metered_pending_status(&status)
+    } else {
+        status
+    }
+}
+
+/// The fixture status the banner shows while a metered connection holds the
+/// first download back (R1): the reason as guidance, and a retryable pending
+/// operation so the banner offers the button that starts it.
+fn metered_pending_status(status: &RuntimeStatus) -> RuntimeStatus {
+    let mut pending = status.clone();
+    pending.guidance = vec![
+        "Estás en una conexión medida: la descarga del runtime de IA (varios GB) no empieza sola. Iniciala cuando quieras con el botón."
+            .to_string(),
+    ];
+    pending.active_operation = Some(RuntimeOperation {
+        kind: RuntimeOperationKind::Bootstrap,
+        stage: RuntimeOperationStage::Blocked,
+        summary: "Descarga en espera: conexión medida".to_string(),
+        progress_percent: None,
+        downloaded_bytes: None,
+        total_bytes: None,
+        retryable: true,
+    });
+    pending
 }
 
 /// Outcome of a startup trigger attempt: skipped without side effects,
@@ -1074,7 +1266,7 @@ fn invalidate_stale_managed_runtime(
         return Ok(());
     }
 
-    fs::remove_dir_all(&managed_root).map_err(|error| {
+    crate::path_utils::remove_dir_all_robust(&managed_root).map_err(|error| {
         format!(
             "Failed to invalidate stale runtime {}: {error}",
             managed_root.display()
@@ -1082,46 +1274,75 @@ fn invalidate_stale_managed_runtime(
     })
 }
 
+/// Best-effort removal of the managed runtimes the running app cannot use
+/// (see [`runtime_serves_running_app`]). Returns one message per folder that
+/// could not be removed; it never fails, so a leftover folder cannot block
+/// the current runtime.
 fn invalidate_stale_managed_runtime_dirs(
     app_data_dir: &Path,
     current_manifest: &RuntimeManifest,
-) -> Result<(), String> {
+) -> Vec<String> {
+    invalidate_stale_managed_runtime_dirs_with(
+        app_data_dir,
+        current_manifest,
+        crate::path_utils::remove_dir_all_robust,
+    )
+}
+
+fn invalidate_stale_managed_runtime_dirs_with<R>(
+    app_data_dir: &Path,
+    current_manifest: &RuntimeManifest,
+    mut remove_dir_all: R,
+) -> Vec<String>
+where
+    R: FnMut(&Path) -> std::io::Result<()>,
+{
+    let mut warnings = Vec::new();
     let runtime_dir = runtime_root(app_data_dir);
     let Ok(entries) = fs::read_dir(&runtime_dir) else {
-        return Ok(());
+        return warnings;
     };
 
     let current_root = managed_pack_dir(app_data_dir, &current_manifest.pack_version);
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() || path == current_root {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
+    let candidates: Vec<(std::path::PathBuf, RuntimeManifest)> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && *path != current_root)
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| !name.starts_with('.') && name != "downloads")
+        })
+        .filter_map(|path| {
+            let manifest = RuntimeManifest::load_from_path(&path.join("manifest.json")).ok()?;
+            (manifest.platform == current_manifest.platform).then_some((path, manifest))
+        })
+        .collect();
+    // A runtime reused from another app version is kept only while no runtime
+    // for this exact version exists: once one does (the reused one was damaged
+    // and startup downloaded a new one), the old folder is dead weight.
+    let exact_version_present = candidates
+        .iter()
+        .any(|(_, manifest)| manifest.app_version == running_app_version());
+    for (path, manifest) in candidates {
+        let keep = if exact_version_present {
+            manifest.app_version == running_app_version()
+        } else {
+            runtime_serves_running_app(&manifest)
         };
-        if name.starts_with('.') || name == "downloads" {
-            continue;
-        }
-        let Ok(manifest) = RuntimeManifest::load_from_path(&path.join("manifest.json")) else {
-            continue;
-        };
-        if manifest.platform != current_manifest.platform {
-            continue;
-        }
-        if manifest.app_version == running_app_version() {
+        if keep {
             continue;
         }
 
-        fs::remove_dir_all(&path).map_err(|error| {
-            format!(
-                "Failed to invalidate stale runtime {}: {error}",
+        if let Err(error) = remove_dir_all(&path) {
+            warnings.push(format!(
+                "Could not remove stale runtime {} (kept, ignored): {error}",
                 path.display()
-            )
-        })?;
+            ));
+        }
     }
 
-    Ok(())
+    warnings
 }
 
 fn hydrate_runtime_with_progress<F>(
@@ -1688,7 +1909,7 @@ fn compatibility_status_with_disk_free(
     app_data_dir: &Path,
     disk_free_bytes: Option<u64>,
 ) -> Option<RuntimeStatus> {
-    if manifest.app_version != running_app_version() {
+    if !runtime_serves_running_app(manifest) {
         return Some(app_version_incompatible_status(
             &manifest.app_version,
             &manifest.pack_version,
@@ -1846,6 +2067,70 @@ fn running_app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// The runtime-pack manifest this build bundles for its platform, embedded at
+/// compile time: what the app expects from a runtime (its `runtime_abi` and
+/// the hash of every Python script). None on a platform without a pack.
+fn bundled_runtime_contract() -> Option<&'static RuntimeManifest> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const BUNDLED: Option<&str> = Some(include_str!(
+        "../../resources/runtime-pack/linux-x86_64/manifest.json"
+    ));
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    const BUNDLED: Option<&str> = Some(include_str!(
+        "../../resources/runtime-pack/windows-x86_64/manifest.json"
+    ));
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
+    const BUNDLED: Option<&str> = None;
+
+    static CONTRACT: std::sync::OnceLock<Option<RuntimeManifest>> = std::sync::OnceLock::new();
+    CONTRACT
+        .get_or_init(|| BUNDLED.and_then(|json| serde_json::from_str(json).ok()))
+        .as_ref()
+}
+
+/// Whether the running app can use a runtime described by `manifest`: one
+/// built for this app version, or a release runtime built for another that
+/// meets this app's contract (see [`reusable_across_app_versions`]).
+fn runtime_serves_running_app(manifest: &RuntimeManifest) -> bool {
+    manifest.app_version == running_app_version()
+        || reusable_across_app_versions(manifest, bundled_runtime_contract())
+}
+
+/// A release runtime built for another app version still serves this one
+/// when it declares the same `runtime_abi` as the app's bundled manifest and
+/// carries exactly the same Python scripts (path and hash). The scripts are
+/// checked because the app runs the runtime's copy, not the installer's;
+/// the ABI covers what a hash of the scripts cannot (Python, wheels, native
+/// libraries). Runtimes without `runtime_abi` never qualify.
+fn reusable_across_app_versions(
+    manifest: &RuntimeManifest,
+    contract: Option<&RuntimeManifest>,
+) -> bool {
+    let Some(contract) = contract else {
+        return false;
+    };
+    if contract.runtime_abi.is_none()
+        || manifest.runtime_abi != contract.runtime_abi
+        || manifest.platform != contract.platform
+        || manifest.payload_profile != "release"
+    {
+        return false;
+    }
+    let scripts = |files: &[crate::runtime::manifest::ManifestEntry]| {
+        let mut set: Vec<(String, String)> = files
+            .iter()
+            .map(|entry| (entry.path.clone(), entry.sha256.to_ascii_lowercase()))
+            .collect();
+        set.sort();
+        set
+    };
+    !contract.script_files.is_empty()
+        && scripts(&manifest.script_files) == scripts(&contract.script_files)
+}
+
 fn blocked_capabilities() -> Vec<RuntimeCapability> {
     vec![
         RuntimeCapability::Ocr,
@@ -1868,6 +2153,100 @@ mod tests {
     use base64::Engine;
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
+
+    #[test]
+    fn a_repeated_runtime_line_is_logged_once() {
+        let last = std::sync::Mutex::new(None);
+        let healthy = "Estado runtime: Healthy · Runtime listo";
+        assert!(log_if_changed(&last, healthy, &[]));
+        assert!(!log_if_changed(&last, healthy, &[]));
+        assert!(log_if_changed(
+            &last,
+            healthy,
+            &["nuevo detalle".to_string()]
+        ));
+        assert!(log_if_changed(&last, "Estado runtime: Damaged · x", &[]));
+        assert!(
+            log_if_changed(&last, healthy, &[]),
+            "a return to healthy is a change"
+        );
+    }
+
+    #[test]
+    fn an_alternating_checking_blocked_pair_is_logged_once() {
+        let recent = std::sync::Mutex::new(Vec::new());
+        let start = std::time::Instant::now();
+        let checking = "Operación Bootstrap/Checking: Evaluando readiness del runtime";
+        let blocked =
+            "Operación Bootstrap/Blocked: Bootstrap bloqueado por falta de una fuente confiable";
+        // The sequence the dev log showed at 02:27:12.
+        let logged: Vec<bool> = [checking, blocked, checking, blocked, checking, blocked]
+            .iter()
+            .map(|line| stage_line_is_new(&recent, line, start))
+            .collect();
+        assert_eq!(logged, [true, true, false, false, false, false]);
+        let later = start + STAGE_LINE_QUIET + std::time::Duration::from_secs(1);
+        assert!(
+            stage_line_is_new(&recent, checking, later),
+            "after the quiet window the stage logs again"
+        );
+    }
+
+    #[test]
+    fn a_failed_bootstrap_leads_the_guidance_of_an_unhealthy_status() {
+        let fixture = RuntimeStatus {
+            state: RuntimeState::Fixture,
+            guidance: vec!["Se descarga automáticamente".to_string()],
+            ..healthy_status("2026.05.0")
+        };
+        let error = "Failed to invalidate stale runtime: os error 32";
+        let annotated = annotate_with_bootstrap_error(fixture.clone(), Some(error));
+        assert_eq!(
+            annotated.guidance,
+            vec![
+                format!("{BOOTSTRAP_ERROR_PREFIX}{error}"),
+                "Se descarga automáticamente".to_string()
+            ]
+        );
+        // Emitting the same status twice must not stack the line.
+        let again = annotate_with_bootstrap_error(annotated.clone(), Some(error));
+        assert_eq!(again.guidance, annotated.guidance);
+        // Nothing recorded: the status is untouched.
+        assert_eq!(
+            annotate_with_bootstrap_error(fixture.clone(), None),
+            fixture
+        );
+    }
+
+    #[test]
+    fn a_healthy_runtime_never_shows_an_old_bootstrap_error() {
+        let healthy = healthy_status("2026.11.5");
+        assert_eq!(
+            annotate_with_bootstrap_error(healthy.clone(), Some("old failure")),
+            healthy
+        );
+    }
+
+    #[test]
+    fn a_metered_hold_explains_itself_and_offers_the_start_button() {
+        let fixture = healthy_status("2026.05.0");
+        let pending = metered_pending_status(&RuntimeStatus {
+            state: RuntimeState::Fixture,
+            ..fixture
+        });
+        assert_eq!(pending.state, RuntimeState::Fixture);
+        assert!(
+            pending.guidance[0].contains("conexión medida"),
+            "{:?}",
+            pending.guidance
+        );
+        let operation = pending.active_operation.expect("pending operation");
+        assert!(
+            operation.retryable,
+            "the banner shows its button only when retryable"
+        );
+        assert_eq!(operation.stage, RuntimeOperationStage::Blocked);
+    }
 
     #[test]
     fn configured_bootstrap_catalog_returns_source_unavailable_when_not_configured() {
@@ -1907,6 +2286,7 @@ mod tests {
             wheelhouse: vec![],
             caches: vec![],
             native_assets: vec![],
+            runtime_abi: None,
         };
         let plan = controller.plan(
             &RuntimeStatus {
@@ -2053,6 +2433,7 @@ mod tests {
             wheelhouse: vec![],
             caches: vec![],
             native_assets: vec![],
+            runtime_abi: None,
         }
     }
 
@@ -2765,6 +3146,261 @@ mod tests {
             .expect("read repaired python"),
             b"python"
         );
+    }
+
+    #[test]
+    fn stale_runtime_that_cannot_be_removed_is_kept_and_reported_not_fatal() {
+        let app_data_dir = tempdir().expect("app data dir");
+        let current_manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            "python-sha",
+            "uv-sha",
+        );
+        let mut stale_manifest = current_manifest.clone();
+        stale_manifest.app_version = "0.0.11".to_string();
+        let locked = app_data_dir.path().join("runtime").join("2026.11.4");
+        let removable = app_data_dir.path().join("runtime").join("2026.10.0");
+        write_manifest(&locked, &stale_manifest);
+        write_manifest(&removable, &stale_manifest);
+
+        let warnings = invalidate_stale_managed_runtime_dirs_with(
+            app_data_dir.path(),
+            &current_manifest,
+            |path| {
+                if path == locked {
+                    Err(std::io::Error::from_raw_os_error(32))
+                } else {
+                    fs::remove_dir_all(path)
+                }
+            },
+        );
+
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("2026.11.4"), "{warnings:?}");
+        assert!(locked.exists(), "the folder that failed is left in place");
+        assert!(
+            !removable.exists(),
+            "the other stale folder is still removed"
+        );
+    }
+
+    /// The app's own bundled manifest, the contract a runtime from another app
+    /// version must meet to be reused.
+    fn bundled_contract_for_tests() -> RuntimeManifest {
+        bundled_runtime_contract()
+            .cloned()
+            .expect("this platform bundles a runtime-pack manifest")
+    }
+
+    /// A hydrated runtime built for another app version (0.0.1) that carries
+    /// the app's runtime ABI and the very scripts the app bundles.
+    fn other_app_version_runtime(app_data_dir: &Path) -> (std::path::PathBuf, RuntimeManifest) {
+        let contract = bundled_contract_for_tests();
+        let root = app_data_dir.join("runtime").join("2026.11.9");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(&root, python_relpath, b"python");
+        let uv_sha = write_file(&root, uv_relpath, b"uv");
+        let mut manifest = sample_manifest(&contract.platform, &python_sha, &uv_sha);
+        manifest.pack_version = "2026.11.9".to_string();
+        manifest.app_version = "0.0.1".to_string();
+        manifest.runtime_abi = contract.runtime_abi;
+        let bundled_scripts = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("runtime-pack")
+            .join(&contract.platform);
+        manifest.script_files = contract
+            .script_files
+            .iter()
+            .map(|entry| {
+                let bytes = fs::read(bundled_scripts.join(&entry.path)).expect("bundled script");
+                assert_eq!(write_file(&root, &entry.path, &bytes), entry.sha256);
+                entry.clone()
+            })
+            .collect();
+        write_manifest(&root, &manifest);
+        (root, manifest)
+    }
+
+    #[test]
+    fn bundled_manifests_declare_a_runtime_abi() {
+        let contract = bundled_contract_for_tests();
+        assert!(contract.runtime_abi.is_some());
+        assert!(!contract.script_files.is_empty());
+        assert_eq!(contract.app_version, running_app_version());
+    }
+
+    #[test]
+    fn a_runtime_from_another_app_version_is_reusable_only_with_the_same_abi_and_scripts() {
+        let app_data_dir = tempdir().expect("app data dir");
+        let contract = bundled_contract_for_tests();
+        let (_root, runtime) = other_app_version_runtime(app_data_dir.path());
+        assert!(reusable_across_app_versions(&runtime, Some(&contract)));
+        assert!(runtime_serves_running_app(&runtime));
+
+        let mut no_abi = runtime.clone();
+        no_abi.runtime_abi = None;
+        assert!(!reusable_across_app_versions(&no_abi, Some(&contract)));
+
+        let mut other_abi = runtime.clone();
+        other_abi.runtime_abi = contract.runtime_abi.map(|abi| abi + 1);
+        assert!(!reusable_across_app_versions(&other_abi, Some(&contract)));
+
+        let mut other_script = runtime.clone();
+        other_script.script_files[0].sha256 = "0".repeat(64);
+        assert!(!reusable_across_app_versions(
+            &other_script,
+            Some(&contract)
+        ));
+
+        let mut missing_script = runtime.clone();
+        missing_script.script_files.pop();
+        assert!(!reusable_across_app_versions(
+            &missing_script,
+            Some(&contract)
+        ));
+
+        let mut fixture = runtime.clone();
+        fixture.payload_profile = "fixture".to_string();
+        assert!(!reusable_across_app_versions(&fixture, Some(&contract)));
+
+        let mut other_platform = runtime.clone();
+        other_platform.platform = "plan9-mips".to_string();
+        assert!(!reusable_across_app_versions(
+            &other_platform,
+            Some(&contract)
+        ));
+
+        assert!(!reusable_across_app_versions(&runtime, None));
+    }
+
+    #[test]
+    fn stale_runtime_sweep_keeps_a_runtime_the_running_app_can_reuse() {
+        let app_data_dir = tempdir().expect("app data dir");
+        let current_manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            "python-sha",
+            "uv-sha",
+        );
+        let (reusable, runtime) = other_app_version_runtime(app_data_dir.path());
+        let other_abi_root = app_data_dir.path().join("runtime").join("2026.10.0");
+        let mut other_abi = runtime.clone();
+        other_abi.runtime_abi = runtime.runtime_abi.map(|abi| abi + 1);
+        write_manifest(&other_abi_root, &other_abi);
+
+        let warnings =
+            invalidate_stale_managed_runtime_dirs(app_data_dir.path(), &current_manifest);
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(reusable.exists(), "the reusable runtime is kept");
+        assert!(
+            !other_abi_root.exists(),
+            "a runtime with another ABI is removed"
+        );
+    }
+
+    #[test]
+    fn stale_runtime_sweep_drops_a_reused_runtime_once_one_for_this_version_exists() {
+        // A reusable runtime that turned out damaged makes startup download a
+        // runtime for this app version; from then on the old one is only dead
+        // weight and goes, as it did before reuse existed.
+        let app_data_dir = tempdir().expect("app data dir");
+        let current_manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            "python-sha",
+            "uv-sha",
+        );
+        let (reusable, _runtime) = other_app_version_runtime(app_data_dir.path());
+        let exact_root = app_data_dir.path().join("runtime").join("2026.12.0");
+        let mut exact = current_manifest.clone();
+        exact.pack_version = "2026.12.0".to_string();
+        write_manifest(&exact_root, &exact);
+
+        let warnings =
+            invalidate_stale_managed_runtime_dirs(app_data_dir.path(), &current_manifest);
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(
+            exact_root.exists(),
+            "the runtime for this app version is kept"
+        );
+        assert!(!reusable.exists(), "the reused runtime is no longer needed");
+    }
+
+    #[test]
+    fn startup_reuses_a_runtime_from_another_app_version_without_downloading() {
+        let bundle_dir = tempdir().expect("bundle dir");
+        let app_data_dir = tempdir().expect("app data dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
+        let mut bundled = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        bundled.payload_profile = "fixture".to_string();
+        bundled.release_injection_required = true;
+        bundled.external_artifacts_required = vec!["relocatable-python".to_string()];
+        write_manifest(bundle_dir.path(), &bundled);
+        let (reused_root, _runtime) = other_app_version_runtime(app_data_dir.path());
+
+        let archive_bytes = runtime_archive_bytes();
+        let (release, public_key) = build_signed_release(&archive_bytes);
+        let downloads = std::sync::atomic::AtomicUsize::new(0);
+        let manager = RuntimeManager::new();
+        let status = manager
+            .ensure_ready_or_bootstrap_for_tests_with_remote_support(
+                bundle_dir.path(),
+                app_data_dir.path(),
+                BootstrapRemoteCatalog::Available {
+                    source: BootstrapRemoteSource {
+                        manifest_url: "https://example.com/bootstrap.json".to_string(),
+                        public_key_id: "entropia-root".to_string(),
+                    },
+                    index: crate::runtime::manifest::BootstrapManifestIndex {
+                        channel: "stable".to_string(),
+                        generated_at: "2026-05-06T00:00:00Z".to_string(),
+                        releases: vec![release.clone()],
+                    },
+                },
+                |_| Ok(public_key.clone()),
+                |source_manifest_url, release, app_data_dir, public_key_base64, on_progress| {
+                    downloads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    crate::runtime::download::download_and_activate_remote_runtime_with_fetch(
+                        source_manifest_url,
+                        release,
+                        app_data_dir,
+                        public_key_base64,
+                        |_| Ok(std::io::Cursor::new(archive_bytes.clone())),
+                        on_progress,
+                    )
+                },
+                |_| {},
+            )
+            .expect("the existing runtime should be reused");
+
+        assert_eq!(status.state, RuntimeState::Healthy);
+        assert_eq!(status.pack_version.as_deref(), Some("2026.11.9"));
+        assert_eq!(downloads.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(reused_root.join("manifest.json").is_file());
     }
 
     #[test]

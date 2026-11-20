@@ -47,6 +47,8 @@ export interface WritingEditorProps {
   ondictate?: (audio: Blob) => Promise<string>
   /** Capture diagnostics, for the app log. */
   ondictationlog?: (level: DictationLogLevel, message: string) => void | Promise<void>
+  /** Shown as a button next to a failed dictation, to open the app's fix. */
+  ondictationhelp?: () => void
   /** Recording stops by itself after this many seconds. */
   dictationMaxSeconds?: number
   labels?: Partial<WritingEditorLabels>
@@ -58,6 +60,8 @@ type ColorLabels = Record<WritingColorLabelKey, string>
 export interface WritingEditorLabels extends DictationLabels, ColorLabels {
   /** Accessible name for the editing surface. */
   editorLabel: string
+  /** Button next to a failed dictation, when `ondictationhelp` is set. */
+  dictationOpenDependencies: string
   toolbarLabel: string
   undo: string
   redo: string
@@ -238,6 +242,7 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   dictationInserted: 'Texto insertado desde el micrófono.',
   dictationNoText: 'No se detectó texto en el audio.',
   dictationTranscriptionFailed: 'No se pudo transcribir el audio.',
+  dictationOpenDependencies: 'Abrir Dependencias de IA',
   refusedTitle: 'Este documento no se puede abrir en esta versión',
   refusedUnknownNode:
     'Contiene un elemento que esta versión de EntropIA no conoce. El documento no se modificó.',

@@ -195,8 +195,9 @@ fn resolve_limit(limit: Option<u32>) -> Result<usize, JobsError> {
     Ok(limit)
 }
 
-/// Operations that always run through OpenRouter, in every variant: OCR
-/// correction has no local vision path (`force_remote_ocr_correction`).
+/// Operations the pre-flight treats as remote in every variant. OCR
+/// correction can run on the local Qwen3-VL corrector in Pro, but the gate
+/// cannot see whether it is installed, so it still asks for the key.
 fn is_always_remote(op: &str) -> bool {
     op == "ocr_correction"
 }
@@ -208,20 +209,20 @@ fn runs_on_openrouter_in_lite(op: &str) -> bool {
     matches!(op, "embeddings" | "ner" | "triples" | "summary") || op.starts_with("schema:")
 }
 
-/// Whether the request needs the OpenRouter key before planning. Correction is
-/// always remote, so Pro refuses it without the key exactly as Lite does
-/// instead of planning tasks that could only park as blocked.
+/// Whether the request needs the OpenRouter key before planning. Correction
+/// counts as remote in Pro as well (see [`is_always_remote`]) instead of
+/// planning tasks that could only park as blocked.
 fn needs_openrouter_key(operations: &[String], local_ml: bool) -> bool {
     operations
         .iter()
         .any(|op| is_always_remote(op) || (!local_ml && runs_on_openrouter_in_lite(op)))
 }
 
-/// Whether the OpenRouter key is configured. Reads the stored value (a keyring
-/// reference or the legacy plain value) and never resolves the secret itself.
+/// Whether the OpenRouter key is configured and switched on. Reads the stored
+/// value (a keyring reference or the legacy plain value) and never resolves
+/// the secret itself.
 fn openrouter_configured(conn: &Connection) -> bool {
-    crate::settings::get_raw_setting(conn, crate::settings::OPENROUTER_API_KEY)
-        .is_some_and(|value| !value.trim().is_empty())
+    crate::settings::api_key_configured(conn, crate::settings::OPENROUTER_API_KEY)
 }
 
 /// The operations a batch runs. The tab only ever sends these; an assistant's

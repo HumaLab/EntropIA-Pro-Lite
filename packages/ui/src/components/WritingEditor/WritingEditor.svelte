@@ -64,6 +64,7 @@
     oninsertimage,
     ondictate,
     ondictationlog,
+    ondictationhelp,
     dictationMaxSeconds = 300,
     labels: labelOverrides,
   }: WritingEditorProps = $props()
@@ -1316,6 +1317,16 @@
           data-testid="writing-editor-dictation-message"
         >
           {dictation.message}
+          {#if dictation.state === 'error' && ondictationhelp}
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="writing-editor-dictation-help"
+              onclick={() => ondictationhelp?.()}
+            >
+              {labels.dictationOpenDependencies}
+            </Button>
+          {/if}
         </p>
       {/if}
 

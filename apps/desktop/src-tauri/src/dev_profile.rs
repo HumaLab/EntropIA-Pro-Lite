@@ -115,6 +115,22 @@ pub fn startup_line(
     )
 }
 
+/// Which build wrote the log (S4): Pro and Lite share the archive and the
+/// log file, so the startup line names the variant, the version and whether
+/// it runs from an MSIX package (Store) or a direct install.
+pub fn build_identity(packaged: bool) -> String {
+    format!(
+        "variant={} version={} install={}",
+        if cfg!(feature = "local-ml") {
+            "pro"
+        } else {
+            "lite"
+        },
+        env!("CARGO_PKG_VERSION"),
+        if packaged { "msix" } else { "direct" }
+    )
+}
+
 #[cfg(debug_assertions)]
 fn env_value() -> Option<String> {
     std::env::var(ENV_VAR).ok()
@@ -668,6 +684,20 @@ mod tests {
         assert!(line.contains("sync=local:http://127.0.0.1:8787"), "{line}");
         let off = startup_line(Some("a"), None, Path::new("/d"), Path::new("/c"));
         assert!(off.contains("sync=disabled"), "{off}");
+    }
+
+    #[test]
+    fn the_build_identity_names_variant_version_and_install() {
+        let variant = if cfg!(feature = "local-ml") {
+            "variant=pro"
+        } else {
+            "variant=lite"
+        };
+        let packaged = build_identity(true);
+        assert!(packaged.contains(variant), "{packaged}");
+        assert!(packaged.contains(env!("CARGO_PKG_VERSION")), "{packaged}");
+        assert!(packaged.ends_with("install=msix"), "{packaged}");
+        assert!(build_identity(false).ends_with("install=direct"));
     }
 
     /// The new variable is read once, in a debug-only function, and nowhere else.

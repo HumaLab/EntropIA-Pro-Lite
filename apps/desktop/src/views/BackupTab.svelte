@@ -17,6 +17,7 @@
   } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { settingsGet, settingsSet } from '$lib/settings'
+  import { isInflight, trackInflight, whenInflightSettles } from '$lib/inflight.svelte'
 
   const DIR_KEY = 'backend_grant.backup_dir'
   const LAST_AT_KEY = 'backend_grant.backup_last_at'
@@ -33,6 +34,9 @@
   let frequency = $state<Frequency>('never')
   let keep = $state(String(DEFAULT_KEEP))
   let busy = $state(false)
+  // A backup keeps running after the user leaves this tab.
+  const BACKUP_KEY = 'backup:run'
+  const backupRunning = $derived(isInflight(BACKUP_KEY))
   let error = $state('')
   let done = $state('')
 
@@ -51,6 +55,8 @@
   $effect(() => {
     void load()
   })
+  // Started from an earlier visit: show its date once it ends.
+  void whenInflightSettles(BACKUP_KEY)?.then(() => load())
 
   const frequencyLabel = (f: Frequency) => t(`settings.backup.frequency.${f}`)
 
@@ -74,7 +80,7 @@
   }
 
   async function act(action: () => Promise<void>) {
-    if (busy) return
+    if (busy || backupRunning) return
     busy = true
     error = ''
     done = ''
@@ -95,7 +101,7 @@
 
   const runNow = () =>
     act(async () => {
-      done = await invoke<string>('backup_run_now')
+      done = await trackInflight(BACKUP_KEY, () => invoke<string>('backup_run_now'))
       await load()
     })
 </script>
@@ -108,7 +114,7 @@
       <span class="backup-tab__label">{$currentLocale && t('settings.backup.dirLabel')}</span>
       <div class="backup-tab__row">
         <span class="backup-tab__value">{dir || t('settings.backup.noDir')}</span>
-        <Button variant="secondary" size="sm" disabled={busy} onclick={chooseDir}>
+        <Button variant="secondary" size="sm" disabled={busy || backupRunning} onclick={chooseDir}>
           <ActionIcon name="folder" size={14} />
           {$currentLocale && t('settings.backup.chooseDir')}
         </Button>
@@ -151,7 +157,13 @@
           {$currentLocale && t('settings.backup.lastAt')}
           {lastAt ? new Date(lastAt).toLocaleString() : t('settings.backup.never')}
         </span>
-        <Button variant="primary" size="sm" disabled={busy || !dir} loading={busy} onclick={runNow}>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={busy || backupRunning || !dir}
+          loading={busy || backupRunning}
+          onclick={runNow}
+        >
           {$currentLocale && t('settings.backup.runNow')}
         </Button>
       </div>

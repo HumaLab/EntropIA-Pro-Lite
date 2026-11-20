@@ -1,6 +1,8 @@
 /// Audio decoding and resampling for Whisper transcription.
 ///
-/// Supports WAV (via hound), MP3, FLAC, M4A/AAC (via symphonia).
+/// Supports WAV (PCM via hound, compressed codecs such as Microsoft ADPCM via
+/// symphonia), MP3, FLAC, M4A/AAC, Ogg Vorbis (via symphonia) and
+/// Opus (via libopus, see `crate::audio_codecs`).
 /// All audio is converted to 16kHz mono f32 PCM for Whisper-compatible input.
 use std::path::Path;
 
@@ -30,7 +32,7 @@ const WHISPER_SAMPLE_RATE: usize = 16_000;
 
 /// Decode an audio file to 16kHz mono f32 PCM samples suitable for Whisper.
 ///
-/// Supports: WAV, MP3, FLAC, M4A/AAC, OGG.
+/// Supports: WAV, MP3, FLAC, M4A/AAC, OGG (Vorbis or Opus), OPUS.
 /// Returns an error for unsupported formats.
 pub fn decode_audio_file(path: &str) -> Result<AudioData, String> {
     let ext = Path::new(path)
@@ -40,10 +42,15 @@ pub fn decode_audio_file(path: &str) -> Result<AudioData, String> {
         .to_lowercase();
 
     match ext.as_str() {
-        "wav" => decode_wav(path),
-        "mp3" | "flac" | "m4a" | "aac" | "ogg" | "wma" => decode_symphonia(path),
+        // hound reads only uncompressed 16-bit PCM here; a WAV holding a
+        // compressed codec (Microsoft ADPCM, A-law…) or other sample formats
+        // goes through symphonia instead of failing the whole transcription.
+        "wav" => decode_wav(path).or_else(|pcm_error| {
+            decode_symphonia(path).map_err(|error| format!("{pcm_error}; {error}"))
+        }),
+        "mp3" | "flac" | "m4a" | "aac" | "ogg" | "opus" | "wma" => decode_symphonia(path),
         _ => Err(format!(
-            "Unsupported audio format: .{ext}. Supported: wav, mp3, flac, m4a, aac, ogg"
+            "Unsupported audio format: .{ext}. Supported: wav, mp3, flac, m4a, aac, ogg, opus"
         )),
     }
 }
@@ -131,7 +138,7 @@ fn decode_symphonia(path: &str) -> Result<AudioData, String> {
         .as_ref()
         .map(|c| c.count())
         .unwrap_or(1) as u16;
-    let mut decoder = symphonia::default::get_codecs()
+    let mut decoder = crate::audio_codecs::codecs()
         .make_audio_decoder(audio_params, &decoder_opts)
         .map_err(|e| format!("Failed to create audio decoder: {e}"))?;
 
@@ -234,6 +241,83 @@ fn resample(samples: &[f32], from_rate: usize, to_rate: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One second of a 440 Hz tone, encoded like a WhatsApp voice note: Ogg
+    /// container, Opus codec, mono, 48 kHz (ffmpeg libopus, 16 kbit/s, voip).
+    const OPUS_VOICE_NOTE: &[u8] = include_bytes!("testdata/tone-opus.ogg");
+
+    fn decode_fixture(extension: &str) -> Result<AudioData, String> {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(format!("voice-note.{extension}"));
+        std::fs::write(&path, OPUS_VOICE_NOTE).expect("write fixture");
+        decode_audio_file(path.to_str().expect("utf-8 path"))
+    }
+
+    fn assert_is_the_one_second_tone(audio: &AudioData) {
+        assert!(
+            (900..=1100).contains(&audio.duration_ms),
+            "duration {} ms",
+            audio.duration_ms
+        );
+        assert!(
+            (14_400..=17_600).contains(&audio.samples.len()),
+            "{} samples at 16 kHz",
+            audio.samples.len()
+        );
+        let rms =
+            (audio.samples.iter().map(|s| s * s).sum::<f32>() / audio.samples.len() as f32).sqrt();
+        assert!(rms > 0.05, "decoded signal is silent (rms {rms})");
+    }
+
+    #[test]
+    fn decodes_an_opus_voice_note_in_ogg() {
+        let audio = decode_fixture("ogg").expect("Opus in Ogg must decode");
+        assert_is_the_one_second_tone(&audio);
+    }
+
+    #[test]
+    fn decodes_an_opus_file_with_the_opus_extension() {
+        let audio = decode_fixture("opus").expect(".opus must decode");
+        assert_is_the_one_second_tone(&audio);
+    }
+
+    /// One second of a 440 Hz tone in a WAV file compressed with Microsoft
+    /// ADPCM, mono, 8 kHz (ffmpeg `adpcm_ms`), like old dictaphone recordings.
+    const ADPCM_WAV: &[u8] = include_bytes!("testdata/tone-adpcm-ms.wav");
+
+    #[test]
+    fn decodes_a_wav_compressed_with_microsoft_adpcm() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("recording.wav");
+        std::fs::write(&path, ADPCM_WAV).expect("write fixture");
+        let audio =
+            decode_audio_file(path.to_str().expect("utf-8 path")).expect("ADPCM WAV must decode");
+        assert_is_the_one_second_tone(&audio);
+    }
+
+    #[test]
+    fn still_decodes_a_plain_16_bit_pcm_wav() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("plain.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).expect("create wav");
+        for n in 0..16_000 {
+            let phase = n as f32 * 440.0 * std::f32::consts::TAU / 16_000.0;
+            writer
+                .write_sample((phase.sin() * 0.5 * i16::MAX as f32) as i16)
+                .expect("write sample");
+        }
+        writer.finalize().expect("finalize wav");
+
+        let audio = decode_audio_file(path.to_str().expect("utf-8 path")).expect("PCM WAV");
+        assert_is_the_one_second_tone(&audio);
+        assert_eq!(audio.original_sample_rate, 16_000);
+    }
 
     #[test]
     fn test_mix_to_mono_stereo() {

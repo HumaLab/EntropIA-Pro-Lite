@@ -308,8 +308,18 @@ export function createDictation(options: DictationOptions) {
       }
     } catch (error) {
       logDictation('error', `transcription callback failed; error=${describeDictationError(error)}`)
+      // Tauri rejects `invoke` with the backend's message as a plain string,
+      // not an Error: show it instead of the generic label.
+      const reason =
+        error instanceof Error
+          ? error.message.trim()
+          : typeof error === 'string'
+            ? error.trim()
+            : ''
       setDictationMessage(
-        error instanceof Error ? error.message : options.labels.dictationTranscriptionFailed,
+        reason
+          ? `${options.labels.dictationTranscriptionFailed} ${reason}`
+          : options.labels.dictationTranscriptionFailed,
         'error'
       )
     } finally {
@@ -520,8 +530,11 @@ export function createDictation(options: DictationOptions) {
         }
         recorder.ondataavailable = (event) => {
           accumulatedChunkBytes += event.data.size
+          // The last chunk after stop() is often empty (the recorder is then
+          // inactive): normal. Only an empty chunk while recording is suspect.
+          const suspect = event.data.size === 0 && recorder.state === 'recording'
           logDictation(
-            event.data.size > 0 ? 'info' : 'warn',
+            suspect ? 'warn' : 'info',
             `MediaRecorder dataavailable; chunkBytes=${event.data.size}; accumulatedBytes=${accumulatedChunkBytes}`
           )
           if (event.data.size > 0) {

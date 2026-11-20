@@ -1,7 +1,8 @@
 //! LLM OCR correction behind the batch queue.
 //!
 //! One asset is one unit: read its text, ask the configured correction flow
-//! (always OpenRouter, also in Pro, exactly like the per-page button) and
+//! (routed exactly like the per-page button, see
+//! [`crate::llm::correct_ocr_for_asset_blocking`]) and
 //! publish the corrected text inside the commit transaction. Nothing here
 //! forks the correction logic: the publisher is
 //! [`crate::llm::ocr_correction::commit_asset_correction_if_current`], the
@@ -34,6 +35,9 @@ pub struct CorrectionComputeOutput {
     pub expected_extraction: String,
     /// The model's corrected text, not yet committed.
     pub corrected: String,
+    /// The engine that produced `corrected`; `None` when nothing ran (a
+    /// blank page).
+    pub engine: Option<crate::llm::CorrectionEngine>,
 }
 
 /// Publishes one page's correction inside the commit transaction: the same
@@ -58,19 +62,16 @@ pub fn publish_correction_output(
         &output.corrected,
         &output.expected_extraction,
     )?;
-    crate::asset_history::record_best_effort(
-        conn,
-        &crate::llm::llm_history_event(
+    if let Some(engine) = &output.engine {
+        crate::asset_history::record_best_effort(
             conn,
-            asset_id,
-            crate::asset_history::PROCESS_OCR_CORRECTION,
-            crate::llm::generation::GenerationFlow::OcrCorrection,
-        )
-        .input_sha256(Some(crate::asset_history::sha256_hex(
-            output.expected_extraction.as_bytes(),
-        )))
-        .output_text(&corrected),
-    );
+            &crate::llm::ocr_correction_history_event(conn, asset_id, engine)
+                .input_sha256(Some(crate::asset_history::sha256_hex(
+                    output.expected_extraction.as_bytes(),
+                )))
+                .output_text(&corrected),
+        );
+    }
     Ok(())
 }
 
@@ -140,6 +141,7 @@ impl Executor for OcrCorrectionExecutor {
                 Some(CorrectionComputeOutput {
                     expected_extraction: String::new(),
                     corrected: String::new(),
+                    engine: None,
                 }),
             );
         }
@@ -157,6 +159,7 @@ impl Executor for OcrCorrectionExecutor {
                     Some(CorrectionComputeOutput {
                         expected_extraction: run.expected_extraction,
                         corrected: run.corrected,
+                        engine: Some(run.engine),
                     }),
                 )
             }
@@ -222,6 +225,7 @@ mod tests {
         let output = CorrectionComputeOutput {
             expected_extraction: "texto original del OCR".to_string(),
             corrected: "Texto original del OCR.".to_string(),
+            engine: None,
         };
         // The supervisor's commit transaction is the owner: the publisher must
         // join it instead of opening a nested one SQLite would refuse.
@@ -284,6 +288,7 @@ mod tests {
         let output = CorrectionComputeOutput {
             expected_extraction: "texto original del OCR".to_string(),
             corrected: "Texto original del OCR.".to_string(),
+            engine: None,
         };
         conn.execute_batch("BEGIN IMMEDIATE")
             .expect("commit transaction");
@@ -311,6 +316,7 @@ mod tests {
         let output = CorrectionComputeOutput {
             expected_extraction: "texto original del OCR".to_string(),
             corrected: "   ".to_string(),
+            engine: None,
         };
         publish_correction_output(&conn, "a1", &output).expect("no-op");
         assert_eq!(

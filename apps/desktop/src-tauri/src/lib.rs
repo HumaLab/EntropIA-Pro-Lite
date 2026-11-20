@@ -4,6 +4,7 @@ pub(crate) mod asset_history;
 mod asset_integrity;
 pub mod asset_scope;
 mod asset_sweep;
+mod audio_codecs;
 mod audio_preview;
 mod exit_watchdog;
 // `pub` so the assistant endpoint's surface is real crate API between tasks
@@ -13,6 +14,7 @@ pub mod automation;
 mod backup;
 pub mod bibliography;
 pub mod corpus;
+mod crash_trace;
 mod db;
 mod dev_profile;
 pub mod fs_scope;
@@ -36,6 +38,7 @@ mod image_versions;
 mod instance_guard;
 mod internet_archive;
 mod llm;
+mod local_modes_offer;
 mod logging;
 mod navegador;
 mod nlp;
@@ -268,6 +271,27 @@ fn processing_commit_observer(
                                         |row| row.get::<_, i64>(0),
                                     )
                                     .unwrap_or(0);
+                                // R29: a batch that left embeddings out keeps
+                                // this text away from automatic embedding;
+                                // the admission below then admits nothing.
+                                match processing::repository::ocr_excludes_embeddings(
+                                    &conn,
+                                    &task.task_id,
+                                ) {
+                                    Ok(true) => {
+                                        if let Err(error) =
+                                            processing::repository::suppress_auto_embedding(
+                                                &conn,
+                                                &task.asset_id,
+                                                revision,
+                                            )
+                                        {
+                                            log::warn!(target: "processing", "{error}");
+                                        }
+                                    }
+                                    Ok(false) => {}
+                                    Err(error) => log::warn!(target: "processing", "{error}"),
+                                }
                                 let fingerprint =
                                     processing::eligibility::embedding_input_fingerprint(
                                         &conn,
@@ -768,6 +792,7 @@ pub fn run() {
     // through it, and records emitted before an AppHandle is attached still
     // reach stderr.
     logging::init();
+    crash_trace::install_panic_hook();
 
     // Suppress Windows error dialogs and CRT debug assertions that block the
     // process when native libraries crash.
@@ -858,13 +883,14 @@ pub fn run() {
             // `tauri dev` shows it before anything else happens.
             log::info!(
                 target: "setup",
-                "{}",
+                "{} {}",
                 dev_profile::startup_line(
                     dev_profile::active(),
                     dev_profile::sync_server(),
                     &app_dir,
                     &cache_dir,
-                )
+                ),
+                dev_profile::build_identity(automation::connector::has_package_identity())
             );
             // One EntropIA at a time, before anything touches the archive: a
             // second process on the same database — above all a Store build
@@ -933,6 +959,7 @@ pub fn run() {
             app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
             // Now `warn`/`error` records also land in the app's own log.
             logging::attach_app(app.handle().clone());
+            crash_trace::begin_session(&cache_dir.join("logs"));
             app.manage(store_updates::StoreUpdateState::new());
             navegador::sweep_quarantine(&cache_dir);
             app_logs::info(&app.handle().clone(), "setup", "Registro de diagnóstico inicializado");
@@ -967,11 +994,15 @@ pub fn run() {
             app_logs::info(
                 &app.handle().clone(),
                 "setup",
-                dev_profile::startup_line(
-                    dev_profile::active(),
-                    dev_profile::sync_server(),
-                    &app_dir,
-                    &cache_dir,
+                format!(
+                    "{} {}",
+                    dev_profile::startup_line(
+                        dev_profile::active(),
+                        dev_profile::sync_server(),
+                        &app_dir,
+                        &cache_dir,
+                    ),
+                    dev_profile::build_identity(automation::connector::has_package_identity())
                 ),
             );
             let db_path = app_dir.join("entropia.sqlite");
@@ -1066,6 +1097,17 @@ pub fn run() {
                     "API credentials moved to the system credential store, but SQLite storage cleanup could not be completed"
                         .to_string();
                 app_logs::error(&app.handle().clone(), "settings/migration", message);
+            }
+
+            // Not fatal: a vector left with the old local stamp is only
+            // re-embedded once more, as before this repair existed (R15).
+            match processing::eligibility::restamp_legacy_local_embedding_contract(&ui_conn) {
+                Ok(0) => {}
+                Ok(rows) => log::info!(
+                    target: "setup",
+                    "re-stamped {rows} local BGE-M3 embedding rows with the canonical contract"
+                ),
+                Err(error) => log::warn!(target: "setup", "embedding contract re-stamp skipped: {error}"),
             }
 
             let research = research::ResearchState::new(app_dir.clone(), db_path.clone())
@@ -1514,6 +1556,9 @@ pub fn run() {
             });
             app.manage(exit_watchdog::ExitWatchdog::new());
             attach_close_orchestration(app.handle());
+            if let Some(window) = app.get_webview_window("main") {
+                crash_trace::watch_webview_processes(&window);
+            }
 
             // On Linux, WebKitGTK denies media-device permission requests by default.
             // We must explicitly enable media-stream and auto-approve permission
@@ -1601,6 +1646,7 @@ pub fn run() {
             bibliography::commands::bibliography_reprocess_confirm,
             processing::commands::processing_list_batches,
             processing::commands::processing_get_batch,
+            processing::commands::processing_asset_active_task,
             processing::commands::processing_list_tasks,
             processing::commands::processing_get_task,
             writing::commands::writing_is_ready,
@@ -1649,6 +1695,11 @@ pub fn run() {
             ocr::commands::glm_ocr_download_models,
             ocr::commands::qwen_correction_local_info,
             ocr::commands::qwen_correction_download_models,
+            ocr::commands::llama_server_download,
+            local_modes_offer::local_modes_offer,
+            ocr::commands::ocr_local_high_info,
+            automation::models_setup::local_setup_status,
+            automation::models_setup::local_setup_install,
             ocr::commands::update_extraction_text_cmd,
             ocr::commands::extraction_is_edited_by_hand,
             ocr::block_reocr::reocr_layout_block,
@@ -1681,6 +1732,8 @@ pub fn run() {
             transcription::commands::transcribe_audio,
             transcription::commands::transcription_is_edited_by_hand,
             transcription::commands::transcribe_dictation,
+            transcription::commands::stt_parakeet_model_info,
+            transcription::commands::stt_parakeet_download_model,
             transcription::commands::test_assemblyai_connection,
             zotero_web::zotero_verify_key,
             transcription::commands::update_transcription_text_cmd,
@@ -1699,7 +1752,7 @@ pub fn run() {
             llm::commands::llm_can_restore_original_ocr_asset,
             llm::commands::llm_restore_original_ocr_asset,
             llm::commands::llm_is_available,
-            llm::commands::llm_ocr_correction_is_available,
+            llm::commands::llm_ocr_correction_engine,
             llm::commands::llm_local_model_info,
             llm::commands::llm_open_models_dir,
             llm::commands::llm_download_model,
@@ -1873,6 +1926,9 @@ pub fn run() {
 /// What has to happen before the process ends, on the normal `Exit` and on the
 /// watchdog's forced one alike.
 fn stop_background_services(app_handle: &tauri::AppHandle) {
+    // An orderly exit, normal or forced by the watchdog: no "ended without
+    // closing" warning at the next start (crash_trace.rs).
+    crash_trace::end_session();
     // Signal the sync engine to tear down cleanly on app exit (DESIGN §3.1)
     // instead of being killed mid-cycle.
     if let Some(engine) = app_handle.try_state::<sync::engine::SyncEngine>() {
@@ -3236,6 +3292,66 @@ mod tests {
             "nothing is left to move"
         );
         assert!(cache.join("models").join("weights.bin").exists());
+    }
+
+    /// R26: every model resolver must look where the migration puts models.
+    /// Before the fix the migration moved `<data>/models` into the cache and the
+    /// readers kept resolving `<data>/models`, so each start "lost" them.
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn models_moved_by_the_cache_migration_are_found_by_every_resolver() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let data = root.path().join("data");
+        let cache = root.path().join("cache");
+        fs::create_dir_all(&cache).expect("cache dir");
+        let db_path = data.join(SQLITE_BASENAME);
+
+        let reranker_file = Path::new("rerankers")
+            .join(crate::rag::reranker::LOCAL_RERANKER_DIR_NAME)
+            .join("model_int8.onnx");
+        let embedding_file = Path::new("embeddings").join("bge-m3").join("model.onnx");
+        let files = [
+            std::path::PathBuf::from(crate::llm::MODEL_FILENAME),
+            Path::new(crate::ocr::glm_ocr_local::MODELS_SUBDIR)
+                .join(crate::ocr::glm_ocr_local::MODEL_FILENAME),
+            Path::new(crate::ocr::qwen_local::MODELS_SUBDIR)
+                .join(crate::ocr::qwen_local::MODEL_FILENAME),
+            reranker_file.clone(),
+            embedding_file.clone(),
+        ];
+        // Where a build before the cache split downloaded them.
+        for file in &files {
+            let path = data.join("models").join(file);
+            fs::create_dir_all(path.parent().expect("parent")).expect("model dir");
+            fs::write(&path, b"weights").expect("model file");
+        }
+
+        migrate_cache_out_of_data_dir(&data, &cache).expect("migration succeeds");
+        assert!(
+            !data.join("models").exists(),
+            "nothing left in the data dir"
+        );
+
+        path_utils::set_test_cache_dir(Some(cache.clone()));
+        let models = cache.join("models");
+        assert_eq!(
+            crate::llm::resolve_model_path(&db_path),
+            models.join(crate::llm::MODEL_FILENAME)
+        );
+        assert!(crate::ocr::glm_ocr_local::local_info(&db_path, None).model_present);
+        assert!(crate::ocr::qwen_local::local_info(&db_path, None).model_present);
+        let model_root = path_utils::model_root(&db_path);
+        assert_eq!(
+            crate::rag::reranker::resolve_local_reranker_model_dir(&model_root)
+                .join("model_int8.onnx"),
+            models.join(&reranker_file)
+        );
+        assert_eq!(
+            crate::nlp::embeddings::resolve_local_embedding_model_dir(None, Some(&model_root))
+                .join("model.onnx"),
+            models.join(&embedding_file)
+        );
+        path_utils::set_test_cache_dir(None);
     }
 
     #[test]

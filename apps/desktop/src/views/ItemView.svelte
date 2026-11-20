@@ -106,8 +106,22 @@
   import ImageVersionsPanel from '../components/ImageVersionsPanel.svelte'
   import { assetHasImageVersions, type ImageVersion } from '$lib/image-versions'
   import { runPendingAssetJob } from '$lib/item-view-media-jobs'
+  import {
+    clearInflight,
+    isInflight,
+    llmJobKey,
+    markInflight,
+    nlpJobKey,
+    transcriptionJobKey,
+  } from '$lib/inflight.svelte'
   import { recordAssetProcess, type RendererProcess } from '$lib/asset-history'
-  import { OcrStore, extractText, extractionIsEditedByHand, type OcrMode } from '$lib/ocr'
+  import {
+    OcrStore,
+    extractText,
+    extractionIsEditedByHand,
+    localOcrhInfo,
+    type OcrMode,
+  } from '$lib/ocr'
   import { TranscriptionStore, transcribeAudio, transcribeDictation } from '$lib/transcription'
   import {
     NlpStore,
@@ -128,13 +142,16 @@
     llmRestoreOriginalOcrAsset,
     llmExtractTriplesAsset,
     llmIsAvailable,
-    llmOcrCorrectionIsAvailable,
+    llmOcrCorrectionEngine,
+    type OcrCorrectionEngine,
     llmGetResult,
     llmGetResults,
   } from '$lib/llm'
   import { GeoStore, geocodeEntity } from '$lib/geo'
+  import { processingAssetActiveTask } from '$lib/batch-processing'
   import {
     ActionIcon,
+    Button,
     ConfirmDialog,
     IconButton,
     Panel,
@@ -150,6 +167,7 @@
   import { getNavigation } from '$lib/pane-context'
   import { registerEscapeInterceptor } from '$lib/keyboard'
   import { LOCAL_ML } from '$lib/capabilities'
+  import { dictationHelp } from '$lib/dictation-help'
   import {
     DOCUMENT_ASSET_DELETED_EVENT,
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
@@ -300,6 +318,9 @@
   // A user-requested OCR waiting for the person to accept that it replaces
   // corrections made by hand.
   let pendingOcrRerun = $state<{ assetId: string; mode: OcrMode } | null>(null)
+  // A user-requested OCRH that would run on the CPU (~15 min per page),
+  // waiting for the person to accept the wait (R17).
+  let pendingCpuOcrh = $state<{ assetId: string; editedByHand: boolean } | null>(null)
   // A version chosen in the versions panel, waiting for the person to accept
   // that the annotations of the image may not match it.
   let pendingVersionSwitch = $state<{ assetId: string; version: ImageVersion } | null>(null)
@@ -755,6 +776,7 @@
       dictationInserted: translate('item.noteEditor.inserted'),
       dictationNoText: translate('item.noteEditor.noText'),
       dictationTranscriptionFailed: translate('item.noteEditor.transcriptionFailed'),
+      dictationOpenDependencies: translate('item.noteEditor.openDependencies'),
       linkInvalidUrl: translate('item.noteEditor.linkInvalidUrl'),
       linkInvalidHttp: translate('item.noteEditor.linkInvalidHttp'),
       linkInvalidExample: translate('item.noteEditor.linkInvalidExample'),
@@ -849,7 +871,7 @@
   let llmTick = $state(0)
 
   let llmAvailable = $state(false)
-  let ocrCorrectionAvailable = $state(false)
+  let ocrCorrectionEngine = $state<OcrCorrectionEngine | null>(null)
   let summaryTexts = $state(new Map<string, string>()) // assetId → summary text
   let summaryTick = $state(0) // reactivity trigger for summary display
 
@@ -866,6 +888,11 @@
 
   async function handleLlmSummarize() {
     error = null
+    const key = llmJobKey(
+      'summarize',
+      getActiveLlmTarget({ itemId, selectedAssetId: selectedAsset?.id ?? null }).targetId
+    )
+    markInflight(key)
     try {
       await runScopedLlmAction({
         itemId,
@@ -875,6 +902,7 @@
       })
     } catch (e) {
       console.error('[LLM] summarize failed:', e)
+      clearInflight(key)
       error = translate('item.error.summarize')
     }
   }
@@ -947,6 +975,7 @@
       }
 
       try {
+        markInflight(llmJobKey('correct_ocr', asset.id))
         await llmCorrectOcrAsset(asset.id)
         enqueued = true
       } catch (correctionError) {
@@ -960,6 +989,7 @@
         }
       }
     } finally {
+      if (!enqueued) clearInflight(llmJobKey('correct_ocr', asset.id))
       if (!enqueued && correctingOcrAssetId === asset.id) {
         correctingOcrAssetId = null
       }
@@ -1004,6 +1034,11 @@
   async function handleLlmExtractTriples() {
     nlpStore._setJobStatus(itemId, 'triples', 'pending')
     nlpTick++
+    const key = llmJobKey(
+      'extract_triples',
+      getActiveLlmTarget({ itemId, selectedAssetId: selectedAsset?.id ?? null }).targetId
+    )
+    markInflight(key)
     try {
       await runScopedLlmAction({
         itemId,
@@ -1013,6 +1048,7 @@
       })
     } catch (e) {
       console.error('[LLM] extract triples failed:', e)
+      clearInflight(key)
       nlpStore._setJobStatus(itemId, 'triples', 'error', getErrorMessage(e))
       nlpTick++
     }
@@ -2019,12 +2055,36 @@
     })
   }
 
-  function startOrConfirmOcr(asset: Asset, mode: OcrMode, editedByHand: boolean) {
+  async function startOrConfirmOcr(asset: Asset, mode: OcrMode, editedByHand: boolean) {
+    if (mode === 'high' && (await localOcrhInfo()).high_on_cpu) {
+      pendingCpuOcrh = { assetId: asset.id, editedByHand }
+      return
+    }
+    return confirmHandEditsOrRun(asset, mode, editedByHand)
+  }
+
+  function confirmHandEditsOrRun(asset: Asset, mode: OcrMode, editedByHand: boolean) {
     if (editedByHand) {
       pendingOcrRerun = { assetId: asset.id, mode }
       return
     }
     return handleExtractText(asset, mode)
+  }
+
+  async function confirmCpuOcrh() {
+    const pending = pendingCpuOcrh
+    pendingCpuOcrh = null
+    const asset = selectedAsset
+    if (!pending || !asset || asset.id !== pending.assetId) return
+    await confirmHandEditsOrRun(asset, 'high', pending.editedByHand)
+  }
+
+  async function useOcrlInstead() {
+    const pending = pendingCpuOcrh
+    pendingCpuOcrh = null
+    const asset = selectedAsset
+    if (!pending || !asset || asset.id !== pending.assetId) return
+    await confirmHandEditsOrRun(asset, 'light', pending.editedByHand)
   }
 
   async function confirmOcrRerun() {
@@ -2065,7 +2125,13 @@
       execute: async () => {
         // Finish debounced edits before the automatic writer can replace them.
         await transcriptionTextPersistor.flushAndWait(asset.id)
-        await transcribeAudio(asset.id, asset.path)
+        markInflight(transcriptionJobKey(asset.id))
+        try {
+          await transcribeAudio(asset.id, asset.path)
+        } catch (transcriptionError) {
+          clearInflight(transcriptionJobKey(asset.id))
+          throw transcriptionError
+        }
         const nextEditedText = new Map(transEditedText)
         nextEditedText.delete(asset.id)
         transEditedText = nextEditedText
@@ -2094,12 +2160,52 @@
     return nlpStore.getState(itemId, assetId)
   }
 
+  /**
+   * Shows again the jobs that kept running while the user was on another
+   * screen: the stores below are created with the view, so they start idle.
+   * `assetId` null restores the item-level runs only.
+   */
+  function restoreInflightJobs(assetId: string | null) {
+    const busy = (status: string) => status === 'pending' || status === 'running'
+    const nlpState = nlpStore.getState(itemId, assetId)
+    for (const job of ['embed', 'ner', 'fts'] as const) {
+      const scopedAssetId = job === 'fts' ? null : assetId
+      if (busy(nlpState[job]) || !isInflight(nlpJobKey(job, itemId, scopedAssetId))) continue
+      nlpStore._setJobStatus(itemId, job, 'pending', undefined, scopedAssetId)
+    }
+    const targetId = assetId ?? itemId
+    if (
+      !busy(nlpStore.getState(itemId).triples) &&
+      isInflight(llmJobKey('extract_triples', targetId))
+    ) {
+      nlpStore._setJobStatus(itemId, 'triples', 'pending')
+    }
+    if (isInflight(llmJobKey('summarize', targetId))) {
+      llmStore.restoreActiveJob(targetId, 'summarize')
+    }
+    if (assetId && isInflight(llmJobKey('correct_ocr', assetId)) && !correctingOcrAssetId) {
+      correctingOcrAssetId = assetId
+    }
+    if (
+      assetId &&
+      isInflight(transcriptionJobKey(assetId)) &&
+      !busy(transcriptionStore.getState(assetId).status)
+    ) {
+      transcriptionStore._updateState(assetId, { status: 'pending', progress: 0 })
+    }
+    nlpTick++
+    llmTick++
+    transcriptionTick++
+  }
+
   async function handleIndexFts() {
     nlpStore._setJobStatus(itemId, 'fts', 'pending')
     nlpTick++
+    markInflight(nlpJobKey('fts', itemId))
     try {
       await indexFts(itemId)
     } catch (e) {
+      clearInflight(nlpJobKey('fts', itemId))
       nlpStore._setJobStatus(itemId, 'fts', 'error', e instanceof Error ? e.message : 'Failed')
       nlpTick++
     }
@@ -2130,9 +2236,11 @@
     const assetId = selectedAsset.id
     nlpStore._setJobStatus(itemId, 'embed', 'pending', undefined, assetId)
     nlpTick++
+    markInflight(nlpJobKey('embed', itemId, assetId))
     try {
       await embedAsset(itemId, assetId)
     } catch (e) {
+      clearInflight(nlpJobKey('embed', itemId, assetId))
       nlpStore._setJobStatus(
         itemId,
         'embed',
@@ -2148,6 +2256,7 @@
     const assetId = selectedAsset?.id ?? null
     nlpStore._setJobStatus(itemId, 'ner', 'pending', undefined, assetId)
     nlpTick++
+    markInflight(nlpJobKey('ner', itemId, assetId))
     try {
       if (assetId) {
         await extractEntitiesForAsset(itemId, assetId)
@@ -2155,6 +2264,7 @@
         await extractEntities(itemId)
       }
     } catch (e) {
+      clearInflight(nlpJobKey('ner', itemId, assetId))
       nlpStore._setJobStatus(
         itemId,
         'ner',
@@ -3229,6 +3339,7 @@
     const asset = untrack(() => selectedAsset)
     if (!asset) return
     const requestToken = selectedAssetStateLoadGuard.next()
+    untrack(() => restoreInflightJobs(asset.id))
 
     rightPanelTab = 'notes'
 
@@ -3237,23 +3348,43 @@
 
     if (asset.type !== 'audio') loadOcrTextEditedByHand(asset.id)
 
-    // Load existing extraction text for this asset
+    // Load existing extraction text for this asset, and any OCR the queue is
+    // still running for it: the OCR state lives in memory, so after leaving
+    // and coming back a running OCRH would otherwise show the old text as
+    // DONE (R16). The previous text stays visible while the new one runs.
     const store = getStore()
-    void store.extractions.findByAsset(asset.id).then((extraction) => {
-      if (
-        selectedAssetStateLoadGuard.isCurrent(requestToken) &&
-        isCurrentSelectedAsset(asset) &&
-        extraction
-      ) {
-        ocrStore._updateState(asset.id, {
-          status: 'done',
-          progress: 100,
-          textLength: extraction.textContent.length,
-          method: extraction.method,
-          textContent: extraction.textContent,
-        })
-        ocrTick++
+    void Promise.all([
+      store.extractions.findByAsset(asset.id),
+      asset.type === 'audio'
+        ? Promise.resolve(null)
+        : processingAssetActiveTask(asset.id, 'ocr').catch(() => null),
+    ]).then(([extraction, activeOcr]) => {
+      if (!selectedAssetStateLoadGuard.isCurrent(requestToken) || !isCurrentSelectedAsset(asset)) {
+        return
       }
+      if (!extraction && !activeOcr) return
+      const previous = extraction
+        ? {
+            textLength: extraction.textContent.length,
+            method: extraction.method,
+            textContent: extraction.textContent,
+          }
+        : {}
+      if (activeOcr) {
+        const running = activeOcr.state === 'running'
+        ocrStore._updateState(asset.id, {
+          ...previous,
+          status: running ? 'running' : 'pending',
+          progress:
+            running && activeOcr.progressTotal
+              ? Math.round((activeOcr.progressDone / activeOcr.progressTotal) * 100)
+              : 0,
+          stage: running ? 'running' : 'queued',
+        })
+      } else {
+        ocrStore._updateState(asset.id, { ...previous, status: 'done', progress: 100 })
+      }
+      ocrTick++
     })
 
     // Load existing transcription for audio assets
@@ -3292,7 +3423,10 @@
     void loadAssetEmbedded(asset)
     // Load persisted LLM results for this asset so previous
     // asset-level results (summarize, correct_ocr, etc.) are visible.
-    llmStore.loadPersistedResults(asset.id, 'asset')
+    // A persisted result marks its job done; one still running wins.
+    void llmStore.loadPersistedResults(asset.id, 'asset').then(() => {
+      if (isCurrentSelectedAsset(asset)) restoreInflightJobs(asset.id)
+    })
     const restoreStateGuard = ocrRestoreStateLoadGuardFor(asset.id)
     const restoreRequestToken = restoreStateGuard.next()
     void llmCanRestoreOriginalOcrAsset(asset.id)
@@ -3422,7 +3556,9 @@
         })
         // Load persisted LLM results for the item (legacy item-level results).
         // Asset-level results are loaded in the selectedAsset effect below.
-        llmStore.loadPersistedResults(itemId, 'item')
+        void llmStore
+          .loadPersistedResults(itemId, 'item')
+          .then(() => restoreInflightJobs(selectedAsset?.id ?? null))
       })
       .catch((e) => console.error('[ItemView] LLM listener setup failed:', e))
 
@@ -3434,12 +3570,12 @@
         llmAvailable = false
       })
 
-    llmOcrCorrectionIsAvailable()
-      .then((available) => {
-        ocrCorrectionAvailable = available
+    llmOcrCorrectionEngine()
+      .then((engine) => {
+        ocrCorrectionEngine = engine
       })
       .catch(() => {
-        ocrCorrectionAvailable = false
+        ocrCorrectionEngine = null
       })
 
     geoStore
@@ -3784,6 +3920,7 @@
               onTopicsChange={handleTopicsChange}
               onSaveNote={handleSaveNote}
               onTranscribeDictation={handleTranscribeDictation}
+              onDictationHelp={dictationHelp}
               onSaveEdit={handleSaveEdit}
               onCancelEdit={handleCancelEdit}
               onEditNote={handleEditNote}
@@ -3900,7 +4037,7 @@
               transcriptionEditedText={textPanelTranscriptionEditedText}
               llmState={textPanelLlmState}
               {llmAvailable}
-              {ocrCorrectionAvailable}
+              {ocrCorrectionEngine}
               localOcrAvailable={LOCAL_ML}
               isOcrCorrected={selectedAsset ? ocrCorrectedAssets.has(selectedAsset.id) : false}
               ocrEditingDisabled={correctingOcrAssetId === selectedAsset?.id ||
@@ -4039,6 +4176,21 @@
       oncancel={() => (pendingOcrRerun = null)}
       onconfirm={confirmOcrRerun}
     />
+  {/if}
+
+  {#if pendingCpuOcrh && pendingCpuOcrh.assetId === selectedAssetId}
+    <ConfirmDialog
+      title={translate('item.ocrhCpuTitle')}
+      message={translate('item.ocrhCpuWarning')}
+      cancelLabel={translate('collections.cancel')}
+      confirmLabel={translate('item.ocrhCpuContinue')}
+      oncancel={() => (pendingCpuOcrh = null)}
+      onconfirm={confirmCpuOcrh}
+    >
+      <Button variant="secondary" size="sm" onclick={useOcrlInstead}>
+        {translate('item.ocrhCpuUseOcrl')}
+      </Button>
+    </ConfirmDialog>
   {/if}
 
   {#if pendingVersionSwitch && pendingVersionSwitch.assetId === selectedAssetId}

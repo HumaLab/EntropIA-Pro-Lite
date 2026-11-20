@@ -5,7 +5,7 @@
    * Optional; without a key nothing changes. The key lives in the system
    * credential store like the others and is never shown back.
    */
-  import { ActionIcon, Button, Card, Input } from '@entropia/ui'
+  import { ActionIcon, Button, Card, Checkbox, Input } from '@entropia/ui'
   import { openExternalUrlFromClick } from '$lib/external-links'
   import { locale, t } from '$lib/i18n'
   import {
@@ -24,12 +24,26 @@
   let busy = $state(false)
   let error = $state('')
   let ok = $state('')
+  // "Usar esta API": off keeps the key but the backend reads it as absent
+  // (settings.rs `api_key_disabled`). This card saves on its own, so the
+  // switch does too.
+  const DISABLED_SETTING = `${SETTINGS_KEYS.VERCEL_AI_GATEWAY_API_KEY}_disabled`
+  let enabled = $state(true)
 
   $effect(() => {
     settingsGet(SETTINGS_KEYS.VERCEL_AI_GATEWAY_API_KEY)
       .then((value) => (hasKey = Boolean(value)))
       .catch(() => (hasKey = false))
+    settingsGet(DISABLED_SETTING)
+      .then((value) => (enabled = value !== '1'))
+      .catch(() => {})
   })
+
+  const switchApi = (next: boolean) =>
+    run(async () => {
+      await settingsSet(DISABLED_SETTING, next ? '0' : '1')
+      enabled = next
+    })
 
   async function run(action: () => Promise<void>) {
     if (busy) return
@@ -90,6 +104,14 @@
       </a>
     </div>
     <p class="vercel-card__text">{$currentLocale && t('settings.vercel.description')}</p>
+    <Checkbox checked={enabled} disabled={busy} onchange={(next: boolean) => switchApi(next)}>
+      <strong>{t('settings.apiSwitch.label')}</strong>
+      <span class="vercel-card__text"
+        >{enabled
+          ? t('settings.apiSwitch.on', { service: 'Vercel AI Gateway' })
+          : t('settings.apiSwitch.offNow', { service: 'Vercel AI Gateway' })}</span
+      >
+    </Checkbox>
     <div class="vercel-card__row">
       <div class="vercel-card__field">
         <Input

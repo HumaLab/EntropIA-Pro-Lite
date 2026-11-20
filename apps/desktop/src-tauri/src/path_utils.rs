@@ -415,7 +415,46 @@ pub fn remember_cache_dir(dir: PathBuf) {
 /// `None` in unit tests and anywhere setup has not run; callers fall back to
 /// their previous behaviour so a test does not depend on process-wide state.
 pub fn remembered_cache_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = TEST_CACHE_DIR.with(|dir| dir.borrow().clone()) {
+        return Some(dir);
+    }
     REMEMBERED_CACHE_DIR.get().cloned()
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CACHE_DIR: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Give the calling test thread a cache directory without touching the
+/// process-wide value other tests rely on being unset.
+#[cfg(test)]
+// Only the `local-ml` model-resolver test sets it.
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
+pub fn set_test_cache_dir(dir: Option<PathBuf>) {
+    TEST_CACHE_DIR.with(|cell| *cell.borrow_mut() = dir);
+}
+
+/// The directory that holds every downloaded model: `<cache>/models`.
+///
+/// The one answer for downloaders, readers and the paths Settings shows. The
+/// startup migration moves `<data>/models` into the cache directory on every
+/// launch, so a model looked up beside the database is found only until the
+/// next start, and a redownload lands where the next start moves it again.
+pub fn models_dir(db_path: &Path) -> PathBuf {
+    model_root(db_path).join("models")
+}
+
+/// The directory `models/` hangs from, for resolvers that take a root.
+///
+/// Without a remembered cache directory (unit tests, any process that never
+/// ran setup) it is the database's directory, the layout before the split.
+pub fn model_root(db_path: &Path) -> PathBuf {
+    remembered_cache_dir()
+        .or_else(|| db_path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
 
 /// Resolve a stored `assets.path` at a command boundary.
@@ -450,9 +489,124 @@ pub fn store_asset_path_at_boundary(absolute: &str, app_handle: &tauri::AppHandl
     derive_rel_path(absolute, &dir).unwrap_or_else(|_| absolute.to_string())
 }
 
+/// Removes a directory tree. `NotFound` counts as success.
+///
+/// On Windows, `std::fs::remove_dir_all` can fail with os error 32 (sharing
+/// violation) on a folder nobody holds open: it happens on this app's own
+/// data and cache folders, where deleting the same tree entry by entry
+/// succeeds. When the first attempt fails, the tree is removed bottom-up with
+/// `remove_file` / `remove_dir`, and that result is the one reported.
+pub fn remove_dir_all_robust(path: &Path) -> std::io::Result<()> {
+    remove_dir_all_robust_with(path, |path| std::fs::remove_dir_all(path))
+}
+
+fn remove_dir_all_robust_with(
+    path: &Path,
+    first_attempt: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    match first_attempt(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => match remove_tree_entry_by_entry(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        },
+    }
+}
+
+fn remove_tree_entry_by_entry(path: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            remove_tree_entry_by_entry(&entry_path)?;
+        } else if file_type.is_symlink() {
+            // A directory symlink or junction is removed as a link; its
+            // target is never walked.
+            std::fs::remove_file(&entry_path).or_else(|_| std::fs::remove_dir(&entry_path))?;
+        } else {
+            remove_file_clearing_read_only(&entry_path)?;
+        }
+    }
+    std::fs::remove_dir(path)
+}
+
+fn remove_file_clearing_read_only(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let mut permissions = std::fs::metadata(path)?.permissions();
+            if !permissions.readonly() {
+                return Err(error);
+            }
+            #[allow(clippy::permissions_set_readonly_false)]
+            permissions.set_readonly(false);
+            std::fs::set_permissions(path, permissions)?;
+            std::fs::remove_file(path)
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_nested_tree(root: &Path) {
+        std::fs::create_dir_all(root.join("a/b/c")).unwrap();
+        for (index, dir) in ["", "a", "a/b", "a/b/c"].iter().enumerate() {
+            std::fs::write(root.join(dir).join(format!("f{index}.txt")), b"x").unwrap();
+        }
+    }
+
+    #[test]
+    fn remove_dir_all_robust_removes_a_nested_tree() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("tree");
+        write_nested_tree(&root);
+
+        remove_dir_all_robust(&root).unwrap();
+
+        assert!(!root.exists());
+        assert!(temp.path().exists(), "the parent folder stays");
+    }
+
+    #[test]
+    fn remove_dir_all_robust_removes_read_only_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("tree");
+        write_nested_tree(&root);
+        let file = root.join("a/b/f2.txt");
+        let mut permissions = std::fs::metadata(&file).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&file, permissions).unwrap();
+        let sharing_violation = |_: &Path| Err(std::io::Error::from_raw_os_error(32));
+
+        remove_dir_all_robust_with(&root, sharing_violation).unwrap();
+
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn remove_dir_all_robust_finishes_the_tree_when_std_refuses_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("tree");
+        write_nested_tree(&root);
+        // On Windows `std::fs::remove_dir_all` fails with os error 32 inside
+        // com.entropia.shared while deleting entry by entry still works.
+        let sharing_violation = |_: &Path| Err(std::io::Error::from_raw_os_error(32));
+
+        remove_dir_all_robust_with(&root, sharing_violation).unwrap();
+
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn remove_dir_all_robust_accepts_a_missing_folder() {
+        let temp = tempfile::tempdir().unwrap();
+
+        remove_dir_all_robust(&temp.path().join("missing")).unwrap();
+    }
 
     #[test]
     fn leaves_plain_paths_unchanged() {

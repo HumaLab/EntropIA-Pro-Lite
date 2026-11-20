@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::process::Command;
 use tokio::task;
@@ -22,9 +22,7 @@ use crate::runtime::status::{RuntimeState, RuntimeStatus};
 
 const PROBE_TIMEOUT_SECS: u64 = 45;
 const GLOBAL_PROBE_TIMEOUT_SECS: u64 = 90;
-const GPU_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-const PROBE_PADDLEPADDLE_CUDA: &str = "import paddle; assert paddle.device.is_compiled_with_cuda(), 'PaddlePaddle CPU wheel installed on NVIDIA hardware'; print('ok')";
 const PROBE_PADDLE_VL: &str = "from paddleocr import PaddleOCRVL; print('ok')";
 const PROBE_FASTER_WHISPER: &str = "import faster_whisper; print('ok')";
 const RUNTIME_PYTHON_KEYS: &[&str] = &["python.paddle_vl.path", "python.faster_whisper.path"];
@@ -66,6 +64,17 @@ pub async fn probe_one(
     dep: &crate::deps::registry::DependencySpec,
     python_path: &Path,
 ) -> DependencyStatus {
+    probe_one_with_reason(dep, python_path).await.0
+}
+
+/// [`probe_one`] plus why it did not pass: the last line of the probe's
+/// stderr (e.g. `DLL load failed ... Acceso denegado`). A failed check after
+/// an install that succeeded used to report only "No se pudo confirmar", and
+/// the cause of R5 stayed invisible in the UI and the log.
+pub async fn probe_one_with_reason(
+    dep: &crate::deps::registry::DependencySpec,
+    python_path: &Path,
+) -> (DependencyStatus, Option<String>) {
     let mut cmd = Command::new(python_path);
     #[cfg(windows)]
     {
@@ -82,14 +91,16 @@ pub async fn probe_one(
         Ok(Ok(output)) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.trim().contains("ok") {
-                DependencyStatus::Installed { version: None }
+                (DependencyStatus::Installed { version: None }, None)
             } else {
-                DependencyStatus::Missing
+                (DependencyStatus::Missing, None)
             }
         }
-        // Non-zero exit or I/O error from spawn
-        Ok(_) => DependencyStatus::Missing,
-        // Timeout
+        Ok(Ok(output)) => (
+            DependencyStatus::Missing,
+            last_stderr_line(&String::from_utf8_lossy(&output.stderr)),
+        ),
+        Ok(Err(error)) => (DependencyStatus::Missing, Some(error.to_string())),
         Err(_) => {
             log::warn!(
                 target: "deps/checks",
@@ -97,9 +108,22 @@ pub async fn probe_one(
                 dep.display_name,
                 python_path.display()
             );
-            DependencyStatus::Missing
+            (
+                DependencyStatus::Missing,
+                Some(format!("timeout ({PROBE_TIMEOUT_SECS} s)")),
+            )
         }
     }
+}
+
+/// The line of a Python traceback that names the error, bounded for a UI
+/// message.
+fn last_stderr_line(stderr: &str) -> Option<String> {
+    stderr
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .map(|line| line.chars().take(300).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -198,124 +222,11 @@ pub async fn probe_all(python_path: &Path) -> HashMap<DependencyId, DependencySt
     results
 }
 
+/// The probe for `dep`. PaddlePaddle passes with the CPU wheel on any hardware:
+/// the managed runtime ships only that wheel, and PaddleOCR-VL falls back to
+/// CPU when CUDA is missing.
 fn probe_code_for(dep: &crate::deps::registry::DependencySpec) -> &'static str {
-    if dep.id == DependencyId::PaddlePaddle && detect_nvidia_gpu_hardware() {
-        return PROBE_PADDLEPADDLE_CUDA;
-    }
-
     dep.probe_code
-}
-
-fn detect_nvidia_gpu_hardware() -> bool {
-    let mut cmd = std::process::Command::new("nvidia-smi");
-    cmd.arg("-L");
-    match std_command_output_with_timeout(cmd, GPU_PROBE_TIMEOUT, "nvidia-smi -L") {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if !stdout.trim().is_empty() && stdout.contains("GPU") {
-                return true;
-            }
-        }
-        _ => {}
-    }
-
-    detect_nvidia_gpu_from_system_inventory()
-}
-
-fn std_command_output_with_timeout(
-    mut cmd: std::process::Command,
-    timeout: Duration,
-    label: &str,
-) -> Result<std::process::Output, String> {
-    let mut child = cmd
-        .spawn()
-        .map_err(|error| format!("{label} failed to start: {error}"))?;
-    let started_at = Instant::now();
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|error| format!("{label} failed to collect output: {error}"));
-            }
-            Ok(None) if started_at.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("{label} timed out after {}s", timeout.as_secs()));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("{label} failed while waiting: {error}"));
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn detect_nvidia_gpu_from_system_inventory() -> bool {
-    if std::fs::read_dir("/proc/driver/nvidia/gpus")
-        .map(|mut entries| entries.next().is_some())
-        .unwrap_or(false)
-    {
-        return true;
-    }
-
-    let Ok(entries) = std::fs::read_dir("/sys/bus/pci/devices") else {
-        return false;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let vendor = std::fs::read_to_string(path.join("vendor")).unwrap_or_default();
-        if vendor.trim() != "0x10de" {
-            continue;
-        }
-
-        let class = std::fs::read_to_string(path.join("class")).unwrap_or_default();
-        if class.trim().starts_with("0x03") {
-            return true;
-        }
-    }
-
-    false
-}
-
-#[cfg(windows)]
-fn detect_nvidia_gpu_from_system_inventory() -> bool {
-    let candidates = [
-        std::env::var_os("ProgramFiles").map(PathBuf::from),
-        std::env::var_os("ProgramW6432").map(PathBuf::from),
-    ];
-
-    for base in candidates.into_iter().flatten() {
-        let smi = base
-            .join("NVIDIA Corporation")
-            .join("NVSMI")
-            .join("nvidia-smi.exe");
-        if !smi.exists() {
-            continue;
-        }
-        let mut cmd = std::process::Command::new(&smi);
-        cmd.arg("-L");
-        if let Ok(output) =
-            std_command_output_with_timeout(cmd, GPU_PROBE_TIMEOUT, "nvidia-smi.exe -L")
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if output.status.success() && stdout.contains("GPU") {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn detect_nvidia_gpu_from_system_inventory() -> bool {
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -371,9 +282,13 @@ pub fn resolve_probe_python_from_settings(
     }
 }
 
+/// The Python the app itself owns: the healthy runtime pack's, or the venv
+/// the app created. It never looks at other Pythons on the machine: the
+/// dependency check reports the runtime the app will use, and a system Python
+/// that happens to have the libraries does not make them installed (audit
+/// 1.8.1, item 6). Only [`ProbePythonMode::RuntimeFallback`] goes further.
 fn resolve_runtime_python_choice(
     managed_path: Option<&Path>,
-    runtime_candidates: Vec<PathBuf>,
     managed_runtime_python: Option<&Path>,
     managed_runtime_status: Option<&RuntimeStatus>,
 ) -> Option<PathBuf> {
@@ -399,7 +314,6 @@ fn resolve_runtime_python_choice(
                 None
             }
         })
-        .or_else(|| resolve_runtime_python_candidates(runtime_candidates))
 }
 
 fn runtime_status_is_healthy(status: Option<&RuntimeStatus>) -> bool {
@@ -417,7 +331,6 @@ pub fn resolve_probe_python_with_runtime(
 ) -> Option<PathBuf> {
     if let Some(path) = resolve_runtime_python_choice(
         settings.managed_path.as_deref(),
-        settings.runtime_candidates.clone(),
         managed_runtime_python,
         managed_runtime_status,
     ) {
@@ -524,6 +437,17 @@ fn probe_runtime_capabilities(path: &Path) -> RuntimeCapabilities {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// R5: the reason a probe gives is the error line, not the traceback head.
+    #[test]
+    fn probe_reason_is_the_last_traceback_line() {
+        let stderr = "Traceback (most recent call last):\r\n  File \"<string>\", line 1, in <module>\r\nImportError: DLL load failed while importing numpy_ops: Acceso denegado.\r\n\r\n";
+        assert_eq!(
+            last_stderr_line(stderr).as_deref(),
+            Some("ImportError: DLL load failed while importing numpy_ops: Acceso denegado.")
+        );
+        assert_eq!(last_stderr_line("  \n"), None);
+    }
 
     fn in_memory_conn() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().expect("in-memory SQLite");
@@ -669,7 +593,6 @@ mod tests {
 
         let resolution = resolve_runtime_python_choice(
             None,
-            vec![],
             Some(&runtime_python),
             Some(&crate::runtime::status::RuntimeStatus {
                 state: crate::runtime::status::RuntimeState::Healthy,
@@ -700,7 +623,6 @@ mod tests {
 
         let resolution = resolve_runtime_python_choice(
             Some(managed_python.as_path()),
-            vec![],
             Some(&runtime_python),
             Some(&crate::runtime::status::RuntimeStatus {
                 state: crate::runtime::status::RuntimeState::Damaged,
@@ -719,5 +641,59 @@ mod tests {
         );
 
         assert_eq!(resolution, Some(managed_python));
+    }
+
+    #[test]
+    fn the_dependency_check_ignores_pythons_the_app_does_not_own() {
+        // A fixture pack, no venv of the app's own: whatever other Python is
+        // on the machine, the dependency check has nothing to probe, so it
+        // reports the dependencies missing instead of ready (audit 1.8.1).
+        let dir = tempdir().expect("temp dir");
+        let runtime_python = dir.path().join("runtime-python");
+        std::fs::write(&runtime_python, b"runtime").expect("write runtime python");
+        let settings = ProbePythonSettings {
+            managed_path: None,
+            runtime_candidates: vec![dir.path().join("system-python")],
+        };
+        let fixture = crate::runtime::status::RuntimeStatus {
+            state: crate::runtime::status::RuntimeState::Fixture,
+            pack_version: Some("2026.05.0".to_string()),
+            repair_needed: false,
+            repair_available: false,
+            summary: "Runtime de IA pendiente de descarga".to_string(),
+            blocked_capabilities: vec![],
+            details: vec![],
+            guidance: vec![],
+            bootstrap_eligible: true,
+            bootstrap_required: true,
+            blocked_reason: None,
+            active_operation: None,
+        };
+
+        assert_eq!(
+            resolve_probe_python_with_runtime(
+                settings,
+                ProbePythonMode::DependencyManager,
+                Some(&runtime_python),
+                Some(&fixture),
+            ),
+            None
+        );
+    }
+    /// The managed runtime ships the CPU PaddlePaddle wheel on every platform
+    /// (build-runtime-pack.yml), and paddle_vl.py falls back to CPU when CUDA is
+    /// missing. Demanding a CUDA build on NVIDIA hardware marked that wheel
+    /// failed forever on any machine with an NVIDIA card.
+    #[test]
+    fn paddlepaddle_probe_accepts_the_cpu_wheel_on_any_hardware() {
+        let paddle = all_deps()
+            .iter()
+            .find(|dep| dep.id == DependencyId::PaddlePaddle)
+            .expect("PaddlePaddle is registered");
+
+        let probe = probe_code_for(paddle);
+
+        assert_eq!(probe, paddle.probe_code);
+        assert!(!probe.contains("is_compiled_with_cuda"), "{probe}");
     }
 }

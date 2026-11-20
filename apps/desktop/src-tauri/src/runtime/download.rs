@@ -1398,6 +1398,7 @@ pub(crate) mod test_support {
                 wheelhouse: vec![],
                 caches: vec![],
                 native_assets: vec![],
+                runtime_abi: None,
             };
             zip.start_file("manifest.json", options)
                 .expect("manifest entry");
@@ -1659,6 +1660,7 @@ mod tests {
                 wheelhouse: vec![],
                 caches: vec![],
                 native_assets: vec![],
+                runtime_abi: None,
             };
             zip.write_all(&serde_json::to_vec_pretty(&manifest).expect("manifest json"))
                 .expect("manifest bytes");
@@ -2150,6 +2152,7 @@ mod tests {
                 wheelhouse: vec![],
                 caches: vec![],
                 native_assets: vec![],
+                runtime_abi: None,
             };
             zip.start_file("manifest.json", options)
                 .expect("manifest entry");

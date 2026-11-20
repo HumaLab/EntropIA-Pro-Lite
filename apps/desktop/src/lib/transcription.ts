@@ -286,3 +286,37 @@ export async function transcribeDictation(blob: Blob): Promise<string> {
     await removeTempFileIfPresent(tempPath)
   }
 }
+
+// Only the Pro (local-ML) build ships Parakeet; under Lite these stay inert
+// like the other local-model wrappers.
+const LOCAL_ML_OFF = import.meta.env.VITE_LOCAL_ML !== '1'
+
+/** The local Parakeet model on disk. Dictation never downloads it (R11). */
+export interface ParakeetModelInfo {
+  installed: boolean
+  downloading: boolean
+  missing_bytes: number
+  total_bytes: number
+  directory: string
+}
+
+export interface ParakeetDownloadProgressPayload {
+  pct: number
+  downloaded_bytes: number
+  total_bytes: number | null
+}
+
+export interface ParakeetDownloadErrorPayload {
+  error: string
+}
+
+export function parakeetModelInfo(): Promise<ParakeetModelInfo | null> {
+  if (LOCAL_ML_OFF) return Promise.resolve(null)
+  return invoke<ParakeetModelInfo>('stt_parakeet_model_info')
+}
+
+/** Start (or resume) the Parakeet download; progress arrives as events. */
+export function parakeetDownloadModel(): Promise<string> {
+  if (LOCAL_ML_OFF) return Promise.resolve('')
+  return invoke<string>('stt_parakeet_download_model')
+}

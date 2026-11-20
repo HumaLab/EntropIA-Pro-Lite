@@ -76,8 +76,25 @@ pub struct DepsStateData {
     pub statuses: HashMap<DependencyId, DependencyStatus>,
     pub cached_probe_python: Option<PathBuf>,
     pub cached_probe_results: Option<HashMap<DependencyId, DependencyStatus>>,
+    /// The managed runtime the cached results were probed against: `None`
+    /// when no healthy runtime was active then.
+    pub cached_probe_runtime_root: Option<PathBuf>,
     pub probe_in_flight: bool,
     pub probe_generation: u64,
+}
+
+/// The cached probe results, while the managed runtime they were probed
+/// against is still the active one. A runtime downloaded or activated since
+/// (or one that stopped being healthy) makes them stale: they describe the
+/// previous runtime's Python, so the next probe must run again.
+fn cached_results_for(
+    data: &DepsStateData,
+    current_runtime_root: Option<&std::path::Path>,
+) -> Option<HashMap<DependencyId, DependencyStatus>> {
+    if data.cached_probe_runtime_root.as_deref() != current_runtime_root {
+        return None;
+    }
+    data.cached_probe_results.clone()
 }
 
 #[derive(Clone, Debug)]
@@ -128,9 +145,13 @@ async fn remove_dir_all_with_retry(path: &std::path::Path) -> Result<(), String>
     const ATTEMPTS: u32 = 5;
     let mut last_err = String::new();
     for attempt in 0..ATTEMPTS {
-        match tokio::fs::remove_dir_all(path).await {
+        let target = path.to_path_buf();
+        let outcome =
+            tokio::task::spawn_blocking(move || crate::path_utils::remove_dir_all_robust(&target))
+                .await
+                .unwrap_or_else(|join_error| Err(std::io::Error::other(join_error.to_string())));
+        match outcome {
             Ok(()) => return Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => {
                 last_err = e.to_string();
                 tokio::time::sleep(std::time::Duration::from_millis(
@@ -166,6 +187,21 @@ fn reset_candidate_paths(app_data_dir: &std::path::Path) -> Vec<PathBuf> {
     reset_paths
 }
 
+/// The locked paths that make a reset fail. Only the venv of the runtime the
+/// app runs now matters: a leftover dev fallback, an old runtime's venv or the
+/// cache is never used again once the Python settings are cleared, so failing
+/// on it left the user retrying a reset that could never finish.
+fn reset_blocking_paths(
+    locked: &[(PathBuf, String)],
+    active_venv: Option<&std::path::Path>,
+) -> Vec<String> {
+    locked
+        .iter()
+        .filter(|(path, _)| Some(path.as_path()) == active_venv)
+        .map(|(path, error)| format!("{} ({error})", path.display()))
+        .collect()
+}
+
 impl DepsState {
     /// Create a new state map with all dependencies initialised to `Unknown`.
     pub fn new() -> Self {
@@ -173,6 +209,7 @@ impl DepsState {
             statuses: default_dependency_statuses(),
             cached_probe_python: None,
             cached_probe_results: None,
+            cached_probe_runtime_root: None,
             probe_in_flight: false,
             probe_generation: 0,
         })))
@@ -224,6 +261,7 @@ pub async fn invalidate_probe_cache(state: &DepsState) {
     let mut data = state.0.lock().await;
     data.cached_probe_python = None;
     data.cached_probe_results = None;
+    data.cached_probe_runtime_root = None;
     data.probe_in_flight = false;
     data.probe_generation = data.probe_generation.saturating_add(1);
     drop(data);
@@ -242,6 +280,7 @@ async fn finish_probe_attempt(
     probe_generation: u64,
     probe_python: Option<PathBuf>,
     results: Option<HashMap<DependencyId, DependencyStatus>>,
+    runtime_root: Option<PathBuf>,
 ) {
     let mut data = state.0.lock().await;
     if data.probe_generation != probe_generation {
@@ -249,6 +288,7 @@ async fn finish_probe_attempt(
     }
     data.cached_probe_python = probe_python;
     data.cached_probe_results = results.clone();
+    data.cached_probe_runtime_root = runtime_root;
     data.probe_in_flight = false;
     if let Some(results_map) = results {
         for (id, status) in results_map {
@@ -257,35 +297,62 @@ async fn finish_probe_attempt(
     }
 }
 
-fn managed_runtime_probe_context(
-    app_data_dir: &std::path::Path,
-) -> (
-    Option<PathBuf>,
-    Option<crate::runtime::status::RuntimeStatus>,
-) {
+/// The healthy hydrated runtime, as the dependency probe sees it.
+struct ManagedRuntimeProbe {
+    /// The runtime's root folder, only when it is healthy.
+    root: Option<PathBuf>,
+    /// The runtime's venv Python, only when it is healthy.
+    python: Option<PathBuf>,
+    status: Option<crate::runtime::status::RuntimeStatus>,
+}
+
+fn managed_runtime_probe_context(app_data_dir: &std::path::Path) -> ManagedRuntimeProbe {
+    let none = ManagedRuntimeProbe {
+        root: None,
+        python: None,
+        status: None,
+    };
     let manager = crate::runtime::RuntimeManager::new();
     let Some(managed_root) = manager.discover_hydrated_runtime_root_for_tests(app_data_dir) else {
-        return (None, None);
+        return none;
     };
     let Ok(manifest) = crate::runtime::manifest::RuntimeManifest::load_from_path(
         &managed_root.join("manifest.json"),
     ) else {
-        return (None, None);
+        return none;
     };
     let Some(status) =
         manager.inspect_hydrated_runtime_for_tests(app_data_dir, &managed_root, &manifest)
     else {
-        return (None, None);
+        return none;
     };
 
     if status.state != RuntimeState::Healthy {
-        return (None, Some(status));
+        return ManagedRuntimeProbe {
+            status: Some(status),
+            ..none
+        };
     }
 
-    (
-        Some(crate::runtime::managed_venv_python_path(&managed_root)),
-        Some(status),
-    )
+    ManagedRuntimeProbe {
+        python: Some(crate::runtime::managed_venv_python_path(&managed_root)),
+        root: Some(managed_root),
+        status: Some(status),
+    }
+}
+
+/// The folder the dependency probe looks for hydrated runtimes in.
+///
+/// The runtime is cache, not data: it lives under the cache directory, which
+/// the installed app keeps apart from the archive's folder. Looking beside the
+/// database never found it, so the probe kept an old runtime's venv and never
+/// forgot its paths. Without a recorded cache directory (unit tests, a process
+/// that never ran setup) it is the database's folder, the layout before the
+/// split, as in `python_discovery::hydrated_runtime_python_path`.
+fn probe_runtime_dir(db_path: &std::path::Path) -> PathBuf {
+    crate::path_utils::remembered_cache_dir()
+        .or_else(|| db_path.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub async fn probe_all_once(
@@ -313,14 +380,19 @@ pub async fn probe_all_once(
         };
 
         if let Some(probe_generation) = probe_generation {
+            let runtime = managed_runtime_probe_context(&probe_runtime_dir(&db.db_path));
             // The settings read is SQL: run it on the blocking pool so the
             // async worker never locks `ui_conn` (A-05b).
             let db = db.clone();
+            let active_runtime_root = runtime.root.clone();
             let probe_settings = tokio::task::spawn_blocking(move || -> Result<_, String> {
                 let conn = db
                     .ui_conn
                     .lock()
                     .map_err(|err| format!("DB lock error: {err}"))?;
+                for message in forget_stale_python_paths(&conn, active_runtime_root.as_deref()) {
+                    log::warn!(target: "deps", "{message}");
+                }
                 Ok(checks::load_probe_python_settings(&conn))
             })
             .await
@@ -329,21 +401,17 @@ pub async fn probe_all_once(
             let probe_settings = if let Ok(settings) = probe_settings {
                 settings
             } else {
-                finish_probe_attempt(state, probe_generation, None, None).await;
+                finish_probe_attempt(state, probe_generation, None, None, None).await;
                 return Err(probe_settings
                     .err()
                     .unwrap_or_else(|| "DB lock error".to_string()));
             };
 
-            let (managed_runtime_python, managed_runtime_status) = managed_runtime_probe_context(
-                db.db_path.parent().unwrap_or(std::path::Path::new(".")),
-            );
-
             let python_path = checks::resolve_probe_python_with_runtime(
                 probe_settings,
                 checks::ProbePythonMode::DependencyManager,
-                managed_runtime_python.as_deref(),
-                managed_runtime_status.as_ref(),
+                runtime.python.as_deref(),
+                runtime.status.as_ref(),
             );
 
             let results_map = match python_path.clone() {
@@ -356,6 +424,7 @@ pub async fn probe_all_once(
                 probe_generation,
                 python_path,
                 Some(results_map.clone()),
+                runtime.root,
             )
             .await;
 
@@ -364,6 +433,60 @@ pub async fn probe_all_once(
 
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
+}
+
+/// Every setting that stores the path of a Python interpreter the AI
+/// features run. `python.spacy_ner_es.path` is the discovery cache of the NER
+/// engine (`python_discovery::python_setting_key`).
+const PYTHON_PATH_SETTING_KEYS: [&str; 4] = [
+    "deps_venv_python_path",
+    "python.paddle_vl.path",
+    "python.faster_whisper.path",
+    "python.spacy_ner_es.path",
+];
+
+/// Forget the Python paths the app should no longer run. A runtime update or
+/// a manual cleanup removes the old venv; a path left pointing at it kept the
+/// dependencies looking installed, so the new venv was never built.
+///
+/// Two kinds of path go:
+/// - an interpreter that is gone;
+/// - with a healthy runtime active (`active_runtime_root`), an interpreter
+///   inside another version of that runtime folder. Windows can refuse to
+///   delete the old version (a file in use), and its venv then still exists.
+///
+/// A Python outside the runtime folder is the user's own and stays. With no
+/// healthy runtime, the old venv is still the best Python there is and stays
+/// too. Returns one message per setting it removed.
+fn forget_stale_python_paths(
+    conn: &rusqlite::Connection,
+    active_runtime_root: Option<&std::path::Path>,
+) -> Vec<String> {
+    let runtime_folder = active_runtime_root.and_then(std::path::Path::parent);
+    let mut messages = Vec::new();
+    for key in PYTHON_PATH_SETTING_KEYS {
+        let Some(raw) = crate::settings::get_raw_setting(conn, key) else {
+            continue;
+        };
+        let path = std::path::Path::new(raw.trim());
+        if raw.trim().is_empty() {
+            continue;
+        }
+        let reason = if !path.is_file() {
+            "missing"
+        } else if runtime_folder.is_some_and(|folder| path.starts_with(folder))
+            && active_runtime_root.is_some_and(|active| !path.starts_with(active))
+        {
+            "another runtime version's"
+        } else {
+            continue;
+        };
+        match crate::settings::delete_setting(conn, key) {
+            Ok(()) => messages.push(format!("Forgot {reason} Python path {key}: {raw}")),
+            Err(error) => messages.push(format!("Could not forget {key}: {error}")),
+        }
+    }
+    messages
 }
 
 // ---------------------------------------------------------------------------
@@ -498,6 +621,57 @@ pub(crate) fn deps_auto_install_skip_reason(
 static DEPS_AUTO_INSTALL_ATTEMPTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// `app_settings` key holding the last automatic install that ended with
+/// dependencies still missing, as [`auto_install_signature`] (R4).
+const DEPS_AUTO_INSTALL_FAILED_KEY: &str = "deps_auto_install_failed";
+
+/// This build's version plus the dependencies still missing or failed,
+/// sorted: `None` when everything is installed. An automatic install that
+/// left the same set behind on this same version is not retried at every
+/// launch (R4); a new version, or a different set, tries again.
+pub(crate) fn auto_install_signature(
+    statuses: &HashMap<DependencyId, DependencyStatus>,
+) -> Option<String> {
+    let mut missing: Vec<String> = registry::all_deps_in_install_order()
+        .iter()
+        .filter(|dep| {
+            !matches!(
+                statuses.get(&dep.id),
+                Some(DependencyStatus::Installed { .. })
+            )
+        })
+        .map(|dep| format!("{:?}", dep.id))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    missing.sort();
+    Some(format!(
+        "{}|{}",
+        env!("CARGO_PKG_VERSION"),
+        missing.join(",")
+    ))
+}
+
+fn read_auto_install_failure(db_path: &std::path::Path) -> Option<String> {
+    let conn = crate::db::open::open_archive_connection(db_path).ok()?;
+    crate::settings::get_raw_setting(&conn, DEPS_AUTO_INSTALL_FAILED_KEY)
+}
+
+/// Records (or clears, with `None`) the set an automatic install left behind.
+fn write_auto_install_failure(db_path: &std::path::Path, signature: Option<&str>) {
+    let result = crate::db::open::open_archive_connection(db_path).and_then(|conn| {
+        match signature {
+            Some(value) => crate::settings::set_setting(&conn, DEPS_AUTO_INSTALL_FAILED_KEY, value),
+            None => crate::settings::delete_setting(&conn, DEPS_AUTO_INSTALL_FAILED_KEY),
+        }
+        .map_err(|error| error.to_string())
+    });
+    if let Err(error) = result {
+        log::warn!(target: "deps", "could not record the auto-install outcome: {error}");
+    }
+}
+
 /// Installs the AI dependencies on its own once the managed runtime is ready,
 /// so a fresh Pro install needs no trip to the Dependencias tab. Called after
 /// the startup probe and after a bootstrap download finishes; returns at once
@@ -516,8 +690,33 @@ pub fn trigger_deps_auto_install(app: tauri::AppHandle) {
                 return;
             }
         };
+        // A probe before the runtime is ready cannot pass (R4): the bootstrap
+        // completion triggers this again once it is.
+        if runtime_state != RuntimeState::Healthy {
+            log::debug!(target: "deps", "auto-install skipped: runtime not ready");
+            return;
+        }
         let db = app.state::<crate::db::state::AppDbState>();
         let state = app.state::<DepsState>();
+        // A runtime that finished downloading after the startup probe is not
+        // the one that probe ran against: probe again on the new one, so its
+        // stale Python paths are forgotten and its venv gets installed.
+        let runtime_dir = probe_runtime_dir(&db.db_path);
+        let active_runtime_root =
+            tokio::task::spawn_blocking(move || managed_runtime_probe_context(&runtime_dir).root)
+                .await
+                .ok()
+                .flatten();
+        let cache_is_stale = {
+            let data = state.0.lock().await;
+            data.cached_probe_results.is_some()
+                && cached_results_for(&data, active_runtime_root.as_deref()).is_none()
+        };
+        if cache_is_stale {
+            log::info!(target: "deps", "active runtime changed since the last probe; probing again");
+            crate::python_discovery::invalidate_probe_cache();
+            invalidate_probe_cache(state.inner()).await;
+        }
         let statuses = match probe_all_once(state.inner(), db.inner()).await {
             Ok(statuses) => statuses,
             Err(error) => {
@@ -535,6 +734,23 @@ pub fn trigger_deps_auto_install(app: tauri::AppHandle) {
             log::debug!(target: "deps", "auto-install skipped: {reason:?}");
             return;
         }
+        let db_path = db.db_path.clone();
+        let signature = auto_install_signature(&statuses);
+        let previous = {
+            let db_path = db_path.clone();
+            tokio::task::spawn_blocking(move || read_auto_install_failure(&db_path))
+                .await
+                .ok()
+                .flatten()
+        };
+        if signature.is_some() && previous == signature {
+            crate::app_logs::info(
+                &app,
+                "deps",
+                "Instalación automática omitida: en el arranque anterior quedaron las mismas dependencias sin instalar. Reintentá desde Dependencias de IA.",
+            );
+            return;
+        }
         // Two triggers can race (startup probe and bootstrap completion):
         // only the one that flips the flag installs.
         if DEPS_AUTO_INSTALL_ATTEMPTED
@@ -545,15 +761,55 @@ pub fn trigger_deps_auto_install(app: tauri::AppHandle) {
         }
         crate::app_logs::info(&app, "deps", "Instalación automática de dependencias de IA");
         if let Err(error) =
-            run_install_all(&app, state.inner(), &db.db_path, "deps_auto_install").await
+            run_install_all(&app, state.inner(), &db_path, "deps_auto_install").await
         {
             log::warn!(target: "deps", "auto-install failed: {error}");
         }
+        let left = probe_all_once(state.inner(), db.inner())
+            .await
+            .ok()
+            .and_then(|statuses| auto_install_signature(&statuses));
+        let _ = tokio::task::spawn_blocking(move || {
+            write_auto_install_failure(&db_path, left.as_deref())
+        })
+        .await;
     });
 }
 
+/// Serializes "install everything" (R4): a request that arrives while one is
+/// running waits for it and reports its result instead of running a second
+/// full install right after it.
+static INSTALL_ALL_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static INSTALL_ALL_RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static INSTALL_ALL_LAST: std::sync::Mutex<Option<Result<(), String>>> = std::sync::Mutex::new(None);
+
 /// Shared body of the manual and automatic "install everything" paths.
 async fn run_install_all(
+    app: &tauri::AppHandle,
+    state: &DepsState,
+    db_path: &std::path::Path,
+    operation: &str,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+
+    let seen = INSTALL_ALL_RUNS.load(Ordering::SeqCst);
+    let _single = INSTALL_ALL_GATE.lock().await;
+    if INSTALL_ALL_RUNS.load(Ordering::SeqCst) != seen {
+        if let Some(result) = INSTALL_ALL_LAST.lock().ok().and_then(|last| last.clone()) {
+            log::info!(target: "deps", "{operation}: joined the install that just finished");
+            return result;
+        }
+    }
+    let result = run_install_all_now(app, state, db_path, operation).await;
+    if let Ok(mut last) = INSTALL_ALL_LAST.lock() {
+        *last = Some(result.clone());
+    }
+    INSTALL_ALL_RUNS.fetch_add(1, Ordering::SeqCst);
+    result
+}
+
+/// One full install, under the runtime ops lock.
+async fn run_install_all_now(
     app: &tauri::AppHandle,
     state: &DepsState,
     db_path: &std::path::Path,
@@ -784,7 +1040,10 @@ pub async fn deps_reset(
     // first one (a live OCR/transcription child or AV can hold a venv DLL). Each
     // path is retried with backoff; persistent failures are collected and
     // reported at the end so the settings/state are still cleared.
-    let mut locked_paths: Vec<String> = Vec::new();
+    let active_venv = RuntimeManager::new()
+        .discover_hydrated_runtime_root_for_tests(&app_data_dir)
+        .map(|root| install::venv_path(&root));
+    let mut locked_paths: Vec<(PathBuf, String)> = Vec::new();
     for path in reset_candidate_paths(&app_data_dir) {
         if !path.exists() {
             continue;
@@ -803,7 +1062,7 @@ pub async fn deps_reset(
                     "deps",
                     format!("Reset no pudo eliminar {}: {e}", path.display()),
                 );
-                locked_paths.push(format!("{} ({e})", path.display()));
+                locked_paths.push((path, e));
             }
         }
     }
@@ -818,12 +1077,10 @@ pub async fn deps_reset(
                 .ui_conn
                 .lock()
                 .map_err(|e| format!("DB lock error: {e}"))?;
-            let keys = [
-                "deps_venv_python_path",
-                "python.runtime_selection",
-                "python.paddle_vl.path",
-                "python.faster_whisper.path",
-            ];
+            let keys = PYTHON_PATH_SETTING_KEYS
+                .iter()
+                .copied()
+                .chain(["python.runtime_selection"]);
             for key in keys {
                 crate::settings::delete_setting(&conn, key)
                     .map_err(|e| format!("Error eliminando configuración '{key}': {e}"))?;
@@ -849,15 +1106,25 @@ pub async fn deps_reset(
         map.probe_generation = map.probe_generation.saturating_add(1);
     }
 
-    if !locked_paths.is_empty() {
-        let detail = locked_paths.join("; ");
+    let blocking = reset_blocking_paths(&locked_paths, active_venv.as_deref());
+    if !blocking.is_empty() {
+        let detail = blocking.join("; ");
         crate::app_logs::warn(&app, "deps", format!("Reset: rutas bloqueadas: {detail}"));
         return Err(format!(
-            "El reset limpió la configuración pero no pudo eliminar {} ruta(s) bloqueada(s) \
-             (posible OCR/transcripción en curso o antivirus): {detail}. Cerrá los trabajos en \
-             curso y volvé a intentar.",
-            locked_paths.len()
+            "El reset limpió la configuración pero no pudo eliminar el entorno de Python \
+             (otro proceso lo tiene abierto: un trabajo de OCR o transcripción en curso, o el \
+             antivirus): {detail}. Esperá a que termine el trabajo y volvé a intentar."
         ));
+    }
+    if !locked_paths.is_empty() {
+        crate::app_logs::warn(
+            &app,
+            "deps",
+            format!(
+                "Reset: {} ruta(s) en desuso quedaron sin borrar; no afectan al entorno",
+                locked_paths.len()
+            ),
+        );
     }
 
     crate::app_logs::warn(&app, "deps", "Reset de dependencias completado");
@@ -870,6 +1137,99 @@ mod tests {
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
+    #[test]
+    fn clear_missing_python_paths_forgets_only_paths_that_no_longer_exist() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let live = dir.path().join("python.exe");
+        std::fs::write(&live, b"python").expect("write python");
+        let gone = dir.path().join("old-runtime").join("python.exe");
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        let insert = |key: &str, value: &str| {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES (?1, ?2)",
+                rusqlite::params![key, value],
+            )
+            .expect("insert");
+        };
+        insert("deps_venv_python_path", &gone.to_string_lossy());
+        insert("python.paddle_vl.path", &gone.to_string_lossy());
+        insert("python.faster_whisper.path", &live.to_string_lossy());
+        insert("python.spacy_ner_es.path", &gone.to_string_lossy());
+        insert("stt_local_engine", "parakeet");
+
+        let messages = forget_stale_python_paths(&conn, None);
+
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        let get = |key: &str| crate::settings::get_raw_setting(&conn, key);
+        assert_eq!(get("deps_venv_python_path"), None);
+        assert_eq!(get("python.paddle_vl.path"), None);
+        assert_eq!(get("python.spacy_ner_es.path"), None);
+        assert_eq!(
+            get("python.faster_whisper.path").as_deref(),
+            Some(live.to_string_lossy().as_ref())
+        );
+        assert_eq!(get("stt_local_engine").as_deref(), Some("parakeet"));
+    }
+
+    /// Store 1.8.2: the new runtime hydrated next to an old one Windows would
+    /// not let the app delete. The saved paths still named the old runtime's
+    /// venv, so the dependencies looked installed and the new venv was never
+    /// built. With a healthy runtime active, a path inside another runtime
+    /// version is as stale as a missing one.
+    #[test]
+    fn forget_stale_python_paths_drops_paths_into_another_runtime_version() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let runtime = dir.path().join("runtime");
+        let active = runtime.join("2026.11.6");
+        let old_python = runtime.join("2026.11.5/venv/entropia-env/Scripts/python.exe");
+        let active_python = active.join("venv/entropia-env/Scripts/python.exe");
+        let custom_python = dir.path().join("custom/python.exe");
+        for path in [&old_python, &active_python, &custom_python] {
+            std::fs::create_dir_all(path.parent().unwrap()).expect("create parent");
+            std::fs::write(path, b"python").expect("write python");
+        }
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        let set = |key: &str, path: &std::path::Path| {
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings(key, value) VALUES (?1, ?2)",
+                rusqlite::params![key, path.to_string_lossy()],
+            )
+            .expect("insert");
+        };
+        let get = |key: &str| crate::settings::get_raw_setting(&conn, key);
+        let seed = || {
+            set("deps_venv_python_path", &old_python);
+            set("python.paddle_vl.path", &old_python);
+            set("python.faster_whisper.path", &custom_python);
+            set("python.spacy_ner_es.path", &active_python);
+        };
+
+        // No healthy runtime: the old venv is still the best Python there is.
+        seed();
+        assert!(forget_stale_python_paths(&conn, None).is_empty());
+        assert!(get("deps_venv_python_path").is_some());
+
+        seed();
+        let messages = forget_stale_python_paths(&conn, Some(&active));
+
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert_eq!(get("deps_venv_python_path"), None);
+        assert_eq!(get("python.paddle_vl.path"), None);
+        assert_eq!(
+            get("python.faster_whisper.path").as_deref(),
+            Some(custom_python.to_string_lossy().as_ref()),
+            "a Python outside the runtime folder is the user's own"
+        );
+        assert_eq!(
+            get("python.spacy_ner_es.path").as_deref(),
+            Some(active_python.to_string_lossy().as_ref())
+        );
+    }
+
     fn write_file(root: &std::path::Path, relpath: &str, bytes: &[u8]) -> String {
         let path = root.join(relpath);
         if let Some(parent) = path.parent() {
@@ -877,6 +1237,24 @@ mod tests {
         }
         std::fs::write(&path, bytes).expect("write file");
         hex::encode(Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn reset_fails_only_when_the_active_venv_stays_locked() {
+        let active = PathBuf::from("runtime/2026.11.5/venv/entropia-env");
+        let dev = PathBuf::from("runtime-dev");
+        let locked = vec![(dev.clone(), "os error 32".to_string())];
+
+        assert!(reset_blocking_paths(&locked, Some(&active)).is_empty());
+        assert!(reset_blocking_paths(&locked, None).is_empty());
+
+        let locked = vec![
+            (dev, "os error 32".to_string()),
+            (active.clone(), "os error 32".to_string()),
+        ];
+        let blocking = reset_blocking_paths(&locked, Some(&active));
+        assert_eq!(blocking.len(), 1);
+        assert!(blocking[0].contains("entropia-env"), "{blocking:?}");
     }
 
     #[test]
@@ -896,10 +1274,10 @@ mod tests {
         assert!(!paths.contains(&install::venv_path(app_data_dir.path())));
     }
 
-    #[test]
-    fn managed_runtime_probe_context_prefers_hydrated_runtime_python() {
-        let app_data_dir = tempdir().expect("app data dir");
-        let managed_root = app_data_dir.path().join("runtime").join("2026.05.0");
+    /// Writes a healthy hydrated runtime under `<dir>/runtime/2026.05.0`, with
+    /// its venv Python, and returns its root.
+    fn write_healthy_runtime(dir: &std::path::Path) -> PathBuf {
+        let managed_root = dir.join("runtime").join("2026.05.0");
         let python_relpath = if cfg!(windows) {
             "python/python.exe"
         } else {
@@ -945,21 +1323,88 @@ mod tests {
                 wheelhouse: vec![],
                 caches: vec![],
                 native_assets: vec![],
+                runtime_abi: None,
             })
             .expect("serialize manifest"),
         )
         .expect("write manifest");
+        managed_root
+    }
 
-        let (python, status) = managed_runtime_probe_context(app_data_dir.path());
+    #[test]
+    fn cached_probe_results_are_dropped_when_the_active_runtime_changes() {
+        // At startup the new runtime was still downloading: the probe ran on
+        // the previous runtime's venv and found everything installed.
+        let installed: HashMap<DependencyId, DependencyStatus> = registry::all_deps()
+            .iter()
+            .map(|dep| {
+                (
+                    dep.id.clone(),
+                    DependencyStatus::Installed { version: None },
+                )
+            })
+            .collect();
+        let new_root = PathBuf::from("runtime").join("2026.11.8");
+        let data = DepsStateData {
+            cached_probe_results: Some(installed.clone()),
+            cached_probe_runtime_root: None,
+            ..DepsStateData::default()
+        };
+
+        // The download finished and the new runtime is now the active one.
+        assert_eq!(cached_results_for(&data, Some(&new_root)), None);
+        // Same runtime as when probed: the cache still answers.
+        assert_eq!(cached_results_for(&data, None), Some(installed.clone()));
+        let probed_on_new = DepsStateData {
+            cached_probe_results: Some(installed.clone()),
+            cached_probe_runtime_root: Some(new_root.clone()),
+            ..DepsStateData::default()
+        };
+        assert_eq!(
+            cached_results_for(&probed_on_new, Some(&new_root)),
+            Some(installed)
+        );
+    }
+
+    #[test]
+    fn the_dependency_probe_looks_for_the_runtime_in_the_cache_dir() {
+        // The installed app keeps the archive in the data directory and the
+        // hydrated runtime in the cache directory: two different folders.
+        let data_dir = tempdir().expect("data dir");
+        let cache_dir = tempdir().expect("cache dir");
+        let db_path = data_dir.path().join("entropia.sqlite");
+        let managed_root = write_healthy_runtime(cache_dir.path());
+
+        crate::path_utils::set_test_cache_dir(Some(cache_dir.path().to_path_buf()));
+        let probe = managed_runtime_probe_context(&probe_runtime_dir(&db_path));
+        crate::path_utils::set_test_cache_dir(None);
+
+        assert_eq!(probe.root, Some(managed_root));
+        assert_eq!(
+            probe.status.map(|status| status.state),
+            Some(RuntimeState::Healthy)
+        );
+        // Without a recorded cache directory it is the database's folder,
+        // the layout before the split.
+        assert_eq!(probe_runtime_dir(&db_path), data_dir.path());
+    }
+
+    #[test]
+    fn managed_runtime_probe_context_prefers_hydrated_runtime_python() {
+        let app_data_dir = tempdir().expect("app data dir");
+        let managed_root = write_healthy_runtime(app_data_dir.path());
+
+        let probe = managed_runtime_probe_context(app_data_dir.path());
 
         assert_eq!(
-            status.map(|status| status.state),
+            probe.status.map(|status| status.state),
             Some(RuntimeState::Healthy)
         );
         assert_eq!(
-            python,
+            probe.python,
             Some(crate::runtime::managed_venv_python_path(&managed_root))
         );
+        assert_eq!(probe.root, Some(managed_root));
     }
 
     #[test]
@@ -1080,6 +1525,31 @@ mod auto_install_tests {
                 (id, status)
             })
             .collect()
+    }
+
+    #[test]
+    fn the_failure_signature_names_version_and_sorted_missing_set() {
+        assert_eq!(auto_install_signature(&statuses(&[])), None);
+        let one_order = auto_install_signature(&statuses(&[
+            DependencyId::Spacy,
+            DependencyId::FasterWhisper,
+        ]))
+        .expect("missing deps");
+        let other_order = auto_install_signature(&statuses(&[
+            DependencyId::FasterWhisper,
+            DependencyId::Spacy,
+        ]))
+        .expect("missing deps");
+        assert_eq!(one_order, other_order);
+        assert!(
+            one_order.starts_with(env!("CARGO_PKG_VERSION")),
+            "{one_order}"
+        );
+        assert_ne!(
+            one_order,
+            auto_install_signature(&statuses(&[DependencyId::Spacy])).unwrap(),
+            "a different set is a different failure and retries"
+        );
     }
 
     #[test]

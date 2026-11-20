@@ -32,7 +32,7 @@ use tokenizers::{
 use super::retrieval::RrfCandidate;
 
 const RERANK_DOCUMENT_MAX_CHARS: usize = 6000;
-const LOCAL_RERANKER_DIR_NAME: &str = "bge-reranker-v2-m3";
+pub(crate) const LOCAL_RERANKER_DIR_NAME: &str = "bge-reranker-v2-m3";
 #[cfg(feature = "local-ml")]
 const LOCAL_RERANKER_MODEL_FILE: &str = "model_int8.onnx";
 #[cfg(feature = "local-ml")]
@@ -640,28 +640,23 @@ fn choose_ranking(
 
 fn resolve_local_reranker_model_dir_from(
     override_dir: Option<&Path>,
-    app_data_dir: Option<&Path>,
+    model_root: &Path,
 ) -> PathBuf {
     override_dir.map(Path::to_path_buf).unwrap_or_else(|| {
-        app_data_dir
-            .map(|root| {
-                root.join("models")
-                    .join("rerankers")
-                    .join(LOCAL_RERANKER_DIR_NAME)
-            })
-            .unwrap_or_else(|| {
-                PathBuf::from("models")
-                    .join("rerankers")
-                    .join(LOCAL_RERANKER_DIR_NAME)
-            })
+        model_root
+            .join("models")
+            .join("rerankers")
+            .join(LOCAL_RERANKER_DIR_NAME)
     })
 }
 
-pub fn resolve_local_reranker_model_dir(app_data_dir: Option<&Path>) -> PathBuf {
+/// `model_root` is [`crate::path_utils::model_root`]: the reranker lives with
+/// the other downloaded models.
+pub fn resolve_local_reranker_model_dir(model_root: &Path) -> PathBuf {
     let override_dir = std::env::var_os("ENTROPIA_LOCAL_RERANKER_MODEL_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    resolve_local_reranker_model_dir_from(override_dir.as_deref(), app_data_dir)
+    resolve_local_reranker_model_dir_from(override_dir.as_deref(), model_root)
 }
 
 #[cfg(feature = "local-ml")]
@@ -821,8 +816,12 @@ fn download_artifact(
             ));
         }
 
-        let mut file = std::fs::File::create(&temporary)
-            .map_err(|_| "Failed to create reranker download file".to_string())?;
+        // Batched writes (R8): one read is about one TLS record.
+        let mut file = std::io::BufWriter::with_capacity(
+            1 << 20,
+            std::fs::File::create(&temporary)
+                .map_err(|_| "Failed to create reranker download file".to_string())?,
+        );
         let mut hasher = Sha256::new();
         let mut downloaded_bytes = 0_u64;
         let mut last_reported_pct = 0_u8;
@@ -1123,13 +1122,13 @@ mod tests {
     fn model_dir_resolution_is_environment_independent() {
         let root = Path::new("app-data");
         assert_eq!(
-            resolve_local_reranker_model_dir_from(None, Some(root)),
+            resolve_local_reranker_model_dir_from(None, root),
             root.join("models")
                 .join("rerankers")
                 .join(LOCAL_RERANKER_DIR_NAME)
         );
         assert_eq!(
-            resolve_local_reranker_model_dir_from(Some(Path::new("override")), Some(root)),
+            resolve_local_reranker_model_dir_from(Some(Path::new("override")), root),
             PathBuf::from("override")
         );
     }

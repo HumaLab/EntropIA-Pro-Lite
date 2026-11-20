@@ -84,6 +84,7 @@ def create_fixture_root(root: Path, platform: str = 'linux-x86_64') -> Path:
     manifest = {
         'platform': platform,
         'pack_version': 'fixture-pack',
+        'runtime_abi': 7,
         'app_version': 'fixture-app',
         'payload_profile': 'fixture',
         'release_injection_required': True,
@@ -236,6 +237,13 @@ class RuntimePackScriptTests(unittest.TestCase):
             self.assertEqual(smoke_payload['payload_profile'], 'release')
             self.assertEqual(smoke_payload['external_artifacts_required'], [])
             self.assertGreaterEqual(smoke_payload['entry_counts']['wheelhouse'], 3)
+            # The app reuses an installed runtime across app versions by this
+            # field, so the release pack must carry the bundled manifest's.
+            built_manifest = json.loads(
+                (pack_root / 'linux-x86_64' / 'manifest.json').read_text(encoding='utf-8')
+            )
+            self.assertEqual(built_manifest['runtime_abi'], 7)
+            self.assertEqual(built_manifest['app_version'], 'test-app')
 
     def test_materialize_windows_repackages_installed_dist_info_as_wheel(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

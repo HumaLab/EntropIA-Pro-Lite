@@ -177,7 +177,7 @@ fn admit_manual_ocr(conn: &rusqlite::Connection, asset_id: &str, mode: &str) -> 
             |row| row.get::<_, String>(0),
         )
         .map_err(|_| format!("invalid_selection: unknown asset {asset_id}"))?;
-    repository::admit_or_attach(
+    let outcome = repository::admit_or_attach(
         conn,
         &batch,
         "ocr",
@@ -187,6 +187,11 @@ fn admit_manual_ocr(conn: &rusqlite::Connection, asset_id: &str, mode: &str) -> 
         &crate::processing::ocr::ocr_task_contract(mode),
         None,
     )?;
+    // Asking again retries a unit an earlier configuration failure parked
+    // (audit 1.8.1, item 8); attaching alone left it blocked.
+    if !outcome.created {
+        repository::requeue_ocr_configuration_blocked_task(conn, &outcome.task_id)?;
+    }
     Ok(())
 }
 /// Materialize a normalized region from one PDF page as a standalone PDF.
@@ -373,8 +378,14 @@ pub struct GlmOcrDownloadErrorPayload {
 #[tauri::command]
 pub async fn glm_ocr_local_info(
     db: State<'_, AppDbState>,
+    app_handle: AppHandle,
 ) -> Result<super::glm_ocr_local::GlmOcrLocalInfo, String> {
-    Ok(super::glm_ocr_local::local_info(&db.db_path))
+    use tauri::Manager;
+    let resource_dir = app_handle.path().resource_dir().ok();
+    Ok(super::glm_ocr_local::local_info(
+        &db.db_path,
+        resource_dir.as_deref(),
+    ))
 }
 
 /// Without `local-ml` there is no local engine to feed, so the command stays
@@ -505,8 +516,14 @@ pub struct QwenCorrectionDownloadErrorPayload {
 #[tauri::command]
 pub async fn qwen_correction_local_info(
     db: State<'_, AppDbState>,
+    app_handle: AppHandle,
 ) -> Result<super::qwen_local::QwenLocalInfo, String> {
-    Ok(super::qwen_local::local_info(&db.db_path))
+    use tauri::Manager;
+    let resource_dir = app_handle.path().resource_dir().ok();
+    Ok(super::qwen_local::local_info(
+        &db.db_path,
+        resource_dir.as_deref(),
+    ))
 }
 
 /// Without `local-ml` there is no local engine to feed, so the command stays
@@ -626,6 +643,78 @@ pub async fn qwen_correction_download_models(
     Err("No requerido en este build (solo Pro con modelos locales).".to_string())
 }
 
+/// Download the `llama-server` build both local engines run on, where the
+/// installer does not ship it (Windows; see `llama_server_download`). Emits
+/// `llama-server:download_progress`, `llama-server:download_complete` and
+/// `llama-server:download_error`. Returns immediately after queueing.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn llama_server_download(
+    db: State<'_, AppDbState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    super::llama_server_download::start_download(&db.db_path, app_handle)
+}
+
+/// Without `local-ml` there is no local engine to run.
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn llama_server_download(
+    _db: State<'_, AppDbState>,
+    _app_handle: AppHandle,
+) -> Result<String, String> {
+    Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
+/// How OCRH would run right now, for the warnings before a slow local run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct LocalOcrhInfo {
+    /// The OCRH mode is `local`: a batch runs OCRL unless it asks for OCRH.
+    pub local_mode: bool,
+    /// OCRH would run locally (local mode, or auto without a GLM-OCR key) on
+    /// the CPU: Pro without an NVIDIA GPU, where it falls back to PaddleOCR-VL
+    /// at ~15 min per page (R17).
+    pub high_on_cpu: bool,
+}
+
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
+fn local_ocrh_info(mode: &str, has_glm_key: bool, has_gpu: bool) -> LocalOcrhInfo {
+    let local_mode = mode == super::OCRH_MODE_LOCAL;
+    let runs_locally = local_mode || (mode == "auto" && !has_glm_key);
+    LocalOcrhInfo {
+        local_mode,
+        high_on_cpu: runs_locally && !has_gpu,
+    }
+}
+
+/// Always the default in Lite, which has no local OCRH.
+#[tauri::command]
+pub async fn ocr_local_high_info(db: State<'_, AppDbState>) -> Result<LocalOcrhInfo, String> {
+    #[cfg(feature = "local-ml")]
+    {
+        let db_path = db.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            // A connection of its own: the GLM key read may go to the keyring.
+            let conn = crate::db::open::open_archive_connection(&db_path)?;
+            let mode = super::get_ocrh_mode(&conn);
+            let has_glm_key = !super::get_glm_ocr_api_key(&conn).is_empty();
+            drop(conn);
+            Ok(local_ocrh_info(
+                &mode,
+                has_glm_key,
+                crate::llm::has_nvidia_gpu(),
+            ))
+        })
+        .await
+        .map_err(|e| format!("OCRH probe failed: {e}"))?
+    }
+    #[cfg(not(feature = "local-ml"))]
+    {
+        let _ = db;
+        Ok(LocalOcrhInfo::default())
+    }
+}
+
 /// Read the manual-edit signal of an asset's OCR text without changing it.
 ///
 /// A user-requested OCR replaces the text even when it was corrected by hand
@@ -674,6 +763,35 @@ pub async fn update_extraction_text_cmd(
     .await
 }
 
+/// Left in `thumbnails/` once the PDF thumbnails older builds rendered are
+/// gone: those builds turned every landscape page 90°.
+const PDF_THUMBNAILS_UPRIGHT_MARKER: &str = ".pdf-thumbnails-upright";
+
+/// Removes, once per cache folder, the PDF thumbnails (`{asset_id}.png`) that
+/// older builds rendered, so each card renders again in the page's own
+/// orientation. Image thumbnails (`image-…`) are not PDF renders and stay.
+/// Best-effort: a thumbnail that cannot be removed is only a stale picture.
+fn purge_pdf_thumbnails_rendered_sideways(thumb_dir: &std::path::Path) {
+    let marker = thumb_dir.join(PDF_THUMBNAILS_UPRIGHT_MARKER);
+    if marker.exists() {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(thumb_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(stem) = name.to_str().and_then(|name| name.strip_suffix(".png")) else {
+                continue;
+            };
+            if uuid::Uuid::parse_str(stem).is_ok() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    if let Err(error) = std::fs::write(&marker, b"") {
+        log::warn!("could not record the PDF thumbnail purge: {error}");
+    }
+}
+
 /// Generate a thumbnail PNG for the first page of a PDF.
 ///
 /// Returns the filesystem path to the cached thumbnail. The frontend should
@@ -704,6 +822,7 @@ pub async fn generate_pdf_thumbnail(
     std::fs::create_dir_all(&thumb_dir)
         .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
 
+    purge_pdf_thumbnails_rendered_sideways(&thumb_dir);
     let thumb_path = thumb_dir.join(format!("{asset_id}.png"));
 
     // Return cached thumbnail immediately if it exists
@@ -1159,6 +1278,21 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::tempdir;
 
+    #[test]
+    fn ocrh_warns_only_when_it_would_run_locally_without_a_gpu() {
+        let warn = |mode, key, gpu| local_ocrh_info(mode, key, gpu).high_on_cpu;
+        assert!(warn("local", true, false));
+        assert!(
+            warn("auto", false, false),
+            "auto without a key falls back to local"
+        );
+        assert!(!warn("auto", true, false), "auto with a key runs remote");
+        assert!(!warn("glm_ocr", false, false));
+        assert!(!warn("local", false, true), "a GPU runs it in seconds");
+        assert!(local_ocrh_info("local", false, true).local_mode);
+        assert!(!local_ocrh_info("auto", false, false).local_mode);
+    }
+
     /// Write a JPEG of the given size, roughly what a scanned page looks like.
     fn write_source_image(path: &std::path::Path, width: u32, height: u32) {
         let mut buffer = image::RgbImage::new(width, height);
@@ -1261,6 +1395,34 @@ mod tests {
             .expect("image-{asset_id}-{hash}.png");
         assert_eq!(hash.len(), 64, "{name}");
         assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+    }
+
+    #[test]
+    fn pdf_thumbnails_rendered_sideways_are_purged_once() {
+        let dir = tempdir().expect("tempdir");
+        let thumb_dir = dir.path().join("thumbnails");
+        std::fs::create_dir_all(&thumb_dir).expect("thumb dir");
+        let pdf_thumb = thumb_dir.join("0644e951-f15c-4eb6-bae4-f96f35632120.png");
+        let image_thumb = thumb_dir.join(image_thumbnail_file_name(
+            "0644e951-f15c-4eb6-bae4-f96f35632120",
+            "/a/scan.png",
+        ));
+        let not_ours = thumb_dir.join("notes.png");
+        for path in [&pdf_thumb, &image_thumb, &not_ours] {
+            std::fs::write(path, b"png").expect("seed");
+        }
+
+        purge_pdf_thumbnails_rendered_sideways(&thumb_dir);
+
+        // Older builds turned landscape pages 90°: those cards render again.
+        assert!(!pdf_thumb.exists(), "the PDF thumbnail is rendered again");
+        assert!(image_thumb.exists(), "image thumbnails are not PDF renders");
+        assert!(not_ours.exists(), "a name that is not an asset id stays");
+
+        // Once purged, a thumbnail rendered upright is a cache hit for good.
+        std::fs::write(&pdf_thumb, b"upright").expect("new thumbnail");
+        purge_pdf_thumbnails_rendered_sideways(&thumb_dir);
+        assert_eq!(std::fs::read(&pdf_thumb).expect("read"), b"upright");
     }
 
     #[test]

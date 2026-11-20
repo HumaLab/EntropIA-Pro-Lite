@@ -28,6 +28,8 @@ pub struct ModelDownloadErrorPayload {
 }
 
 const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024;
+/// Disk writes are batched to this size (R8).
+const DOWNLOAD_WRITE_BUFFER: usize = 1 << 20;
 const DOWNLOAD_TIMEOUT_SECS: u64 = 600;
 
 pub(crate) fn open_managed_models_child(
@@ -224,46 +226,54 @@ pub fn download_model_file(
     let mut downloaded_bytes = 0_u64;
     let mut buffer = vec![0_u8; DOWNLOAD_CHUNK_SIZE];
     let mut last_reported_pct = 0_u8;
+    {
+        // A blocking read returns about one TLS record (~16 KB); writing each
+        // straight to disk is a syscall (and an antivirus hook) per record
+        // (R8). Batch them into 1 MiB writes.
+        let mut writer =
+            std::io::BufWriter::with_capacity(DOWNLOAD_WRITE_BUFFER, temporary.writer());
+        loop {
+            let read = reader
+                .read(&mut buffer)
+                .map_err(|e| format!("Failed while reading download stream: {e}"))?;
+            if read == 0 {
+                break;
+            }
+            writer
+                .write_all(&buffer[..read])
+                .map_err(|e| format!("Failed while writing download: {e}"))?;
+            downloaded_bytes += read as u64;
 
-    loop {
-        let read = reader
-            .read(&mut buffer)
-            .map_err(|e| format!("Failed while reading download stream: {e}"))?;
-        if read == 0 {
-            break;
+            let pct = total_bytes.and_then(|total| {
+                if total > 0 {
+                    Some(((downloaded_bytes.saturating_mul(100)) / total).min(100) as u8)
+                } else {
+                    None
+                }
+            });
+
+            if let Some(pct) = pct {
+                if pct >= last_reported_pct.saturating_add(5) || pct == 100 {
+                    last_reported_pct = pct;
+                    let _ = app_handle.emit(
+                        &format!("{event_scope}:download_progress"),
+                        ModelDownloadProgressPayload {
+                            pct,
+                            downloaded_bytes,
+                            total_bytes,
+                        },
+                    );
+                    crate::app_logs::info(
+                        app_handle,
+                        format!("{event_scope}/download"),
+                        format!("Descarga de modelo local {pct}%"),
+                    );
+                }
+            }
         }
-        temporary
-            .writer()
-            .write_all(&buffer[..read])
+        writer
+            .flush()
             .map_err(|e| format!("Failed while writing download: {e}"))?;
-        downloaded_bytes += read as u64;
-
-        let pct = total_bytes.and_then(|total| {
-            if total > 0 {
-                Some(((downloaded_bytes.saturating_mul(100)) / total).min(100) as u8)
-            } else {
-                None
-            }
-        });
-
-        if let Some(pct) = pct {
-            if pct >= last_reported_pct.saturating_add(5) || pct == 100 {
-                last_reported_pct = pct;
-                let _ = app_handle.emit(
-                    &format!("{event_scope}:download_progress"),
-                    ModelDownloadProgressPayload {
-                        pct,
-                        downloaded_bytes,
-                        total_bytes,
-                    },
-                );
-                crate::app_logs::info(
-                    app_handle,
-                    format!("{event_scope}/download"),
-                    format!("Descarga de modelo local {pct}%"),
-                );
-            }
-        }
     }
 
     temporary.finish(filename)?;

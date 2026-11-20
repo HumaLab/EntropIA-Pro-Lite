@@ -5,6 +5,10 @@ import { openExternalUrl } from './external-links'
 /** The exact string the backend sends when there is no OpenRouter key (S6). */
 export const HELP_NO_OPENROUTER_KEY = 'help_no_openrouter_key'
 
+/** The exact string the backend sends when `llm_mode = local` but the local
+ * Gemma file is not on disk (R22). */
+export const HELP_LOCAL_MODEL_MISSING = 'help_local_model_missing'
+
 /** The published user manual the no-key page links to. */
 export const HELP_MANUAL_URL =
   'https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html'
@@ -56,12 +60,20 @@ export interface HelpAnswer {
   roundLimitReached: boolean
   /** True when the provider rejected tool use and the answer is plain, without actions (T22). */
   toolsUnavailable: boolean
+  /** True when the local Gemma wrote it from the manual only, with no network call (R22). */
+  localModel?: boolean
   /** The stored conversation the question and answer joined (S19); absent when nothing was sent. */
   conversationId?: string
 }
 
 export interface HelpStatus {
   hasOpenrouterKey: boolean
+  /** The OpenRouter model the agent runs on. */
+  model?: string
+  /** True when `llm_mode = local` in Pro sends questions to the local Gemma (R22). */
+  localEngine?: boolean
+  /** True when the local Gemma file is on disk. */
+  localModelReady?: boolean
 }
 
 /** Whether the assistant can run on the user's own OpenRouter key (S3, S6). */
@@ -92,7 +104,13 @@ export function helpAsk(
   question: string,
   history: HelpTurn[] = [],
   diagnostics?: string | null,
-  options?: { documents?: boolean; requestId?: string; conversationId?: string }
+  options?: {
+    documents?: boolean
+    requestId?: string
+    conversationId?: string
+    /** Send this question to OpenRouter even when the local Gemma answers (R22). */
+    remote?: boolean
+  }
 ): Promise<HelpAnswer> {
   const kept = history.slice(-HELP_HISTORY_MAX_TURNS)
   const extra: {
@@ -100,11 +118,13 @@ export function helpAsk(
     documents?: boolean
     requestId?: string
     conversationId?: string
+    remote?: boolean
   } = {}
   if (diagnostics) extra.diagnostics = diagnostics
   if (options?.documents) extra.documents = true
   if (options?.requestId) extra.requestId = options.requestId
   if (options?.conversationId) extra.conversationId = options.conversationId
+  if (options?.remote) extra.remote = true
   return invoke<HelpAnswer>('help_ask', { question, history: kept, ...extra })
 }
 
@@ -645,6 +665,13 @@ export function listenHelpApproval(
 export function isNoKeyError(error: unknown): boolean {
   if (typeof error === 'string') return error.includes(HELP_NO_OPENROUTER_KEY)
   if (error instanceof Error) return error.message.includes(HELP_NO_OPENROUTER_KEY)
+  return false
+}
+
+/** True when the failure is the backend's missing-local-Gemma rejection (R22). */
+export function isLocalModelMissingError(error: unknown): boolean {
+  if (typeof error === 'string') return error.includes(HELP_LOCAL_MODEL_MISSING)
+  if (error instanceof Error) return error.message.includes(HELP_LOCAL_MODEL_MISSING)
   return false
 }
 

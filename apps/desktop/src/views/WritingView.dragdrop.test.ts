@@ -99,7 +99,7 @@ describe('a writing view destroyed before its drop subscription settles', () => 
   })
 
   it('does not subscribe when it was destroyed during the settings await', () => {
-    const settingsAt = onMountBody.indexOf('settingsGet(')
+    const settingsAt = onMountBody.indexOf('apiKeyState(')
     const bailAt = onMountBody.indexOf('if (destroyed) return', settingsAt)
     const registerAt = onMountBody.indexOf('getCurrentWebview()')
     expect(settingsAt).toBeGreaterThan(-1)

@@ -855,3 +855,71 @@ fn deleting_a_collection_removes_its_rows_files_and_records_d_tombstones() {
         "an asset outside the archive is never moved"
     );
 }
+
+fn sweep_setting(f: &Fixture) -> Option<String> {
+    crate::settings::get_raw_setting(&f.conn, crate::asset_sweep::SETTING_KEY)
+}
+
+/// The seeded archive has no settings table; the app's archive always does.
+fn mark_sweep_done(f: &Fixture) {
+    f.conn
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        )
+        .unwrap();
+    crate::settings::set_setting(&f.conn, crate::asset_sweep::SETTING_KEY, "done").unwrap();
+}
+
+#[test]
+fn a_clean_delete_leaves_the_orphan_sweep_alone() {
+    let f = fixture();
+    mark_sweep_done(&f);
+    let item = item_id(ALFA, 1);
+    f.write_file(&f.item_folder(ALFA, &item).join("uuid_acta.pdf"), b"%PDF");
+
+    delete_items(
+        &f.conn,
+        &f.data_dir,
+        &f.cache_dir,
+        std::slice::from_ref(&item),
+    )
+    .unwrap();
+
+    assert!(!f.item_folder(ALFA, &item).exists());
+    assert_eq!(sweep_setting(&f).as_deref(), Some("done"));
+}
+
+/// R24: a file another process holds open survives the delete; the orphan
+/// sweep is re-armed so the next start moves it to quarantine.
+#[cfg(windows)]
+#[test]
+fn a_file_held_open_rearms_the_orphan_sweep() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let f = fixture();
+    mark_sweep_done(&f);
+    let item = item_id(ALFA, 1);
+    let held = f.item_folder(ALFA, &item).join("uuid_acta.pdf");
+    f.write_file(&held, b"%PDF");
+    // No sharing at all: Windows refuses to delete it, like os error 32.
+    let _open = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&held)
+        .unwrap();
+
+    delete_items(
+        &f.conn,
+        &f.data_dir,
+        &f.cache_dir,
+        std::slice::from_ref(&item),
+    )
+    .unwrap();
+
+    assert!(held.exists(), "the held file is still there");
+    assert_eq!(
+        sweep_setting(&f),
+        None,
+        "the sweep runs again at the next start"
+    );
+}

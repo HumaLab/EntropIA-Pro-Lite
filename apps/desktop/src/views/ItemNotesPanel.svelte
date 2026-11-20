@@ -30,6 +30,7 @@
     onTopicsChange,
     onSaveNote,
     onTranscribeDictation,
+    onDictationHelp,
     onSaveEdit,
     onCancelEdit,
     onEditNote,
@@ -52,6 +53,7 @@
     onTopicsChange: NonNullable<TopicEditorProps['onchange']>
     onSaveNote: NonNullable<NoteEditorProps['onsave']>
     onTranscribeDictation: NonNullable<NoteEditorProps['ondictate']>
+    onDictationHelp?: NoteEditorProps['ondictationhelp']
     onSaveEdit: (noteId: string, content: string) => void | Promise<void>
     onCancelEdit: () => void
     onEditNote: (note: Note) => void
@@ -174,6 +176,7 @@
   <NoteEditor
     onsave={onSaveNote}
     ondictate={onTranscribeDictation}
+    ondictationhelp={onDictationHelp}
     ondictationlog={logDictationDiagnostic}
     clearOnSave={true}
     placeholder={translate('item.writeNote')}
@@ -200,6 +203,7 @@
                 onsave={(content) => onSaveEdit(note.id, content)}
                 oncancel={onCancelEdit}
                 ondictate={onTranscribeDictation}
+                ondictationhelp={onDictationHelp}
                 ondictationlog={logDictationDiagnostic}
                 clearOnSave={false}
                 saveLabel={translate('item.saveNote')}

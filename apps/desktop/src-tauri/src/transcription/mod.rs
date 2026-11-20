@@ -16,8 +16,8 @@ use engine::TranscriptionResult;
 use engine::{WhisperConfig, WhisperEngine};
 #[cfg(feature = "local-ml")]
 use parakeet::{
-    parakeet_supports_language, ParakeetConfig, ParakeetEngine, PARAKEET_MODEL_NAME,
-    PARAKEET_MODEL_SUBDIR,
+    parakeet_installed, parakeet_model_dir, parakeet_supports_language, ParakeetConfig,
+    ParakeetEngine, PARAKEET_MODEL_NAME,
 };
 use serde::Serialize;
 use std::path::Path;
@@ -412,12 +412,28 @@ pub(super) fn ensure_selected_cloud_key(conn: &rusqlite::Connection) -> Result<(
     Ok(())
 }
 
+/// Whether the selected provider needs the managed AI runtime before it can
+/// start. Only faster-whisper runs on the runtime's Python; Parakeet is ONNX
+/// inside the app and AssemblyAI is remote, so neither must wait for (or fail
+/// on) a runtime bootstrap. `auto` is left to the provider chain: a runtime
+/// error there falls back to AssemblyAI instead of failing up front.
+#[cfg(feature = "local-ml")]
+pub(super) fn selected_provider_needs_runtime(conn: &rusqlite::Connection) -> bool {
+    get_stt_mode(conn) == STT_MODE_LOCAL && get_local_engine(conn) == STT_LOCAL_ENGINE_WHISPER
+}
+
+#[cfg(not(feature = "local-ml"))]
+pub(super) fn selected_provider_needs_runtime(_conn: &rusqlite::Connection) -> bool {
+    false
+}
+
 #[cfg(feature = "local-ml")]
 pub fn local_transcription_available(settings_db_path: Option<&Path>) -> bool {
-    // Parakeet downloads its model on first use, so selecting it counts as
-    // available; otherwise fall back to the faster-whisper Python probe.
+    // Parakeet counts only once its model is on disk (R11): it used to count
+    // as available unconditionally and then download 2.5 GB inside the first
+    // dictation. A missing model is reported, never covered by faster-whisper.
     if local_engine_is_parakeet(settings_db_path) {
-        return true;
+        return settings_db_path.is_some_and(|path| parakeet_installed(&parakeet_model_dir(path)));
     }
     which_python(settings_db_path).is_some()
 }
@@ -465,12 +481,23 @@ fn transcribe_with_local_provider(
             emit_progress(app_handle, asset_id, pct, stage);
         }
     };
+    let mut parakeet_error = None;
+    let mut speakers_requested = false;
     if get_local_engine(conn) == STT_LOCAL_ENGINE_PARAKEET
         && parakeet_supports_language(TRANSCRIPTION_LANGUAGE)
     {
-        let diarize = get_bool_setting(conn, STT_SETTING_LOCAL_DIARIZE);
-        match transcribe_with_parakeet(app_handle, settings_db_path, audio_path, diarize, &progress)
-        {
+        // Not downloaded is not a failure to cover with faster-whisper: the
+        // fallback probes every Python on the machine (~40 s) and then hides
+        // the one thing to do. Say it at once (R11); `auto` still falls back
+        // to AssemblyAI on this error.
+        if !settings_db_path.is_some_and(|path| parakeet_installed(&parakeet_model_dir(path))) {
+            return Err(parakeet::PARAKEET_NOT_DOWNLOADED.to_string());
+        }
+        // A dictation (no asset) is one voice inserting text: no speaker
+        // labels in it, and no 400 MB diarizer download inside the call.
+        let diarize = asset_id.is_some() && get_bool_setting(conn, STT_SETTING_LOCAL_DIARIZE);
+        speakers_requested = diarize;
+        match transcribe_with_parakeet(settings_db_path, audio_path, diarize, &progress) {
             Ok((result, warning)) => {
                 return Ok(ManagedTranscriptionResult {
                     transcription: result,
@@ -483,14 +510,35 @@ fn transcribe_with_local_provider(
                     target: "transcription",
                     "Parakeet failed, falling back to faster-whisper: {error}"
                 );
+                parakeet_error = Some(error);
             }
         }
     }
-    let result = transcribe_audio_file(app_handle, settings_db_path, audio_path)?;
+    let parakeet_failed = parakeet_error.is_some();
+    let result = transcribe_audio_file(app_handle, settings_db_path, audio_path).map_err(
+        // The engine the user picked speaks first: "Parakeet is not
+        // downloaded" says what to do, a missing faster-whisper does not.
+        |whisper_error| match parakeet_error {
+            Some(parakeet_error) => {
+                format!("{parakeet_error} (respaldo faster-whisper: {whisper_error})")
+            }
+            None => whisper_error,
+        },
+    )?;
     Ok(ManagedTranscriptionResult {
         transcription: result,
         model_name: "faster-whisper/base",
-        warning: None,
+        warning: whisper_fallback_warning(speakers_requested, parakeet_failed),
+    })
+}
+
+/// faster-whisper has no speaker labels. When it covered for a failed Parakeet
+/// run that was asked to label speakers, the transcript comes back without
+/// them; say so instead of leaving the user to think the labelling failed.
+#[cfg(feature = "local-ml")]
+fn whisper_fallback_warning(speakers_requested: bool, parakeet_failed: bool) -> Option<String> {
+    (speakers_requested && parakeet_failed).then(|| {
+        "Parakeet no pudo procesar este audio y se transcribió con faster-whisper, que no identifica hablantes: el texto no tiene etiquetas de hablante.".to_string()
     })
 }
 
@@ -501,11 +549,11 @@ fn get_bool_setting(conn: &rusqlite::Connection, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Load (once) + transcribe via the resident Parakeet engine.
+/// Load (once) + transcribe via the resident Parakeet engine. Never
+/// downloads: a missing model fails at once with [`parakeet::PARAKEET_NOT_DOWNLOADED`].
 #[cfg(feature = "local-ml")]
 fn transcribe_with_parakeet(
-    app_handle: &AppHandle,
-    _settings_db_path: Option<&Path>,
+    settings_db_path: Option<&Path>,
     audio_path: &str,
     diarize: bool,
     on_progress: &dyn Fn(u8, &str),
@@ -514,10 +562,11 @@ fn transcribe_with_parakeet(
         .lock()
         .map_err(|_| "Parakeet engine lock poisoned".to_string())?;
     if guard.is_none() {
-        let model_dir = resolve_model_cache_dir(app_handle)?.join(PARAKEET_MODEL_SUBDIR);
+        let db_path = settings_db_path
+            .ok_or_else(|| "Parakeet needs the archive path to find its model".to_string())?;
         let engine = ParakeetEngine::init(
             ParakeetConfig {
-                model_dir,
+                model_dir: parakeet_model_dir(db_path),
                 language: TRANSCRIPTION_LANGUAGE.to_string(),
             },
             on_progress,
@@ -714,6 +763,61 @@ mod tests {
     use crate::runtime::status::{RuntimeCapability, RuntimeState, RuntimeStatus};
     use std::cell::RefCell;
     use tempfile::tempdir;
+
+    fn settings_conn(pairs: &[(&str, &str)]) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        for (key, value) in pairs {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES (?1, ?2)",
+                rusqlite::params![key, value],
+            )
+            .expect("insert setting");
+        }
+        conn
+    }
+
+    #[test]
+    #[cfg(feature = "local-ml")]
+    fn whisper_fallback_warns_only_when_requested_speakers_are_lost() {
+        let warning = whisper_fallback_warning(true, true).expect("speakers lost");
+        assert!(warning.contains("no identifica hablantes"), "{warning}");
+        assert_eq!(whisper_fallback_warning(false, true), None);
+        assert_eq!(whisper_fallback_warning(true, false), None);
+        assert_eq!(whisper_fallback_warning(false, false), None);
+    }
+
+    #[test]
+    fn only_local_whisper_needs_the_managed_runtime() {
+        let cases: &[(&[(&str, &str)], bool)] = &[
+            (&[], false),
+            (
+                &[("stt_mode", "local"), ("stt_local_engine", "parakeet")],
+                false,
+            ),
+            (
+                &[("stt_mode", "local"), ("stt_local_engine", "whisper")],
+                true,
+            ),
+            (
+                &[("stt_mode", "auto"), ("stt_local_engine", "whisper")],
+                false,
+            ),
+            (
+                &[("stt_mode", "assemblyai"), ("stt_local_engine", "whisper")],
+                false,
+            ),
+        ];
+        for (settings, expected) in cases {
+            let conn = settings_conn(settings);
+            assert_eq!(
+                selected_provider_needs_runtime(&conn),
+                *expected,
+                "settings {settings:?}"
+            );
+        }
+    }
 
     #[test]
     fn resolve_transcription_script_prefers_managed_runtime_copy() {

@@ -207,6 +207,65 @@ describe('NoteEditor dictation', () => {
     expect(stopTrackMock).toHaveBeenCalledOnce()
   })
 
+  it('shows the backend reason when the transcription is rejected with a string', async () => {
+    // Tauri rejects `invoke` with the backend message as a plain string.
+    const ondictate = vi.fn().mockRejectedValue('Whisper needs the AI runtime')
+    render(NoteEditor, { props: { ondictate } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Start dictation' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop dictation' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('note-editor-dictation-message')).toHaveTextContent(
+        'Could not transcribe the audio. Whisper needs the AI runtime'
+      )
+    })
+  })
+
+  it('keeps the generic message when the rejection carries no reason', async () => {
+    const ondictate = vi.fn().mockRejectedValue(undefined)
+    render(NoteEditor, { props: { ondictate } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Start dictation' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop dictation' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('note-editor-dictation-message')).toHaveTextContent(
+        /^Could not transcribe the audio\.$/
+      )
+    })
+  })
+
+  it('offers the app fix next to a failed dictation when the app provides one', async () => {
+    const ondictate = vi.fn().mockRejectedValue('Whisper needs the AI runtime')
+    const ondictationhelp = vi.fn()
+    render(NoteEditor, { props: { ondictate, ondictationhelp } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Start dictation' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop dictation' }))
+
+    const help = await screen.findByRole('button', { name: 'Open AI dependencies' })
+    await fireEvent.click(help)
+    expect(ondictationhelp).toHaveBeenCalledOnce()
+  })
+
+  it('shows no fix button after a successful dictation or without a handler', async () => {
+    const ondictationhelp = vi.fn()
+    render(NoteEditor, {
+      props: { ondictate: vi.fn().mockResolvedValue('hola'), ondictationhelp },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Start dictation' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop dictation' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('note-editor-dictation-message')).toHaveTextContent(
+        'Text inserted from the microphone.'
+      )
+    })
+    expect(screen.queryByTestId('note-editor-dictation-help')).not.toBeInTheDocument()
+  })
+
   it('waits for the final audio chunk when stop fires before dataavailable', async () => {
     FakeMediaRecorder.emitStopBeforeData = true
     const ondictate = vi.fn().mockResolvedValue('late chunk text')

@@ -5,6 +5,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import type { LlamaServerSource } from './glm-ocr-local'
 
 // Only the Pro (local-ML) build ships the local engine; under the API-only
 // variant these wrappers stay inert like the llm.ts download surface.
@@ -14,6 +15,7 @@ export interface QwenLocalInfo {
   model_present: boolean
   mmproj_present: boolean
   server_present: boolean
+  server_source: LlamaServerSource
   models_dir: string
   repo_url: string
 }

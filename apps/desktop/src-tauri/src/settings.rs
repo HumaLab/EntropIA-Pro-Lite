@@ -61,6 +61,41 @@ const SECRET_SETTING_KEYS: [&str; 6] = [
     HLAB_PUBLISH_KEY,
     VERCEL_AI_GATEWAY_API_KEY,
 ];
+
+/// Provider keys the person can switch off without deleting them (Settings →
+/// APIs remotas, "Usar esta API"). A switched-off key stays stored, but every
+/// feature reads it as absent: no request reaches that provider, and the
+/// automatic modes use only the local engine. Only the connection test still
+/// reads it, so a key can be checked before switching it back on.
+const SWITCHABLE_API_KEYS: [&str; 5] = [
+    OPENROUTER_API_KEY,
+    ASSEMBLYAI_API_KEY,
+    GLM_OCR_API_KEY,
+    ZOTERO_API_KEY,
+    VERCEL_AI_GATEWAY_API_KEY,
+];
+
+/// The `app_settings` key that switches `api_key` off (`"1"`), if it can be.
+pub(crate) fn api_disabled_setting(api_key: &str) -> Option<String> {
+    SWITCHABLE_API_KEYS
+        .contains(&api_key)
+        .then(|| format!("{api_key}_disabled"))
+}
+
+/// Whether the person switched this provider key off.
+pub(crate) fn api_key_disabled(conn: &rusqlite::Connection, api_key: &str) -> bool {
+    api_disabled_setting(api_key)
+        .and_then(|flag| get_raw_setting(conn, &flag))
+        .is_some_and(|value| value.trim() == "1")
+}
+
+/// Whether a provider key is stored and switched on, without resolving the
+/// secret: for availability checks that must not touch the credential store.
+pub(crate) fn api_key_configured(conn: &rusqlite::Connection, api_key: &str) -> bool {
+    !api_key_disabled(conn, api_key)
+        && get_raw_setting(conn, api_key).is_some_and(|value| !value.trim().is_empty())
+}
+
 static APP_CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
 
 /// Per-key locks serializing the whole credential-store + `app_settings`
@@ -299,7 +334,11 @@ fn set_setting_with_store(
 /// fresh archive connection reads it; a failure is logged and never fails the
 /// save, exactly like the in-lock pass this replaced.
 fn resume_work_after_setting_change_outside_ui_conn(db_path: &std::path::Path, key: &str) {
-    if !is_embedding_engine_setting(key) && !is_ocr_engine_setting(key) {
+    let key = switched_api_key(key).unwrap_or(key);
+    if !is_embedding_engine_setting(key)
+        && !is_ocr_engine_setting(key)
+        && !is_ner_engine_setting(key)
+    {
         return;
     }
     match crate::db::open::open_archive_connection(db_path) {
@@ -379,6 +418,15 @@ fn resume_configuration_blocked_with(
     }
 }
 
+/// The provider key a "Usar esta API" flag switches (`openrouter_api_key`
+/// for `openrouter_api_key_disabled`): switching it changes what can run
+/// exactly like saving or clearing the key.
+fn switched_api_key(setting: &str) -> Option<&str> {
+    setting
+        .strip_suffix("_disabled")
+        .filter(|key| api_disabled_setting(key).is_some())
+}
+
 /// Requeues queue units parked on a configuration a saved setting decides,
 /// once that configuration is now valid: the embedding engine's
 /// (`configuration_required…` on `embedding`/`bibliography_profile` units)
@@ -392,6 +440,7 @@ fn resume_configuration_blocked_with(
 /// the NER model is saved. Best effort: a failure is logged and never fails
 /// the save. Returns how many units were requeued.
 pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key: &str) -> usize {
+    let key = switched_api_key(key).unwrap_or(key);
     let mut resumed = 0;
     if is_embedding_engine_setting(key) {
         resumed += resume_configuration_blocked_with(
@@ -638,11 +687,28 @@ pub(crate) fn read_settings_unlocked(
     keys: &[&str],
     store: &dyn SecretStore,
 ) -> Result<Vec<Option<String>>, String> {
+    read_settings_unlocked_with(ui_conn, keys, store, true)
+}
+
+/// [`read_settings_unlocked`]; `honor_disabled = false` also reads a provider
+/// key the person switched off (the connection test only).
+fn read_settings_unlocked_with(
+    ui_conn: &Mutex<rusqlite::Connection>,
+    keys: &[&str],
+    store: &dyn SecretStore,
+    honor_disabled: bool,
+) -> Result<Vec<Option<String>>, String> {
     let _key_guards = lock_setting_keys(keys);
     let references: Vec<SettingRef> = {
         let conn = ui_conn.lock().map_err(|e| format!("DB lock error: {e}"))?;
         keys.iter()
-            .map(|key| read_setting_ref(&conn, key))
+            .map(|key| {
+                if honor_disabled && api_key_disabled(&conn, key) {
+                    SettingRef::Missing
+                } else {
+                    read_setting_ref(&conn, key)
+                }
+            })
             .collect()
     };
     Ok(keys
@@ -668,6 +734,9 @@ pub(crate) fn get_secret_setting_unlocked(
 /// explicit `provided` key wins with no database or credential-store access,
 /// and a blank one resolves the stored secret after the connection is
 /// released. The error for a key that is not configured is unchanged.
+///
+/// Only the connection tests call this, so it reads a key the person switched
+/// off too: checking a key must work before switching it back on.
 pub(crate) fn resolve_api_key_input_unlocked(
     ui_conn: &Mutex<rusqlite::Connection>,
     key: &str,
@@ -678,7 +747,10 @@ pub(crate) fn resolve_api_key_input_unlocked(
     if !provided.is_empty() {
         return Ok(provided.to_string());
     }
-    get_secret_setting_unlocked(ui_conn, key, store)?
+    read_settings_unlocked_with(ui_conn, &[key], store, false)?
+        .into_iter()
+        .next()
+        .flatten()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("No protected credential is configured for '{key}'"))
@@ -727,6 +799,9 @@ fn read_setting_for_ipc(
 /// ([`read_setting_ref`] then [`resolve_setting_ref`], wrapped by
 /// [`read_settings_unlocked`]).
 pub fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
+    if api_key_disabled(conn, key) {
+        return None;
+    }
     let reference = read_setting_ref(conn, key);
     resolve_reference_logged(&reference, key, &KeyringSecretStore)
 }
@@ -1622,6 +1697,42 @@ mod tests {
             )
             .expect("resolve explicit key"),
             "explicit"
+        );
+    }
+
+    #[test]
+    fn a_switched_off_key_stays_stored_but_reads_as_absent_except_for_the_test() {
+        let conn = Mutex::new(in_memory_settings_db());
+        {
+            let guard = conn.lock().expect("conn");
+            set_setting(&guard, OPENROUTER_API_KEY, "sk-stored").expect("save key");
+            set_setting(&guard, "openrouter_api_key_disabled", "1").expect("switch off");
+            assert_eq!(get_setting(&guard, OPENROUTER_API_KEY), None);
+            assert!(!api_key_configured(&guard, OPENROUTER_API_KEY));
+            assert_eq!(
+                get_raw_setting(&guard, OPENROUTER_API_KEY).as_deref(),
+                Some("sk-stored"),
+                "the key is kept"
+            );
+        }
+        let read = read_settings_unlocked(&conn, &[OPENROUTER_API_KEY], &KeyringSecretStore)
+            .expect("read");
+        assert_eq!(read, vec![None]);
+        assert_eq!(
+            resolve_api_key_input_unlocked(&conn, OPENROUTER_API_KEY, "", &KeyringSecretStore)
+                .expect("the connection test still reads it"),
+            "sk-stored"
+        );
+
+        set_setting(
+            &conn.lock().expect("conn"),
+            "openrouter_api_key_disabled",
+            "0",
+        )
+        .expect("switch on");
+        assert_eq!(
+            get_setting(&conn.lock().expect("conn"), OPENROUTER_API_KEY).as_deref(),
+            Some("sk-stored")
         );
     }
 

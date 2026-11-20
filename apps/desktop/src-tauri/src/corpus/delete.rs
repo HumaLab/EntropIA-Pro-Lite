@@ -556,8 +556,15 @@ fn canonical_folder(path: &Path, canonical_root: &Path, depth: usize) -> Option<
     (relative.components().count() == depth).then_some(canonical)
 }
 
+thread_local! {
+    /// Files and folders the current [`remove_files_after_commit`] could not
+    /// remove (Windows refuses while another process holds them open).
+    static LEFT_BEHIND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn remove_file_logged(path: &Path) {
     if let Err(error) = std::fs::remove_file(path) {
+        LEFT_BEHIND.with(|left| left.set(left.get() + 1));
         log::warn!(
             "corpus delete: could not remove {}: {error}",
             path.display()
@@ -566,7 +573,8 @@ fn remove_file_logged(path: &Path) {
 }
 
 fn remove_dir_all_logged(path: &Path) {
-    if let Err(error) = std::fs::remove_dir_all(path) {
+    if let Err(error) = crate::path_utils::remove_dir_all_robust(path) {
+        LEFT_BEHIND.with(|left| left.set(left.get() + 1));
         log::warn!(
             "corpus delete: could not remove {}: {error}",
             path.display()
@@ -699,11 +707,35 @@ fn remove_folder_inside(
         );
         return;
     }
-    if let Err(error) = std::fs::remove_dir_all(&canonical) {
-        log::warn!(
-            "corpus delete: could not remove {}: {error}",
-            canonical.display()
-        );
+    remove_dir_all_logged(&canonical);
+}
+
+/// [`remove_files_after_commit`], then hand what stayed behind to the orphan
+/// sweep. On Windows a file another process holds open (the shell's preview,
+/// an antivirus, a viewer) cannot be removed (R24): re-arming the sweep moves
+/// it to `orphaned-assets/` at the next start, when nothing holds it.
+fn remove_files_and_rearm_sweep(
+    conn: &Connection,
+    data_dir: &Path,
+    cache_dir: &Path,
+    outcome: &DeleteOutcome,
+) {
+    LEFT_BEHIND.with(|left| left.set(0));
+    remove_files_after_commit(data_dir, cache_dir, outcome);
+    let left = LEFT_BEHIND.with(|left| left.replace(0));
+    if left == 0 {
+        return;
+    }
+    log::warn!(
+        "corpus delete: {left} archivo(s) o carpeta(s) estaban en uso y quedaron en disco; \
+         el barrido de huérfanos los mueve a {}/ en el próximo arranque",
+        crate::asset_sweep::QUARANTINE_DIR
+    );
+    if let Err(error) = conn.execute(
+        "DELETE FROM app_settings WHERE key = ?1",
+        [crate::asset_sweep::SETTING_KEY],
+    ) {
+        log::warn!("corpus delete: could not re-arm the orphan sweep: {error}");
     }
 }
 
@@ -758,7 +790,7 @@ pub fn delete_items(
 ) -> Result<(), CorpusError> {
     let item_ids = normalized_item_ids(item_ids)?;
     let outcome = run_in_transaction(conn, || delete_items_rows(conn, data_dir, &item_ids))?;
-    remove_files_after_commit(data_dir, cache_dir, &outcome);
+    remove_files_and_rearm_sweep(conn, data_dir, cache_dir, &outcome);
     Ok(())
 }
 
@@ -777,7 +809,7 @@ pub fn delete_items_if_unchanged(
         check_fence(conn, &DeleteScope::Items(item_ids.clone()), expected_fence)?;
         delete_items_rows(conn, data_dir, &item_ids)
     })?;
-    remove_files_after_commit(data_dir, cache_dir, &outcome);
+    remove_files_and_rearm_sweep(conn, data_dir, cache_dir, &outcome);
     Ok(())
 }
 
@@ -792,7 +824,7 @@ pub fn delete_collection(
     let outcome = run_in_transaction(conn, || {
         delete_collection_rows(conn, data_dir, collection_id)
     })?;
-    remove_files_after_commit(data_dir, cache_dir, &outcome);
+    remove_files_and_rearm_sweep(conn, data_dir, cache_dir, &outcome);
     Ok(())
 }
 
@@ -813,7 +845,7 @@ pub fn delete_collection_if_unchanged(
         )?;
         delete_collection_rows(conn, data_dir, collection_id)
     })?;
-    remove_files_after_commit(data_dir, cache_dir, &outcome);
+    remove_files_and_rearm_sweep(conn, data_dir, cache_dir, &outcome);
     Ok(())
 }
 

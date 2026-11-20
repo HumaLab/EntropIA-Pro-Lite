@@ -1,6 +1,12 @@
 <script lang="ts">
   import { loadSampleCollection } from '$lib/sample-collection'
   import { settingsGet, settingsSet } from '$lib/settings'
+  import {
+    acceptLocalModes,
+    dismissLocalModes,
+    localModesOffer,
+    type ModeOffer,
+  } from '$lib/local-modes-offer'
   /**
    * Inicio (home): the startup overview — what to continue, what to start,
    * how the corpus stands, and where the main workspaces are.
@@ -12,6 +18,7 @@
    */
   import { onMount } from 'svelte'
   import { locale, t, type I18nKey } from '$lib/i18n'
+  import { isInflight, trackInflight } from '$lib/inflight.svelte'
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { workspace } from '$lib/workspace'
   import {
@@ -89,6 +96,7 @@
 
   onMount(() => {
     void loadSnapshot()
+    void loadModeOffer()
     // Idempotent (BatchStore memoizes the bootstrap): safe even when
     // BatchStatusIndicator already initialized the same singleton.
     void batchStore.initialize()
@@ -96,6 +104,35 @@
       unsubscribeBatch()
     }
   })
+
+  /** Pro on an archive Lite configured: offer the local engines once (R6). */
+  let modeOffer = $state<ModeOffer[]>([])
+  let modeOfferBusy = $state(false)
+  let modeOfferError = $state<string | null>(null)
+
+  async function loadModeOffer() {
+    try {
+      modeOffer = (await localModesOffer()) ?? []
+    } catch {
+      // Best effort: without the offer, Settings still has every mode.
+      modeOffer = []
+    }
+  }
+
+  async function answerModeOffer(accept: boolean) {
+    modeOfferBusy = true
+    modeOfferError = null
+    try {
+      await (accept ? acceptLocalModes(modeOffer) : dismissLocalModes())
+      modeOffer = []
+    } catch (caught) {
+      modeOfferError = t('home.localModes.failed', {
+        error: caught instanceof Error ? caught.message : String(caught),
+      })
+    } finally {
+      modeOfferBusy = false
+    }
+  }
 
   // ─── Actions ────────────────────────────────────────────────────────────
   // One function per action so a later task can swap its body without
@@ -202,20 +239,23 @@
   }
 
   /** T-37: nine invented documents with their text, to try the app on. */
-  let loadingSample = $state(false)
+  // Loading the samples keeps running after the user leaves Inicio.
+  const SAMPLE_KEY = 'home:sample'
+  let ownLoadingSample = $state(false)
+  const loadingSample = $derived(ownLoadingSample || isInflight(SAMPLE_KEY))
   async function openSampleCollection() {
     if (loadingSample) return
-    loadingSample = true
+    ownLoadingSample = true
     actionError = null
     try {
-      const sample = await loadSampleCollection()
+      const sample = await trackInflight(SAMPLE_KEY, loadSampleCollection)
       navigation.navigate({ name: 'collection', id: sample.id, collectionName: sample.name })
     } catch (failure) {
       actionError = t('home.firstRun.sampleFailed', {
         error: failure instanceof Error ? failure.message : String(failure),
       })
     } finally {
-      loadingSample = false
+      ownLoadingSample = false
     }
   }
 
@@ -414,6 +454,47 @@
 
   {#if actionError}
     <p class="surface-message surface-message--error" role="alert">{actionError}</p>
+  {/if}
+
+  {#if modeOffer.length > 0}
+    <section class="home-panel home-view__mode-offer" aria-labelledby="home-mode-offer-{paneId}">
+      <div class="home-panel__header">
+        <span id="home-mode-offer-{paneId}" class="home-panel__label"
+          >{t('home.localModes.title')}</span
+        >
+      </div>
+      <div class="home-view__mode-offer-body">
+        <p>{t('home.localModes.description')}</p>
+        <ul>
+          {#each modeOffer as mode (mode.key)}
+            <li>{t(`home.localModes.${mode.key}` as const)}</li>
+          {/each}
+        </ul>
+        <p class="home-view__mode-offer-hint">{t('home.localModes.hint')}</p>
+        {#if modeOfferError}
+          <p class="surface-message surface-message--error" role="alert">{modeOfferError}</p>
+        {/if}
+        <div class="home-view__first-run-actions">
+          <Button
+            variant="primary"
+            size="sm"
+            loading={modeOfferBusy}
+            disabled={modeOfferBusy}
+            onclick={() => answerModeOffer(true)}
+          >
+            {t('home.localModes.accept')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={modeOfferBusy}
+            onclick={() => answerModeOffer(false)}
+          >
+            {t('home.localModes.dismiss')}
+          </Button>
+        </div>
+      </div>
+    </section>
   {/if}
 
   {#if activeBatch}
@@ -938,6 +1019,27 @@
     display: flex;
     gap: var(--space-2);
     margin-top: var(--space-2);
+  }
+
+  .home-view__mode-offer {
+    flex: 0 0 auto;
+  }
+
+  .home-view__mode-offer-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4) var(--space-4);
+  }
+
+  .home-view__mode-offer-body ul {
+    margin: 0;
+    padding-left: var(--space-5);
+  }
+
+  .home-view__mode-offer-hint {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
   }
 
   /* ─── Estado del corpus: OCR/STT -> Texto -> Embeddings pipeline ─── */

@@ -485,25 +485,22 @@ describe('HelpBubble (S13, T17)', () => {
     expect(screen.getByRole('button', { name: 'Restaurar' })).toBeInTheDocument()
   })
 
-  it('maximizing the panel puts the help opt-ins on one single-line row', async () => {
+  it('maximizing the panel keeps the help opt-ins on their one row', async () => {
     render(HelpBubble)
     await openPanel()
 
-    expect(document.querySelector('.help-view__optins--single')).toBeNull()
+    expect(document.querySelectorAll('.help-view__optins')).toHaveLength(1)
 
     await fireEvent.click(screen.getByRole('button', { name: 'Maximizar' }))
 
-    const row = document.querySelector('.help-view__optins--single')
+    const row = document.querySelector('.help-view__optins')
     expect(row).not.toBeNull()
     expect(
-      within(row as HTMLElement).getByRole('checkbox', { name: 'Incluir diagnóstico' })
+      within(row as HTMLElement).getByRole('checkbox', { name: 'Diagnóstico' })
     ).toBeInTheDocument()
     expect(
-      within(row as HTMLElement).getByRole('checkbox', { name: 'Buscar en mis documentos' })
+      within(row as HTMLElement).getByRole('checkbox', { name: 'Mis documentos' })
     ).toBeInTheDocument()
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Restaurar' }))
-    expect(document.querySelector('.help-view__optins--single')).toBeNull()
   })
 
   it('toggling maximize keeps the conversation: a typed draft survives', async () => {
@@ -725,7 +722,7 @@ describe('HelpBubble (S13, T17)', () => {
         screen.getByRole('button', { name: 'Enviar' }).closest('.help-view__composer')
       ).not.toBeNull()
 
-      await fireEvent.click(screen.getByRole('button', { name: 'Ver qué se envía' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Ver input' }))
       const pre = await screen.findByText(
         (_content, element) => element?.textContent === PREVIEW_TEXT
       )

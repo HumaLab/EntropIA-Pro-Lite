@@ -713,4 +713,30 @@ mod tests {
         let second = HelpIndex::open(&path, &HelpIndex::bundled_docs()).expect("reopen");
         assert!(second.rebuilt(), "adding the FAQ must rebuild the index");
     }
+
+    #[test]
+    fn a_difference_question_ranks_its_topics_not_difference_titles() {
+        // R22 dev test: «Diferencia entre exportar y respaldar» won this
+        // question and the local model answered that the manual had nothing.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index =
+            HelpIndex::open(&dir.path().join("i.sqlite"), &HelpIndex::manual_docs()).expect("open");
+        let hits = index.search_in(
+            "¿Qué diferencia hay entre OCRL y OCRH?",
+            3,
+            Some(Source::Manual),
+        );
+        assert!(
+            hits.iter().any(|hit| hit.chapter.starts_with("Capítulo 6")),
+            "{:?}",
+            hits.iter().map(|hit| &hit.title).collect::<Vec<_>>()
+        );
+        assert!(
+            !hits
+                .iter()
+                .any(|hit| hit.title.contains("exportar y respaldar")),
+            "{:?}",
+            hits.iter().map(|hit| &hit.title).collect::<Vec<_>>()
+        );
+    }
 }

@@ -122,8 +122,14 @@ pub async fn run(app: &AppHandle, sync_settled: bool) {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(reason))) => {
             // Only worth a line when it is a real decision; an archive that
-            // reclaims by itself says nothing every close.
-            if !matches!(reason, compact::SkipReason::NotNeeded(_)) {
+            // reclaims by itself, or has too little free space to be worth a
+            // VACUUM, says nothing every close.
+            if !matches!(
+                reason,
+                compact::SkipReason::NotNeeded(_)
+                    | compact::SkipReason::FreeBelowFloor { .. }
+                    | compact::SkipReason::FreeBelowRatio { .. }
+            ) {
                 log(app, Outcome::Skipped(reason).summary());
             }
             return;

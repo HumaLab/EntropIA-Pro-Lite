@@ -5,6 +5,8 @@ export interface NoteEditorProps {
   oncancel?: () => void
   ondictate?: (audio: Blob) => Promise<string>
   ondictationlog?: (level: 'info' | 'warn' | 'error', message: string) => void | Promise<void>
+  /** Shown as a button next to a failed dictation, to open the app's fix. */
+  ondictationhelp?: () => void
   dictationMaxSeconds?: number
   clearOnSave?: boolean
   saveLabel?: string
@@ -42,6 +44,7 @@ export interface NoteEditorLabels {
   dictationInserted: string
   dictationNoText: string
   dictationTranscriptionFailed: string
+  dictationOpenDependencies: string
   linkInvalidUrl: string
   linkInvalidHttp: string
   linkInvalidExample: string

@@ -3,6 +3,7 @@
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { locale, t } from '$lib/i18n'
   import { renderMarkdown } from '$lib/markdown'
+  import { followBottom } from '$lib/follow-bottom'
   import {
     HELP_HISTORY_MAX_TURNS,
     describeHelpStep,
@@ -17,6 +18,7 @@
     helpHistoryList,
     helpStatus,
     helpStop,
+    isLocalModelMissingError,
     isNoKeyError,
     listenHelpApproval,
     listenHelpApprovalOutcome,
@@ -44,8 +46,8 @@
    * Compact mode for the floating panel (T15): the panel header replaces the
    * full-page header card, and the view fills the panel body with its own
    * scrolling middle and fixed footer. Standalone use keeps the header card.
-   * `maximized` (T28) drives the single-line opt-in row: the panel owns the
-   * state (HelpBubble) and the view only renders the contract.
+   * `maximized` (S21) centres the conversation in one column: the panel owns
+   * the state (HelpBubble) and the view only renders the contract.
    */
   let { embedded = false, maximized = false }: { embedded?: boolean; maximized?: boolean } =
     $props()
@@ -74,6 +76,8 @@
     roundLimitReached?: boolean
     /** True when the provider rejected tool use and the answer is plain (T22). */
     toolsUnavailable?: boolean
+    /** True when the local Gemma wrote it from the manual only (R22). */
+    localModel?: boolean
     /** Decided MCP approvals that followed this answer (T26). */
     notices?: HelpOutcomeNotice[]
   }
@@ -90,6 +94,9 @@
   // `help://step` events and `helpStop`. Steps accumulate here as they
   // arrive and are replaced by the answer's final list at the end.
   let liveSteps = $state<HelpStep[]>([])
+  // Bumped when the reader starts or opens a conversation: the messages
+  // region re-pins to its end even if it was scrolled up before.
+  let scrollPin = $state(0)
   let currentRequestId = $state<string | null>(null)
   let stopping = $state(false)
   let error = $state<string | null>(null)
@@ -97,6 +104,16 @@
   let includeDiagnostics = $state(false)
   // Opt-in per question, off by default (S12); same reset-after-send pattern.
   let includeDocuments = $state(false)
+  // Where questions go (R22): the local Gemma when `llm_mode = local` in Pro,
+  // else the OpenRouter agent. `useRemote` sends one question to OpenRouter
+  // anyway; same reset-after-send pattern as the other opt-ins.
+  let localEngine = $state(false)
+  let localModelReady = $state(true)
+  let hasOpenrouterKey = $state(false)
+  let remoteModel = $state('')
+  let useRemote = $state(false)
+  // The local engine cannot use tools, so documents need OpenRouter.
+  const documentsAvailable = $derived(!localEngine || useRemote)
   let preview = $state<string | null>(null)
   let previewOpen = $state(false)
   let previewLoading = $state(false)
@@ -130,6 +147,7 @@
       local: meta['local'] === true,
       roundLimitReached: meta['roundLimitReached'] === true,
       toolsUnavailable: meta['toolsUnavailable'] === true,
+      localModel: meta['localModel'] === true,
     }
   }
 
@@ -257,6 +275,7 @@
       const detail = await helpHistoryGet(id)
       conversationId = detail.id
       messages = (detail.messages ?? []).map(historyMessageToMessage)
+      scrollPin += 1
       error = null
       historyOpen = false
     } catch {
@@ -344,7 +363,12 @@
     })
     void helpStatus().then(
       (result) => {
-        status = result.hasOpenrouterKey ? 'ready' : 'no-key'
+        hasOpenrouterKey = result.hasOpenrouterKey
+        remoteModel = result.model ?? ''
+        localEngine = result.localEngine === true
+        localModelReady = result.localModelReady !== false
+        // The local Gemma needs no key (R22): only the OpenRouter agent does.
+        status = result.hasOpenrouterKey || localEngine ? 'ready' : 'no-key'
       },
       () => {
         // A failed check is not a missing key: let the user ask, and let
@@ -415,13 +439,17 @@
       .slice(-HELP_HISTORY_MAX_TURNS)
       .map((message) => ({ role: message.role, content: message.content }))
     messages = [...messages, { role: 'user', content: question }]
+    scrollPin += 1
     if (fromDraft) draft = ''
     // Same pattern as diagnostics (S5): every send starts unsubscribed again.
-    const withDocuments = includeDocuments
+    const withDocuments = includeDocuments && documentsAvailable
     includeDocuments = false
+    const remote = localEngine && useRemote
+    useRemote = false
     try {
       const answer = await helpAsk(question, history, diagnostics, {
         ...(withDocuments ? { documents: true as const } : {}),
+        ...(remote ? { remote: true as const } : {}),
         requestId,
         conversationId,
       })
@@ -437,6 +465,7 @@
           steps: answer.steps ?? [],
           roundLimitReached: answer.roundLimitReached ?? false,
           toolsUnavailable: answer.toolsUnavailable ?? false,
+          localModel: answer.localModel ?? false,
         },
       ]
       void refreshHistory()
@@ -445,6 +474,12 @@
         // No local answer and no key: show the key message (S6) instead of
         // a generic error. The input stays for a local question.
         error = t('help.noKeyBody')
+        if (fromDraft) draft = question
+        return
+      }
+      if (isLocalModelMissingError(sendError)) {
+        localModelReady = false
+        error = t('help.engineLocalMissing')
         if (fromDraft) draft = question
         return
       }
@@ -540,6 +575,9 @@
           </div>
           {#if message.local}
             <p class="help-view__local">{$currentLocale && t('help.localAnswer')}</p>
+          {/if}
+          {#if message.localModel}
+            <p class="help-view__local">{$currentLocale && t('help.localModelAnswer')}</p>
           {/if}
           {#if metaCount(message) > 0}
             {@const metaId = `help-meta-${paneId}-${index}`}
@@ -732,6 +770,7 @@
     </div>
     <div
       class="help-view__messages"
+      use:followBottom={{ pin: scrollPin }}
       role="log"
       aria-live="polite"
       aria-label={$currentLocale && t('help.title')}
@@ -757,7 +796,21 @@
         void send()
       }}
     >
-      <div class="help-view__optins" class:help-view__optins--single={maximized}>
+      <div class="help-view__optins">
+        {#if localEngine && hasOpenrouterKey}
+          <div
+            class="help-view__optin"
+            use:tooltip={$currentLocale && t('help.useRemoteHint', { model: remoteModel })}
+          >
+            <Checkbox
+              bind:checked={useRemote}
+              disabled={sending}
+              label={$currentLocale && t('help.useRemote')}
+            >
+              {$currentLocale && t('help.useRemote')}
+            </Checkbox>
+          </div>
+        {/if}
         <div class="help-view__optin">
           <Checkbox
             bind:checked={includeDiagnostics}
@@ -771,12 +824,18 @@
             class="help-view__info"
             aria-label={$currentLocale && t('help.diagnosticsInfo')}
             aria-describedby="help-diagnostics-hint-{paneId}"
-            use:tooltip={$currentLocale && t('help.diagnosticsHint')}
+            use:tooltip={$currentLocale &&
+              (localEngine && !useRemote
+                ? t('help.diagnosticsHintLocal')
+                : t('help.diagnosticsHint'))}
           >
             <ActionIcon name="info" size={12} />
           </button>
           <span id="help-diagnostics-hint-{paneId}" class="help-view__visually-hidden">
-            {$currentLocale && t('help.diagnosticsHint')}
+            {$currentLocale &&
+              (localEngine && !useRemote
+                ? t('help.diagnosticsHintLocal')
+                : t('help.diagnosticsHint'))}
           </span>
           <button
             type="button"
@@ -789,7 +848,7 @@
         <div class="help-view__optin">
           <Checkbox
             bind:checked={includeDocuments}
-            disabled={sending}
+            disabled={sending || !documentsAvailable}
             label={$currentLocale && t('help.includeDocuments')}
           >
             {$currentLocale && t('help.includeDocuments')}
@@ -799,12 +858,14 @@
             class="help-view__info"
             aria-label={$currentLocale && t('help.documentsInfo')}
             aria-describedby="help-documents-hint-{paneId}"
-            use:tooltip={$currentLocale && t('help.documentsHint')}
+            use:tooltip={$currentLocale &&
+              (documentsAvailable ? t('help.documentsHint') : t('help.documentsNeedRemote'))}
           >
             <ActionIcon name="info" size={12} />
           </button>
           <span id="help-documents-hint-{paneId}" class="help-view__visually-hidden">
-            {$currentLocale && t('help.documentsHint')}
+            {$currentLocale &&
+              (documentsAvailable ? t('help.documentsHint') : t('help.documentsNeedRemote'))}
           </span>
         </div>
       </div>
@@ -843,6 +904,16 @@
           </Button>
         {/if}
       </div>
+      {#if localEngine}
+        <p class="help-view__note">
+          {$currentLocale &&
+            (localModelReady ? t('help.engineLocal') : t('help.engineLocalMissing'))}
+        </p>
+      {:else if remoteModel}
+        <p class="help-view__note">
+          {$currentLocale && t('help.engineRemote', { model: remoteModel })}
+        </p>
+      {/if}
     </form>
 
     <!-- Inline LOCAL_WRITE approval (T27, D12): a modal dialog like the MCP
@@ -959,7 +1030,10 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--space-2) var(--space-1);
+    /* The bottom padding keeps the last bubble clear of the composer's top
+       border once the region is scrolled to its end. */
+    padding: var(--space-2) var(--space-1) var(--space-4);
+    scroll-padding-block-end: var(--space-4);
   }
 
   /* The empty state (S20): one quiet card holding the invitation and the
@@ -1230,26 +1304,31 @@
     border-top: 1px solid var(--border-subtle);
   }
 
-  /* Opt-ins (T28): one wrapping row by default; a single line only with the
-     maximized contract below. The maximized panel is wide enough for both. */
+  /* Where the question goes (R22): the local Gemma line and its one-question
+     OpenRouter switch, above the opt-ins. */
+  /* Opt-ins (T28): the OpenRouter switch, the diagnostics and the documents
+     share one line at every panel size. A narrow panel scrolls the row
+     sideways instead of wrapping it. */
   .help-view__optins {
     display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: var(--space-1) var(--space-3);
-  }
-
-  .help-view__optins--single {
     flex-wrap: nowrap;
     align-items: center;
+    gap: var(--space-1) var(--space-3);
     overflow-x: auto;
   }
 
   .help-view__optin {
     display: flex;
+    flex-shrink: 0;
     align-items: baseline;
     gap: var(--space-1);
-    min-width: 0;
+    white-space: nowrap;
+  }
+
+  /* The engine note closes the composer, under the question box; the
+     composer gap already spaces it. */
+  .help-view__composer .help-view__note {
+    margin: 0;
   }
 
   /* The small superscript hint (T28): the hint paragraph is gone and the

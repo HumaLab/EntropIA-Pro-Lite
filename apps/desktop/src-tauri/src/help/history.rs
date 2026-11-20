@@ -405,6 +405,7 @@ pub(crate) fn answer_meta_json(answer: &super::prompt::HelpAnswer) -> String {
         "local": answer.local,
         "roundLimitReached": answer.round_limit_reached,
         "toolsUnavailable": answer.tools_unavailable,
+        "localModel": answer.local_model,
     })
     .to_string()
 }
@@ -758,6 +759,7 @@ mod tests {
             }],
             round_limit_reached: true,
             tools_unavailable: false,
+            local_model: false,
             conversation_id: None,
         };
         let meta: serde_json::Value =

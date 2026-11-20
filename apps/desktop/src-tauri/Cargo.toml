@@ -1,6 +1,6 @@
 [package]
 name = "entropia-pro-desktop"
-version = "1.8.0"
+version = "1.8.5"
 edition = "2021"
 rust-version = "1.90"
 resolver = "3"
@@ -108,6 +108,9 @@ ed25519-dalek = { version = "3", optional = true }
 # Audio preview decoding (prepare_audio_preview command): decode arbitrary
 # source audio to a PCM16 WAV the webview <audio> element can play.
 symphonia = { version = "0.6", features = ["all"] }
+# Symphonia has no Opus decoder; voice notes (WhatsApp, Telegram) are Opus.
+# The default `bundled` feature compiles libopus into the binary.
+symphonia-adapter-libopus = "0.3"
 hound = "3"
 # Embeddings use a bundled local ONNX model via Rust ort. Transcription still
 # uses Python subprocess (scripts/transcribe.py) for faster-whisper isolation.
@@ -137,6 +140,8 @@ keyring = { version = "3", default-features = false, features = ["windows-native
 windows = { version = "0.62", features = [
     "ApplicationModel",
     "Foundation",
+    # runtime/manager.rs: no automatic multi-GB download on a metered connection.
+    "Networking_Connectivity",
     "Services_Store",
     "Win32_Foundation",
     # automation/private_acl.rs: owner-only access lists for the assistant's

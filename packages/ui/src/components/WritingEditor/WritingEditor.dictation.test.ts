@@ -132,6 +132,40 @@ describe('WritingEditor dictation', () => {
     expect(stopTrack).toHaveBeenCalledOnce()
   })
 
+  it('offers the app fix next to a failed dictation when the app provides one', async () => {
+    const ondictate = vi.fn().mockRejectedValue('Whisper needs the AI runtime')
+    const ondictationhelp = vi.fn()
+    render(WritingEditor, {
+      props: { document: manuscript('Hola mundo'), ondictate, ondictationhelp },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Iniciar dictado' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Detener dictado' }))
+
+    const help = await screen.findByRole('button', { name: 'Abrir Dependencias de IA' })
+    await fireEvent.click(help)
+    expect(ondictationhelp).toHaveBeenCalledOnce()
+  })
+
+  it('shows no fix button for a failed dictation when the app provides none', async () => {
+    render(WritingEditor, {
+      props: {
+        document: manuscript('Hola mundo'),
+        ondictate: vi.fn().mockRejectedValue('Whisper needs the AI runtime'),
+      },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Iniciar dictado' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Detener dictado' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('writing-editor-dictation-message')).toHaveTextContent(
+        'No se pudo transcribir el audio.'
+      )
+    })
+    expect(screen.queryByTestId('writing-editor-dictation-help')).not.toBeInTheDocument()
+  })
+
   it('is one undo step', async () => {
     const ondictate = vi.fn().mockResolvedValue('texto dictado')
     const { component } = render(WritingEditor, {

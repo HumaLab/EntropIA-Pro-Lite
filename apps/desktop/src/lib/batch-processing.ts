@@ -268,6 +268,23 @@ export function processingGetBatch(batchId: string): Promise<BatchSnapshot> {
   return invoke<BatchSnapshot>('processing_get_batch', { batchId })
 }
 
+/** A unit an asset is waiting on: `pending`, `retry_wait` or `running`. */
+export interface AssetActiveTask {
+  taskId: string
+  state: 'pending' | 'retry_wait' | 'running'
+  progressDone: number
+  progressTotal: number | null
+  queuedAt: number
+}
+
+/** The live unit of `kind` for an asset, read from the queue, or null. */
+export function processingAssetActiveTask(
+  assetId: string,
+  kind: string
+): Promise<AssetActiveTask | null> {
+  return invoke<AssetActiveTask | null>('processing_asset_active_task', { assetId, kind })
+}
+
 /**
  * `afterTaskId` walks forward from a cursor, `offset` jumps to a fixed place
  * in the same ordering. Numbered pages need the second: a cursor can only ever

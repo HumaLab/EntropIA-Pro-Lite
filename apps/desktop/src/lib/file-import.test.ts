@@ -19,6 +19,10 @@ import {
 // Tauri APIs are already mocked globally in test-setup.ts
 
 describe('classifyFileType', () => {
+  it('classifies a WhatsApp voice note saved as .opus as audio', () => {
+    expect(classifyFileType('nota-de-voz.OPUS')).toBe('audio')
+  })
+
   it('classifies png as image', () => {
     expect(classifyFileType('photo.png')).toBe('image')
   })
@@ -73,8 +77,9 @@ describe('SUPPORTED_FORMATS', () => {
     expect(SUPPORTED_FORMATS).toContain('m4a')
     expect(SUPPORTED_FORMATS).toContain('aac')
     expect(SUPPORTED_FORMATS).toContain('ogg')
-    // 6 image + 1 pdf + 6 audio = 13
-    expect(SUPPORTED_FORMATS).toHaveLength(13)
+    expect(SUPPORTED_FORMATS).toContain('opus')
+    // 6 image + 1 pdf + 7 audio = 14
+    expect(SUPPORTED_FORMATS).toHaveLength(14)
   })
 })
 
