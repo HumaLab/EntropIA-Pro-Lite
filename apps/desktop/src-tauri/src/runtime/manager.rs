@@ -240,6 +240,9 @@ impl RuntimeManager {
             return Err(error);
         }
 
+        if status.state == RuntimeState::Healthy {
+            spawn_purge_retired_runtimes(app_data_dir.clone());
+        }
         self.emit_status(app_handle, &status)?;
         Ok(status)
     }
@@ -272,6 +275,9 @@ impl RuntimeManager {
         if let Some(error) = emit_error {
             return Err(error);
         }
+        if status.state == RuntimeState::Healthy {
+            spawn_purge_retired_runtimes(app_data_dir.clone());
+        }
         self.emit_status(app_handle, &status)?;
         Ok(status)
     }
@@ -280,6 +286,46 @@ impl RuntimeManager {
         let status = self.status(app_handle)?;
         self.emit_status(app_handle, &status)?;
         Ok(status)
+    }
+
+    /// Startup housekeeping, on a thread of its own. With the runtime already
+    /// healthy at startup, retires the runtime folders the running app does
+    /// not use; then deletes every retired folder, including those an earlier
+    /// session could not finish.
+    ///
+    /// A runtime that is not healthy yet is left to the bootstrap, which
+    /// retires the old folders once the new runtime is active: before that the
+    /// old runtime may still be in use. The retire phase takes the operations
+    /// lock only with a healthy status, when no startup bootstrap will run,
+    /// and skips if the lock is busy (the next startup tries again).
+    pub fn sweep_unused_runtimes_in_background(
+        &self,
+        app_handle: &AppHandle,
+        startup_status: &RuntimeStatus,
+    ) {
+        let Ok(app_data_dir) = crate::path_utils::cache_dir(app_handle) else {
+            return;
+        };
+        if startup_status.state == RuntimeState::Healthy {
+            let status = startup_status.clone();
+            let retire_dir = app_data_dir.clone();
+            let spawned = std::thread::Builder::new()
+                .name("runtime-sweep".to_string())
+                .spawn(move || {
+                    match crate::runtime::ops_lock::try_acquire("runtime_sweep") {
+                        Ok(_guard) => retire_unused_runtimes_after_ready(&retire_dir, &status),
+                        Err(_) => log::info!(
+                            target: "runtime",
+                            "Runtime cleanup skipped: another runtime operation is running"
+                        ),
+                    }
+                    spawn_purge_retired_runtimes(retire_dir);
+                });
+            if spawned.is_ok() {
+                return;
+            }
+        }
+        spawn_purge_retired_runtimes(app_data_dir);
     }
 
     /// T4 (S1, S8): one-shot background bootstrap after `validate_startup`.
@@ -395,6 +441,11 @@ impl RuntimeManager {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() {
+                continue;
+            }
+            // `.`-prefixed folders are never an active runtime: staging,
+            // replacement backups and folders retired for deletion.
+            if entry.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
             let Ok(manifest) = RuntimeManifest::load_from_path(&path.join("manifest.json")) else {
@@ -570,7 +621,44 @@ impl RuntimeManager {
         )
     }
 
+    /// Checks, hydrates or downloads the runtime; once it is healthy, retires
+    /// the runtime folders the running app no longer uses (their deletion is
+    /// left to [`spawn_purge_retired_runtimes`], off the operations lock).
     fn ensure_ready_or_bootstrap_with_remote_support<F, K, D>(
+        &self,
+        bundle_root: &Path,
+        app_data_dir: &Path,
+        remote_catalog: BootstrapRemoteCatalog,
+        key_provider: K,
+        remote_downloader: D,
+        on_progress: F,
+    ) -> Result<RuntimeStatus, String>
+    where
+        F: FnMut(RuntimeOperation),
+        K: Fn(&str) -> Result<String, String>,
+        D: Fn(
+            &str,
+            &crate::runtime::manifest::BootstrapReleaseManifest,
+            &Path,
+            &str,
+            &mut dyn FnMut(RuntimeOperation),
+        ) -> Result<crate::runtime::download::BootstrapDownloadOutcome, String>,
+    {
+        let status = self.ensure_ready_or_bootstrap_checked(
+            bundle_root,
+            app_data_dir,
+            remote_catalog,
+            key_provider,
+            remote_downloader,
+            on_progress,
+        )?;
+        if status.state == RuntimeState::Healthy {
+            retire_unused_runtimes_after_ready(app_data_dir, &status);
+        }
+        Ok(status)
+    }
+
+    fn ensure_ready_or_bootstrap_checked<F, K, D>(
         &self,
         bundle_root: &Path,
         app_data_dir: &Path,
@@ -608,13 +696,9 @@ impl RuntimeManager {
         };
 
         invalidate_stale_managed_runtime(app_data_dir, &manifest)?;
-        // Removing runtimes of other app versions is housekeeping: a folder
-        // that cannot be deleted (an antivirus or another process may hold a
-        // file in it) must not stop the current runtime from being checked,
-        // downloaded or hydrated.
-        for warning in invalidate_stale_managed_runtime_dirs(app_data_dir, &manifest) {
-            log::warn!(target: "runtime", "{warning}");
-        }
+        // Runtimes of other app versions are retired only once this one is
+        // healthy (see `retire_unused_runtimes_after_ready`): before that the
+        // previous runtime may still be in use, and it is all there is.
 
         let current_status =
             inspect_runtime(bundle_root, app_data_dir, &manifest, remote_catalog.clone())?;
@@ -1274,75 +1358,54 @@ fn invalidate_stale_managed_runtime(
     })
 }
 
-/// Best-effort removal of the managed runtimes the running app cannot use
-/// (see [`runtime_serves_running_app`]). Returns one message per folder that
-/// could not be removed; it never fails, so a leftover folder cannot block
-/// the current runtime.
-fn invalidate_stale_managed_runtime_dirs(
-    app_data_dir: &Path,
-    current_manifest: &RuntimeManifest,
-) -> Vec<String> {
-    invalidate_stale_managed_runtime_dirs_with(
+/// Retires (renames for deletion) the runtime folders the running app no
+/// longer uses, keeping the healthy runtime `status` reports. Housekeeping
+/// only: a folder in use is kept intact and logged, never an error. The
+/// caller holds the runtime operations lock; see [`crate::runtime::sweep`].
+fn retire_unused_runtimes_after_ready(app_data_dir: &Path, status: &RuntimeStatus) {
+    let keep: Vec<PathBuf> = status
+        .pack_version
+        .as_deref()
+        .map(|pack_version| managed_pack_dir(app_data_dir, pack_version))
+        .into_iter()
+        .collect();
+    let report = crate::runtime::sweep::retire_unused_runtimes(
         app_data_dir,
-        current_manifest,
-        crate::path_utils::remove_dir_all_robust,
-    )
+        &keep,
+        &current_runtime_platform(),
+        running_app_version(),
+        &runtime_serves_running_app,
+    );
+    for path in &report.retired {
+        log::info!(target: "runtime", "Unused runtime retired for deletion: {}", path.display());
+    }
+    for message in &report.kept {
+        log::warn!(target: "runtime", "{message}");
+    }
 }
 
-fn invalidate_stale_managed_runtime_dirs_with<R>(
-    app_data_dir: &Path,
-    current_manifest: &RuntimeManifest,
-    mut remove_dir_all: R,
-) -> Vec<String>
-where
-    R: FnMut(&Path) -> std::io::Result<()>,
-{
-    let mut warnings = Vec::new();
-    let runtime_dir = runtime_root(app_data_dir);
-    let Ok(entries) = fs::read_dir(&runtime_dir) else {
-        return warnings;
-    };
-
-    let current_root = managed_pack_dir(app_data_dir, &current_manifest.pack_version);
-    let candidates: Vec<(std::path::PathBuf, RuntimeManifest)> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir() && *path != current_root)
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| !name.starts_with('.') && name != "downloads")
-        })
-        .filter_map(|path| {
-            let manifest = RuntimeManifest::load_from_path(&path.join("manifest.json")).ok()?;
-            (manifest.platform == current_manifest.platform).then_some((path, manifest))
-        })
-        .collect();
-    // A runtime reused from another app version is kept only while no runtime
-    // for this exact version exists: once one does (the reused one was damaged
-    // and startup downloaded a new one), the old folder is dead weight.
-    let exact_version_present = candidates
-        .iter()
-        .any(|(_, manifest)| manifest.app_version == running_app_version());
-    for (path, manifest) in candidates {
-        let keep = if exact_version_present {
-            manifest.app_version == running_app_version()
-        } else {
-            runtime_serves_running_app(&manifest)
-        };
-        if keep {
-            continue;
-        }
-
-        if let Err(error) = remove_dir_all(&path) {
-            warnings.push(format!(
-                "Could not remove stale runtime {} (kept, ignored): {error}",
-                path.display()
-            ));
-        }
+/// Deletes the retired runtime folders on a thread of its own: a runtime is
+/// several GB, and its deletion must neither hold the operations lock nor
+/// delay the bootstrap's completion. Purges never overlap.
+pub(crate) fn spawn_purge_retired_runtimes(app_data_dir: PathBuf) {
+    static PURGE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let spawned = std::thread::Builder::new()
+        .name("runtime-purge".to_string())
+        .spawn(move || {
+            let _one_at_a_time = PURGE
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let report = crate::runtime::sweep::purge_retired_runtimes(&app_data_dir);
+            for path in &report.removed {
+                log::info!(target: "runtime", "Retired runtime deleted: {}", path.display());
+            }
+            for message in &report.failed {
+                log::warn!(target: "runtime", "{message}");
+            }
+        });
+    if let Err(error) = spawned {
+        log::warn!(target: "runtime", "Could not start the retired runtime cleanup: {error}");
     }
-
-    warnings
 }
 
 fn hydrate_runtime_with_progress<F>(
@@ -2094,7 +2157,7 @@ fn bundled_runtime_contract() -> Option<&'static RuntimeManifest> {
 /// Whether the running app can use a runtime described by `manifest`: one
 /// built for this app version, or a release runtime built for another that
 /// meets this app's contract (see [`reusable_across_app_versions`]).
-fn runtime_serves_running_app(manifest: &RuntimeManifest) -> bool {
+pub(crate) fn runtime_serves_running_app(manifest: &RuntimeManifest) -> bool {
     manifest.app_version == running_app_version()
         || reusable_across_app_versions(manifest, bundled_runtime_contract())
 }
@@ -3148,39 +3211,132 @@ mod tests {
         );
     }
 
+    /// Names of the folders under `<app_data_dir>/runtime`, sorted.
+    fn runtime_folder_names(app_data_dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(app_data_dir.join("runtime"))
+            .expect("runtime folder")
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
     #[test]
-    fn stale_runtime_that_cannot_be_removed_is_kept_and_reported_not_fatal() {
+    fn a_healthy_runtime_retires_old_versions_and_orphans_then_the_purge_deletes_them() {
+        let bundle_dir = tempdir().expect("bundle dir");
         let app_data_dir = tempdir().expect("app data dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
         let current_manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        write_manifest(bundle_dir.path(), &current_manifest);
+
+        let runtime_dir = app_data_dir.path().join("runtime");
+        let mut old_manifest = current_manifest.clone();
+        old_manifest.app_version = "0.0.11".to_string();
+        old_manifest.pack_version = "2026.04.0".to_string();
+        write_manifest(&runtime_dir.join("2026.04.0"), &old_manifest);
+        write_file(
+            &runtime_dir.join("2026.04.0"),
+            python_relpath,
+            b"old-python",
+        );
+        // The 1.8.5 field case: a runtime that lost its manifest to a
+        // deletion that stopped halfway.
+        write_file(
+            &runtime_dir.join("2026.03.0"),
+            "venv/entropia-env/x.pyd",
+            b"x",
+        );
+
+        let status = RuntimeManager::new()
+            .ensure_ready_or_bootstrap_for_tests(
+                bundle_dir.path(),
+                app_data_dir.path(),
+                BootstrapRemoteCatalog::NotConfigured,
+                |_| {},
+            )
+            .expect("runtime should hydrate");
+        assert_eq!(status.state, RuntimeState::Healthy);
+
+        let names = runtime_folder_names(app_data_dir.path());
+        assert!(names.contains(&"2026.05.0".to_string()), "{names:?}");
+        assert!(!names.contains(&"2026.04.0".to_string()), "{names:?}");
+        assert!(!names.contains(&"2026.03.0".to_string()), "{names:?}");
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.starts_with(".retired-"))
+                .count(),
+            2,
+            "{names:?}"
+        );
+        assert_eq!(
+            fs::read(runtime_dir.join("2026.05.0").join(python_relpath)).expect("current python"),
+            b"python"
+        );
+
+        crate::runtime::sweep::purge_retired_runtimes(app_data_dir.path());
+        assert_eq!(
+            runtime_folder_names(app_data_dir.path()),
+            vec!["2026.05.0".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_runtime_that_is_not_ready_leaves_the_previous_runtime_alone() {
+        // Before the new runtime is active the previous one may be in use
+        // (the dependency probe runs its Python) and it is all there is.
+        let bundle_dir = tempdir().expect("bundle dir");
+        let app_data_dir = tempdir().expect("app data dir");
+        let mut fixture = sample_manifest(
             &crate::runtime::paths::current_runtime_platform(),
             "python-sha",
             "uv-sha",
         );
-        let mut stale_manifest = current_manifest.clone();
-        stale_manifest.app_version = "0.0.11".to_string();
-        let locked = app_data_dir.path().join("runtime").join("2026.11.4");
-        let removable = app_data_dir.path().join("runtime").join("2026.10.0");
-        write_manifest(&locked, &stale_manifest);
-        write_manifest(&removable, &stale_manifest);
+        fixture.payload_profile = "fixture".to_string();
+        fixture.external_artifacts_required = vec!["relocatable-python".to_string()];
+        write_manifest(bundle_dir.path(), &fixture);
 
-        let warnings = invalidate_stale_managed_runtime_dirs_with(
-            app_data_dir.path(),
-            &current_manifest,
-            |path| {
-                if path == locked {
-                    Err(std::io::Error::from_raw_os_error(32))
-                } else {
-                    fs::remove_dir_all(path)
-                }
-            },
-        );
+        let previous = app_data_dir.path().join("runtime").join("2026.04.0");
+        let mut previous_manifest = fixture.clone();
+        previous_manifest.app_version = "0.0.11".to_string();
+        previous_manifest.pack_version = "2026.04.0".to_string();
+        write_manifest(&previous, &previous_manifest);
+        write_file(&previous, "venv/entropia-env/Scripts/python.exe", b"py");
 
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("2026.11.4"), "{warnings:?}");
-        assert!(locked.exists(), "the folder that failed is left in place");
-        assert!(
-            !removable.exists(),
-            "the other stale folder is still removed"
+        let status = RuntimeManager::new()
+            .ensure_ready_or_bootstrap_for_tests(
+                bundle_dir.path(),
+                app_data_dir.path(),
+                BootstrapRemoteCatalog::NotConfigured,
+                |_| {},
+            )
+            .expect("a blocked bootstrap is a status, not an error");
+
+        assert_ne!(status.state, RuntimeState::Healthy);
+        assert!(previous.join("manifest.json").exists());
+        assert!(previous
+            .join("venv/entropia-env/Scripts/python.exe")
+            .exists());
+        assert_eq!(
+            runtime_folder_names(app_data_dir.path()),
+            vec!["2026.04.0".to_string()]
         );
     }
 
@@ -3282,24 +3438,32 @@ mod tests {
         assert!(!reusable_across_app_versions(&runtime, None));
     }
 
+    /// Both phases of the sweep with the manager's own reuse rule, keeping
+    /// `keep` as the active runtime.
+    fn sweep_like_a_healthy_start(app_data_dir: &Path, keep: &[PathBuf]) {
+        let retired = crate::runtime::sweep::retire_unused_runtimes(
+            app_data_dir,
+            keep,
+            &current_runtime_platform(),
+            running_app_version(),
+            &runtime_serves_running_app,
+        );
+        assert!(retired.kept.is_empty(), "{:?}", retired.kept);
+        let purged = crate::runtime::sweep::purge_retired_runtimes(app_data_dir);
+        assert!(purged.failed.is_empty(), "{:?}", purged.failed);
+    }
+
     #[test]
     fn stale_runtime_sweep_keeps_a_runtime_the_running_app_can_reuse() {
         let app_data_dir = tempdir().expect("app data dir");
-        let current_manifest = sample_manifest(
-            &crate::runtime::paths::current_runtime_platform(),
-            "python-sha",
-            "uv-sha",
-        );
         let (reusable, runtime) = other_app_version_runtime(app_data_dir.path());
         let other_abi_root = app_data_dir.path().join("runtime").join("2026.10.0");
         let mut other_abi = runtime.clone();
         other_abi.runtime_abi = runtime.runtime_abi.map(|abi| abi + 1);
         write_manifest(&other_abi_root, &other_abi);
 
-        let warnings =
-            invalidate_stale_managed_runtime_dirs(app_data_dir.path(), &current_manifest);
+        sweep_like_a_healthy_start(app_data_dir.path(), &[]);
 
-        assert!(warnings.is_empty(), "{warnings:?}");
         assert!(reusable.exists(), "the reusable runtime is kept");
         assert!(
             !other_abi_root.exists(),
@@ -3324,10 +3488,9 @@ mod tests {
         exact.pack_version = "2026.12.0".to_string();
         write_manifest(&exact_root, &exact);
 
-        let warnings =
-            invalidate_stale_managed_runtime_dirs(app_data_dir.path(), &current_manifest);
+        // Not listed as active: the exact version is kept by the rule itself.
+        sweep_like_a_healthy_start(app_data_dir.path(), &[]);
 
-        assert!(warnings.is_empty(), "{warnings:?}");
         assert!(
             exact_root.exists(),
             "the runtime for this app version is kept"
@@ -3401,6 +3564,50 @@ mod tests {
         assert_eq!(status.pack_version.as_deref(), Some("2026.11.9"));
         assert_eq!(downloads.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(reused_root.join("manifest.json").is_file());
+    }
+
+    #[test]
+    fn discovery_never_takes_a_dot_folder_for_the_active_runtime() {
+        let bundle_dir = tempdir().expect("bundle dir");
+        let app_data_dir = tempdir().expect("app data dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
+        let manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        write_manifest(bundle_dir.path(), &manifest);
+        RuntimeManager::new()
+            .ensure_ready_or_bootstrap_for_tests(
+                bundle_dir.path(),
+                app_data_dir.path(),
+                BootstrapRemoteCatalog::NotConfigured,
+                |_| {},
+            )
+            .expect("runtime should hydrate");
+        // A retired copy of the same runtime sorts before it ('.' < '2').
+        let runtime_dir = app_data_dir.path().join("runtime");
+        let retired = runtime_dir.join(".retired-2026.05.0-1");
+        write_manifest(&retired, &manifest);
+        write_file(&retired, python_relpath, b"python");
+        write_file(&retired, uv_relpath, b"uv");
+
+        let active = RuntimeManager::new()
+            .discover_hydrated_runtime_root_for_tests(app_data_dir.path())
+            .expect("the hydrated runtime is found");
+
+        assert_eq!(active, runtime_dir.join("2026.05.0"));
     }
 
     #[test]
