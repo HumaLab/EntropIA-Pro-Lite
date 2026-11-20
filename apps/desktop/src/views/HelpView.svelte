@@ -1304,17 +1304,16 @@
     border-top: 1px solid var(--border-subtle);
   }
 
-  /* Where the question goes (R22): the local Gemma line and its one-question
-     OpenRouter switch, above the opt-ins. */
-  /* Opt-ins (T28): the OpenRouter switch, the diagnostics and the documents
-     share one line at every panel size. A narrow panel scrolls the row
-     sideways instead of wrapping it. */
+  /* Opt-ins (T28): the OpenRouter switch, the diagnostics and the documents.
+     They share one line wherever it fits (the maximized panel); where it does
+     not (the 400 px floating panel), the row wraps, so every option stays in
+     sight. Each option keeps its label whole. Never a sideways scroll: it hid
+     «Mis documentos» past the panel edge in 1.8.5. */
   .help-view__optins {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-1) var(--space-3);
-    overflow-x: auto;
   }
 
   .help-view__optin {
