@@ -19,7 +19,7 @@
   import IconAffiliate from '@tabler/icons-svelte-runes/icons/affiliate'
   import IconAlertTriangle from '@tabler/icons-svelte-runes/icons/alert-triangle'
   import IconAlignCenter from '@tabler/icons-svelte-runes/icons/align-center'
-  import IconAlignJustified from '@tabler/icons-svelte-runes/icons/align-justified'
+  import IconAlignJustified from '@tabler/icons-svelte-runes/icons/align-left-justified'
   import IconAlignLeft from '@tabler/icons-svelte-runes/icons/align-left'
   import IconAlignRight from '@tabler/icons-svelte-runes/icons/align-right'
   import IconArrowBackUp from '@tabler/icons-svelte-runes/icons/arrow-back-up'

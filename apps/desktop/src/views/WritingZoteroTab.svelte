@@ -653,18 +653,18 @@
                 <span class="zotero__meta">
                   {[entry.authors, entry.year].filter(Boolean).join(' · ')}
                   {#if entry.semantic}
-                    <span class="zotero__tag"
-                      ><StatusBadge variant="neutral" size="xs"
-                        >{t('writing.zoteroSemanticTag')}</StatusBadge
-                      ></span
-                    >
+                    <span class="zotero__tag">
+                      <StatusBadge variant="neutral" size="xs">
+                        {t('writing.zoteroSemanticTag')}
+                      </StatusBadge>
+                    </span>
                   {/if}
                   {#if entry.content}
-                    <span class="zotero__tag"
-                      ><StatusBadge variant="neutral" size="xs"
-                        >{t('writing.zoteroContentTag')}</StatusBadge
-                      ></span
-                    >
+                    <span class="zotero__tag">
+                      <StatusBadge variant="neutral" size="xs">
+                        {t('writing.zoteroContentTag')}
+                      </StatusBadge>
+                    </span>
                   {/if}
                 </span>
                 {#if entry.content}

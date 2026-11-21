@@ -919,9 +919,9 @@
                                           >
                                             <ActionIcon name={assetIcon} size={14} />
                                           </span>
-                                          <span class="explorer__node-main"
-                                            >{getAssetLabel(asset, index)}</span
-                                          >
+                                          <span class="explorer__node-main">
+                                            {getAssetLabel(asset, index)}
+                                          </span>
                                           <span class="explorer__asset-type">{asset.type}</span>
                                         </button>
                                       </div>

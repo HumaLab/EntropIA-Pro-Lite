@@ -217,8 +217,10 @@
             class="appearance-tab__zoom-level"
             data-testid="appearance-zoom-level"
             aria-label={t('topbar.zoomLevelAria', { value: zoomPercent })}
-            aria-live="polite">{zoomPercent}%</span
+            aria-live="polite"
           >
+            {zoomPercent}%
+          </span>
           <IconButton
             size="sm"
             label={t('topbar.zoomIn')}

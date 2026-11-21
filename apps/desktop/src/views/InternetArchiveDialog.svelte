@@ -1365,9 +1365,9 @@
           }}
         >
           <div class="ia-field ia-field--grow">
-            <label class="ia-field__label" for="{uid}-text"
-              >{t('internetArchive.search.text')}</label
-            >
+            <label class="ia-field__label" for="{uid}-text">
+              {t('internetArchive.search.text')}
+            </label>
             <Input id="{uid}-text" size="sm" bind:value={searchText} />
           </div>
           <div class="ia-field">
@@ -1383,9 +1383,9 @@
             <Input id="{uid}-creator" size="sm" bind:value={searchCreator} />
           </div>
           <label class="ia-field ia-field--year">
-            <span class="ia-field__label number-field-label"
-              >{t('internetArchive.search.yearFrom')}</span
-            >
+            <span class="ia-field__label number-field-label">
+              {t('internetArchive.search.yearFrom')}
+            </span>
             <NumberField
               min="0"
               max="9999"
@@ -1395,9 +1395,9 @@
             />
           </label>
           <label class="ia-field ia-field--year">
-            <span class="ia-field__label number-field-label"
-              >{t('internetArchive.search.yearTo')}</span
-            >
+            <span class="ia-field__label number-field-label">
+              {t('internetArchive.search.yearTo')}
+            </span>
             <NumberField
               min="0"
               max="9999"
@@ -1444,8 +1444,9 @@
           }}
         >
           <div class="ia-field ia-field--grow">
-            <label class="ia-field__label" for="{uid}-link">{t('internetArchive.link.label')}</label
-            >
+            <label class="ia-field__label" for="{uid}-link">
+              {t('internetArchive.link.label')}
+            </label>
             <Input
               id="{uid}-link"
               size="sm"
@@ -1877,9 +1878,9 @@
           </span>
         </div>
         {#if hit.restricted}
-          <StatusBadge variant="warning" size="xs"
-            >{t('internetArchive.restrictedBadge')}</StatusBadge
-          >
+          <StatusBadge variant="warning" size="xs">
+            {t('internetArchive.restrictedBadge')}
+          </StatusBadge>
         {/if}
         <Button variant="outline" size="sm" onclick={() => void openItem(hit.identifier)}>
           {t('internetArchive.search.viewFiles')}
@@ -1930,9 +1931,9 @@
       <p class="ia-item__meta ia-results__identifier">{itemDetails.identifier}</p>
       {#if itemDetails.restricted}
         <p>
-          <StatusBadge variant="warning" size="xs"
-            >{t('internetArchive.restrictedBadge')}</StatusBadge
-          >
+          <StatusBadge variant="warning" size="xs">
+            {t('internetArchive.restrictedBadge')}
+          </StatusBadge>
         </p>
       {/if}
     </div>

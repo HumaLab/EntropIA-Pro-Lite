@@ -409,9 +409,9 @@
     <div class="assistants-tab__row">
       <div class="assistants-tab__copy">
         <span class="assistants-tab__label">Permitir asistentes externos</span>
-        <span class="assistants-tab__value" data-testid="assistants-endpoint-state"
-          >{endpointLabel}</span
-        >
+        <span class="assistants-tab__value" data-testid="assistants-endpoint-state">
+          {endpointLabel}
+        </span>
       </div>
       <Switch
         bind:checked={accessChecked}
@@ -604,9 +604,9 @@
       <div class="assistants-tab__connection">
         <span class="assistants-tab__label">Cómo conectar {created.client.name}</span>
         <p class="assistants-tab__value">
-          Identificador del cliente: <code data-testid="assistants-client-id"
-            >{created.client.id}</code
-          >
+          Identificador del cliente: <code data-testid="assistants-client-id">
+            {created.client.id}
+          </code>
         </p>
         <p class="assistants-tab__hint">
           El conector de EntropIA lee la credencial del llavero del sistema y estas líneas no la
@@ -630,9 +630,9 @@
           <li class="assistants-tab__line">
             <span class="assistants-tab__line-name">Comando del conector</span>
             <div class="assistants-tab__line-row">
-              <code class="assistants-tab__code" data-testid="assistants-connector-command"
-                >{invocation}</code
-              >
+              <code class="assistants-tab__code" data-testid="assistants-connector-command">
+                {invocation}
+              </code>
               <Button
                 variant="ghost"
                 size="sm"
@@ -647,9 +647,9 @@
             <li class="assistants-tab__line">
               <span class="assistants-tab__line-name">{recipe.label}</span>
               <div class="assistants-tab__line-row">
-                <code class="assistants-tab__code" data-testid="assistants-line-{recipe.id}"
-                  >{recipe.line}</code
-                >
+                <code class="assistants-tab__code" data-testid="assistants-line-{recipe.id}">
+                  {recipe.line}
+                </code>
                 <Button
                   variant="ghost"
                   size="sm"

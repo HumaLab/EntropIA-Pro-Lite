@@ -462,8 +462,9 @@
               y={box.y + (markup.fontSize ?? TEXT_FONT_SIZE_PT) * viewport.scale}
               fill={markup.color}
               font-size={(markup.fontSize ?? TEXT_FONT_SIZE_PT) * viewport.scale}
-              >{markup.comment ?? ''}</text
             >
+              {markup.comment ?? ''}
+            </text>
           {/if}
           {#if selected && isMovable(markup) && tool === 'select' && index === 0}
             <rect

@@ -589,11 +589,11 @@
           </span>
         {/if}
         {#if runtimeStatus?.blockedCapabilities?.length}
-          <span
-            >{t('deps.runtime.affected', {
+          <span>
+            {t('deps.runtime.affected', {
               list: (runtimeStatus?.blockedCapabilities ?? []).join(', '),
-            })}</span
-          >
+            })}
+          </span>
         {/if}
         {#if runtimeStatus?.details?.length}
           <ul>
@@ -635,8 +635,9 @@
         {/if}
       </div>
       {#if shouldShowRuntimeRepairAction(runtimeStatus)}
-        <Button variant="secondary" onclick={handleRuntimeRepair}>{t('deps.runtime.repair')}</Button
-        >
+        <Button variant="secondary" onclick={handleRuntimeRepair}>
+          {t('deps.runtime.repair')}
+        </Button>
       {:else if runtimeBlockedUnreachable}
         <Button
           variant="secondary"
@@ -739,9 +740,9 @@
       <div class="deps-progress__track">
         <ProgressBar value={overallProgress()} aria-labelledby="deps-progress-label" />
       </div>
-      <span id="deps-progress-label" class="deps-progress__label"
-        >{t('deps.installedPct', { pct: overallProgress() })}</span
-      >
+      <span id="deps-progress-label" class="deps-progress__label">
+        {t('deps.installedPct', { pct: overallProgress() })}
+      </span>
     </div>
   {/if}
 
@@ -870,9 +871,9 @@
             {#if component.ready}
               <StatusBadge variant="success" size="xs">{t('deps.models.ready')}</StatusBadge>
             {:else if component.unavailableReason}
-              <StatusBadge variant="neutral" size="xs"
-                >{t('deps.models.notForThisMachine')}</StatusBadge
-              >
+              <StatusBadge variant="neutral" size="xs">
+                {t('deps.models.notForThisMachine')}
+              </StatusBadge>
             {:else}
               <StatusBadge variant="warning" size="xs">{t('deps.models.missing')}</StatusBadge>
             {/if}

@@ -553,9 +553,9 @@
           </div>
 
           <div class="research-form__evidence">
-            <span class="research-form__evidence-label"
-              >{$currentLocale && t('ragChat.scopeLabel')}</span
-            >
+            <span class="research-form__evidence-label">
+              {$currentLocale && t('ragChat.scopeLabel')}
+            </span>
             <TabList aria-label={$currentLocale && t('ragChat.scopeLabel')}>
               {#each EVIDENCE_SCOPES as entry (entry.id)}
                 <TabButton
@@ -624,9 +624,9 @@
                         }}
                       >
                         <span class="research-form__scope-row">
-                          <span class="research-form__scope-name" use:tooltip={collection.name}
-                            >{collection.name}</span
-                          >
+                          <span class="research-form__scope-name" use:tooltip={collection.name}>
+                            {collection.name}
+                          </span>
                           <span class="research-form__scope-count">{collection.items}</span>
                         </span>
                       </Checkbox>
@@ -681,11 +681,11 @@
             <div class="research-form__submit">
               <Button variant="primary" type="submit" loading={creating} disabled={!canSubmit}>
                 <ActionIcon name="message-circle-plus" size={16} />
-                <span
-                  >{creating
+                <span>
+                  {creating
                     ? $currentLocale && t('research.starting')
-                    : $currentLocale && t('research.start')}</span
-                >
+                    : $currentLocale && t('research.start')}
+                </span>
               </Button>
             </div>
           </div>

@@ -526,8 +526,9 @@
 
   <div class="topbar__actions" data-tauri-drag-region>
     {#if LOCAL_ML && hasDepsWarning}
-      <StatusBadge variant="warning" size="sm" title="Dependencias de IA pendientes">IA</StatusBadge
-      >
+      <StatusBadge variant="warning" size="sm" title="Dependencias de IA pendientes">
+        IA
+      </StatusBadge>
     {/if}
 
     <!-- Colecciones is a screen like any other: pushed, so Back returns to

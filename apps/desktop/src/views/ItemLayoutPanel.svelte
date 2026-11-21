@@ -310,14 +310,14 @@
                     {overlayMeta.shortLabel}
                   </StatusBadge>
                   {#if viewerType === 'pdf'}
-                    <StatusBadge size="xs"
-                      >{translate('item.pageShort', { page: block.page })}</StatusBadge
-                    >
+                    <StatusBadge size="xs">
+                      {translate('item.pageShort', { page: block.page })}
+                    </StatusBadge>
                   {/if}
                 </span>
-                <span class="layout-block-preview"
-                  >{block.preview || translate('item.layoutNoPreview')}</span
-                >
+                <span class="layout-block-preview">
+                  {block.preview || translate('item.layoutNoPreview')}
+                </span>
               </span>
             </button>
           {/each}
@@ -405,9 +405,9 @@
               </div>
               <div>
                 <span class="layout-inspector__label">{translate('item.layoutOverlayBbox')}</span>
-                <code data-testid="layout-inspector-bbox"
-                  >{formatLayoutBbox(selectedLayoutBlock.overlayBbox)}</code
-                >
+                <code data-testid="layout-inspector-bbox">
+                  {formatLayoutBbox(selectedLayoutBlock.overlayBbox)}
+                </code>
               </div>
               <div class="layout-inspector__field layout-inspector__field--wide">
                 <span class="layout-inspector__label">{translate('item.layoutOverlaySource')}</span>

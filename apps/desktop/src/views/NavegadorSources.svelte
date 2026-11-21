@@ -418,16 +418,16 @@
               <strong class="sources__row-title">{row.title}</strong>
               <span class="sources__row-meta">
                 {#if row.host}<span>{row.host}</span>{/if}
-                <span
-                  >{$currentLocale &&
-                    t('navegador.sources.captureCount', { count: row.captureCount })}</span
-                >
+                <span>
+                  {$currentLocale &&
+                    t('navegador.sources.captureCount', { count: row.captureCount })}
+                </span>
               </span>
               <span class="sources__row-kinds">
                 {#each row.kinds as kind (kind)}
-                  <StatusBadge variant="neutral" size="sm"
-                    >{$currentLocale && kindLabel(kind)}</StatusBadge
-                  >
+                  <StatusBadge variant="neutral" size="sm">
+                    {$currentLocale && kindLabel(kind)}
+                  </StatusBadge>
                 {/each}
               </span>
               <span class="sources__row-meta">
@@ -573,9 +573,9 @@
           {#each captures as capture (capture.id)}
             <li class="sources__capture">
               <div class="sources__capture-head">
-                <StatusBadge variant="neutral" size="sm"
-                  >{$currentLocale && kindLabel(capture.kind)}</StatusBadge
-                >
+                <StatusBadge variant="neutral" size="sm">
+                  {$currentLocale && kindLabel(capture.kind)}
+                </StatusBadge>
                 <span class="sources__strong">{capture.accessedLocal}</span>
               </div>
               <span class="sources__muted">
@@ -583,9 +583,9 @@
               </span>
               <span class="sources__wrap">{capture.finalUrl}</span>
               <span>
-                {$currentLocale && t(`navegador.sources.hash.${capture.hashOf}`) + ' '}<code
-                  >{capture.shortSha}</code
-                >
+                {$currentLocale && t(`navegador.sources.hash.${capture.hashOf}`) + ' '}<code>
+                  {capture.shortSha}
+                </code>
               </span>
               <span>{$currentLocale && t('navegador.sources.size', { size: capture.size })}</span>
               {#if capture.file === 'present'}

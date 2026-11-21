@@ -500,9 +500,9 @@
                 onkeydown={(event) => handleDeleteKeydown(event, entity.id)}
               >
                 {#if pendingDeleteEntityId === entity.id}
-                  <span aria-hidden="true" class="entity-viewer__delete-label"
-                    >{labels.deletePrompt}</span
-                  >
+                  <span aria-hidden="true" class="entity-viewer__delete-label">
+                    {labels.deletePrompt}
+                  </span>
                 {:else}
                   <ActionIcon name="delete" size={12} />
                 {/if}

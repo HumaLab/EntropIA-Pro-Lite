@@ -997,9 +997,9 @@
           aria-label={$currentLocale && t('ragChat.scopeLabel')}
         >
           {#if frozenScope}
-            <StatusBadge variant="neutral" size="sm"
-              >{$currentLocale && t(researchScopeKey(frozenScope.alcance))}</StatusBadge
-            >
+            <StatusBadge variant="neutral" size="sm">
+              {$currentLocale && t(researchScopeKey(frozenScope.alcance))}
+            </StatusBadge>
             {#if frozenScopeLibraries}
               <StatusBadge variant="neutral" size="sm">{frozenScopeLibraries}</StatusBadge>
             {/if}
@@ -1010,8 +1010,10 @@
             <StatusBadge
               variant="neutral"
               size="sm"
-              title={$currentLocale && t('research.modelLabel')}>{frozenModel}</StatusBadge
+              title={$currentLocale && t('research.modelLabel')}
             >
+              {frozenModel}
+            </StatusBadge>
           {/if}
         </div>
       {/if}
@@ -1078,9 +1080,9 @@
       aria-label={$currentLocale && t('investigation.adjustBudget')}
     >
       <label class="investigation-round__field">
-        <span class="investigation-round__axis number-field-label"
-          >{$currentLocale && t('research.callsLabel')}</span
-        >
+        <span class="investigation-round__axis number-field-label">
+          {$currentLocale && t('research.callsLabel')}
+        </span>
         <NumberField
           min="1"
           step="1"
@@ -1091,9 +1093,9 @@
         />
       </label>
       <label class="investigation-round__field">
-        <span class="investigation-round__axis number-field-label"
-          >{$currentLocale && t('research.maxCostLabel')}</span
-        >
+        <span class="investigation-round__axis number-field-label">
+          {$currentLocale && t('research.maxCostLabel')}
+        </span>
         <NumberField
           min="0"
           step="0.01"
@@ -1200,9 +1202,9 @@
                 </h4>
                 {#if designDraft}
                   <label class="investigation-round__field">
-                    <span class="investigation-round__axis"
-                      >{$currentLocale && t('investigation.design.hypothesis')}</span
-                    >
+                    <span class="investigation-round__axis">
+                      {$currentLocale && t('investigation.design.hypothesis')}
+                    </span>
                     <Textarea
                       rows={2}
                       bind:value={designDraft.hypothesis}
@@ -1210,15 +1212,15 @@
                     />
                   </label>
                   <label class="investigation-round__field">
-                    <span class="investigation-round__axis"
-                      >{$currentLocale && t('investigation.design.scope')}</span
-                    >
+                    <span class="investigation-round__axis">
+                      {$currentLocale && t('investigation.design.scope')}
+                    </span>
                     <Textarea rows={2} bind:value={designDraft.scope} disabled={answeringRound} />
                   </label>
                   <label class="investigation-round__field">
-                    <span class="investigation-round__axis"
-                      >{$currentLocale && t('investigation.design.criteriaEdit')}</span
-                    >
+                    <span class="investigation-round__axis">
+                      {$currentLocale && t('investigation.design.criteriaEdit')}
+                    </span>
                     <Textarea
                       rows={3}
                       bind:value={designDraft.criteria}
@@ -1298,9 +1300,9 @@
           {#if planDraft}
             <div class="investigation-round">
               <label class="investigation-round__field">
-                <span class="investigation-round__axis"
-                  >{$currentLocale && t('investigation.planGate.queriesEdit')}</span
-                >
+                <span class="investigation-round__axis">
+                  {$currentLocale && t('investigation.planGate.queriesEdit')}
+                </span>
                 <Textarea
                   rows={5}
                   bind:value={planDraft.queries}
@@ -1308,9 +1310,9 @@
                 />
               </label>
               <label class="investigation-round__field">
-                <span class="investigation-round__axis"
-                  >{$currentLocale && t('investigation.planGate.bibliographyEdit')}</span
-                >
+                <span class="investigation-round__axis">
+                  {$currentLocale && t('investigation.planGate.bibliographyEdit')}
+                </span>
                 <Textarea
                   rows={3}
                   bind:value={planDraft.bibliography}
@@ -1489,9 +1491,9 @@
                 {#if sectionEdit && sectionEdit.id === seccion.id}
                   <div class="investigation-round">
                     <label class="investigation-round__field">
-                      <span class="investigation-round__axis"
-                        >{$currentLocale && t('investigation.section.titleLabel')}</span
-                      >
+                      <span class="investigation-round__axis">
+                        {$currentLocale && t('investigation.section.titleLabel')}
+                      </span>
                       <Input
                         size="md"
                         bind:value={sectionEdit.title}
@@ -1499,9 +1501,9 @@
                       />
                     </label>
                     <label class="investigation-round__field">
-                      <span class="investigation-round__axis"
-                        >{$currentLocale && t('investigation.section.textLabel')}</span
-                      >
+                      <span class="investigation-round__axis">
+                        {$currentLocale && t('investigation.section.textLabel')}
+                      </span>
                       <Textarea
                         rows={8}
                         bind:value={sectionEdit.text}
@@ -1540,9 +1542,9 @@
                           onclick={(event) => openCitation(cita, event.currentTarget)}
                           use:tooltip={$currentLocale && t('investigation.report.openSource')}
                         >
-                          <span class="report__quote-text"
-                            >{cita.text}{cita.truncated ? ' […]' : ''}</span
-                          >
+                          <span class="report__quote-text">
+                            {cita.text}{cita.truncated ? ' […]' : ''}
+                          </span>
                           <span class="report__quote-meta">
                             <span class="report__quote-ref">[{cita.n}]</span>
                             <span class="report__quote-source">{citationLabel(cita)}</span>
@@ -1556,9 +1558,9 @@
                 {#if sectionRewrite && sectionRewrite.id === seccion.id}
                   <div class="investigation-round report__section-rewrite">
                     <label class="investigation-round__field">
-                      <span class="investigation-round__axis"
-                        >{$currentLocale && t('investigation.section.instructionLabel')}</span
-                      >
+                      <span class="investigation-round__axis">
+                        {$currentLocale && t('investigation.section.instructionLabel')}
+                      </span>
                       <Textarea
                         rows={3}
                         bind:value={sectionRewrite.instruction}
