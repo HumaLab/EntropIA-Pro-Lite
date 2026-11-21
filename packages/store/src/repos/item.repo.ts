@@ -1647,13 +1647,19 @@ export class ItemRepo {
       const ftsResults = await this.ftsRepo.search(query, limit)
       if (ftsResults.length > 0) {
         const ids = ftsResults.map((r) => r.itemId)
-        return this.db
+        const rows = await this.db
           .select()
           .from(items)
           .where(
             ids.length === 1 ? eq(items.id, ids[0]!) : or(...ids.map((id) => eq(items.id, id)))!
           )
-          .orderBy(asc(items.title), asc(items.id))
+        // Keep FTS's BM25 order: the best match first, not the first title.
+        const position = new Map(ids.map((id, index) => [id, index]))
+        return rows.sort(
+          (a, b) =>
+            (position.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+            (position.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+        )
       }
     }
 

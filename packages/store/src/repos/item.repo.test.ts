@@ -685,6 +685,55 @@ describe('ItemRepo', () => {
     })
   })
 
+  describe('searchGlobal', () => {
+    const item = (id: string, title: string) => ({
+      id,
+      title,
+      collectionId: 'col-1',
+      metadata: null,
+      createdAt: 100,
+      updatedAt: 200,
+    })
+
+    it('keeps the FTS relevance order, not the title order', async () => {
+      // FTS ranks the test PDF first; the database hands rows back by title.
+      const rawClient = {
+        execute: vi.fn().mockResolvedValue({ rowsAffected: 0 }),
+        select: vi.fn().mockResolvedValue([
+          { item_id: 'pdf', rank: -13.75 },
+          { item_id: 'dsc-2', rank: -6.1 },
+          { item_id: 'dsc-1', rank: -2.4 },
+        ]),
+      } as unknown as DbClient
+      const selectResult = createChainMock([
+        item('dsc-1', 'DSC01001'),
+        item('dsc-2', 'DSC01002'),
+        item('pdf', 'prueba-pdf-2paginas'),
+      ])
+      ;(db.db.select as ReturnType<typeof vi.fn>).mockReturnValue(selectResult.proxy)
+
+      const repo2 = new ItemRepo(db.db, rawClient)
+      const results = await repo2.searchGlobal('petitorio patronal')
+
+      expect(results.map((r) => r.id)).toEqual(['pdf', 'dsc-2', 'dsc-1'])
+    })
+
+    it('still sorts the LIKE fallback by title', async () => {
+      const rawClient = {
+        execute: vi.fn().mockResolvedValue({ rowsAffected: 0 }),
+        select: vi.fn().mockResolvedValue([]),
+      } as unknown as DbClient
+      const selectResult = createChainMock([item('a', 'Acta'), item('b', 'Boletín')])
+      ;(db.db.select as ReturnType<typeof vi.fn>).mockReturnValue(selectResult.proxy)
+
+      const repo2 = new ItemRepo(db.db, rawClient)
+      const results = await repo2.searchGlobal('acta')
+
+      expect(results.map((r) => r.id)).toEqual(['a', 'b'])
+      expect(selectResult.chain.orderBy).toHaveBeenCalled()
+    })
+  })
+
   describe('getCollectionStats', () => {
     function createStatsSqlite() {
       const db = new DatabaseSync(':memory:')
