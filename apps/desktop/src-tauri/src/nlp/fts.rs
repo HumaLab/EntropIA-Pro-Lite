@@ -78,8 +78,85 @@ pub fn index_item_from_db(conn: &Connection, item_id: &str) -> Result<(), String
 
     // Fetch extracted text from both extractions and transcriptions via text_provider
     let extracted_text = text_provider::get_item_text(conn, item_id)?;
+    // The index holds the words, not GLM's layout markup (finding 6): the
+    // stored text keeps it for display.
+    let extracted_text = crate::ocr::markup::ocr_plain_text(&extracted_text);
 
     fts_index_item(conn, item_id, &title, &metadata, &extracted_text)
+}
+
+/// Marks an archive whose index holds plain text (finding 6). Before it, the
+/// index carried GLM markup: `<div>`, `bbox`, region numbers. The setting is
+/// local to the device: `app_settings` does not sync, and every device builds
+/// its own index.
+pub const PLAIN_TEXT_INDEX_KEY: &str = "fts_index_text_version";
+pub const PLAIN_TEXT_INDEX_VERSION: &str = "plain-v1";
+
+fn table_exists(conn: &Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+/// Re-indexes every item once, so text indexed before the plain-text index
+/// loses its markup, then records the version. Returns the line for the log.
+/// A failed item stops the pass without recording it: the next start retries.
+pub fn reindex_plain_text_once(conn: &Connection) -> String {
+    if !table_exists(conn, "app_settings") || !table_exists(conn, "fts_items") {
+        return "plain-text reindex skipped: archive not ready".to_string();
+    }
+    let done: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [PLAIN_TEXT_INDEX_KEY],
+            |row| row.get(0),
+        )
+        .ok();
+    if done.as_deref() == Some(PLAIN_TEXT_INDEX_VERSION) {
+        return "plain-text reindex: already done for this archive".to_string();
+    }
+    let ids: Vec<String> = match conn
+        .prepare("SELECT id FROM items ORDER BY rowid")
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<String>, _>>()
+        }) {
+        Ok(ids) => ids,
+        Err(error) => return format!("plain-text reindex skipped: {error}"),
+    };
+    for (done, item_id) in ids.iter().enumerate() {
+        if let Err(error) = index_item_from_db(conn, item_id) {
+            return format!(
+                "plain-text reindex stopped after {done} of {} items: {error}",
+                ids.len()
+            );
+        }
+    }
+    match crate::settings::set_setting(conn, PLAIN_TEXT_INDEX_KEY, PLAIN_TEXT_INDEX_VERSION) {
+        Ok(()) => format!("plain-text reindex: {} items", ids.len()),
+        Err(error) => format!(
+            "plain-text reindex: {} items; could not record completion: {error}",
+            ids.len()
+        ),
+    }
+}
+
+/// Background thread: opens its own connection, logs one line, and can fail in
+/// any way without touching startup or the archive.
+pub fn spawn_plain_text_reindex(app: tauri::AppHandle, db_path: std::path::PathBuf) {
+    std::thread::spawn(move || {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            match crate::db::open::open_archive_connection(&db_path) {
+                Ok(conn) => reindex_plain_text_once(&conn),
+                Err(error) => format!("plain-text reindex skipped: {error}"),
+            }
+        }));
+        let line = outcome.unwrap_or_else(|_| "plain-text reindex stopped by an error".to_string());
+        crate::app_logs::info(&app, "nlp/fts", line);
+    });
 }
 
 /// Upsert a document into `fts_items`.
@@ -946,6 +1023,92 @@ mod tests {
             results_transcription.len(),
             1,
             "FTS should find transcription text"
+        );
+    }
+
+    #[test]
+    fn index_item_from_db_indexes_the_words_not_the_glm_markup() {
+        // Finding 6: `<div>` and region references reached the index.
+        let conn = setup_fts_db_with_assets();
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title, metadata) VALUES ('item-g', 'col-1', 'Fileteros', '{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assets(id, item_id, path, type, sort_index, created_at) VALUES ('asset-g', 'item-g', 'p.png', 'image', 0, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO extractions(id, asset_id, text_content, created_at) VALUES ('ext-g', 'asset-g', ?1, 10)",
+            params!["<div align=\"center\"># Fileteado porteño</div>\n\n![](page=0,bbox=[27, 43, 325, 364])"],
+        )
+        .unwrap();
+
+        index_item_from_db(&conn, "item-g").unwrap();
+
+        assert_eq!(fts_search(&conn, "porteño", None).unwrap().len(), 1);
+        for markup in ["div", "align", "bbox", "325"] {
+            assert!(
+                fts_search(&conn, markup, None).unwrap().is_empty(),
+                "{markup} must not be indexed"
+            );
+        }
+    }
+    #[test]
+    fn the_plain_text_reindex_retires_markup_indexed_before_it_once() {
+        let conn = setup_fts_db_with_assets();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO items(id, collection_id, title, metadata) VALUES ('item-g', 'col-1', 'Fileteros', '{}');
+             INSERT INTO assets(id, item_id, path, type, sort_index, created_at) VALUES ('asset-g', 'item-g', 'p.png', 'image', 0, 1);",
+        )
+        .unwrap();
+        let glm = "<div align=\"center\"># Fileteado porteño</div>
+
+![](page=0,bbox=[27, 43, 325, 364])";
+        conn.execute(
+            "INSERT INTO extractions(id, asset_id, text_content, created_at) VALUES ('ext-g', 'asset-g', ?1, 10)",
+            params![glm],
+        )
+        .unwrap();
+        // What an archive indexed before 1.8.7 holds.
+        fts_index_item(&conn, "item-g", "Fileteros", "{}", glm).unwrap();
+        assert_eq!(fts_search(&conn, "div", None).unwrap().len(), 1);
+
+        assert_eq!(
+            reindex_plain_text_once(&conn),
+            "plain-text reindex: 1 items"
+        );
+
+        assert!(fts_search(&conn, "div", None).unwrap().is_empty());
+        assert!(fts_search(&conn, "bbox", None).unwrap().is_empty());
+        assert_eq!(fts_search(&conn, "porteño", None).unwrap().len(), 1);
+        let marker: String = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                [PLAIN_TEXT_INDEX_KEY],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(marker, PLAIN_TEXT_INDEX_VERSION);
+
+        // Second start: nothing is redone.
+        fts_index_item(&conn, "item-g", "Fileteros", "{}", glm).unwrap();
+        assert_eq!(
+            reindex_plain_text_once(&conn),
+            "plain-text reindex: already done for this archive"
+        );
+        assert_eq!(fts_search(&conn, "div", None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_plain_text_reindex_waits_for_an_archive_without_settings() {
+        let conn = setup_fts_db_with_assets();
+        assert_eq!(
+            reindex_plain_text_once(&conn),
+            "plain-text reindex skipped: archive not ready"
         );
     }
 }

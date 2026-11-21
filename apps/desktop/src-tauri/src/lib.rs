@@ -1536,6 +1536,10 @@ pub fn run() {
             // bounded, logged, never fatal.
             asset_sweep::spawn(app.handle().clone(), app_dir.clone(), db_path.clone());
 
+            // Text indexed before 1.8.7 carried GLM markup into search. Once per
+            // archive, background, logged, never fatal.
+            nlp::fts::spawn_plain_text_reindex(app.handle().clone(), db_path.clone());
+
             // Sync engine (DESIGN §3.1): single long-lived task owning its own
             // connection. Spawned PAUSED — it runs no cycle until the gate opens
             // (capture ensured + a session exists). Held in managed state so the
