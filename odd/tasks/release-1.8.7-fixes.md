@@ -45,7 +45,7 @@ Each spec is the item of the same number in `odd/plans/release-1.8.7-findings.md
 | T13 | S12 | inline | done | bb80b0b3 |
 | T14 | S21 | inline | done (not seen in the real app) | 06c7b113 |
 | T15 | S8 | inline | done (not seen in the real app) | f8f297eb |
-| T16 | S11 | — | pending: needs a decision on where the bubble sits | |
+| T16 | S11 | — | deferred to 1.8.8 (user decision) | |
 | T12 | S14b | inline; independent verifier (Risk item 1): no blockers | done (not seen in the real app) | a0479288 |
 
 ## Log
@@ -64,3 +64,4 @@ Each spec is the item of the same number in `odd/plans/release-1.8.7-findings.md
 - L12 T14 (06c7b113): «Sincronizar ahora» waits for the pass with `syncAndWait`, says «Sincronización completa.», and the card always shows the last sync time. RED observed (no last-sync line).
 - L13 T15 (f8f297eb): `jobStatusLabelKey` words every badge (sin hacer / en cola / en curso / hecho / error); a resting badge with a stored result says hecho. RED observed; 6 ItemView tests updated from the English words.
 - L14 T16 (S11): the bubble's position went through T14–T17 on purpose (centred on the status-bar anchor, draggable, reset every launch). Moving it is a design decision; asked the user.
+- L15 (2026-11-21) User: «Dejarlo para 1.8.8» — answering whether the help bubble moves into the status bar or waits. T16 deferred. Delivery: #376 merged to main; #378–#381 merged into their parents, so #377 carries the rest and runs CI once.

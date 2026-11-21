@@ -57,7 +57,7 @@ Deferred to 1.8.8:
 
 - 1–5, 9, 10, 17–20, 26, 27, 30 and 32 from the list above.
 - 6, the rest: re-chunk the existing `rag_chunks` and re-embed them from plain text. This needs a bump of the chunking contract and a slow background sweep.
-- 11, unless it is settled before the release: the floating help button needs a decision on where it sits.
+- 11: the floating help button covers content; decide where it sits (the status bar is one option, at the cost of dragging).
 - The «Improvements» list below.
 - Advisories from the transcript-history review: restoring can hit `SQLITE_BUSY_SNAPSHOT` when a worker commits at the same moment (it rolls back cleanly and the user retries), and `transcription_versions` has no size cap.
 
