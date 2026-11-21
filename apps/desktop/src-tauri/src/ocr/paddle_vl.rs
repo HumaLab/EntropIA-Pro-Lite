@@ -781,7 +781,7 @@ fn detect_nvidia_gpu_from_system_inventory() -> bool {
     false
 }
 
-fn command_output_with_timeout(
+pub(crate) fn command_output_with_timeout(
     mut cmd: Command,
     timeout: Duration,
     label: &str,
@@ -918,9 +918,14 @@ pub fn create_paddle_vl_engine_result(
 
     // Auto-detect GPU and prefer it, but let the Python subprocess validate
     // software-level support and fall back to CPU if GPU init fails.
+    // PaddleOCR-VL's own GPU path is Paddle's CUDA build: NVIDIA only. GLM-OCR
+    // runs on any GPU llama-server has a build for.
     let has_gpu = detect_nvidia_gpu();
-    let glm_assets =
-        resolve_desired_backend_with_gpu(settings_db_path, resource_dir.as_deref(), has_gpu)?;
+    let glm_assets = resolve_desired_backend_with_gpu(
+        settings_db_path,
+        resource_dir.as_deref(),
+        super::llama_gpu::engine_runs(super::llama_gpu::Engine::GlmOcr),
+    )?;
     if let Some(assets) = glm_assets {
         crate::app_logs::info(
             app_handle,
@@ -1038,7 +1043,7 @@ pub fn resolve_desired_backend(
     resolve_desired_backend_with_gpu(
         settings_db_path,
         bundled_resource_dir(app_handle).as_deref(),
-        detect_nvidia_gpu(),
+        super::llama_gpu::engine_runs(super::llama_gpu::Engine::GlmOcr),
     )
 }
 

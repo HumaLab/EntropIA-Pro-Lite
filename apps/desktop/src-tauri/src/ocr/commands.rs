@@ -702,7 +702,7 @@ pub async fn ocr_local_high_info(db: State<'_, AppDbState>) -> Result<LocalOcrhI
             Ok(local_ocrh_info(
                 &mode,
                 has_glm_key,
-                crate::llm::has_nvidia_gpu(),
+                crate::ocr::llama_gpu::engine_runs(crate::ocr::llama_gpu::Engine::GlmOcr),
             ))
         })
         .await

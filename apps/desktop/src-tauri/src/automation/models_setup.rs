@@ -151,6 +151,28 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
+/// What the missing server would download: the build this machine's GPU
+/// runs and its size.
+#[cfg(feature = "local-ml")]
+fn server_download_summary() -> String {
+    use crate::ocr::llama_gpu::Backend;
+    let Some(gpu) = crate::ocr::llama_gpu::detected() else {
+        return "Falta descargar.".to_string();
+    };
+    let build = match gpu.backend {
+        Backend::Cuda => "CUDA, para NVIDIA",
+        Backend::Hip => "HIP, para AMD Radeon",
+        Backend::Vulkan => "Vulkan, para AMD o Intel",
+        Backend::Metal => "Metal, para Apple",
+    };
+    format!(
+        "Falta descargar unos {} (build {build}).",
+        human_size(crate::ocr::llama_server_download::download_size(
+            gpu.backend
+        ))
+    )
+}
+
 /// Inspect every component without starting anything.
 pub fn status(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> ModelsStatus {
     #[cfg(not(feature = "local-ml"))]
@@ -173,9 +195,15 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
     use tauri::Manager;
     let mut components = Vec::new();
     let resource_dir = app_handle.and_then(|handle| handle.path().resource_dir().ok());
-    let has_gpu = crate::llm::has_nvidia_gpu();
-    const NEEDS_GPU: &str = "Necesita una GPU NVIDIA: este equipo no tiene, así que no se \
-                             descarga. Esta función usa el motor remoto o PaddleOCR-VL.";
+    use crate::ocr::llama_gpu::{engine_runs, Engine};
+    let needs_gpu = |engine: Engine| {
+        format!(
+            "Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos {} GB de memoria de \
+             video: este equipo no tiene, así que no se descarga. Esta función usa el motor \
+             remoto o PaddleOCR-VL.",
+            engine.min_vram_gb()
+        )
+    };
 
     // Runtime pack (Python, venv, Paddle deps, scripts): needed for every
     // local OCR path. Needs the app handle for bundle/data-dir resolution.
@@ -298,7 +326,7 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
             crate::ocr::local_server::env_server_override(),
             resource_dir.as_deref(),
         );
-        let present = server.is_file();
+        let present = crate::ocr::local_server::server_ready(&server, db_path);
         let source = crate::ocr::local_server::server_source();
         let mut entry = component(
             COMPONENT_LLAMA_SERVER,
@@ -309,12 +337,12 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
             } else if source == ServerSource::Bundled {
                 "Falta: este sistema lo trae con el instalador; reinstalá EntropIA Pro.".to_string()
             } else {
-                "Falta descargar (unos 610 MB; ocupa 1,1 GB).".to_string()
+                server_download_summary()
             },
             "Ejecuta GLM-OCR y Qwen3-VL en la GPU",
         );
-        if !present && source == ServerSource::RequiresNvidiaGpu {
-            entry.unavailable_reason = Some(NEEDS_GPU.to_string());
+        if !present && source == ServerSource::RequiresGpu {
+            entry.unavailable_reason = Some(needs_gpu(Engine::GlmOcr));
         }
         components.push(entry);
     }
@@ -334,8 +362,8 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
             },
             "OCRH de alta precisión sin enviar las páginas afuera",
         );
-        if !ready && !has_gpu {
-            entry.unavailable_reason = Some(NEEDS_GPU.to_string());
+        if !ready && !engine_runs(Engine::GlmOcr) {
+            entry.unavailable_reason = Some(needs_gpu(Engine::GlmOcr));
         }
         components.push(entry);
     }
@@ -355,8 +383,8 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
             },
             "Corrección de OCR (OCRC) sin enviar el texto afuera",
         );
-        if !ready && !has_gpu {
-            entry.unavailable_reason = Some(NEEDS_GPU.to_string());
+        if !ready && !engine_runs(Engine::Qwen) {
+            entry.unavailable_reason = Some(needs_gpu(Engine::Qwen));
         }
         components.push(entry);
     }

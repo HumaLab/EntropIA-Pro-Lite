@@ -1,15 +1,19 @@
 //! Managed download of the `llama-server` build behind local GLM-OCR and
 //! local Qwen correction, into `<data>/tools/llama-server`.
 //!
-//! Windows installers ship no server. Both local engines run only on an
-//! NVIDIA GPU, so the useful build is CUDA, and with NVIDIA's runtime DLLs it
-//! is ~610 MB compressed: every installer (MSI, NSIS and the Store MSIX made
-//! from the MSI) would carry it for the few machines that can use it. The app
-//! instead downloads llama.cpp's official release of the exact revision it
-//! links (tag `b8783` = e21cdc11, the sources llama-cpp-sys-2 0.1.145 vendors),
-//! checks every archive against its pinned SHA-256 and extracts
-//! `llama-server.exe` with its DLLs. Linux keeps the server bundled in the
-//! `.deb` (scripts/fetch-llama-server.sh).
+//! The app downloads llama.cpp's official release of the exact revision it
+//! links (tag `b8783` = e21cdc11, the sources llama-cpp-sys-2 0.1.145
+//! vendors), in the build this machine's GPU runs ([`super::llama_gpu`]):
+//! CUDA for NVIDIA on Windows, HIP for supported Radeons, Vulkan for other
+//! AMD and Intel GPUs, Metal on Apple Silicon. Every archive is checked
+//! against its pinned size and SHA-256, and only `llama-server` with its
+//! libraries is kept. The Linux `.deb` still bundles its CUDA build for
+//! NVIDIA (scripts/fetch-llama-server.sh); installers ship no other build,
+//! since each would carry hundreds of MB for the machines that can use it.
+//!
+//! The install records its build in [`BACKEND_MARKER`]. A HIP build that
+//! lists no ROCm device after install (a card the table misnames, or Linux
+//! without a working ROCm) is replaced by the Vulkan build.
 
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -18,7 +22,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
-use super::local_server::{server_binary_name, server_dir, server_source, ServerSource};
+use super::llama_gpu::{self, Backend, Platform};
+use super::local_server::{
+    backend_satisfies, installed_backend, list_devices, server_binary_name, server_dir,
+    server_source, ServerSource, BACKEND_MARKER,
+};
 use crate::llm::download::{
     build_model_download_client, ModelDownloadCompletePayload, ModelDownloadErrorPayload,
     ModelDownloadProgressPayload,
@@ -40,8 +48,7 @@ struct ReleaseAsset {
 
 /// The CUDA 12.4 build and NVIDIA's runtime (cudart, cuBLAS) for it. CUDA 12
 /// rather than 13: it runs on older drivers and on pre-Turing cards.
-#[cfg(all(windows, target_arch = "x86_64"))]
-const ASSETS: &[ReleaseAsset] = &[
+const WINDOWS_CUDA: &[ReleaseAsset] = &[
     ReleaseAsset {
         name: "llama-b8783-bin-win-cuda-12.4-x64.zip",
         size: 249_262_710,
@@ -53,8 +60,56 @@ const ASSETS: &[ReleaseAsset] = &[
         sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
     },
 ];
-#[cfg(not(all(windows, target_arch = "x86_64")))]
-const ASSETS: &[ReleaseAsset] = &[];
+/// HIP with the ROCm libraries it needs (rocBLAS, hipBLASLt and their kernel
+/// folders), for the `gfx` targets in [`llama_gpu::hip_target`].
+const WINDOWS_HIP: &[ReleaseAsset] = &[ReleaseAsset {
+    name: "llama-b8783-bin-win-hip-radeon-x64.zip",
+    size: 362_054_813,
+    sha256: "b4db5253b4c2407f4d2757080d63c8d09d036e8f55f030eb50c28e44a709a274",
+}];
+const WINDOWS_VULKAN: &[ReleaseAsset] = &[ReleaseAsset {
+    name: "llama-b8783-bin-win-vulkan-x64.zip",
+    size: 58_526_472,
+    sha256: "5b82e8a9e66bb8ed2bdcbfac3363bc2eceea18c759e4298548bfe34edfcd239e",
+}];
+/// Links the system's ROCm 7.2 runtime, which it does not ship.
+const LINUX_HIP: &[ReleaseAsset] = &[ReleaseAsset {
+    name: "llama-b8783-bin-ubuntu-rocm-7.2-x64.tar.gz",
+    size: 169_665_919,
+    sha256: "d42a283e12d73a7dddf1a18c8b053d9369b7e46c64226d54e5870060e3a18e35",
+}];
+const LINUX_VULKAN: &[ReleaseAsset] = &[ReleaseAsset {
+    name: "llama-b8783-bin-ubuntu-vulkan-x64.tar.gz",
+    size: 50_827_722,
+    sha256: "b7b2f08df4c4c2da5c1dff9282900f921eb9dd96b433ef5e71fe730be7750b43",
+}];
+const MAC_METAL: &[ReleaseAsset] = &[ReleaseAsset {
+    name: "llama-b8783-bin-macos-arm64.tar.gz",
+    size: 40_968_640,
+    sha256: "340ca1e1ce544dd8c0b5d683a7ba279ddc31a4974f1a3506e3900e4b9ac0fddc",
+}];
+
+/// The archives of `backend`'s build on `platform`; empty when the release
+/// has none to download there (Linux CUDA comes with the `.deb`).
+fn assets_for(platform: Platform, backend: Backend) -> &'static [ReleaseAsset] {
+    match (platform, backend) {
+        (Platform::Windows, Backend::Cuda) => WINDOWS_CUDA,
+        (Platform::Windows, Backend::Hip) => WINDOWS_HIP,
+        (Platform::Windows, Backend::Vulkan) => WINDOWS_VULKAN,
+        (Platform::Linux, Backend::Hip) => LINUX_HIP,
+        (Platform::Linux, Backend::Vulkan) => LINUX_VULKAN,
+        (Platform::MacArm, Backend::Metal) => MAC_METAL,
+        _ => &[],
+    }
+}
+
+/// Download size in bytes of `backend`'s build on this platform.
+pub(crate) fn download_size(backend: Backend) -> u64 {
+    assets_for(Platform::current(), backend)
+        .iter()
+        .map(|asset| asset.size)
+        .sum()
+}
 
 /// One download at a time: the GLM-OCR card, the Qwen card and the
 /// assistant's `models_setup` all start the same install.
@@ -64,23 +119,20 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 /// `llama-server:download_progress`, `llama-server:download_complete` and
 /// `llama-server:download_error`.
 pub(crate) fn start_download(db_path: &Path, app_handle: AppHandle) -> Result<String, String> {
-    if server_dir(db_path).join(server_binary_name()).is_file() {
-        return Ok("already complete".to_string());
-    }
-    match server_source() {
-        ServerSource::Download => {}
+    let gpu = match server_source() {
+        ServerSource::Download => llama_gpu::detected()
+            .ok_or_else(|| "No se detectó la GPU de este equipo.".to_string())?,
         ServerSource::Bundled => {
             return Err(
                 "En este sistema llama-server viene con el instalador; no se descarga aparte."
                     .to_string(),
             )
         }
-        ServerSource::RequiresNvidiaGpu => {
-            return Err(
-                "llama-server solo se descarga en equipos con GPU NVIDIA: GLM-OCR y Qwen locales no corren en CPU."
-                    .to_string(),
-            )
-        }
+        ServerSource::RequiresGpu => return Err(requires_gpu_message()),
+    };
+    if installed_backend(db_path).is_some_and(|installed| backend_satisfies(installed, gpu.backend))
+    {
+        return Ok("already complete".to_string());
     }
     if RUNNING.swap(true, Ordering::AcqRel) {
         return Ok("already running".to_string());
@@ -89,14 +141,19 @@ pub(crate) fn start_download(db_path: &Path, app_handle: AppHandle) -> Result<St
     crate::app_logs::info(
         &app_handle,
         "llama-server/download",
-        format!("Inicio descarga de llama-server ({RELEASE_TAG}, CUDA 12.4)"),
+        format!(
+            "Inicio descarga de llama-server ({RELEASE_TAG}, {})",
+            gpu.backend.as_str()
+        ),
     );
     let db_path = db_path.to_path_buf();
     tauri::async_runtime::spawn(async move {
         let worker_handle = app_handle.clone();
-        let result = tokio::task::spawn_blocking(move || install(&db_path, &worker_handle))
-            .await
-            .unwrap_or_else(|e| Err(format!("Download task panicked: {e}")));
+        let result = tokio::task::spawn_blocking(move || {
+            install_with_fallback(&db_path, gpu.backend, &worker_handle)
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("Download task panicked: {e}")));
         RUNNING.store(false, Ordering::Release);
         match result {
             Ok(server) => {
@@ -128,30 +185,144 @@ pub(crate) fn start_download(db_path: &Path, app_handle: AppHandle) -> Result<St
     Ok("started".to_string())
 }
 
+/// Why no build is offered on a machine without a usable GPU.
+pub(crate) fn requires_gpu_message() -> String {
+    format!(
+        "llama-server solo se descarga en equipos con GPU NVIDIA, o AMD, Intel o Apple con al menos {} GB de memoria de video: GLM-OCR y Qwen locales no corren en CPU.",
+        llama_gpu::Engine::GlmOcr.min_vram_gb()
+    )
+}
+
+/// Install `backend`'s build; a HIP build that sees no ROCm device is
+/// replaced by the Vulkan build of the same platform.
+fn install_with_fallback(
+    db_path: &Path,
+    backend: Backend,
+    app_handle: &AppHandle,
+) -> Result<PathBuf, String> {
+    match install(db_path, backend, app_handle) {
+        Err(InstallError::NoDevice(listing)) if backend == Backend::Hip => {
+            crate::app_logs::info(
+                app_handle,
+                "llama-server/download",
+                format!("El build HIP no ve ninguna GPU ROCm; se instala Vulkan. {listing}"),
+            );
+            install(db_path, Backend::Vulkan, app_handle).map_err(InstallError::into_message)
+        }
+        result => result.map_err(InstallError::into_message),
+    }
+}
+
+#[derive(Debug)]
+enum InstallError {
+    /// The staged build lists no device of its kind; carries the listing.
+    NoDevice(String),
+    Other(String),
+}
+
+impl InstallError {
+    fn into_message(self) -> String {
+        match self {
+            InstallError::NoDevice(listing) => format!(
+                "llama-server no encontró la GPU (¿falta actualizar el driver de video?). {listing}"
+            ),
+            InstallError::Other(message) => message,
+        }
+    }
+}
+
+impl From<String> for InstallError {
+    fn from(message: String) -> Self {
+        InstallError::Other(message)
+    }
+}
+
 /// Download, verify and extract every archive into a work directory next to
-/// the managed one, then move the files in. The work directory is removed
-/// whatever happens.
-fn install(db_path: &Path, app_handle: &AppHandle) -> Result<PathBuf, String> {
+/// the managed one, check the build sees its GPU, then replace the managed
+/// install with it. The work directory is removed whatever happens.
+fn install(
+    db_path: &Path,
+    backend: Backend,
+    app_handle: &AppHandle,
+) -> Result<PathBuf, InstallError> {
+    let assets = assets_for(Platform::current(), backend);
+    if assets.is_empty() {
+        return Err(InstallError::Other(format!(
+            "No hay build {} de llama-server para este sistema",
+            backend.as_str()
+        )));
+    }
     let target = server_dir(db_path);
     let work = target.with_file_name("llama-server.partial");
     // Left behind by an attempt the app did not survive.
     let _ = std::fs::remove_dir_all(&work);
-    let result = download_and_stage(&work, app_handle)
-        .and_then(|staging| move_into_place(&staging, &target));
+    let result = download_and_stage(&work, assets, app_handle)
+        .map_err(InstallError::Other)
+        .and_then(|staging| finish_install(&staging, &target, backend));
     let _ = std::fs::remove_dir_all(&work);
     result.map(|()| target.join(server_binary_name()))
 }
 
-fn download_and_stage(work: &Path, app_handle: &AppHandle) -> Result<PathBuf, String> {
+/// Check the staged build, record which one it is and put it in place.
+fn finish_install(staging: &Path, target: &Path, backend: Backend) -> Result<(), InstallError> {
+    check_sees_gpu(staging, backend)?;
+    std::fs::write(staging.join(BACKEND_MARKER), backend.as_str())
+        .map_err(|e| format!("Cannot record the build: {e}"))?;
+    replace_install(staging, target)?;
+    Ok(())
+}
+
+/// A Vulkan or HIP build that lists no device of its kind would run on the
+/// CPU, which neither engine can afford. CUDA and Metal are not probed: CUDA
+/// is offered because `nvidia-smi` saw a card, Metal is the Mac's own GPU.
+fn check_sees_gpu(staging: &Path, backend: Backend) -> Result<(), InstallError> {
+    if !matches!(backend, Backend::Vulkan | Backend::Hip) {
+        return Ok(());
+    }
+    let listing = list_devices(&staging.join(server_binary_name()))?;
+    if llama_gpu::lists_device(&listing, backend) {
+        Ok(())
+    } else {
+        Err(InstallError::NoDevice(device_lines(&listing)))
+    }
+}
+
+/// The `Available devices:` part of a listing, for the log.
+fn device_lines(listing: &str) -> String {
+    listing
+        .lines()
+        .skip_while(|line| !line.starts_with("Available devices"))
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Replace whatever the managed directory holds with the staged build: a
+/// CUDA install left in place would leave its `ggml-cuda.dll` for a Vulkan
+/// server to load. A running server holds its files, so it stops first.
+fn replace_install(staging: &Path, target: &Path) -> Result<(), String> {
+    if target.exists() {
+        super::local_server::shutdown();
+        std::fs::remove_dir_all(target)
+            .map_err(|e| format!("Cannot remove the previous llama-server: {e}"))?;
+    }
+    move_into_place(staging, target)
+}
+
+fn download_and_stage(
+    work: &Path,
+    assets: &[ReleaseAsset],
+    app_handle: &AppHandle,
+) -> Result<PathBuf, String> {
     let staging = work.join("staging");
     std::fs::create_dir_all(&staging)
         .map_err(|e| format!("Cannot create {}: {e}", staging.display()))?;
     let client = build_model_download_client()?;
-    let total: u64 = ASSETS.iter().map(|asset| asset.size).sum();
+    let total: u64 = assets.iter().map(|asset| asset.size).sum();
     let mut done = 0_u64;
     let mut last_pct = 0_u8;
 
-    for asset in ASSETS {
+    for asset in assets {
         let url = format!(
             "https://github.com/ggml-org/llama.cpp/releases/download/{RELEASE_TAG}/{}",
             asset.name
@@ -191,7 +362,13 @@ fn download_and_stage(work: &Path, app_handle: &AppHandle) -> Result<PathBuf, St
         archive
             .rewind()
             .map_err(|e| format!("Cannot reread {}: {e}", archive_path.display()))?;
-        extract_server_files(archive, &staging).map_err(|e| format!("{}: {e}", asset.name))?;
+        let extracted = if asset.name.ends_with(".zip") {
+            extract_server_files(archive, &staging).map(drop)
+        } else {
+            drop(archive);
+            extract_tarball(&archive_path, work, &staging)
+        };
+        extracted.map_err(|e| format!("{}: {e}", asset.name))?;
         let _ = std::fs::remove_file(&archive_path);
     }
     if !staging.join(server_binary_name()).is_file() {
@@ -263,11 +440,88 @@ fn copy_verified<R: Read, W: Write>(
     Ok(())
 }
 
-/// Files the server needs from a release archive: the server executable and
-/// every DLL at the archive root. The other tools (llama-cli, ...) stay out.
+/// Folders of ROCm kernel libraries the HIP build loads next to its DLLs.
+const LIBRARY_DIRS: &[&str] = &["rocblas", "hipblaslt"];
+
+/// Files the server needs from a release archive, by their path inside it
+/// (`/`-separated, relative to the build's root): the server executable,
+/// every shared library at the root (`.dll`, `.so`, `.so.N`, `.dylib`), and
+/// the HIP build's [`LIBRARY_DIRS`]. The other tools (llama-cli, ...) stay out.
 fn is_server_file(name: &str) -> bool {
-    !name.contains(['/', '\\'])
-        && (name == server_binary_name() || name.to_ascii_lowercase().ends_with(".dll"))
+    if name.contains('\\') || name.split('/').any(|part| part.is_empty() || part == "..") {
+        return false;
+    }
+    match name.split_once('/') {
+        None => {
+            let lower = name.to_ascii_lowercase();
+            name == server_binary_name()
+                || lower.ends_with(".dll")
+                || lower.ends_with(".dylib")
+                || lower.ends_with(".so")
+                || lower.contains(".so.")
+        }
+        Some((dir, _)) => LIBRARY_DIRS.contains(&dir),
+    }
+}
+
+/// Unpack a `.tar.gz` release (Linux, macOS) with the system's `tar`, which
+/// keeps the libraries' symlinks and executable bits, then move its
+/// [`is_server_file`] entries into `dest`. The archive is already verified.
+fn extract_tarball(archive: &Path, work: &Path, dest: &Path) -> Result<(), String> {
+    let unpacked = work.join("unpacked");
+    let _ = std::fs::remove_dir_all(&unpacked);
+    std::fs::create_dir_all(&unpacked)
+        .map_err(|e| format!("Cannot create {}: {e}", unpacked.display()))?;
+    let status = std::process::Command::new("tar")
+        .arg("-xzf")
+        .arg(archive)
+        .arg("-C")
+        .arg(&unpacked)
+        .status()
+        .map_err(|e| format!("Cannot run tar: {e}"))?;
+    if !status.success() {
+        return Err(format!("tar failed ({status})"));
+    }
+    let root = release_root(&unpacked)?;
+    move_server_files(&root, dest)?;
+    let _ = std::fs::remove_dir_all(&unpacked);
+    let _ = std::fs::remove_file(archive);
+    Ok(())
+}
+
+/// The directory holding the server: the archive's single top folder
+/// (`llama-b8783/`), or the unpack directory itself when it is flat.
+fn release_root(unpacked: &Path) -> Result<PathBuf, String> {
+    if unpacked.join(server_binary_name()).exists() {
+        return Ok(unpacked.to_path_buf());
+    }
+    std::fs::read_dir(unpacked)
+        .map_err(|e| format!("Cannot list {}: {e}", unpacked.display()))?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.join(server_binary_name()).is_file())
+        .ok_or_else(|| format!("The release has no {}", server_binary_name()))
+}
+
+/// Move the [`is_server_file`] entries at `root`'s top level into `dest`.
+/// Renaming keeps a symlink a symlink.
+fn move_server_files(root: &Path, dest: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(root)
+        .map_err(|e| format!("Cannot list {}: {e}", root.display()))?
+        .flatten()
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let keep = if entry.path().is_dir() && !entry.path().is_symlink() {
+            LIBRARY_DIRS.contains(&name.as_str())
+        } else {
+            is_server_file(&name)
+        };
+        if keep {
+            std::fs::rename(entry.path(), dest.join(&name))
+                .map_err(|e| format!("Cannot move {name}: {e}"))?;
+        }
+    }
+    Ok(())
 }
 
 /// Extract the [`is_server_file`] entries of `archive` into `dest`.
@@ -287,6 +541,10 @@ fn extract_server_files<R: Read + Seek>(archive: R, dest: &Path) -> Result<Vec<S
             continue;
         }
         let path = dest.join(&name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
+        }
         let mut file = std::fs::File::create(&path)
             .map_err(|e| format!("Cannot create {}: {e}", path.display()))?;
         std::io::copy(&mut entry, &mut file).map_err(|e| format!("Cannot extract {name}: {e}"))?;
@@ -434,5 +692,178 @@ mod tests {
         move_into_place(&staging, &target).unwrap();
         assert!(target.join(server_binary_name()).is_file());
         assert!(target.join("z.dll").is_file());
+    }
+
+    #[test]
+    fn every_gpu_build_has_its_pinned_archives() {
+        use Backend::*;
+        let names = |platform, backend| -> Vec<&str> {
+            assets_for(platform, backend)
+                .iter()
+                .map(|a| a.name)
+                .collect()
+        };
+        assert_eq!(
+            names(Platform::Windows, Cuda),
+            [
+                "llama-b8783-bin-win-cuda-12.4-x64.zip",
+                "cudart-llama-bin-win-cuda-12.4-x64.zip"
+            ]
+        );
+        assert_eq!(
+            names(Platform::Windows, Hip),
+            ["llama-b8783-bin-win-hip-radeon-x64.zip"]
+        );
+        assert_eq!(
+            names(Platform::Windows, Vulkan),
+            ["llama-b8783-bin-win-vulkan-x64.zip"]
+        );
+        assert_eq!(
+            names(Platform::Linux, Hip),
+            ["llama-b8783-bin-ubuntu-rocm-7.2-x64.tar.gz"]
+        );
+        assert_eq!(
+            names(Platform::Linux, Vulkan),
+            ["llama-b8783-bin-ubuntu-vulkan-x64.tar.gz"]
+        );
+        assert_eq!(
+            names(Platform::MacArm, Metal),
+            ["llama-b8783-bin-macos-arm64.tar.gz"]
+        );
+        // The .deb bundles Linux CUDA; nothing else downloads elsewhere.
+        assert!(assets_for(Platform::Linux, Cuda).is_empty());
+        assert!(assets_for(Platform::Other, Vulkan).is_empty());
+        for backend in [Cuda, Hip, Vulkan, Metal] {
+            for platform in [Platform::Windows, Platform::Linux, Platform::MacArm] {
+                for asset in assets_for(platform, backend) {
+                    assert!(asset.name.contains(RELEASE_TAG) || asset.name.starts_with("cudart"));
+                    assert_eq!(asset.sha256.len(), 64, "{}", asset.name);
+                    assert!(asset.size > 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_hip_build_keeps_its_rocm_kernel_folders() {
+        assert!(is_server_file("rocblas/library/TensileLibrary_gfx1100.dat"));
+        assert!(is_server_file(
+            "hipblaslt/library/Kernels.so-000-gfx1201.hsaco"
+        ));
+        assert!(is_server_file("rocblas.dll"));
+        assert!(!is_server_file("rocblas/../../escape.dll"));
+        assert!(!is_server_file("other/lib.dll"));
+        assert!(!is_server_file("/rocblas/x"));
+    }
+
+    #[test]
+    fn unix_builds_keep_their_shared_libraries() {
+        for name in [
+            "libggml-vulkan.so",
+            "libllama.so.0",
+            "libllama.so.0.0.8783",
+            "libggml-metal.0.dylib",
+        ] {
+            assert!(is_server_file(name), "{name}");
+        }
+        for name in ["llama-cli", "LICENSE", "rpc-server"] {
+            assert!(!is_server_file(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_zip_with_kernel_folders_extracts_them_in_place() {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            for name in [
+                server_binary_name(),
+                "ggml-hip.dll",
+                "rocblas/library/a.dat",
+            ] {
+                zip.start_file(name, options).unwrap();
+                zip.write_all(name.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buffer.rewind().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        extract_server_files(buffer, dest.path()).unwrap();
+        assert_eq!(
+            std::fs::read(dest.path().join("rocblas/library/a.dat")).unwrap(),
+            b"rocblas/library/a.dat"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tarball_release_keeps_the_server_its_libraries_and_symlinks() {
+        let work = tempfile::tempdir().unwrap();
+        let source = work.path().join("src/llama-b8783");
+        std::fs::create_dir_all(&source).unwrap();
+        for name in [
+            server_binary_name(),
+            "libllama.so.0.0.8783",
+            "llama-cli",
+            "LICENSE",
+        ] {
+            std::fs::write(source.join(name), name).unwrap();
+        }
+        std::os::unix::fs::symlink("libllama.so.0.0.8783", source.join("libllama.so.0")).unwrap();
+        let archive = work.path().join("release.tar.gz");
+        let status = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(work.path().join("src"))
+            .arg("llama-b8783")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let staging = work.path().join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        extract_tarball(&archive, work.path(), &staging).unwrap();
+
+        assert!(staging.join(server_binary_name()).is_file());
+        assert!(staging.join("libllama.so.0").is_symlink());
+        assert!(!staging.join("llama-cli").exists());
+        assert!(!staging.join("LICENSE").exists());
+    }
+
+    #[test]
+    fn replacing_an_install_drops_the_previous_builds_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let staging = dir.path().join("staging");
+        let target = dir.path().join("tools/llama-server");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("ggml-cuda.dll"), b"cuda").unwrap();
+        std::fs::write(target.join(server_binary_name()), b"old").unwrap();
+        std::fs::write(staging.join("ggml-vulkan.dll"), b"vk").unwrap();
+        std::fs::write(staging.join(BACKEND_MARKER), "vulkan").unwrap();
+        std::fs::write(staging.join(server_binary_name()), b"new").unwrap();
+
+        replace_install(&staging, &target).unwrap();
+
+        assert!(!target.join("ggml-cuda.dll").exists());
+        assert_eq!(
+            std::fs::read(target.join(server_binary_name())).unwrap(),
+            b"new"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join(BACKEND_MARKER)).unwrap(),
+            "vulkan"
+        );
+    }
+
+    #[test]
+    fn the_log_keeps_only_the_device_list() {
+        let listing = "load_backend: loaded CPU backend\nAvailable devices:\n  Vulkan0: RX 560 (4096 MiB, 3463 MiB free)\n";
+        assert_eq!(
+            device_lines(listing),
+            "Available devices: Vulkan0: RX 560 (4096 MiB, 3463 MiB free)"
+        );
     }
 }

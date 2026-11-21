@@ -19,6 +19,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use super::llama_gpu::{self, Backend, Gpu, Platform};
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -119,25 +121,65 @@ pub(crate) fn resolve_server(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServerSource {
-    /// The installer ships it (Linux `.deb`, scripts/fetch-llama-server.sh).
+    /// The installer ships it (the Linux `.deb`'s CUDA build for NVIDIA,
+    /// scripts/fetch-llama-server.sh).
     Bundled,
-    /// Downloaded on demand (Windows), and this machine can run it.
+    /// Downloaded on demand, in the build this machine's GPU runs.
     Download,
-    /// Downloaded on demand, but there is no NVIDIA GPU: both local engines
-    /// are GPU-only, so the ~610 MB CUDA build is not offered.
-    RequiresNvidiaGpu,
+    /// No GPU the local engines can use (none, or too little memory): both
+    /// are GPU-only, so no build is offered.
+    RequiresGpu,
 }
 
-/// Platforms whose installers ship no server (see `llama_server_download`).
-pub(crate) const SERVER_DOWNLOADED: bool = cfg!(all(windows, target_arch = "x86_64"));
+/// Name of the file in [`server_dir`] that records which build it holds.
+/// An install from before the file existed is the CUDA build.
+pub(crate) const BACKEND_MARKER: &str = "backend.txt";
+
+/// The build the managed install holds, when there is one.
+pub(crate) fn installed_backend(db_path: &Path) -> Option<Backend> {
+    let dir = server_dir(db_path);
+    if !dir.join(server_binary_name()).is_file() {
+        return None;
+    }
+    match std::fs::read_to_string(dir.join(BACKEND_MARKER)) {
+        Ok(text) => Backend::parse(&text),
+        Err(_) => Some(Backend::Cuda),
+    }
+}
+
+/// Whether an installed build serves a machine that wants `wanted`. A HIP
+/// install that listed no device fell back to Vulkan, which then stands.
+pub(crate) fn backend_satisfies(installed: Backend, wanted: Backend) -> bool {
+    installed == wanted || (wanted == Backend::Hip && installed == Backend::Vulkan)
+}
+
+/// Whether the managed install holds a build this machine cannot use (the
+/// GPU changed since), so the download is offered again.
+pub(crate) fn managed_server_stale(db_path: &Path) -> bool {
+    match (installed_backend(db_path), llama_gpu::detected()) {
+        (Some(installed), Some(gpu)) => !backend_satisfies(installed, gpu.backend),
+        _ => false,
+    }
+}
+
+/// Whether the resolved server is there and runs on this machine's GPU.
+pub(crate) fn server_ready(server: &Path, db_path: &Path) -> bool {
+    server.is_file()
+        && !(server == server_dir(db_path).join(server_binary_name())
+            && managed_server_stale(db_path))
+}
 
 pub(crate) fn server_source() -> ServerSource {
-    if !SERVER_DOWNLOADED {
-        ServerSource::Bundled
-    } else if crate::llm::has_nvidia_gpu() {
-        ServerSource::Download
-    } else {
-        ServerSource::RequiresNvidiaGpu
+    server_source_for(Platform::current(), llama_gpu::detected().as_ref())
+}
+
+fn server_source_for(platform: Platform, gpu: Option<&Gpu>) -> ServerSource {
+    match (platform, gpu.map(|gpu| gpu.backend)) {
+        // The `.deb` carries the CUDA build; other platforms run what they ship.
+        (Platform::Linux, Some(Backend::Cuda)) | (Platform::Other, _) => ServerSource::Bundled,
+        (_, Some(_)) => ServerSource::Download,
+        (Platform::Linux, None) => ServerSource::Bundled,
+        (_, None) => ServerSource::RequiresGpu,
     }
 }
 
@@ -229,8 +271,12 @@ fn start(
         .args(["-np", &config.slots.to_string()])
         .args(["-c", &(config.slots * config.ctx_per_slot).to_string()])
         .args(["--host", "127.0.0.1"])
-        .args(["--port", &port.to_string()])
-        .stdin(Stdio::null())
+        .args(["--port", &port.to_string()]);
+    if let Some(device) = managed_device(&assets.server, db_path) {
+        log::info!(target: config.log_target, "llama-server device: {device}");
+        cmd.args(["--device", &device]);
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_err));
     // llama-server reads these as its own flags. A user's `LLAMA_API_KEY`
@@ -285,6 +331,50 @@ fn start(
         "llama-server did not become healthy within {}s. Log:\n{}",
         STARTUP_TIMEOUT.as_secs(),
         log_tail(&log_path)
+    ))
+}
+
+/// The device a managed Vulkan or HIP build must use: the GPU
+/// [`llama_gpu::detected`] chose. llama.cpp would otherwise split the model
+/// across every device it sees, an integrated GPU included. `None` leaves
+/// the choice to llama.cpp (CUDA, Metal, bundled or overridden servers).
+fn managed_device(server: &Path, db_path: &Path) -> Option<String> {
+    if server != server_dir(db_path).join(server_binary_name()) {
+        return None;
+    }
+    let backend = installed_backend(db_path)?;
+    if !matches!(backend, Backend::Vulkan | Backend::Hip) {
+        return None;
+    }
+    let listing = list_devices(server).ok()?;
+    let gpu = llama_gpu::detected();
+    llama_gpu::pick_device(
+        &listing,
+        backend,
+        gpu.as_ref().and_then(|gpu| gpu.name.as_deref()),
+    )
+}
+
+/// `llama-server --list-devices`, stdout and stderr together.
+pub(crate) fn list_devices(server: &Path) -> Result<String, String> {
+    let mut cmd = Command::new(server);
+    cmd.arg("--list-devices").stdin(Stdio::null());
+    if let Some(dir) = server.parent() {
+        cmd.current_dir(dir);
+    }
+    for name in llama_server_env_overrides(std::env::vars_os().map(|(name, _)| name)) {
+        cmd.env_remove(name);
+    }
+    let output = super::paddle_vl::command_output_with_timeout(
+        cmd,
+        Duration::from_secs(60),
+        "llama-server --list-devices",
+    )?;
+    Ok(format!(
+        "{}
+{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     ))
 }
 
@@ -418,5 +508,69 @@ mod tests {
     fn health_check_fails_on_a_closed_port() {
         let port = free_port().unwrap();
         assert!(!health_ok(port));
+    }
+
+    fn gpu(backend: Backend) -> Gpu {
+        Gpu {
+            backend,
+            vram: None,
+            name: None,
+        }
+    }
+
+    #[test]
+    fn each_platform_gets_its_server_from_the_right_place() {
+        let cuda = gpu(Backend::Cuda);
+        let vulkan = gpu(Backend::Vulkan);
+        assert_eq!(
+            server_source_for(Platform::Windows, Some(&cuda)),
+            ServerSource::Download
+        );
+        assert_eq!(
+            server_source_for(Platform::Windows, Some(&vulkan)),
+            ServerSource::Download
+        );
+        assert_eq!(
+            server_source_for(Platform::Windows, None),
+            ServerSource::RequiresGpu
+        );
+        // The .deb keeps its CUDA build; other Linux GPUs download theirs.
+        assert_eq!(
+            server_source_for(Platform::Linux, Some(&cuda)),
+            ServerSource::Bundled
+        );
+        assert_eq!(
+            server_source_for(Platform::Linux, Some(&vulkan)),
+            ServerSource::Download
+        );
+        assert_eq!(
+            server_source_for(Platform::MacArm, Some(&gpu(Backend::Metal))),
+            ServerSource::Download
+        );
+        assert_eq!(
+            server_source_for(Platform::MacArm, None),
+            ServerSource::RequiresGpu
+        );
+    }
+
+    #[test]
+    fn the_marker_names_the_installed_build_and_legacy_installs_are_cuda() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("entropia.db");
+        assert_eq!(installed_backend(&db), None);
+        std::fs::create_dir_all(server_dir(&db)).unwrap();
+        std::fs::write(server_dir(&db).join(server_binary_name()), b"s").unwrap();
+        assert_eq!(installed_backend(&db), Some(Backend::Cuda));
+        std::fs::write(server_dir(&db).join(BACKEND_MARKER), "vulkan").unwrap();
+        assert_eq!(installed_backend(&db), Some(Backend::Vulkan));
+    }
+
+    #[test]
+    fn a_hip_machine_keeps_the_vulkan_fallback_but_cuda_does_not_serve_vulkan() {
+        assert!(backend_satisfies(Backend::Vulkan, Backend::Hip));
+        assert!(backend_satisfies(Backend::Hip, Backend::Hip));
+        assert!(!backend_satisfies(Backend::Cuda, Backend::Vulkan));
+        assert!(!backend_satisfies(Backend::Vulkan, Backend::Cuda));
+        assert!(!backend_satisfies(Backend::Hip, Backend::Vulkan));
     }
 }

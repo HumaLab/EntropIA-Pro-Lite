@@ -11,17 +11,22 @@ import { invoke } from '@tauri-apps/api/core'
 const OFF = import.meta.env.VITE_LOCAL_ML !== '1'
 
 /**
- * Where the build gets llama-server: shipped by the installer (Linux),
- * downloaded on demand (Windows), or not offered (Windows without an NVIDIA
- * GPU, where neither local engine runs).
+ * Where the build gets llama-server: shipped by the installer (the Linux
+ * CUDA build for NVIDIA), downloaded on demand in the build the machine's GPU
+ * runs (CUDA, HIP, Vulkan or Metal), or not offered (no GPU with enough
+ * memory, where neither local engine runs).
  */
-export type LlamaServerSource = 'bundled' | 'download' | 'requires_nvidia_gpu'
+export type LlamaServerSource = 'bundled' | 'download' | 'requires_gpu'
 
 export interface GlmOcrLocalInfo {
   model_present: boolean
   mmproj_present: boolean
   server_present: boolean
   server_source: LlamaServerSource
+  /** This machine has a GPU with enough memory for GLM-OCR. */
+  gpu_fits: boolean
+  /** The memory floor for a non-NVIDIA GPU, in nominal GB. */
+  min_vram_gb: number
   models_dir: string
   repo_url: string
 }

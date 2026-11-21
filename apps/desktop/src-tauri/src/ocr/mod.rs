@@ -12,6 +12,8 @@ pub mod paddle;
 pub mod glm_ocr_local;
 #[cfg(feature = "local-ml")]
 pub mod layout_onnx;
+#[cfg(feature = "paddle-ocr")]
+pub(crate) mod llama_gpu;
 #[cfg(feature = "local-ml")]
 pub(crate) mod llama_server_download;
 #[cfg(feature = "paddle-ocr")]

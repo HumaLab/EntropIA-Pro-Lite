@@ -146,6 +146,8 @@ windows = { version = "0.62", features = [
     "Networking_Connectivity",
     "Services_Store",
     "Win32_Foundation",
+    # ocr/llama_gpu.rs: list the GPUs and their dedicated memory (DXGI).
+    "Win32_Graphics_Dxgi",
     # automation/private_acl.rs: owner-only access lists for the assistant's
     # tokens, token hashes and instance key.
     "Win32_Security",

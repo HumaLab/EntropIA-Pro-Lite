@@ -1581,13 +1581,14 @@ fn ocr_correction_llm_mode(conn: &rusqlite::Connection) -> String {
     }
 }
 
-/// Whether the local Qwen corrector can take a page: assets installed AND an
-/// NVIDIA GPU. On CPU one page takes well over five minutes (the image alone
-/// ~3 min on a desktop CPU) and outlives the request timeout, so a GPU-less
-/// machine treats Qwen as not installed, like GLM-OCR's `auto` engine does.
+/// Whether the local Qwen corrector can take a page: assets installed AND a
+/// GPU with room for it (NVIDIA, or AMD/Intel/Apple with 6 GB). On CPU one
+/// page takes well over five minutes (the image alone ~3 min on a desktop
+/// CPU) and outlives the request timeout, so a machine without one treats
+/// Qwen as not installed, like GLM-OCR's `auto` engine does.
 fn local_ocr_correction_available(_app_handle: &AppHandle, _db_path: &std::path::Path) -> bool {
     #[cfg(feature = "paddle-ocr")]
-    return has_nvidia_gpu()
+    return crate::ocr::llama_gpu::engine_runs(crate::ocr::llama_gpu::Engine::Qwen)
         && qwen_correction::local_correction_available_for(_app_handle, _db_path);
     #[cfg(not(feature = "paddle-ocr"))]
     false

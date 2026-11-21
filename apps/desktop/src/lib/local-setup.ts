@@ -27,7 +27,7 @@ export interface LocalComponent {
   detail: string
   /** What the component enables. */
   enables: string
-  /** Set when this machine cannot use it (an NVIDIA-only model without one). */
+  /** Set when this machine cannot use it (a GPU-only model without a GPU it fits on). */
   unavailableReason?: string
 }
 

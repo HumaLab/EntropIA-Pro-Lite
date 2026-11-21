@@ -9,9 +9,10 @@
 //! The offer is computed once per archive: [`OFFERED_KEY`] records that it was
 //! answered, or that there was nothing to offer, so a cloud mode the user picks
 //! later in Pro is never second-guessed. It only proposes what runs well on
-//! this machine: dictation always (Parakeet runs on CPU), OCRH and the text
-//! LLM only with an NVIDIA GPU, and never the embedding provider (switching it
-//! re-embeds the whole archive for identical vectors, R15).
+//! this machine: dictation always (Parakeet runs on CPU), OCRH only with a GPU
+//! that fits local GLM-OCR, the text LLM only with one that fits the local
+//! Qwen corrector, and never the embedding provider (switching it re-embeds
+//! the whole archive for identical vectors, R15).
 
 use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
@@ -28,21 +29,42 @@ pub struct ModeOffer {
     pub local: &'static str,
 }
 
-/// `(setting, Lite's cloud value, needs an NVIDIA GPU)`. Only Lite's own
-/// cloud value is offered: `auto` or anything else was chosen on purpose.
-const OFFERABLE: &[(&str, &str, bool)] = &[
-    ("stt_mode", "assemblyai", false),
-    ("ocrh_mode", "glm_ocr", true),
-    ("llm_mode", "openrouter", true),
+/// The GPU a local mode needs to run well.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Needs {
+    Nothing,
+    /// Local GLM-OCR (4 GB on AMD/Intel/Apple).
+    GlmGpu,
+    /// The local Qwen corrector (6 GB on AMD/Intel/Apple).
+    QwenGpu,
+}
+
+/// What this machine's GPU runs.
+#[derive(Clone, Copy, Debug, Default)]
+struct GpuRuns {
+    glm: bool,
+    qwen: bool,
+}
+
+/// `(setting, Lite's cloud value, what it needs)`. Only Lite's own cloud
+/// value is offered: `auto` or anything else was chosen on purpose.
+const OFFERABLE: &[(&str, &str, Needs)] = &[
+    ("stt_mode", "assemblyai", Needs::Nothing),
+    ("ocrh_mode", "glm_ocr", Needs::GlmGpu),
+    ("llm_mode", "openrouter", Needs::QwenGpu),
 ];
 
-fn pending_offer(lookup: impl Fn(&str) -> Option<String>, has_gpu: bool) -> Vec<ModeOffer> {
+fn pending_offer(lookup: impl Fn(&str) -> Option<String>, gpu: GpuRuns) -> Vec<ModeOffer> {
     if lookup(OFFERED_KEY).is_some() {
         return Vec::new();
     }
     OFFERABLE
         .iter()
-        .filter(|(_, _, needs_gpu)| has_gpu || !needs_gpu)
+        .filter(|(_, _, needs)| match needs {
+            Needs::Nothing => true,
+            Needs::GlmGpu => gpu.glm,
+            Needs::QwenGpu => gpu.qwen,
+        })
         .filter_map(|(key, cloud, _)| {
             let current = lookup(key)?;
             (current == *cloud).then_some(ModeOffer {
@@ -65,14 +87,20 @@ pub async fn local_modes_offer(db: State<'_, AppDbState>) -> Result<Vec<ModeOffe
     run_blocking_db_task(move || {
         // GPU detection spawns nvidia-smi: never with the connection held.
         #[cfg(feature = "local-ml")]
-        let has_gpu = crate::llm::has_nvidia_gpu();
+        let gpu = {
+            use crate::ocr::llama_gpu::{engine_runs, Engine};
+            GpuRuns {
+                glm: engine_runs(Engine::GlmOcr),
+                qwen: engine_runs(Engine::Qwen),
+            }
+        };
         #[cfg(not(feature = "local-ml"))]
-        let has_gpu = false;
+        let gpu = GpuRuns::default();
         let conn = db
             .ui_conn
             .lock()
             .map_err(|e| format!("DB lock error: {e}"))?;
-        let offer = pending_offer(|key| crate::settings::get_raw_setting(&conn, key), has_gpu);
+        let offer = pending_offer(|key| crate::settings::get_raw_setting(&conn, key), gpu);
         if offer.is_empty() && crate::settings::get_raw_setting(&conn, OFFERED_KEY).is_none() {
             crate::settings::set_setting(&conn, OFFERED_KEY, "1")
                 .map_err(|e| format!("Failed to record the local modes offer: {e}"))?;
@@ -88,8 +116,18 @@ mod tests {
     use std::collections::HashMap;
 
     fn offer(settings: &[(&str, &str)], has_gpu: bool) -> Vec<&'static str> {
+        offer_with(
+            settings,
+            GpuRuns {
+                glm: has_gpu,
+                qwen: has_gpu,
+            },
+        )
+    }
+
+    fn offer_with(settings: &[(&str, &str)], gpu: GpuRuns) -> Vec<&'static str> {
         let map: HashMap<&str, &str> = settings.iter().copied().collect();
-        pending_offer(|key| map.get(key).map(|v| v.to_string()), has_gpu)
+        pending_offer(|key| map.get(key).map(|v| v.to_string()), gpu)
             .into_iter()
             .map(|offer| offer.key)
             .collect()
@@ -109,6 +147,20 @@ mod tests {
             ["stt_mode", "ocrh_mode", "llm_mode"]
         );
         assert_eq!(offer(LITE_ARCHIVE, false), ["stt_mode"]);
+    }
+
+    #[test]
+    fn a_4_gb_gpu_offers_local_ocrh_but_not_the_local_llm() {
+        assert_eq!(
+            offer_with(
+                LITE_ARCHIVE,
+                GpuRuns {
+                    glm: true,
+                    qwen: false
+                }
+            ),
+            ["stt_mode", "ocrh_mode"]
+        );
     }
 
     #[test]
