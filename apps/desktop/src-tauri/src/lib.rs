@@ -1746,6 +1746,8 @@ pub fn run() {
             transcription::commands::test_assemblyai_connection,
             zotero_web::zotero_verify_key,
             transcription::commands::update_transcription_text_cmd,
+            transcription::commands::list_transcription_versions,
+            transcription::commands::restore_transcription_version,
             audio_preview::prepare_audio_preview,
             llm::commands::llm_extract_entities,
             llm::commands::llm_extract_triples,

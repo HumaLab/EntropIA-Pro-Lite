@@ -197,3 +197,14 @@ the item's entity list). No foreign keys: aliases resolve by text, so they
 survive the deletion of the documents that suggested them. The table is
 synced once the server accepts it; the first push from an updated device
 raises the account schema_tag.
+
+## 0066_transcription_versions
+
+The transcripts a re-transcription replaced. `transcriptions` keeps one row
+per asset, so before the Rust writer overwrites that row it copies it here in
+the same transaction: text (with the speaker names the user typed), segments,
+model, language, duration, `transcribed_at` (the replaced row's
+`created_at`) and `replaced_at`. The transcript panel lists these versions
+and restores one by swapping it with the current transcript. `asset_id`
+cascades on asset delete. Local to the device: the table is not synced. The
+first push from an updated device raises the account schema_tag.

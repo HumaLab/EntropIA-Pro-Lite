@@ -238,6 +238,25 @@ export const transcriptions = sqliteTable('transcriptions', {
 })
 
 // ---------------------------------------------------------------------------
+// Transcription versions — transcripts a re-transcription replaced (0066).
+// Local to the device: not synced. Written and restored by the Rust side.
+// ---------------------------------------------------------------------------
+export const transcriptionVersions = sqliteTable('transcription_versions', {
+  id: text('id').primaryKey(),
+  assetId: text('asset_id')
+    .notNull()
+    .references(() => assets.id, { onDelete: 'cascade' }),
+  textContent: text('text_content').notNull(),
+  language: text('language'),
+  durationMs: integer('duration_ms'),
+  model: text('model'),
+  segments: text('segments'),
+  confidence: real('confidence'),
+  transcribedAt: integer('transcribed_at').notNull(),
+  replacedAt: integer('replaced_at').notNull(),
+})
+
+// ---------------------------------------------------------------------------
 // Annotations — visual overlays linked to an asset/page
 // ---------------------------------------------------------------------------
 export const annotations = sqliteTable(

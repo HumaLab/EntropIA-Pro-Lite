@@ -147,6 +147,13 @@ impl Fixture {
             .unwrap();
         self.conn
             .execute(
+                "INSERT INTO transcription_versions (id, asset_id, text_content, model, transcribed_at, replaced_at)
+                 VALUES (?1, ?2, 'version anterior', 'model', 0, 1)",
+                params![format!("trv-{asset}"), asset],
+            )
+            .unwrap();
+        self.conn
+            .execute(
                 "INSERT INTO topics (id, name, created_at) VALUES ('top-1', 'historia', 1)",
                 [],
             )
@@ -295,6 +302,7 @@ fn deleting_items_removes_every_row_the_store_removes() {
         "triples",
         "annotations",
         "transcriptions",
+        "transcription_versions",
         "item_topics",
         "rag_chunks",
         "processing_asset_revisions",
@@ -803,6 +811,7 @@ fn deleting_a_collection_removes_its_rows_files_and_records_d_tombstones() {
         "triples",
         "annotations",
         "transcriptions",
+        "transcription_versions",
         "item_topics",
         "rag_chunks",
         "processing_asset_revisions",

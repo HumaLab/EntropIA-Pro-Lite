@@ -338,6 +338,12 @@
     },
     {
       "type": "index",
+      "name": "idx_transcription_versions_asset",
+      "tbl_name": "transcription_versions",
+      "sql": "CREATE INDEX idx_transcription_versions_asset\n  ON transcription_versions(asset_id, replaced_at)"
+    },
+    {
+      "type": "index",
       "name": "idx_transcriptions_asset_id",
       "tbl_name": "transcriptions",
       "sql": "CREATE INDEX idx_transcriptions_asset_id ON transcriptions(asset_id)"
@@ -893,6 +899,12 @@
       "name": "topics",
       "tbl_name": "topics",
       "sql": "CREATE TABLE topics (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL UNIQUE,\n  created_at INTEGER NOT NULL\n)"
+    },
+    {
+      "type": "table",
+      "name": "transcription_versions",
+      "tbl_name": "transcription_versions",
+      "sql": "CREATE TABLE transcription_versions (\n  id TEXT PRIMARY KEY,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  text_content TEXT NOT NULL,\n  language TEXT,\n  duration_ms INTEGER,\n  model TEXT,\n  segments TEXT,\n  confidence REAL,\n  transcribed_at INTEGER NOT NULL,\n  replaced_at INTEGER NOT NULL\n)"
     },
     {
       "type": "table",
@@ -5844,6 +5856,115 @@
       "foreign_keys_error": null
     },
     {
+      "name": "transcription_versions",
+      "columns": [
+        {
+          "cid": 0,
+          "name": "id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1,
+          "hidden": 0
+        },
+        {
+          "cid": 1,
+          "name": "asset_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 2,
+          "name": "text_content",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 3,
+          "name": "language",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 4,
+          "name": "duration_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 5,
+          "name": "model",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 6,
+          "name": "segments",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 7,
+          "name": "confidence",
+          "type": "REAL",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 8,
+          "name": "transcribed_at",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 9,
+          "name": "replaced_at",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "assets",
+          "from": "asset_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE",
+          "match": "NONE"
+        }
+      ],
+      "columns_error": null,
+      "foreign_keys_error": null
+    },
+    {
       "name": "transcriptions",
       "columns": [
         {
@@ -10535,6 +10656,36 @@
       "columns_error": null
     },
     {
+      "name": "idx_transcription_versions_asset",
+      "columns": [
+        {
+          "seqno": 0,
+          "cid": 1,
+          "name": "asset_id",
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 1
+        },
+        {
+          "seqno": 1,
+          "cid": 9,
+          "name": "replaced_at",
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 1
+        },
+        {
+          "seqno": 2,
+          "cid": -1,
+          "name": null,
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 0
+        }
+      ],
+      "columns_error": null
+    },
+    {
       "name": "idx_transcriptions_asset_id",
       "columns": [
         {
@@ -11594,6 +11745,7 @@
     "0062_triple_evidence",
     "0063_collection_ai_context",
     "0064_derived_source_path",
-    "0065_entity_aliases"
+    "0065_entity_aliases",
+    "0066_transcription_versions"
   ]
 }

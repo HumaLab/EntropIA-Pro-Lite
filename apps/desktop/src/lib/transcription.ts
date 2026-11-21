@@ -270,6 +270,32 @@ export async function transcribeAudio(assetId: string, assetPath: string): Promi
   await invoke('transcribe_audio', { assetId, assetPath })
 }
 
+/** A transcript a re-transcription replaced (kept on this device only). */
+export interface TranscriptVersion {
+  id: string
+  textContent: string
+  model: string | null
+  language: string | null
+  durationMs: number | null
+  /** When this transcript was made (epoch ms). */
+  transcribedAt: number
+  /** When it stopped being the current transcript (epoch ms). */
+  replacedAt: number
+}
+
+/** The asset's previous transcripts, the most recently replaced first. */
+export async function listTranscriptionVersions(assetId: string): Promise<TranscriptVersion[]> {
+  return invoke<TranscriptVersion[]>('list_transcription_versions', { assetId })
+}
+
+/**
+ * Makes a previous transcript current again; the current one becomes a
+ * version, so nothing is lost. Resolves with the asset id.
+ */
+export async function restoreTranscriptionVersion(versionId: string): Promise<string> {
+  return invoke<string>('restore_transcription_version', { versionId })
+}
+
 export async function transcribeDictation(blob: Blob): Promise<string> {
   const tempPath = await createDictationTempPath(blob)
 

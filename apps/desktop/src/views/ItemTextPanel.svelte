@@ -18,7 +18,9 @@
     renameSpeakers,
     transcriptionIsEditedByHand,
     type AssetTranscriptionState,
+    type TranscriptVersion,
   } from '$lib/transcription'
+  import TranscriptVersions from './TranscriptVersions.svelte'
   import type { ItemLlmState, OcrCorrectionEngine } from '$lib/llm'
   import { getAssetPathLabel } from '$lib/item-metadata'
 
@@ -46,6 +48,7 @@
     onTranscribeAudio,
     onOcrTextInput,
     onTranscriptionTextInput,
+    onRestoreTranscriptVersion,
   }: {
     selectedAsset: Asset | null
     assetsCount: number
@@ -70,6 +73,7 @@
     onTranscribeAudio: (asset: Asset) => void | Promise<void>
     onOcrTextInput: (assetId: string, value: string) => void
     onTranscriptionTextInput: (assetId: string, value: string) => void
+    onRestoreTranscriptVersion: (assetId: string, version: TranscriptVersion) => Promise<void>
   } = $props()
 
   let pendingTranscription = $state<Asset | null>(null)
@@ -436,6 +440,13 @@
         {#if transcriptionState.warning}
           <p class="ocr-status-text" role="note">{transcriptionState.warning}</p>
         {/if}
+        {#key selectedAsset.id}
+          <TranscriptVersions
+            assetId={selectedAsset.id}
+            {translate}
+            onRestore={(version) => onRestoreTranscriptVersion(selectedAsset.id, version)}
+          />
+        {/key}
         {@const speakerLabels = extractSpeakerLabels(transcriptionEditedText)}
         {#if speakerLabels.length > 0}
           <div class="ocr-speaker-rename">

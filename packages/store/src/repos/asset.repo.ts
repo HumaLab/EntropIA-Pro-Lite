@@ -398,6 +398,7 @@ export class AssetRepo {
         { sql: 'DELETE FROM extractions WHERE asset_id = ?', params: [id] },
         { sql: 'DELETE FROM layouts WHERE asset_id = ?', params: [id] },
         { sql: 'DELETE FROM transcriptions WHERE asset_id = ?', params: [id] },
+        { sql: 'DELETE FROM transcription_versions WHERE asset_id = ?', params: [id] },
         {
           sql: "DELETE FROM llm_results WHERE target_id = ? AND (target_type = 'asset' OR target_type = 'unknown')",
           params: [id],
@@ -413,6 +414,10 @@ export class AssetRepo {
         },
         {
           sql: 'DELETE FROM transcriptions WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM transcription_versions WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)',
           params: [id],
         },
         {

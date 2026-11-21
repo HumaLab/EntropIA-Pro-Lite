@@ -591,7 +591,7 @@ Correction and summary may leave out data or change the meaning. If the collecti
 
 **Rename speakers.** When the transcription has speaker labels (from AssemblyAI or the local engine), **Rename speakers** in the **Text** panel lets you replace "Speaker A" with the person's name throughout the text; **Apply names** saves the change and **Hide** closes the form. Check the attributions by listening to the audio: identifying turns does not confirm who a person is.
 
-**Transcribe again.** If you corrected the transcription by hand, **Transcribe again** warns you that those corrections will be replaced and asks for confirmation.
+**Transcribe again.** If the audio already has a transcription, **Transcribe again** asks for confirmation before replacing it. The replaced transcription is not lost: it stays, with its speaker names, in **Previous versions**, below the transcription. There each version shows when it was replaced, which engine made it and its first line; **Restore** makes it the current transcription again, and the one that was there moves to the list. Previous versions are kept on this device only: sync does not carry them.
 
 Microphone dictation uses the same engine (AssemblyAI in Lite; the **STT mode** engine in Pro) and does not use speaker identification. **Summarising the transcription is a separate task and needs OpenRouter** (or, in Pro, the local model), besides having the text.
 

@@ -171,6 +171,45 @@ pub async fn update_transcription_text_cmd(
     .await
 }
 
+/// The transcripts a re-transcription replaced, newest first.
+#[tauri::command]
+pub async fn list_transcription_versions(
+    asset_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<Vec<super::versions::TranscriptVersion>, String> {
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock poisoned: {e}"))?;
+        super::versions::list(&conn, &asset_id)
+    })
+    .await
+}
+
+/// Makes a previous transcript current again; the one it replaces becomes a
+/// version. The caller refreshes search data as after a manual edit.
+#[tauri::command]
+pub async fn restore_transcription_version(
+    version_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<String, String> {
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock poisoned: {e}"))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        super::versions::restore(&conn, &version_id, now)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn transcribe_dictation(
     audio_path: String,
