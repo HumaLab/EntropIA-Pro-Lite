@@ -192,6 +192,30 @@ describe('ItemAnalysisPanel', () => {
     expect(badgeVariants(container)).toEqual(['stored', 'neutral', 'stored', 'stored'])
   })
 
+  function badgeTexts(container: HTMLElement): string[] {
+    return Array.from(container.querySelectorAll('.nlp-badge')).map(
+      (badge) => badge.textContent?.trim() ?? ''
+    )
+  }
+
+  it('words each badge from the stored result, never the raw job state (finding 8)', () => {
+    const { container } = render(
+      ItemAnalysisPanel,
+      makeProps(vi.fn(), {
+        nlpState: { fts: 'idle', embed: 'idle', ner: 'running', triples: 'pending' },
+        ftsIndexed: true,
+        assetEmbedded: false,
+      })
+    )
+
+    expect(badgeTexts(container)).toEqual([
+      'item.jobStatus.stored',
+      'item.jobStatus.idle',
+      'item.jobStatus.running',
+      'item.jobStatus.pending',
+    ])
+  })
+
   it('does not repaint the running, pending, error or done states', () => {
     const { container } = render(
       ItemAnalysisPanel,

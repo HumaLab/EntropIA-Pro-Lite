@@ -851,10 +851,46 @@ fn format_child_output_tail(stdout: &str, stderr: &str) -> String {
     }
 }
 
+/// The log source of the engine's setup lines. OCRL builds the shared engine
+/// for its layout model only, so its lines must not read as an OCRH run
+/// (finding 12).
+pub(crate) fn engine_log_source(requested_by: &super::OcrMode) -> &'static str {
+    match requested_by {
+        super::OcrMode::High => "OCRH",
+        super::OcrMode::Light => "OCRL",
+    }
+}
+
+fn managed_python_line(requested_by: &super::OcrMode, python: &Path) -> String {
+    match requested_by {
+        super::OcrMode::High => format!(
+            "PaddleOCR-VL usará Python del runtime administrado: {}",
+            python.display()
+        ),
+        super::OcrMode::Light => format!(
+            "El layout de OCRL usará Python del runtime administrado: {}",
+            python.display()
+        ),
+    }
+}
+
+fn incomplete_cache_line(requested_by: &super::OcrMode) -> &'static str {
+    match requested_by {
+        super::OcrMode::High => {
+            "Cache PaddleOCR-VL incompleta; OCRH permitirá descarga online administrada"
+        }
+        super::OcrMode::Light => {
+            "Cache de PaddleX incompleta; el layout de OCRL permitirá descarga online administrada"
+        }
+    }
+}
+
 pub fn create_paddle_vl_engine_result(
     app_handle: &tauri::AppHandle,
     settings_db_path: &std::path::Path,
+    requested_by: super::OcrMode,
 ) -> Result<PaddleVlEngine, String> {
+    let log_source = engine_log_source(&requested_by);
     let runtime_root = managed_runtime_root_for_paddle_vl(app_handle)
         .ok()
         .flatten();
@@ -872,11 +908,7 @@ pub fn create_paddle_vl_engine_result(
     let offline_mode =
         runtime_root.is_some() && paddle_vl_caches_look_complete(paddlex_cache_dir.as_deref());
     if runtime_root.is_some() && !offline_mode {
-        crate::app_logs::warn(
-            app_handle,
-            "OCRH",
-            "Cache PaddleOCR-VL incompleta; OCRH permitirá descarga online administrada",
-        );
+        crate::app_logs::warn(app_handle, log_source, incomplete_cache_line(&requested_by));
     }
 
     // Find Python interpreter with PaddleOCR-VL. OCRH should prefer the
@@ -893,11 +925,8 @@ pub fn create_paddle_vl_engine_result(
         {
             crate::app_logs::info(
                 app_handle,
-                "OCRH",
-                format!(
-                    "PaddleOCR-VL usará Python del runtime administrado: {}",
-                    candidate.display()
-                ),
+                log_source,
+                managed_python_line(&requested_by, &candidate),
             );
             Some(candidate)
         } else {
@@ -927,14 +956,17 @@ pub fn create_paddle_vl_engine_result(
         super::llama_gpu::engine_runs(super::llama_gpu::Engine::GlmOcr),
     )?;
     if let Some(assets) = glm_assets {
-        crate::app_logs::info(
-            app_handle,
-            "OCRH",
-            format!(
-                "OCRH local usará GLM-OCR (llama-server: {})",
-                assets.server.display()
-            ),
-        );
+        // OCRL only runs the layout script; GLM-OCR is not part of its run.
+        if requested_by == super::OcrMode::High {
+            crate::app_logs::info(
+                app_handle,
+                log_source,
+                format!(
+                    "OCRH local usará GLM-OCR (llama-server: {})",
+                    assets.server.display()
+                ),
+            );
+        }
         let config = PaddleVlConfig {
             python_path,
             script_path: resolve_ocrh_script_path_from_roots(
@@ -1199,6 +1231,32 @@ mod tests {
     use crate::runtime::status::{RuntimeCapability, RuntimeState, RuntimeStatus};
     use std::cell::RefCell;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_light_run_logs_the_engine_setup_as_ocrl_not_paddleocr_vl() {
+        use crate::ocr::OcrMode;
+        let python = Path::new("C:/runtime/python.exe");
+        assert_eq!(engine_log_source(&OcrMode::Light), "OCRL");
+        let line = managed_python_line(&OcrMode::Light, python);
+        assert!(line.contains("OCRL"), "{line}");
+        assert!(!line.contains("PaddleOCR-VL"), "{line}");
+        assert!(!incomplete_cache_line(&OcrMode::Light).contains("OCRH"));
+    }
+
+    #[test]
+    fn a_high_run_keeps_its_ocrh_lines() {
+        use crate::ocr::OcrMode;
+        let python = Path::new("C:/runtime/python.exe");
+        assert_eq!(engine_log_source(&OcrMode::High), "OCRH");
+        assert_eq!(
+            managed_python_line(&OcrMode::High, python),
+            "PaddleOCR-VL usará Python del runtime administrado: C:/runtime/python.exe"
+        );
+        assert_eq!(
+            incomplete_cache_line(&OcrMode::High),
+            "Cache PaddleOCR-VL incompleta; OCRH permitirá descarga online administrada"
+        );
+    }
 
     #[test]
     fn test_extract_sentinel_json() {

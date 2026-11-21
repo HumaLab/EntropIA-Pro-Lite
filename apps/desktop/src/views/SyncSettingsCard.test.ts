@@ -157,7 +157,22 @@ function conflict(overrides: Partial<SyncConflict> = {}): SyncConflict {
 
 vi.mock('$lib/sync-store', () => ({
   syncStore: syncStoreMock,
+  syncAndWait: () => fakeSyncAndWait(),
 }))
+
+/** `syncAndWait` over the mocked store: asks for a pass, resolves on a new `last_sync_at`. */
+function fakeSyncAndWait(): Promise<SyncStatus> {
+  const before = syncStoreMock.status.last_sync_at
+  return new Promise((resolve, reject) => {
+    const unsubscribe = syncStoreMock.subscribe((next) => {
+      if (next.last_sync_at !== before) {
+        unsubscribe()
+        resolve(next)
+      }
+    })
+    Promise.resolve(invoke('sync_now')).catch(reject)
+  })
+}
 
 /** Routes invoke calls by command name; defaults cover the card's refreshAll fan-out. */
 function routeInvoke(handlers: Partial<Record<string, (args?: unknown) => unknown>> = {}) {
@@ -661,6 +676,37 @@ describe('SyncSettingsCard — manual sync flushes the writing editor (W-GUARD1)
     expect(alert).toHaveTextContent('flush failed')
     expect(flushSpy).toHaveBeenCalledTimes(1)
     expect(mockInvoke.mock.calls.filter(([command]) => command === 'sync_now')).toHaveLength(0)
+  })
+})
+
+describe('SyncSettingsCard — manual sync feedback (finding 21)', () => {
+  beforeEach(() => {
+    locale.set('es')
+    mockInvoke.mockReset()
+    setSyncState(status())
+    routeInvoke({ sync_now: () => status() })
+  })
+
+  afterEach(() => {
+    mockInvoke.mockReset()
+  })
+
+  it('stays on «Sincronizando…» until the pass ends, then says it finished and when', async () => {
+    render(SyncSettingsCard)
+    expect(await screen.findByText('Todavía no se sincronizó')).toBeInTheDocument()
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sincronizar ahora' }))
+    const running = await screen.findByRole('button', { name: 'Sincronizando…' })
+    expect(running).toBeDisabled()
+
+    const when = Date.UTC(2026, 10, 21, 15, 30)
+    setSyncState(status({ last_sync_at: when }))
+
+    expect(await screen.findByRole('button', { name: 'Sincronizar ahora' })).toBeEnabled()
+    expect(await screen.findByText('Sincronización completa.')).toBeInTheDocument()
+    expect(
+      screen.getByText(`Última sincronización: ${new Date(when).toLocaleString()}`)
+    ).toBeInTheDocument()
   })
 })
 
