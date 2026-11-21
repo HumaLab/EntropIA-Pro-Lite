@@ -2551,6 +2551,30 @@ describe('SettingsView Escape behavior', () => {
     }
   })
 
+  it('asks before leaving through another section with unsaved changes', async () => {
+    const navigation = workspace.activeNavigation
+    navigation.navigate({ name: 'settings' })
+    await renderLoadedSettings()
+
+    await fireEvent.input(screen.getByLabelText('Modelo generativo'), {
+      target: { value: 'openai/gpt-test' },
+    })
+    // The pending change is marked next to the save button.
+    expect(screen.getByRole('status')).toHaveTextContent('Cambios sin guardar')
+
+    navigation.openRootSection({ name: 'rag-chat' })
+    expect(navigation.current).toEqual({ name: 'settings' })
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Seguir editando' }))
+    expect(navigation.current).toEqual({ name: 'settings' })
+
+    navigation.openRootSection({ name: 'rag-chat' })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Descartar' }))
+    expect(navigation.current).toEqual({ name: 'rag-chat' })
+    navigation.setLeaveGuard(null)
+  })
+
   it('does not prompt on Escape after saving the edited settings', async () => {
     const backSpy = vi.spyOn(workspace.activeNavigation, 'back').mockImplementation(() => {})
     const cleanupKeyboard = setupKeyboardShortcuts()

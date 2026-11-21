@@ -130,8 +130,16 @@ function viewsEqual(a: unknown, b: unknown): boolean {
  */
 const HISTORY_CAP = 200
 
+/**
+ * Asked before the current screen is left. Returns true to hold the
+ * navigation: the screen then runs `proceed` itself once the user agrees
+ * (for example after confirming to discard unsaved edits).
+ */
+export type LeaveGuard = (proceed: () => void) => boolean
+
 export class NavigationStore {
   private _history: View[] = [{ name: 'home' }]
+  private _leaveGuard: LeaveGuard | null = null
   private readonly _subscribers = new Set<NavigationSubscriber>()
   private readonly _unsubscribeLocale: () => void
 
@@ -222,9 +230,26 @@ export class NavigationStore {
    */
   navigate(view: View): void {
     if (viewsEqual(view, this.current)) return
-    const next = [...this._history, view]
-    this._history = this.capHistory(next)
-    this.emit()
+    this.leave(() => {
+      const next = [...this._history, view]
+      this._history = this.capHistory(next)
+      this.emit()
+    })
+  }
+
+  /**
+   * Set (or clear, with null) the guard the current screen uses to hold a
+   * user navigation away from it. Only user moves are guarded (`navigate`,
+   * `openRootSection`, `replace`, `back`); pruning deleted subjects and
+   * seeding history are not.
+   */
+  setLeaveGuard(guard: LeaveGuard | null): void {
+    this._leaveGuard = guard
+  }
+
+  private leave(go: () => void): void {
+    if (this._leaveGuard?.(go)) return
+    go()
   }
 
   /**
@@ -258,18 +283,22 @@ export class NavigationStore {
 
   /** Replace the current view — useful for navigating between sibling items without stacking. */
   replace(view: View): void {
-    if (this._history.length === 0) {
-      this._history = [view]
-    } else {
-      this._history = [...this._history.slice(0, -1), view]
-    }
-    this.emit()
+    this.leave(() => {
+      if (this._history.length === 0) {
+        this._history = [view]
+      } else {
+        this._history = [...this._history.slice(0, -1), view]
+      }
+      this.emit()
+    })
   }
 
   back(): void {
     if (this._history.length > 1) {
-      this._history = this._history.slice(0, -1)
-      this.emit()
+      this.leave(() => {
+        this._history = this._history.slice(0, -1)
+        this.emit()
+      })
     }
   }
 

@@ -786,13 +786,14 @@ const es = {
   'batch.statusAttention': '{count} requieren atención',
   'batch.openBatchTab': 'Abrir procesamiento por lote',
   'settings.save': 'Guardar cambios',
+  'settings.unsavedChanges': 'Cambios sin guardar',
   'settings.saved': 'Configuración guardada. Ya podés usar esta preferencia en toda la app.',
   'settings.loadError': 'No se pudo cargar la configuración guardada: {error}',
   'settings.retryLoad': 'Reintentar carga',
   'settings.loading': 'Cargando la configuración…',
   'settings.discardTitle': 'Descartar cambios',
   'settings.discardMessage':
-    'Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y volver?',
+    'Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y salir?',
   'settings.discardConfirm': 'Descartar',
   'settings.discardCancel': 'Seguir editando',
   'settings.languageTitle': 'Idioma de la interfaz',
@@ -1331,7 +1332,7 @@ const es = {
   'help.diagnosticsHintLocal':
     'Lo lee Gemma local en este equipo: no viaja a ningún servicio. No incluye claves.',
   'help.documentsNeedRemote':
-    'Gemma local no puede leer tus documentos. Marcá «Usar OpenRouter» para esta pregunta.',
+    'Gemma local no puede leer tus documentos. Marcá «OpenRouter» para esta pregunta.',
   'help.suggestionsLabel': 'Probá con:',
   'help.suggestion1': '¿Cómo importo un PDF?',
   'help.suggestion2': '¿Cómo cargo mi clave de OpenRouter?',
@@ -1908,7 +1909,7 @@ const es = {
   'research.modelLabel': 'Modelo',
   'research.deleteTitle': 'Borrar la investigación',
   'research.deleteMessage':
-    'Se van el informe, la evidencia, los juicios y los archivos. No se puede deshacer.',
+    'Se borra «{title}»: el informe, la evidencia, los juicios y los archivos. No se puede deshacer.',
   'research.confirmDelete': 'Borrar',
   'research.deleteError': 'No se pudo borrar la investigación.',
   'research.questionPlaceholder': '¿Qué querés investigar?',
@@ -4987,12 +4988,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.statusAttention': '{count} need attention',
   'batch.openBatchTab': 'Open batch processing',
   'settings.save': 'Save changes',
+  'settings.unsavedChanges': 'Unsaved changes',
   'settings.saved': 'Settings saved. You can now use this preference across the app.',
   'settings.loadError': 'Could not load saved settings: {error}',
   'settings.retryLoad': 'Retry loading',
   'settings.loading': 'Loading settings…',
   'settings.discardTitle': 'Discard changes',
-  'settings.discardMessage': 'You have unsaved settings changes. Discard them and go back?',
+  'settings.discardMessage': 'You have unsaved settings changes. Discard them and leave?',
   'settings.discardConfirm': 'Discard',
   'settings.discardCancel': 'Keep editing',
   'settings.languageTitle': 'Interface language',
@@ -5528,7 +5530,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'help.diagnosticsHintLocal':
     'Local Gemma reads it on this computer: it goes to no service. It includes no keys.',
   'help.documentsNeedRemote':
-    'Local Gemma cannot read your documents. Tick «Use OpenRouter» for this question.',
+    'Local Gemma cannot read your documents. Tick «OpenRouter» for this question.',
   'help.suggestionsLabel': 'Try:',
   'help.suggestion1': 'How do I import a PDF?',
   'help.suggestion2': 'How do I load my OpenRouter key?',
@@ -5570,7 +5572,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'research.modelLabel': 'Model',
   'research.deleteTitle': 'Delete the investigation',
   'research.deleteMessage':
-    'The report, the evidence, the judgments and the files all go. This cannot be undone.',
+    'Deletes “{title}”: the report, the evidence, the judgments and the files. This cannot be undone.',
   'research.confirmDelete': 'Delete',
   'research.deleteError': 'The investigation could not be deleted.',
   'research.questionPlaceholder': 'What do you want to investigate?',

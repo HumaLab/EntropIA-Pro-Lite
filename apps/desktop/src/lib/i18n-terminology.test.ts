@@ -40,3 +40,18 @@ describe('i18n terminology', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('i18n names the controls it points at', () => {
+  it('the help hint names the OpenRouter checkbox by its label', () => {
+    const values = (key: string) =>
+      Array.from(SOURCE.matchAll(ENTRY))
+        .filter((match) => match[1] === key)
+        .map((match) => match[2]!)
+    const labels = values('help.useRemote')
+    const hints = values('help.documentsNeedRemote')
+    expect(hints).toHaveLength(labels.length)
+    hints.forEach((hint, index) => {
+      expect(hint).toContain(`«${labels[index]}»`)
+    })
+  })
+})

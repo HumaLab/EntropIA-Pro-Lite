@@ -181,6 +181,34 @@ describe('ResearchView job deletion', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   }
 
+  it('names the investigation, holds the confirm while deleting, and closes when done', async () => {
+    let finishDelete: () => void = () => {}
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      const op = (args as { request?: { op?: string } } | undefined)?.request?.op
+      if (command === 'research_request' && op === 'delete') {
+        return new Promise((resolve) => {
+          finishDelete = () => resolve({})
+        })
+      }
+      if (command === 'settings_get') return null
+      if (command === 'test_openrouter_connection') return []
+      return listPayloadWithJob()
+    })
+
+    await openDeleteConfirm()
+    expect(screen.getByRole('dialog')).toHaveTextContent('«Pregunta de prueba»')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Borrar' }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Borrar' })).toBeDisabled()
+    })
+
+    finishDelete()
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+  })
+
   it('prunes history for the job once the delete succeeds', async () => {
     invokeMock.mockImplementation(async (command: string, args?: unknown) => {
       const op = (args as { request?: { op?: string } } | undefined)?.request?.op

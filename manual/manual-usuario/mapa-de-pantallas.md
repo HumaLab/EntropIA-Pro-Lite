@@ -1149,7 +1149,7 @@
 - «Falta el modelo de texto local (Gemma): descargalo en Configuración › Modelos locales.» `help.engineLocalMissing`
 - «Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.» `help.documentsHint`
 - «Fuentes y pasos ({count})» `help.metaToggle`
-- «Gemma local no puede leer tus documentos. Marcá «Usar OpenRouter» para esta pregunta.» `help.documentsNeedRemote`
+- «Gemma local no puede leer tus documentos. Marcá «OpenRouter» para esta pregunta.» `help.documentsNeedRemote`
 - «Historial» `help.history`
 - «Historial ({count})» `help.historyCount`
 - «La ayuda pide aprobación» `help.approvalTitle`
@@ -2453,7 +2453,7 @@
 - «Profundizar con el Agente» `research.deepen`
 - «Proyecto» `research.projectLabel`
 - «Revisar mensajes preservados» `research.handoffPreview`
-- «Se van el informe, la evidencia, los juicios y los archivos. No se puede deshacer.» `research.deleteMessage`
+- «Se borra «{title}»: el informe, la evidencia, los juicios y los archivos. No se puede deshacer.» `research.deleteMessage`
 - «Seleccionar todas» `research.selectAll`
 - «Sin límite» `research.maxCostPlaceholder`
 - «Todavía no hay investigaciones. Escribí una pregunta para empezar.» `research.empty`
@@ -2842,6 +2842,7 @@
 - «Asistentes» `settings.assistantsTab`
 - «AssemblyAI» `settings.assemblyai.title`
 - «Ayuda» `settings.helpTab`
+- «Cambios sin guardar» `settings.unsavedChanges`
 - «Cargando la configuración…» `settings.loading`
 - «Clave cargada: {key}» `settings.loadedKey`
 - «Clave en formato anterior (texto plano); guardá de nuevo para protegerla en el almacén de credenciales» `settings.keyStoredLegacyPlaintext`
@@ -2924,7 +2925,7 @@
 - «Sincronización» `settings.syncTab`
 - «Sólo aplica a transcripciones STT de audios de colección. El dictado de notas siempre envía speaker_labels=false.» `settings.assemblyAiSpeakerLabelsHint`
 - «Tema» `settings.appearance.themeLabel`
-- «Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y volver?» `settings.discardMessage`
+- «Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y salir?» `settings.discardMessage`
 - «Usar esta API» `settings.apiSwitch.label`
 - «aai-...» `settings.assemblyAiApiKeyPlaceholder`
 - «google/gemma-4-26b-a4b-it» `settings.modelPlaceholder`

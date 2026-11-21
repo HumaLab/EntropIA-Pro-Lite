@@ -6712,7 +6712,17 @@ describe('ItemView processing labels by asset type', () => {
     expect(screen.getByRole('button', { name: 'OCRR' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'PDFC' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'PDFR' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'OCRL' })).not.toBeInTheDocument()
+  })
+
+  it('offers OCRL on PDF pages in Pro, as on images', async () => {
+    await renderTextTabForAsset('pdf')
+
+    if (!LOCAL_ML) {
+      expect(screen.queryByRole('button', { name: 'OCRL' })).not.toBeInTheDocument()
+      return
+    }
+    await fireEvent.click(screen.getByRole('button', { name: 'OCRL' }))
+    expect(extractTextMock).toHaveBeenCalledWith('asset-pdf-1', 'docs/sample.pdf', 'pdf', 'light')
   })
 
   it('uses transcription and summary labels for audio assets without OCR wording', async () => {

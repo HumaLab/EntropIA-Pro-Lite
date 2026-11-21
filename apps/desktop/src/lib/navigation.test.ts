@@ -994,3 +994,48 @@ describe('NavigationStore — Biblioteca', () => {
     expect(nav.current).toEqual({ name: 'home' })
   })
 })
+
+describe('NavigationStore — leave guard', () => {
+  let nav: NavigationStore
+
+  beforeEach(() => {
+    nav = new NavigationStore()
+    locale.set('es')
+    nav.navigate({ name: 'settings' } as View)
+  })
+
+  it('holds a navigation the guard intercepts and runs it when the guard proceeds', () => {
+    let proceed: (() => void) | null = null
+    nav.setLeaveGuard((go) => {
+      proceed = go
+      return true
+    })
+
+    nav.navigate({ name: 'rag-chat' } as View)
+    expect(nav.current).toEqual({ name: 'settings' })
+
+    nav.setLeaveGuard(null)
+    proceed!()
+    expect(nav.current).toEqual({ name: 'rag-chat' })
+  })
+
+  it('guards back and replace as well', () => {
+    nav.setLeaveGuard(() => true)
+
+    nav.back()
+    nav.replace({ name: 'home' })
+    nav.openRootSection({ name: 'research' } as never)
+
+    expect(nav.current).toEqual({ name: 'settings' })
+  })
+
+  it('lets every navigation through when the guard declines or is removed', () => {
+    nav.setLeaveGuard(() => false)
+    nav.navigate({ name: 'rag-chat' } as View)
+    expect(nav.current).toEqual({ name: 'rag-chat' })
+
+    nav.setLeaveGuard(null)
+    nav.back()
+    expect(nav.current).toEqual({ name: 'settings' })
+  })
+})

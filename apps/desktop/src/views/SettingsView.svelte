@@ -708,18 +708,45 @@
     // confirmation instead of navigating back.
     const cleanupEscape = registerEscapeInterceptor(() => {
       if (!isDirty) return false
+      pendingLeave = null
+      showDiscardConfirm = true
+      return true
+    })
+    // Leaving through the top bar, a shortcut or another section must not
+    // drop unsaved edits either: hold the move and ask, as Escape does.
+    navigation.setLeaveGuard((proceed) => {
+      if (!isDirty || discarding) return false
+      pendingLeave = proceed
       showDiscardConfirm = true
       return true
     })
     return () => {
       unsubscribeTabRequest()
       cleanupEscape()
+      navigation.setLeaveGuard(null)
     }
   })
 
+  /** The navigation held by the leave guard; null means Escape (go back). */
+  let pendingLeave: (() => void) | null = null
+  let discarding = false
+
   function handleDiscardConfirm() {
     showDiscardConfirm = false
-    navigation.back()
+    const proceed = pendingLeave
+    pendingLeave = null
+    discarding = true
+    try {
+      if (proceed) proceed()
+      else navigation.back()
+    } finally {
+      discarding = false
+    }
+  }
+
+  function handleDiscardCancel() {
+    showDiscardConfirm = false
+    pendingLeave = null
   }
 
   async function loadInitialSettings() {
@@ -2182,6 +2209,9 @@
           >
             <ActionIcon name="save" size={20} />
           </Button>
+          {#if isDirty}
+            <span class="settings-view__pending" role="status">{t('settings.unsavedChanges')}</span>
+          {/if}
         </div>
       </section>
 
@@ -3960,7 +3990,7 @@
         cancelLabel={t('settings.discardCancel')}
         confirmLabel={t('settings.discardConfirm')}
         variant="destructive"
-        oncancel={() => (showDiscardConfirm = false)}
+        oncancel={handleDiscardCancel}
         onconfirm={handleDiscardConfirm}
       />
     {/if}
@@ -3999,6 +4029,13 @@
     justify-content: flex-end;
     flex: 1;
     align-self: center;
+  }
+
+  /* Reads before the save button it refers to. */
+  .settings-view__pending {
+    order: -1;
+    color: var(--color-warning);
+    font-size: var(--font-size-sm);
   }
 
   .settings-view__header {
