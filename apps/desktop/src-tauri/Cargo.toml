@@ -1,6 +1,6 @@
 [package]
 name = "entropia-pro-desktop"
-version = "1.8.5"
+version = "1.8.6"
 edition = "2021"
 rust-version = "1.90"
 resolver = "3"
@@ -131,7 +131,9 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 
 [target.'cfg(windows)'.dependencies]
 # Raw security attributes passed to Tokio's named-pipe creation API.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization"] }
+# runtime/sweep.rs lists the running processes (ToolHelp, Threading) so an
+# old runtime a process still runs from is never renamed or deleted.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
 # Cloud-sync stores session tokens in the Windows credential manager.
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 # Lite asks Microsoft Store for updates of its own package (store_updates.rs).

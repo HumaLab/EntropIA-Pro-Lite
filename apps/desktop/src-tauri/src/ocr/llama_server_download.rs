@@ -168,7 +168,7 @@ fn download_and_stage(work: &Path, app_handle: &AppHandle) -> Result<PathBuf, St
             ));
         }
         let archive_path = work.join(asset.name);
-        let mut archive = std::fs::File::create(&archive_path)
+        let mut archive = create_archive_file(&archive_path)
             .map_err(|e| format!("Cannot create {}: {e}", archive_path.display()))?;
         // Batched writes (R8): one read is about one TLS record.
         let mut buffered = std::io::BufWriter::with_capacity(1 << 20, &mut archive);
@@ -198,6 +198,19 @@ fn download_and_stage(work: &Path, app_handle: &AppHandle) -> Result<PathBuf, St
         return Err(format!("The release has no {}", server_binary_name()));
     }
     Ok(staging)
+}
+
+/// The file one release archive downloads into. It is written, then read back
+/// through the same handle to extract it, so it opens for both: a handle from
+/// `File::create` is write-only, and Windows refuses the read with "access
+/// denied" (os error 5).
+fn create_archive_file(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
 }
 
 /// Stream `reader` into `writer`, failing unless exactly `asset.size` bytes
@@ -356,6 +369,48 @@ mod tests {
         assert_eq!(extracted, expected);
         assert!(!dest.path().join("llama-cli.exe").exists());
         assert!(!dest.path().parent().unwrap().join("escape.dll").exists());
+    }
+
+    /// The download path end to end on a real file: written and verified,
+    /// rewound, then extracted through the same handle. With a write-only
+    /// handle Windows refuses the read ("Acceso denegado, os error 5"), which
+    /// failed every llama-server install on Windows in 1.8.5.
+    #[test]
+    fn a_downloaded_archive_is_read_back_from_its_own_file() {
+        let mut zip_bytes = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut zip_bytes);
+            zip.start_file(
+                server_binary_name(),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(b"server").unwrap();
+            zip.finish().unwrap();
+        }
+        let zip_bytes = zip_bytes.into_inner();
+        let digest = hex::encode(Sha256::digest(&zip_bytes));
+        let asset = ReleaseAsset {
+            name: "llama-test.zip",
+            size: zip_bytes.len() as u64,
+            sha256: Box::leak(digest.into_boxed_str()),
+        };
+        let work = tempfile::tempdir().unwrap();
+        let staging = work.path().join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let mut archive = create_archive_file(&work.path().join(asset.name)).unwrap();
+        let mut buffered = std::io::BufWriter::new(&mut archive);
+        copy_verified(&mut &zip_bytes[..], &mut buffered, &asset, |_| {}).unwrap();
+        drop(buffered);
+        archive.rewind().unwrap();
+        let extracted = extract_server_files(archive, &staging).unwrap();
+
+        assert_eq!(extracted, vec![server_binary_name()]);
+        assert_eq!(
+            std::fs::read(staging.join(server_binary_name())).unwrap(),
+            b"server"
+        );
     }
 
     #[test]

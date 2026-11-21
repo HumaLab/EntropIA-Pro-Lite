@@ -1257,7 +1257,7 @@ describe('HelpView', () => {
       expect(box.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     })
 
-    it('normal and maximized sizes keep the opt-ins on one row', async () => {
+    it('normal and maximized sizes keep the opt-ins in one row container', async () => {
       backend({ hasKey: true })
       const { unmount } = render(HelpView)
       await composer()
@@ -1297,7 +1297,7 @@ describe('HelpView', () => {
       expect(docsIcon.querySelector('svg[data-action-icon="info"]')).not.toBeNull()
     })
 
-    it('the opt-ins never wrap (stylesheet contract)', async () => {
+    it('the opt-ins wrap instead of hiding past the panel edge (stylesheet contract)', async () => {
       const { readFileSync } = await import('node:fs')
       const { resolve } = await import('node:path')
       const styles = readFileSync(resolve(import.meta.dirname, 'HelpView.svelte'), 'utf-8')
@@ -1310,8 +1310,16 @@ describe('HelpView', () => {
         expect(match, `${selector} is no longer in the stylesheet`).not.toBeNull()
         return match?.[2] ?? ''
       }
-      // One line at every panel size: the row never wraps.
-      expect(rule('.help-view__optins')).toMatch(/flex-wrap:\s*nowrap/)
+      // The 400 px floating panel cannot hold the four options on one line:
+      // the row wraps so every option stays in sight, and it never scrolls
+      // sideways (1.8.5 hid «Mis documentos» past the panel edge that way).
+      const row = rule('.help-view__optins')
+      expect(row).toMatch(/flex-wrap:\s*wrap\b/)
+      expect(row).not.toMatch(/overflow(-x)?:\s*(auto|scroll|hidden)/)
+      // Each option keeps its label whole when the row wraps.
+      const option = rule('.help-view__optin')
+      expect(option).toMatch(/white-space:\s*nowrap/)
+      expect(option).toMatch(/flex-shrink:\s*0/)
       // The hint icon reads as a superscript, not a paragraph.
       expect(rule('.help-view__info')).toMatch(/vertical-align:\s*super/)
     })

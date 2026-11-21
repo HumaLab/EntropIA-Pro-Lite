@@ -16,6 +16,8 @@ pub(crate) mod ops_lock;
 #[cfg(feature = "local-ml")]
 pub mod paths;
 pub mod status;
+#[cfg(feature = "local-ml")]
+pub(crate) mod sweep;
 
 #[cfg(feature = "local-ml")]
 pub use manager::RuntimeManager;
