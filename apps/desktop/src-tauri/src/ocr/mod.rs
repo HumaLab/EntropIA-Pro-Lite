@@ -2057,9 +2057,14 @@ fn assemble_layout_output(
     let mut vl_regions = Vec::new();
     // The script already emits reading order, but the contract does not
     // guarantee it: sort defensively so text and persisted layout agree.
-    let mut ordered: Vec<_> = layout.boxes.iter().collect();
-    ordered.sort_by_key(|b| b.order);
-    for b in ordered {
+    let mut boxes: Vec<paddle_vl_types::LayoutV3Box> = layout.boxes.clone();
+    boxes.sort_by_key(|b| b.order);
+    // Each entry carries the text already read for it, if any: only lines
+    // added from the full-page pass have one.
+    let mut ordered: Vec<(paddle_vl_types::LayoutV3Box, Option<String>)> =
+        boxes.into_iter().map(|b| (b, None)).collect();
+    insert_uncovered_lines(provider, image, &mut ordered);
+    for (index, (b, known_text)) in ordered.iter().enumerate() {
         let category = layout_category_from_name(&b.category);
         let bbox = provider::BoundingBox {
             x: b.bbox.x,
@@ -2069,7 +2074,9 @@ fn assemble_layout_output(
         };
         // Figures and page furniture never reach the OCR engine, but they
         // stay in the persisted layout like the High path keeps them.
-        let content = if matches!(
+        let content = if let Some(text) = known_text {
+            text.clone()
+        } else if matches!(
             category,
             provider::LayoutCategory::Figure
                 | provider::LayoutCategory::Header
@@ -2093,7 +2100,8 @@ fn assemble_layout_output(
             label: b.label.clone(),
             content: content.clone(),
             bbox: b.bbox.clone(),
-            order: b.order,
+            // Renumbered so lines added between boxes keep text order.
+            order: index as i32 + 1,
             group_id: 0,
         });
         vl_regions.push(paddle_vl_types::PaddleVlRegion {
@@ -2129,6 +2137,79 @@ fn assemble_layout_output(
             actual_device: Some("cpu".to_string()),
         },
     ))
+}
+
+/// Adds, as plain-text boxes, the lines the full-page detector reads but no
+/// layout box covers: the layout model can leave a real line between its
+/// boxes, and OCR that only reads inside the boxes would drop it.
+///
+/// Each added line goes before the first box that starts below it. Best
+/// effort: if the full-page pass fails, the layout boxes stay as they are.
+#[cfg(feature = "paddle-ocr")]
+fn insert_uncovered_lines(
+    provider: &Arc<dyn OcrProvider>,
+    image: &image::DynamicImage,
+    ordered: &mut Vec<(paddle_vl_types::LayoutV3Box, Option<String>)>,
+) {
+    let mut png = Vec::new();
+    if image
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .is_err()
+    {
+        return;
+    }
+    let page = match provider.recognize(&png) {
+        Ok(page) => page,
+        Err(error) => {
+            log::warn!(target: "OCRL", "Full-page pass for uncovered lines failed: {error}");
+            return;
+        }
+    };
+    let covered = |x: i32, y: i32, boxes: &[paddle_vl_types::LayoutV3Box]| {
+        boxes.iter().any(|b| {
+            x >= b.bbox.x
+                && x <= b.bbox.x + b.bbox.width
+                && y >= b.bbox.y
+                && y <= b.bbox.y + b.bbox.height
+        })
+    };
+    let layout_boxes: Vec<paddle_vl_types::LayoutV3Box> =
+        ordered.iter().map(|(b, _)| b.clone()).collect();
+    for line in page.regions {
+        let Some(bbox) = line.bbox else { continue };
+        if line.text.trim().is_empty() {
+            continue;
+        }
+        let center_x = bbox.x + bbox.width as i32 / 2;
+        let center_y = bbox.y + bbox.height as i32 / 2;
+        if covered(center_x, center_y, &layout_boxes) {
+            continue;
+        }
+        log::info!(target: "OCRL", "Keeping a line outside every layout box at y={}", bbox.y);
+        let position = ordered
+            .iter()
+            .position(|(b, _)| b.bbox.y > bbox.y)
+            .unwrap_or(ordered.len());
+        let text = line.text.trim().to_string();
+        ordered.insert(
+            position,
+            (
+                paddle_vl_types::LayoutV3Box {
+                    label: "text".to_string(),
+                    category: "plain_text".to_string(),
+                    bbox: paddle_vl_types::PaddleVlBbox {
+                        x: bbox.x,
+                        y: bbox.y,
+                        width: bbox.width as i32,
+                        height: bbox.height as i32,
+                    },
+                    confidence: line.confidence,
+                    order: 0,
+                },
+                Some(text),
+            ),
+        );
+    }
 }
 
 /// High mode: PaddleVL Python subprocess first, lightweight PaddleOCR fallback.
@@ -2659,6 +2740,71 @@ mod tests {
         assert_eq!(vl.blocks.len(), 3);
         assert_eq!(vl.blocks[0].label, "text");
         assert_eq!(ocr.method, "paddle");
+    }
+
+    /// Reads a crop as "box text"; on the full page it reports one line
+    /// inside the first layout box and one line no layout box covers.
+    #[cfg(feature = "paddle-ocr")]
+    struct PageAwareProvider;
+    #[cfg(feature = "paddle-ocr")]
+    impl provider::OcrProvider for PageAwareProvider {
+        fn name(&self) -> &str {
+            "stub"
+        }
+        fn recognize(&self, bytes: &[u8]) -> Result<provider::OcrOutput, String> {
+            let image = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+            let line = |text: &str, y: i32| provider::OcrRegion {
+                text: text.to_string(),
+                confidence: 0.99,
+                bbox: Some(provider::BoundingBox {
+                    x: 20,
+                    y,
+                    width: 80,
+                    height: 20,
+                }),
+                column: None,
+            };
+            let (text, regions) = if image.width() == 400 {
+                (
+                    "covered\nlost line".to_string(),
+                    vec![line("covered", 20), line("lost line", 200)],
+                )
+            } else {
+                ("box text".to_string(), Vec::new())
+            };
+            Ok(provider::OcrOutput {
+                text,
+                regions,
+                method: "paddle".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "paddle-ocr")]
+    fn light_layout_keeps_lines_outside_every_layout_box() {
+        // Finding 15: a line the detector read with 0.99 confidence fell
+        // between layout boxes and vanished from the OCRL text.
+        let provider: std::sync::Arc<dyn provider::OcrProvider> =
+            std::sync::Arc::new(PageAwareProvider);
+        let image = image::DynamicImage::new_rgb8(400, 300);
+        let mut second = test_box("text", "plain_text", 2);
+        second.bbox.y = 60;
+        let layout = paddle_vl_types::LayoutV3Output {
+            method: "layout_v3".to_string(),
+            image_width: 400,
+            image_height: 300,
+            actual_device: None,
+            boxes: vec![test_box("text", "plain_text", 1), second],
+        };
+        let (ocr, vl) = assemble_layout_output(&provider, &image, &layout).unwrap();
+        assert_eq!(ocr.text, "box text\n\nbox text\n\nlost line");
+        assert_eq!(ocr.regions.len(), 3);
+        assert_eq!(vl.text, ocr.text);
+        assert_eq!(vl.blocks.len(), 3);
+        assert_eq!(vl.blocks[2].content, "lost line");
+        let orders: Vec<i32> = vl.blocks.iter().map(|b| b.order).collect();
+        assert_eq!(orders, vec![1, 2, 3]);
     }
 
     #[test]
