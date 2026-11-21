@@ -73,6 +73,7 @@
   } = $props()
 
   let pendingTranscription = $state<Asset | null>(null)
+  let pendingTranscriptionWarning = $state<I18nKey>('item.retranscribeWarning')
   let checkingTranscription = $state(false)
   let transcriptionCheckError = $state<string | null>(null)
   let renamingSpeakers = $state(false)
@@ -96,7 +97,16 @@
     try {
       const edited = await transcriptionIsEditedByHand(asset.id)
       if (selectedAsset?.id !== asset.id) return
+      const hasTranscript = Boolean(
+        transcriptionState?.text?.trim() || transcriptionEditedText.trim()
+      )
       if (edited || transcriptionState?.editedByHand) {
+        pendingTranscriptionWarning = 'item.retranscribeWarning'
+        pendingTranscription = asset
+      } else if (hasTranscript) {
+        // Speaker roles and names come back only from the engine that made
+        // them: replacing any transcript loses them, edited or not.
+        pendingTranscriptionWarning = 'item.retranscribeExistingWarning'
         pendingTranscription = asset
       } else {
         await onTranscribeAudio(asset)
@@ -479,7 +489,7 @@
 {#if pendingTranscription && pendingTranscription.id === selectedAsset?.id}
   <ConfirmDialog
     title={translate('item.retranscribeAction')}
-    message={translate('item.retranscribeWarning')}
+    message={translate(pendingTranscriptionWarning)}
     cancelLabel={translate('collections.cancel')}
     confirmLabel={translate('item.retranscribeAction')}
     oncancel={() => (pendingTranscription = null)}

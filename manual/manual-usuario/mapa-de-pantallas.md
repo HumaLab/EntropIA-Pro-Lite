@@ -1862,6 +1862,7 @@
 - «Escribí una nota...» `item.writeNote`
 - «Esta imagen tiene anotaciones. Pueden no coincidir con la versión que elegiste. ¿Continuar?» `item.imageVersionAnnotationsWarning`
 - «Esta página todavía no tiene layout persistido.» `item.layoutMissing`
+- «Este audio ya tiene una transcripción. Si lo volvés a transcribir, se reemplaza, con sus nombres de hablante, y no se puede recuperar. ¿Continuar?» `item.retranscribeExistingWarning`
 - «Este equipo no tiene una GPU que pueda correr GLM-OCR (NVIDIA, o AMD, Intel o Apple con 4 GB): OCRH local corre en el procesador y tarda unos 15 minutos por página. OCRL tarda segundos.» `item.ocrhCpuWarning`
 - «Este layout corresponde a otra versión de la imagen ({width}×{height}); la actual mide {currentWidth}×{currentHeight}.» `item.layoutOtherVersionSized`
 - «Este layout corresponde a otra versión de la imagen.» `item.layoutOtherVersion`
@@ -1871,13 +1872,13 @@
 - «Extracción en progreso…» `item.ocrFastBusyTitle, item.ocrHighBusyTitle`
 - «Extraer texto» `item.ocrFastTitle`
 - «Extraer tripletas» `item.triplesTitle`
+
+### Varios (3/6)
+
 - «Extraé o transcribí primero» `item.summaryNeedsText`
 - «Extraé texto primero» `item.ocrCorrectNeedsText`
 - «FTS Debug (solo dev)» `item.ftsDebugTitle`
 - «Filtrar bloques por tipo» `item.layoutFilterGroup`
-
-### Varios (3/6)
-
 - «Formatos de descarga del texto extraído» `item.downloadExtractedTextMenu`
 - «Generando exportación…» `item.exportExtractedTextWorking`
 - «Generando resumen…» `item.generatingSummary`
@@ -1922,13 +1923,13 @@
 - «No hay bloques del tipo seleccionado para la página visible.» `item.layoutNoFilterBlocks`
 - «No hay bloques para la página visible.» `item.layoutNoPageBlocks`
 - «No hay metadatos cargados para este documento.» `item.metadataEmpty`
+
+### Varios (4/6)
+
 - «No hay páginas adjuntas a este documento.» `item.noAssets`
 - «No hay resultados para esa búsqueda.» `item.ftsNoResults`
 - «Nota vacía» `item.noteEmptyPreview`
 - «Notas» `item.notes, item.notesTab`
-
-### Varios (4/6)
-
 - «Nueva caja a continuación» `item.layoutBoxEditInsert`
 - «Nuevo tipo de entidad» `item.newEntityType`
 - «Nuevo valor de entidad» `item.newEntityValue`
@@ -1977,12 +1978,12 @@
 - «Región de recorte» `item.viewerCropRegion`
 - «Renombrar hablantes» `item.renameSpeakers`
 - «Reproducir» `item.audioPlay`
-- «Restaurando OCR original…» `item.restoreOriginalOcrWorking`
-- «Restaurar OCR original» `item.restoreOriginalOcr`
-- «Restaurar versión original del OCR» `item.restoreOriginalOcrAria`
 
 ### Varios (5/6)
 
+- «Restaurando OCR original…» `item.restoreOriginalOcrWorking`
+- «Restaurar OCR original» `item.restoreOriginalOcr`
+- «Restaurar versión original del OCR» `item.restoreOriginalOcrAria`
 - «Resumen» `item.summary, item.summaryAudioAction`
 - «Retroceder 5 segundos» `item.audioSkipBack`
 - «STT» `item.transcribeShortAction`
@@ -2017,13 +2018,13 @@
 - «Todavía no hay páginas similares. Generá embeddings para esta página y compararla contra el resto.» `item.similarAssetsEmpty`
 - «Todavía no hay texto extraído para este documento.» `item.noExtractedText`
 - «Todavía no hay tripletas extraídas{suffix}.» `item.noTriples`
+
+### Varios (6/6)
+
 - «Transcribiendo…» `item.transcribing`
 - «Transcribiendo… {progress}%» `item.transcriptionRunning`
 - «Transcribir» `item.transcribeAction`
 - «Transcribir de nuevo» `item.retranscribeAction`
-
-### Varios (6/6)
-
 - «Transcribir este archivo de audio» `item.transcribeTitle`
 - «Transcripción» `item.transcription`
 - «Transcripción de audio» `item.audioTranscription`

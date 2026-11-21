@@ -2792,6 +2792,8 @@ const es = {
   'item.retranscribeAction': 'Transcribir de nuevo',
   'item.retranscribeWarning':
     'La transcripción tiene correcciones hechas a mano. Si la volvés a transcribir, se reemplazan. ¿Continuar?',
+  'item.retranscribeExistingWarning':
+    'Este audio ya tiene una transcripción. Si lo volvés a transcribir, se reemplaza, con sus nombres de hablante, y no se puede recuperar. ¿Continuar?',
   'item.transcribeShortAction': 'STT',
   'item.transcribeBusyAction': 'STTR',
   'item.pdfCorrectTitle': 'Corrección OCR',
@@ -3597,6 +3599,7 @@ type ExtraI18nKey =
   | 'item.summaryAudioAction'
   | 'item.retranscribeAction'
   | 'item.retranscribeWarning'
+  | 'item.retranscribeExistingWarning'
   | 'item.transcribeShortAction'
   | 'item.transcribeBusyAction'
   | 'item.layoutBlocksCount'
@@ -6445,6 +6448,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.retranscribeAction': 'Transcribe again',
   'item.retranscribeWarning':
     'The transcription has manual corrections. Transcribing it again will replace them. Continue?',
+  'item.retranscribeExistingWarning':
+    'This audio already has a transcription. Transcribing it again replaces it, with its speaker names, and it cannot be recovered. Continue?',
   'item.transcribeShortAction': 'STT',
   'item.transcribeBusyAction': 'STTR',
   'item.pdfCorrectTitle': 'OCR correction',

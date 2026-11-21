@@ -100,11 +100,26 @@ it('asks for pending debounced edits even before history records them', async ()
   expect(transcribe).not.toHaveBeenCalled()
 })
 
-it('preserves direct transcription when not edited', async () => {
-  const transcribe = setup(false)
+it('transcribes at once when the audio has no transcript yet', async () => {
+  const transcribe = setup(false, false, {
+    transcriptionState: { status: 'idle', progress: 0 },
+    transcriptionEditedText: '',
+  })
   await fireEvent.click(screen.getByRole('button', { name: 'STT' }))
   await waitFor(() => expect(transcribe).toHaveBeenCalledTimes(1))
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+})
+
+it('asks before replacing an existing transcript, even without hand edits', async () => {
+  // A transcript with roles from AssemblyAI was replaced without a word (finding 14).
+  const transcribe = setup(false)
+  await fireEvent.click(screen.getByRole('button', { name: 'STT' }))
+  expect(await screen.findByRole('dialog')).toHaveTextContent(
+    'Este audio ya tiene una transcripción. Si lo volvés a transcribir, se reemplaza, con sus nombres de hablante, y no se puede recuperar. ¿Continuar?'
+  )
+  expect(transcribe).not.toHaveBeenCalled()
+  await fireEvent.click(screen.getByRole('button', { name: 'Transcribir de nuevo' }))
+  expect(transcribe).toHaveBeenCalledTimes(1)
 })
 
 it('shows OCR progress as a progressbar carrying its value', () => {
