@@ -49,9 +49,10 @@ const LEXICAL_SCAN_MIN_ITEMS: usize = 8;
 /// (procesado antes de los chunks, o sin proveedor de embeddings) sigue
 /// entrando entero, por `vec_assets` y `fts_items`, como en `Asset`. `Asset`
 /// queda como modo explícito: la página entera, recortada por ventana.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum RetrievalUnit {
     Asset,
+    #[default]
     Chunk,
 }
 
@@ -64,12 +65,6 @@ impl RetrievalUnit {
                 "Unidad de recuperación RAG no soportada: {other}. Usá 'asset' o 'chunk'."
             )),
         }
-    }
-}
-
-impl Default for RetrievalUnit {
-    fn default() -> Self {
-        Self::Chunk
     }
 }
 

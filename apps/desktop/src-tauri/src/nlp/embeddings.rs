@@ -166,9 +166,6 @@ const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024;
 #[cfg(feature = "local-ml")]
 const DOWNLOAD_TIMEOUT_SECS: u64 = 900;
 
-#[cfg(feature = "local-ml")]
-static LOCAL_ORT_INIT: OnceLock<()> = OnceLock::new();
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingProvider {
     Api,
@@ -1402,7 +1399,7 @@ impl LocalBgeM3EmbeddingEngine {
             return Err(error);
         }
 
-        ensure_local_ort_init(model_dir)?;
+        let environment = ensure_local_ort_init(model_dir)?;
 
         let tokenizer = Tokenizer::from_file(&paths.tokenizer_path).map_err(|e| {
             format!(
@@ -1411,7 +1408,7 @@ impl LocalBgeM3EmbeddingEngine {
             )
         })?;
 
-        let session = Session::builder()
+        let session = Session::builder(&environment)
             .map_err(|e| format!("Failed to create local BGE-M3 ORT session builder: {e}"))?
             .with_optimization_level(GraphOptimizationLevel::Level1)
             .map_err(|e| format!("Failed to configure local BGE-M3 ORT optimization: {e}"))?
@@ -1890,23 +1887,16 @@ fn is_legacy_resource_embedding_dir(value: &str) -> bool {
 }
 
 #[cfg(feature = "local-ml")]
-pub(crate) fn ensure_local_ort_init(model_dir: &Path) -> Result<(), String> {
-    if LOCAL_ORT_INIT.get().is_some() {
-        return Ok(());
-    }
-
-    initialize_local_ort(model_dir.to_path_buf())?;
-    let _ = LOCAL_ORT_INIT.set(());
-    Ok(())
+pub(crate) fn ensure_local_ort_init(
+    model_dir: &Path,
+) -> Result<ort::environment::Environment, String> {
+    crate::ort_env::get_or_init(|| local_ort_builder(model_dir.to_path_buf()))
 }
 
 #[cfg(feature = "local-ml")]
-fn initialize_local_ort(model_dir: PathBuf) -> Result<(), String> {
-    // rc.13: `commit()` returns whether this call initialized (no error);
-    // double init is benign, the OnceLock above still serializes first setup.
+fn local_ort_builder(model_dir: PathBuf) -> Result<ort::environment::EnvironmentBuilder, String> {
     if std::env::var_os("ORT_DYLIB_PATH").is_some() {
-        ort::init().commit();
-        return Ok(());
+        return Ok(ort::init());
     }
 
     let dylib_path = find_ort_dylib(&model_dir).ok_or_else(|| {
@@ -1916,16 +1906,12 @@ fn initialize_local_ort(model_dir: PathBuf) -> Result<(), String> {
          )
      })?;
 
-    ort::init_from(dylib_path.display().to_string())
-        .map_err(|e| {
-            format!(
-                "Failed to initialize ORT from {}: {e}",
-                dylib_path.display()
-            )
-        })?
-        .commit();
-
-    Ok(())
+    ort::init_from(dylib_path.display().to_string()).map_err(|e| {
+        format!(
+            "Failed to initialize ORT from {}: {e}",
+            dylib_path.display()
+        )
+    })
 }
 
 #[cfg(feature = "local-ml")]

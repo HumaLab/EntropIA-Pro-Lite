@@ -43,6 +43,8 @@ mod logging;
 mod navegador;
 mod nlp;
 mod ocr;
+#[cfg(feature = "local-ml")]
+mod ort_env;
 mod path_utils;
 // `pub` so the recovery integration test (tests/processing_recovery.rs) can
 // drive claim/recover through the real module boundary, like sync_e2e.rs
