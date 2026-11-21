@@ -5,6 +5,7 @@ pub mod commands;
 mod engine;
 #[cfg(feature = "local-ml")]
 pub(crate) mod parakeet;
+pub(crate) mod versions;
 use crate::nlp::{lookup_item_id_for_asset, NlpJob, NlpQueue};
 #[cfg(feature = "local-ml")]
 use crate::path_utils::normalize_windows_path;
@@ -498,6 +499,39 @@ fn transcribe_with_local_provider(
         let diarize = asset_id.is_some() && get_bool_setting(conn, STT_SETTING_LOCAL_DIARIZE);
         speakers_requested = diarize;
         match transcribe_with_parakeet(settings_db_path, audio_path, diarize, &progress) {
+            Ok((result, warning))
+                if TRANSCRIPTION_LANGUAGE == "es"
+                    && parakeet::drifted_from_spanish(&result.text) =>
+            {
+                // Parakeet takes no language: on some Spanish audio it switches
+                // to translating into English. Whisper is told the language.
+                log::warn!(
+                    target: "transcription",
+                    "Parakeet drifted into English on Spanish audio, re-transcribing with faster-whisper"
+                );
+                return Ok(
+                    match transcribe_audio_file(app_handle, settings_db_path, audio_path) {
+                        Ok(whisper) => ManagedTranscriptionResult {
+                            transcription: whisper,
+                            model_name: "faster-whisper/base",
+                            warning: Some(drift_fallback_warning(diarize)),
+                        },
+                        // No Whisper to fall back on: keep Parakeet's text and say why
+                        // it reads partly in English.
+                        Err(whisper_error) => {
+                            log::warn!(
+                                target: "transcription",
+                                "faster-whisper fallback after English drift failed: {whisper_error}"
+                            );
+                            ManagedTranscriptionResult {
+                                transcription: result,
+                                model_name: PARAKEET_MODEL_NAME,
+                                warning: Some(DRIFT_KEPT_WARNING.to_string()),
+                            }
+                        }
+                    },
+                );
+            }
             Ok((result, warning)) => {
                 return Ok(ManagedTranscriptionResult {
                     transcription: result,
@@ -541,6 +575,21 @@ fn whisper_fallback_warning(speakers_requested: bool, parakeet_failed: bool) -> 
         "Parakeet no pudo procesar este audio y se transcribió con faster-whisper, que no identifica hablantes: el texto no tiene etiquetas de hablante.".to_string()
     })
 }
+
+/// Parakeet drifted into English and faster-whisper redid the audio in Spanish.
+#[cfg(feature = "local-ml")]
+fn drift_fallback_warning(speakers_requested: bool) -> String {
+    let base = "Parakeet empezó a traducir este audio al inglés, así que se transcribió con faster-whisper en castellano";
+    if speakers_requested {
+        format!("{base}, que no identifica hablantes: el texto no tiene etiquetas de hablante.")
+    } else {
+        format!("{base}.")
+    }
+}
+
+/// Parakeet drifted into English and no faster-whisper was there to redo it.
+#[cfg(feature = "local-ml")]
+const DRIFT_KEPT_WARNING: &str = "Parakeet tradujo parte de este audio al inglés y no hay faster-whisper para volver a transcribirlo: revisá el texto o probá con AssemblyAI.";
 
 #[cfg(feature = "local-ml")]
 fn get_bool_setting(conn: &rusqlite::Connection, key: &str) -> bool {
@@ -780,6 +829,14 @@ mod tests {
 
     #[test]
     #[cfg(feature = "local-ml")]
+    fn drift_fallback_warning_mentions_lost_speakers_only_when_requested() {
+        assert!(drift_fallback_warning(true).contains("no identifica hablantes"));
+        assert!(!drift_fallback_warning(false).contains("hablantes"));
+        assert!(drift_fallback_warning(false).contains("faster-whisper en castellano"));
+    }
+
+    #[test]
+    #[cfg(feature = "local-ml")]
     fn whisper_fallback_warns_only_when_requested_speakers_are_lost() {
         let warning = whisper_fallback_warning(true, true).expect("speakers lost");
         assert!(warning.contains("no identifica hablantes"), "{warning}");
@@ -960,6 +1017,48 @@ mod tests {
         );
         assert_eq!(result.unwrap(), None);
     }
+
+    #[test]
+    fn re_transcribing_keeps_the_replaced_transcript_as_a_version() {
+        // Finding 14: a transcript with AssemblyAI roles was replaced for good.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../../tests/fixtures/schema_full.sql"))
+            .unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'C', 0, 0);
+             INSERT INTO items (id, title, collection_id, created_at, updated_at) VALUES ('i1', 'I', 'c1', 0, 0);
+             INSERT INTO assets (id, item_id, path, type, created_at) VALUES ('a1', 'i1', 'assets/a.mp3', 'audio', 0);",
+        )
+        .unwrap();
+        let result = |text: &str| TranscriptionResult {
+            text: text.to_string(),
+            language: "es".to_string(),
+            segments: Vec::new(),
+            duration_ms: 1000,
+        };
+        save_transcription(
+            &conn,
+            "a1",
+            &result("Entrevistador: hola"),
+            "assemblyai/best",
+        )
+        .unwrap();
+        save_transcription(&conn, "a1", &result("hello there"), "parakeet/tdt").unwrap();
+
+        let current: String = conn
+            .query_row(
+                "SELECT text_content FROM transcriptions WHERE asset_id = 'a1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(current, "hello there");
+        let versions = versions::list(&conn, "a1").unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].text_content, "Entrevistador: hola");
+        assert_eq!(versions[0].model.as_deref(), Some("assemblyai/best"));
+    }
 }
 
 // ── Persistence ─────────────────────────────────────────────────────────────
@@ -985,7 +1084,11 @@ fn save_transcription(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    conn.execute(
+    // The replaced transcript moves to the versions in the same savepoint:
+    // a replacement never loses it (finding 14).
+    versions::in_savepoint(conn, || {
+        versions::archive_current(conn, asset_id, now)?;
+        conn.execute(
         "INSERT INTO transcriptions(id, asset_id, text_content, language, duration_ms, model, segments, confidence, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(asset_id) DO UPDATE SET
@@ -1009,7 +1112,8 @@ fn save_transcription(
             now,
         ],
     )
-    .map_err(|e| format!("Failed to upsert transcription: {e}"))?;
+    .map_err(|e| format!("Failed to upsert transcription: {e}"))
+    })?;
 
     let (tool, model) = model_name.split_once('/').unwrap_or((model_name, ""));
     crate::asset_history::record_best_effort(

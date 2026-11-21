@@ -881,6 +881,7 @@
 - «No se pudieron cargar las anotaciones de esta página.»
 - «No se pudieron guardar las anotaciones. Los cambios quedan locales hasta reintentar.»
 - «No se pudieron guardar los metadatos»
+- «No se pudieron leer las versiones anteriores: {error}»
 - «No se pudieron listar las versiones: {error}»
 - «No se pudo abrir el link de la nota»
 - «No se pudo actualizar la nota»
@@ -906,7 +907,9 @@
 - «No se pudo reconocer la caja: {error}»
 - «No se pudo renderizar la página»
 - «No se pudo restaurar la versión original del OCR.»
+- «No se pudo restaurar la versión: {error}»
 - «No se pudo transcribir el audio.»
+- «error»
 
 ### navegador (1/2)
 
@@ -1778,7 +1781,7 @@
 - «Rotar 90° a la izquierda»
 - «Éxito»
 
-### Varios (1/6)
+### Varios (1/7)
 
 - « para esta página» `item.noTriplesPageSuffix`
 - «Actual» `item.imageVersionCurrent`
@@ -1830,7 +1833,7 @@
 - «Descargar» `item.downloadExtractedText`
 - «Descargar texto extraído» `item.downloadExtractedTextAria`
 
-### Varios (2/6)
+### Varios (2/7)
 
 - «Descartar la nueva entidad» `item.newEntityCancelAria`
 - «Descartar la nueva tripleta» `item.newTripleCancelAria`
@@ -1862,12 +1865,17 @@
 - «Escribí una nota...» `item.writeNote`
 - «Esta imagen tiene anotaciones. Pueden no coincidir con la versión que elegiste. ¿Continuar?» `item.imageVersionAnnotationsWarning`
 - «Esta página todavía no tiene layout persistido.» `item.layoutMissing`
+- «Este audio no tiene versiones anteriores.» `item.transcriptVersionsEmpty`
+- «Este audio ya tiene una transcripción. Si lo volvés a transcribir, se reemplaza; la actual, con sus nombres de hablante, queda en «Versiones anteriores» y la podés restaurar. ¿Continuar?» `item.retranscribeExistingWarning`
 - «Este equipo no tiene una GPU que pueda correr GLM-OCR (NVIDIA, o AMD, Intel o Apple con 4 GB): OCRH local corre en el procesador y tarda unos 15 minutos por página. OCRL tarda segundos.» `item.ocrhCpuWarning`
 - «Este layout corresponde a otra versión de la imagen ({width}×{height}); la actual mide {currentWidth}×{currentHeight}.» `item.layoutOtherVersionSized`
 - «Este layout corresponde a otra versión de la imagen.» `item.layoutOtherVersion`
 - «Este texto se extrajo de otra versión de la imagen. Puede no coincidir con lo que ves.» `item.textOtherVersion`
 - «Exportar JSON» `item.processHistoryExport`
 - «Extracción de texto» `item.textExtraction`
+
+### Varios (3/7)
+
 - «Extracción en progreso…» `item.ocrFastBusyTitle, item.ocrHighBusyTitle`
 - «Extraer texto» `item.ocrFastTitle`
 - «Extraer tripletas» `item.triplesTitle`
@@ -1875,9 +1883,6 @@
 - «Extraé texto primero» `item.ocrCorrectNeedsText`
 - «FTS Debug (solo dev)» `item.ftsDebugTitle`
 - «Filtrar bloques por tipo» `item.layoutFilterGroup`
-
-### Varios (3/6)
-
 - «Formatos de descarga del texto extraído» `item.downloadExtractedTextMenu`
 - «Generando exportación…» `item.exportExtractedTextWorking`
 - «Generando resumen…» `item.generatingSummary`
@@ -1902,7 +1907,7 @@
 - «Inspector» `item.layoutInspector`
 - «JSON copiado.» `item.layoutCopiedJson`
 - «La similitud semántica requiere OpenRouter configurado en Configuración.» `item.searchReadiness.openRouterNeeded`
-- «La transcripción tiene correcciones hechas a mano. Si la volvés a transcribir, se reemplazan. ¿Continuar?» `item.retranscribeWarning`
+- «La transcripción tiene correcciones hechas a mano. Si la volvés a transcribir, se reemplaza; la versión corregida queda en «Versiones anteriores». ¿Continuar?» `item.retranscribeWarning`
 - «Label» `item.layoutLabel`
 - «Layout» `item.layoutTab`
 - «Layout no disponible para audios.» `item.layoutUnavailableForAudio`
@@ -1919,6 +1924,9 @@
 - «Mostrar overlay» `item.layoutToggleShow`
 - «NER» `item.nerAction`
 - «No hay archivos de esta imagen en el disco.» `item.imageVersionsEmpty`
+
+### Varios (4/7)
+
 - «No hay bloques del tipo seleccionado para la página visible.» `item.layoutNoFilterBlocks`
 - «No hay bloques para la página visible.» `item.layoutNoPageBlocks`
 - «No hay metadatos cargados para este documento.» `item.metadataEmpty`
@@ -1926,9 +1934,6 @@
 - «No hay resultados para esa búsqueda.» `item.ftsNoResults`
 - «Nota vacía» `item.noteEmptyPreview`
 - «Notas» `item.notes, item.notesTab`
-
-### Varios (4/6)
-
 - «Nueva caja a continuación» `item.layoutBoxEditInsert`
 - «Nuevo tipo de entidad» `item.newEntityType`
 - «Nuevo valor de entidad» `item.newEntityValue`
@@ -1942,6 +1947,7 @@
 - «Objeto de la tripleta» `item.tripleObjectAria`
 - «Ocultar» `item.renameSpeakersHide`
 - «Ocultar overlay» `item.layoutToggleHide`
+- «Ocultar versiones anteriores» `item.transcriptVersionsHide`
 - «OpenRouter no configurado» `item.summaryUnavailable, item.triplesUnavailable`
 - «Orden» `item.layoutOrder`
 - «Original» `item.imageVersionOriginal`
@@ -1971,18 +1977,20 @@
 - «Quitar campo» `item.metadataRemoveField`
 - «Recargar» `item.processHistoryReload`
 - «Reconocer texto de la caja» `item.layoutBoxEditApply`
+
+### Varios (5/7)
+
 - «Reconociendo…» `item.layoutBoxEditApplying`
+- «Reemplazada el {date} · {model} · {count} caracteres» `item.transcriptVersionMeta`
 - «Región a borrar» `item.viewerEraseRegion`
 - «Región de layout {label}» `item.viewerLayoutRegion`
 - «Región de recorte» `item.viewerCropRegion`
 - «Renombrar hablantes» `item.renameSpeakers`
 - «Reproducir» `item.audioPlay`
 - «Restaurando OCR original…» `item.restoreOriginalOcrWorking`
+- «Restaurar» `item.transcriptVersionRestore`
 - «Restaurar OCR original» `item.restoreOriginalOcr`
 - «Restaurar versión original del OCR» `item.restoreOriginalOcrAria`
-
-### Varios (5/6)
-
 - «Resumen» `item.summary, item.summaryAudioAction`
 - «Retroceder 5 segundos» `item.audioSkipBack`
 - «STT» `item.transcribeShortAction`
@@ -2013,6 +2021,9 @@
 - «Tocá o pasá el mouse sobre un bloque para resaltarlo en el viewer.» `item.layoutHelp`
 - «Todavía no hay entidades extraídas.» `item.entitiesEmpty`
 - «Todavía no hay notas.» `item.noNotes`
+
+### Varios (6/7)
+
 - «Todavía no hay procesos registrados para este documento. Los documentos importados antes de la versión con historial no tienen sus procesos anteriores.» `item.processHistoryEmpty`
 - «Todavía no hay páginas similares. Generá embeddings para esta página y compararla contra el resto.» `item.similarAssetsEmpty`
 - «Todavía no hay texto extraído para este documento.» `item.noExtractedText`
@@ -2021,9 +2032,6 @@
 - «Transcribiendo… {progress}%» `item.transcriptionRunning`
 - «Transcribir» `item.transcribeAction`
 - «Transcribir de nuevo» `item.retranscribeAction`
-
-### Varios (6/6)
-
 - «Transcribir este archivo de audio» `item.transcribeTitle`
 - «Transcripción» `item.transcription`
 - «Transcripción de audio» `item.audioTranscription`
@@ -2033,7 +2041,9 @@
 - «Usar OCRL» `item.ocrhCpuUseOcrl`
 - «Usar esta versión» `item.imageVersionUse`
 - «Valor» `item.metadataValueLabel, item.metadataValuePlaceholder`
+- «Versiones anteriores» `item.transcriptVersions`
 - «Versiones de la imagen» `item.imageVersions`
+- «Versión restaurada. La transcripción que estaba quedó en «Versiones anteriores».» `item.transcriptVersionRestored`
 - «Versión {n}» `item.imageVersionNumber`
 - «Volumen» `item.audioVolume`
 - «Volver a correr el OCR» `item.textRerun`
@@ -2041,13 +2051,17 @@
 - «Word (.docx)» `item.exportExtractedTextDocx`
 - «corre en este equipo con {model}» `item.ocrCorrectEngineLocal`
 - «desconocido» `item.ocrMethodUnknown`
+- «en cola» `item.jobStatus.pending`
+- «en curso» `item.jobStatus.running`
 - «enviando a AssemblyAI» `item.transcriptionStage.submitting_remote`
 - «envía el texto a {tool} ({model})» `item.ocrCorrectEngineRemote`
 - «esperando respuesta remota» `item.transcriptionStage.polling_remote`
+- «hecho» `item.jobStatus.done, item.jobStatus.stored`
 - «no se pudo leer el archivo de la imagen para comprobar a qué versión corresponde.» `item.layoutVersionUnknown`
 - «nueva» `item.layoutBoxEditNewLabel`
 - «página {assetId} · documento {itemId} · colección {collectionId}» `item.assetMetaLine`
 - «rank {value}» `item.rank`
+- «sin hacer» `item.jobStatus.idle`
 - «subiendo audio» `item.transcriptionStage.uploading`
 - «{count} bloques» `item.layoutBlocksCount`
 - «{count} caracteres» `item.characters`
@@ -2055,6 +2069,9 @@
 - «{count}s» `item.audioDurationSeconds`
 - «· Página {page}» `item.pageInline`
 - «¿Eliminar?» `item.entityDeletePrompt, item.tripleDeletePrompt`
+
+### Varios (7/7)
+
 - «¿Seguro que querés eliminar esta nota? Esta acción no se puede deshacer.» `item.deleteNoteMessage`
 
 ## Navegación
@@ -3001,12 +3018,14 @@
 - «Sesión»
 - «Sesión iniciada como {email}»
 - «Sincronización automática»
+- «Sincronización completa.»
 - «Sincronización en la nube»
 - «Sincronizando…»
 - «Sincronizar ahora»
 - «Sincronizar automáticamente»
 - «Sincronizá tus datos y archivos entre dispositivos. Es opcional: si no la activás, nada sale de tu equipo.»
 - «Tabla {table} · fila {row}»
+- «Todavía no se sincronizó»
 - «URL del servidor»
 - «Usá una URL https (o http solo para localhost).»
 - «Ver detalle»

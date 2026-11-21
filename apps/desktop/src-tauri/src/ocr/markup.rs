@@ -333,6 +333,98 @@ pub fn ocr_markup_to_text(text: &str) -> String {
     blocks.join("\n\n")
 }
 
+static IMAGE_REFERENCE_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"!\[[^\]\n]*\]\([^)\n]*\)").expect("valid Markdown image regex")
+});
+static TABLE_SEPARATOR_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
+        .expect("valid table separator regex")
+});
+static HEADING_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^\s{0,3}#{1,6}\s+").expect("valid heading regex")
+});
+static BLOCKQUOTE_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"^\s*>\s?").expect("valid blockquote regex"));
+
+/// The words of one OCR answer or stored page, for search and for previews
+/// (finding 6): no HTML, no image or region references such as
+/// `![](page=0,bbox=[27, 43, 325, 364])`, no Markdown headings, quotes,
+/// emphasis, code fences or table pipes. Table cells are joined with ` · `.
+/// The stored text keeps its markup for display; this is a derived form.
+pub fn ocr_plain_text(text: &str) -> String {
+    let text = ocr_markup_to_text(text);
+    let text = IMAGE_REFERENCE_RE.replace_all(&text, "");
+    let mut lines: Vec<String> = Vec::new();
+    for raw in text.lines() {
+        if raw.trim_start().starts_with("```") || TABLE_SEPARATOR_RE.is_match(raw) {
+            continue;
+        }
+        let line = HEADING_RE.replace(raw, "");
+        let line = BLOCKQUOTE_RE.replace(&line, "");
+        let mut line = line.replace("**", "").replace("__", "").replace('`', "");
+        let trimmed = line.trim();
+        if trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.len() > 1 {
+            line = trimmed[1..trimmed.len() - 1]
+                .split('|')
+                .map(str::trim)
+                .filter(|cell| !cell.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ");
+        }
+        lines.push(line.trim_end().to_string());
+    }
+    // Removed markup leaves empty lines behind: keep at most one blank line.
+    let mut out = String::with_capacity(text.len());
+    let mut blank_run = 0;
+    for line in lines {
+        if line.trim().is_empty() {
+            blank_run += 1;
+            if blank_run > 1 {
+                continue;
+            }
+            out.push('\n');
+        } else {
+            blank_run = 0;
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    out.trim().to_string()
+}
+
+#[cfg(test)]
+mod plain_text_tests {
+    use super::ocr_plain_text;
+
+    #[test]
+    fn glm_layout_markup_becomes_plain_words() {
+        // The shape the archive holds (finding 6).
+        let glm = "<div align=\"center\">\n\n# Los Fileteros: arte porteño\n\n</div>\n\n![](page=0,bbox=[27, 43, 325, 364])\n\nEl **fileteado** nació en los talleres.\n\n> Una cita\n\n## Notas";
+        assert_eq!(
+            ocr_plain_text(glm),
+            // Text around HTML blocks is whitespace-collapsed by ocr_markup_to_text.
+            "Los Fileteros: arte porteño\n\nEl fileteado nació en los talleres.\nUna cita\nNotas"
+        );
+    }
+
+    #[test]
+    fn tables_keep_their_cells_without_pipes() {
+        let table = "<table><tr><th>Año</th><th>Precio</th></tr><tr><td>1926</td><td>20,5</td></tr></table>";
+        assert_eq!(ocr_plain_text(table), "Año · Precio\n1926 · 20,5");
+    }
+
+    #[test]
+    fn plain_text_and_transcripts_pass_through() {
+        let text = "Entrevistador: hola\nAna: 3 * 4 = 12, archivo_final.pdf\n\nOtra línea";
+        assert_eq!(ocr_plain_text(text), text);
+    }
+
+    #[test]
+    fn code_fences_go_and_their_content_stays() {
+        assert_eq!(ocr_plain_text("```\nlinea\n```"), "linea");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ocr_markup_to_text;

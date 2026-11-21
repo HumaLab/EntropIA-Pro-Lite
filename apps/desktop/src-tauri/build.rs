@@ -154,6 +154,8 @@ const APP_COMMANDS: &[&str] = &[
     "test_assemblyai_connection",
     "zotero_verify_key",
     "update_transcription_text_cmd",
+    "list_transcription_versions",
+    "restore_transcription_version",
     "prepare_audio_preview",
     "llm_extract_entities",
     "llm_extract_triples",

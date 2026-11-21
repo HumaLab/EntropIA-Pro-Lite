@@ -19,6 +19,7 @@
     type EntityAliasResolver,
   } from '$lib/entity-aliases'
   import type { I18nKey, I18nParams } from '$lib/i18n'
+  import { jobStatusLabelKey } from '$lib/job-status'
   import type { ItemNlpState } from '$lib/nlp'
   import EntityAliasDialog from '../components/EntityAliasDialog.svelte'
   import ItemMapViewer from './ItemMapViewer.svelte'
@@ -345,7 +346,7 @@
             size="sm"
             class="nlp-badge"
           >
-            {nlpState.fts}
+            {translate(jobStatusLabelKey(nlpState.fts, ftsIndexed))}
           </StatusBadge>
         </Button>
 
@@ -362,7 +363,7 @@
             size="sm"
             class="nlp-badge"
           >
-            {nlpState.embed}
+            {translate(jobStatusLabelKey(nlpState.embed, assetEmbedded))}
           </StatusBadge>
         </Button>
 
@@ -380,8 +381,8 @@
             class="nlp-badge"
           >
             {nlpState.ner === 'done' && nlpState.entityCount === 0
-              ? `${nlpState.ner} · 0`
-              : nlpState.ner}
+              ? `${translate(jobStatusLabelKey(nlpState.ner))} · 0`
+              : translate(jobStatusLabelKey(nlpState.ner, entities.length > 0))}
           </StatusBadge>
         </Button>
 
@@ -400,7 +401,7 @@
             size="sm"
             class="nlp-badge"
           >
-            {nlpState.triples}
+            {translate(jobStatusLabelKey(nlpState.triples, triples.length > 0))}
           </StatusBadge>
         </Button>
       </div>

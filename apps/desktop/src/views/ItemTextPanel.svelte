@@ -11,6 +11,7 @@
     type StatusBadgeVariant,
   } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
+  import { jobStatusLabelKey } from '$lib/job-status'
   import type { Asset } from '@entropia/store'
   import type { AssetOcrState, OcrMode } from '$lib/ocr'
   import {
@@ -18,7 +19,9 @@
     renameSpeakers,
     transcriptionIsEditedByHand,
     type AssetTranscriptionState,
+    type TranscriptVersion,
   } from '$lib/transcription'
+  import TranscriptVersions from './TranscriptVersions.svelte'
   import type { ItemLlmState, OcrCorrectionEngine } from '$lib/llm'
   import { getAssetPathLabel } from '$lib/item-metadata'
 
@@ -46,6 +49,7 @@
     onTranscribeAudio,
     onOcrTextInput,
     onTranscriptionTextInput,
+    onRestoreTranscriptVersion,
   }: {
     selectedAsset: Asset | null
     assetsCount: number
@@ -70,9 +74,11 @@
     onTranscribeAudio: (asset: Asset) => void | Promise<void>
     onOcrTextInput: (assetId: string, value: string) => void
     onTranscriptionTextInput: (assetId: string, value: string) => void
+    onRestoreTranscriptVersion: (assetId: string, version: TranscriptVersion) => Promise<void>
   } = $props()
 
   let pendingTranscription = $state<Asset | null>(null)
+  let pendingTranscriptionWarning = $state<I18nKey>('item.retranscribeWarning')
   let checkingTranscription = $state(false)
   let transcriptionCheckError = $state<string | null>(null)
   let renamingSpeakers = $state(false)
@@ -96,7 +102,16 @@
     try {
       const edited = await transcriptionIsEditedByHand(asset.id)
       if (selectedAsset?.id !== asset.id) return
+      const hasTranscript = Boolean(
+        transcriptionState?.text?.trim() || transcriptionEditedText.trim()
+      )
       if (edited || transcriptionState?.editedByHand) {
+        pendingTranscriptionWarning = 'item.retranscribeWarning'
+        pendingTranscription = asset
+      } else if (hasTranscript) {
+        // Speaker roles and names come back only from the engine that made
+        // them: replacing any transcript loses them, edited or not.
+        pendingTranscriptionWarning = 'item.retranscribeExistingWarning'
         pendingTranscription = asset
       } else {
         await onTranscribeAudio(asset)
@@ -204,7 +219,7 @@
         </span>
         <span class="ocr-status">
           <StatusBadge variant={getJobStatusBadgeVariant(ocrState.status)} size="sm">
-            {ocrState.status}
+            {translate(jobStatusLabelKey(ocrState.status))}
           </StatusBadge>
         </span>
         <div class="ocr-btn-group">
@@ -350,7 +365,7 @@
         </span>
         <span class="ocr-status">
           <StatusBadge variant={getJobStatusBadgeVariant(transcriptionState.status)} size="sm">
-            {transcriptionState.status}
+            {translate(jobStatusLabelKey(transcriptionState.status))}
           </StatusBadge>
         </span>
         <div class="ocr-btn-group">
@@ -426,6 +441,13 @@
         {#if transcriptionState.warning}
           <p class="ocr-status-text" role="note">{transcriptionState.warning}</p>
         {/if}
+        {#key selectedAsset.id}
+          <TranscriptVersions
+            assetId={selectedAsset.id}
+            {translate}
+            onRestore={(version) => onRestoreTranscriptVersion(selectedAsset.id, version)}
+          />
+        {/key}
         {@const speakerLabels = extractSpeakerLabels(transcriptionEditedText)}
         {#if speakerLabels.length > 0}
           <div class="ocr-speaker-rename">
@@ -479,7 +501,7 @@
 {#if pendingTranscription && pendingTranscription.id === selectedAsset?.id}
   <ConfirmDialog
     title={translate('item.retranscribeAction')}
-    message={translate('item.retranscribeWarning')}
+    message={translate(pendingTranscriptionWarning)}
     cancelLabel={translate('collections.cancel')}
     confirmLabel={translate('item.retranscribeAction')}
     oncancel={() => (pendingTranscription = null)}

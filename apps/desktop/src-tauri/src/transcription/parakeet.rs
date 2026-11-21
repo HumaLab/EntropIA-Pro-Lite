@@ -109,6 +109,43 @@ pub fn parakeet_supports_language(language: &str) -> bool {
     PARAKEET_LANGUAGES.contains(&base)
 }
 
+/// Whether a transcript asked for in Spanish came out largely in English.
+///
+/// Parakeet TDT v3 takes no language parameter: it picks the language per
+/// window, and on Spanish interviews it can switch to translating into
+/// English. Counts function words unique to each language (words both share,
+/// like `a`, `no` or `me`, are left out).
+#[cfg(feature = "local-ml")]
+pub(crate) fn drifted_from_spanish(text: &str) -> bool {
+    const ENGLISH: &[&str] = &[
+        "the", "of", "and", "to", "in", "is", "that", "it", "was", "for", "with", "they", "this",
+        "from", "by", "are", "were", "which", "their", "been", "would", "there", "what", "when",
+        "who", "will", "about", "into", "than", "them", "these", "its", "our", "we", "you", "but",
+        "not", "or", "an", "at", "on", "my", "since", "during", "have", "had",
+    ];
+    const SPANISH: &[&str] = &[
+        "de", "la", "que", "el", "en", "y", "los", "se", "del", "las", "un", "por", "con", "una",
+        "su", "para", "es", "al", "lo", "como", "pero", "sus", "le", "ya", "fue", "este", "ha",
+        "porque", "esta", "entre", "cuando", "muy", "sin", "sobre", "hasta", "hay", "donde", "nos",
+        "durante", "todo", "eso",
+    ];
+    let (mut english, mut spanish) = (0usize, 0usize);
+    for word in text
+        .split(|c: char| !c.is_alphabetic())
+        .filter(|w| !w.is_empty())
+    {
+        let word = word.to_lowercase();
+        if ENGLISH.contains(&word.as_str()) {
+            english += 1;
+        } else if SPANISH.contains(&word.as_str()) {
+            spanish += 1;
+        }
+    }
+    // A few English function words (a quote, a title) are not drift; a third
+    // of the function words in English is.
+    english >= 8 && english * 3 >= english + spanish
+}
+
 /// Configuration for the Parakeet engine.
 #[cfg(feature = "local-ml")]
 #[derive(Clone)]
@@ -875,6 +912,31 @@ mod tests {
         assert!(!parakeet_supports_language("zh"));
         assert!(!parakeet_supports_language("ja"));
         assert!(!parakeet_supports_language(""));
+    }
+
+    #[test]
+    fn spanish_transcript_with_english_drift_is_detected() {
+        // The 1.8.6 output for a Spanish interview (finding 13).
+        let drifted = "Los procesos of recuperation of empresas for visibilization in Argentina \
+            during the década de los 90. The control obrero of the production, since the \
+            empresarial patron burguese, has numerous references historically, and that is \
+            what we were looking at with the workers of the factory when they took it.";
+        assert!(drifted_from_spanish(drifted));
+    }
+
+    #[test]
+    fn plain_spanish_transcript_is_not_drift() {
+        let spanish = "Hablante A: Los procesos de recuperación de empresas en la Argentina \
+            durante la década del noventa fueron muy importantes para los trabajadores. \
+            Hablante B: Sí, porque cuando la patronal se fue, ellos tomaron la fábrica y \
+            empezaron a producir sin el dueño, con una asamblea que decidía todo.";
+        assert!(!drifted_from_spanish(spanish));
+        // Spanish with a few English loanwords stays Spanish.
+        let loanwords = "El delivery de la empresa y el marketing del producto fueron \
+            parte del plan de la cooperativa, que trabajó con los vecinos del barrio \
+            para que la fábrica siguiera abierta durante todo el conflicto.";
+        assert!(!drifted_from_spanish(loanwords));
+        assert!(!drifted_from_spanish(""));
     }
 
     #[test]

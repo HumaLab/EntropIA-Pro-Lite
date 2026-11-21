@@ -122,7 +122,13 @@
     localOcrhInfo,
     type OcrMode,
   } from '$lib/ocr'
-  import { TranscriptionStore, transcribeAudio, transcribeDictation } from '$lib/transcription'
+  import {
+    TranscriptionStore,
+    restoreTranscriptionVersion,
+    transcribeAudio,
+    transcribeDictation,
+    type TranscriptVersion,
+  } from '$lib/transcription'
   import {
     NlpStore,
     indexFts,
@@ -556,6 +562,34 @@
   /** Save manual transcription edits; search data refreshes after successful persistence. */
   function scheduleTranscriptionPersist(assetId: string, text: string) {
     transcriptionTextPersistor.schedule(assetId, text)
+  }
+
+  /**
+   * Makes a previous transcript current again (finding 14). A pending edit is
+   * saved first, so it becomes a version instead of overwriting the restored
+   * text a moment later; search data refreshes as after an edit.
+   */
+  async function handleRestoreTranscriptVersion(assetId: string, version: TranscriptVersion) {
+    await transcriptionTextPersistor.flushAndWait(assetId)
+    await restoreTranscriptionVersion(version.id)
+    const transcription = await getStore().transcriptions.findByAsset(assetId)
+    if (transcription) {
+      transEditedText.set(assetId, transcription.textContent)
+      transcriptionStore._updateState(assetId, {
+        status: 'done',
+        progress: 100,
+        text: transcription.textContent,
+        language: transcription.language ?? undefined,
+        durationMs: transcription.durationMs ?? undefined,
+        segmentsCount: transcription.segments
+          ? TranscriptionRepo.parseSegments(transcription.segments).length
+          : 0,
+        editedByHand: false,
+        warning: undefined,
+      })
+      transcriptionTick++
+    }
+    scheduleAssetReanalysis(assetId)
   }
 
   // NLP state — mirrors OcrStore pattern
@@ -4060,6 +4094,7 @@
                 schedulePersist(assetId, value)
                 ocrTick++
               }}
+              onRestoreTranscriptVersion={handleRestoreTranscriptVersion}
               onTranscriptionTextInput={(assetId, value) => {
                 transEditedText.set(assetId, value)
                 transcriptionStore.setTextContent(assetId, value)

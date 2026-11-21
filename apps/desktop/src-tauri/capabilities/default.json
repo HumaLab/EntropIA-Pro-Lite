@@ -147,6 +147,8 @@
     "allow-test-assemblyai-connection",
     "allow-zotero-verify-key",
     "allow-update-transcription-text-cmd",
+    "allow-list-transcription-versions",
+    "allow-restore-transcription-version",
     "allow-prepare-audio-preview",
     "allow-llm-extract-entities",
     "allow-llm-extract-triples",

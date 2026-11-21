@@ -207,6 +207,7 @@ static REGISTRY: &[Migration] = &[
     migration!("0063_collection_ai_context", Atomic),
     migration!("0064_derived_source_path", Atomic),
     migration!("0065_entity_aliases", Atomic),
+    migration!("0066_transcription_versions", Atomic),
 ];
 
 // ---------------------------------------------------------------------------
@@ -696,8 +697,8 @@ mod tests {
         );
         assert_eq!(
             from_registry.len(),
-            65,
-            "the Phase 4 shell must keep all 65 migrations"
+            66,
+            "the Phase 4 shell must keep all 66 migrations"
         );
     }
 
@@ -720,7 +721,7 @@ mod tests {
         );
         assert_eq!(
             expected.len(),
-            34,
+            35,
             "the TS atomic condition changed shape; re-check the extractor"
         );
     }
@@ -732,7 +733,7 @@ mod tests {
             apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("apply everything");
         assert_eq!(
             report.applied.len(),
-            65,
+            66,
             "every registry migration must run once"
         );
         assert_matches_canonical_fixture(
@@ -864,7 +865,11 @@ mod tests {
             apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("apply 0064");
         assert_eq!(
             report.applied,
-            vec!["0064_derived_source_path", "0065_entity_aliases"]
+            vec![
+                "0064_derived_source_path",
+                "0065_entity_aliases",
+                "0066_transcription_versions"
+            ]
         );
 
         let source_columns = [
@@ -941,7 +946,10 @@ mod tests {
 
         let report =
             apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("apply 0065");
-        assert_eq!(report.applied, vec!["0065_entity_aliases"]);
+        assert_eq!(
+            report.applied,
+            vec!["0065_entity_aliases", "0066_transcription_versions"]
+        );
         assert!(table_exists(&conn, "entity_aliases"));
 
         // S1: global list — the table carries no collection column.
