@@ -76,6 +76,11 @@ struct TranscriptUtterance {
     speaker: Option<String>,
     speaker_label: Option<String>,
     text: String,
+    /// Milliseconds from the start of the audio.
+    #[serde(default)]
+    start: Option<u64>,
+    #[serde(default)]
+    end: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -225,25 +230,21 @@ impl AssemblyAiClient {
 
             match transcript.status.as_str() {
                 "completed" => {
-                    let text = format_transcript_text(
-                        transcript.text.unwrap_or_default(),
-                        transcript.utterances,
-                        transcript.speech_understanding,
-                    );
                     let duration_ms = transcript
                         .audio_duration
                         .map(|seconds| (seconds * 1000.0).round() as u64)
                         .unwrap_or(0);
-                    let segments = if text.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![Segment {
-                            start: 0.0,
-                            end: duration_ms as f64 / 1000.0,
-                            text: text.clone(),
-                            speaker: None,
-                        }]
-                    };
+                    let text = format_transcript_text(
+                        transcript.text.unwrap_or_default(),
+                        transcript.utterances.as_deref(),
+                        transcript.speech_understanding.as_ref(),
+                    );
+                    let segments = transcript_segments(
+                        &text,
+                        duration_ms,
+                        transcript.utterances.as_deref(),
+                        transcript.speech_understanding.as_ref(),
+                    );
 
                     return Ok(TranscriptionResult {
                         text,
@@ -519,23 +520,77 @@ async fn ensure_success(
     Err(format!("{provider_name} API error ({status}): {api_error}"))
 }
 
+/// The stored segments: one per utterance, with its times and speaker, when
+/// AssemblyAI returned utterances; otherwise the whole text as one segment.
+fn transcript_segments(
+    text: &str,
+    duration_ms: u64,
+    utterances: Option<&[TranscriptUtterance]>,
+    speech_understanding: Option<&SpeechUnderstandingStatus>,
+) -> Vec<Segment> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mapping = speech_understanding
+        .and_then(|status| status.response.as_ref())
+        .and_then(|response| response.speaker_identification.as_ref())
+        .and_then(|identification| identification.mapping.as_ref());
+    let timed: Vec<Segment> = utterances
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|utterance| {
+            let text = utterance.text.trim();
+            let (start, end) = (utterance.start?, utterance.end?);
+            if text.is_empty() {
+                return None;
+            }
+            let speaker = utterance
+                .speaker
+                .as_deref()
+                .or(utterance.speaker_label.as_deref())
+                .map(|key| match mapping.and_then(|m| m.get(key)) {
+                    Some(role) => display_speaker_role(role),
+                    None => key.trim().to_string(),
+                });
+            Some(Segment {
+                start: start as f64 / 1000.0,
+                end: end as f64 / 1000.0,
+                text: text.to_string(),
+                speaker,
+            })
+        })
+        .collect();
+    if !timed.is_empty() {
+        return timed;
+    }
+    vec![Segment {
+        start: 0.0,
+        end: duration_ms as f64 / 1000.0,
+        text: text.to_string(),
+        speaker: None,
+    }]
+}
+
 fn format_transcript_text(
     fallback_text: String,
-    utterances: Option<Vec<TranscriptUtterance>>,
-    speech_understanding: Option<SpeechUnderstandingStatus>,
+    utterances: Option<&[TranscriptUtterance]>,
+    speech_understanding: Option<&SpeechUnderstandingStatus>,
 ) -> String {
     let speaker_mapping = speech_understanding
-        .and_then(|status| status.response)
-        .and_then(|response| response.speaker_identification)
-        .and_then(|speaker_identification| speaker_identification.mapping);
+        .and_then(|status| status.response.as_ref())
+        .and_then(|response| response.speaker_identification.as_ref())
+        .and_then(|speaker_identification| speaker_identification.mapping.as_ref());
 
-    if let (Some(utterances), Some(mapping)) = (utterances, speaker_mapping.as_ref()) {
+    if let (Some(utterances), Some(mapping)) = (utterances, speaker_mapping) {
         let formatted = utterances
-            .into_iter()
+            .iter()
             .filter_map(|utterance| {
-                let speaker_key = utterance.speaker.or(utterance.speaker_label)?;
+                let speaker_key = utterance
+                    .speaker
+                    .as_deref()
+                    .or(utterance.speaker_label.as_deref())?;
                 let label = mapping
-                    .get(&speaker_key)
+                    .get(speaker_key)
                     .map(|value| display_speaker_role(value))
                     .unwrap_or_else(|| speaker_key.trim().to_string());
                 let text = utterance.text.trim();
@@ -1047,6 +1102,52 @@ mod tests {
         let meta = compatibility_error_meta(body).expect("compatibility metadata");
         assert_eq!(meta.body_len, body.len());
         assert_eq!(meta.class, "speech_model_schema");
+    }
+
+    fn utterance(speaker: &str, start: u64, end: u64, text: &str) -> TranscriptUtterance {
+        TranscriptUtterance {
+            speaker: Some(speaker.to_string()),
+            speaker_label: None,
+            text: text.to_string(),
+            start: Some(start),
+            end: Some(end),
+        }
+    }
+
+    #[test]
+    fn utterances_become_timed_segments_with_their_speakers() {
+        let utterances = vec![
+            utterance("A", 0, 4_200, "¿Dónde trabajaba?"),
+            utterance("B", 4_500, 9_000, "En la conserva."),
+        ];
+        let understanding: SpeechUnderstandingStatus = serde_json::from_value(serde_json::json!({
+            "response": { "speaker_identification": { "mapping": { "A": "Entrevistador" } } }
+        }))
+        .unwrap();
+
+        let segments = transcript_segments(
+            "Entrevistador/a: ¿Dónde trabajaba?\nB: En la conserva.",
+            9_000,
+            Some(&utterances),
+            Some(&understanding),
+        );
+
+        assert_eq!(segments.len(), 2);
+        assert_eq!((segments[0].start, segments[0].end), (0.0, 4.2));
+        assert_eq!(segments[0].text, "¿Dónde trabajaba?");
+        assert_eq!(segments[0].speaker.as_deref(), Some("Entrevistador/a"));
+        assert_eq!((segments[1].start, segments[1].end), (4.5, 9.0));
+        // No role for B: the raw AssemblyAI label, as the text shows it.
+        assert_eq!(segments[1].speaker.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn without_utterances_the_text_stays_one_segment() {
+        let segments = transcript_segments("Texto completo.", 3_000, None, None);
+        assert_eq!(segments.len(), 1);
+        assert_eq!((segments[0].start, segments[0].end), (0.0, 3.0));
+        assert_eq!(segments[0].speaker, None);
+        assert!(transcript_segments("", 3_000, None, None).is_empty());
     }
 
     #[test]
