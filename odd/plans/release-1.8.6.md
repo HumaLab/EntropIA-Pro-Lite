@@ -17,6 +17,8 @@ No agrega migraciones: se puede actualizar en cualquier orden entre equipos con 
 - **Runtimes viejos.** Cuando el runtime nuevo queda listo, la app aparta los runtimes que ya no usa y los borra. Si un programa todavía usa uno, lo deja intacto y lo borra en un arranque posterior. También borra lo que dejó un borrado interrumpido en 1.8.5 (hasta 2 GB) y el archivo descargado de cada runtime instalado, que ocupaba unos 2,3 GB por versión y no se usaba.
 - **Runtime en uso.** La app ya no carga partes de un runtime viejo cuando hay uno de su versión. Esto era lo que impedía borrarlo.
 - **llama-server en Windows.** La descarga de llama-server, que necesitan GLM-OCR y el corrector Qwen locales, fallaba siempre al final con «Acceso denegado (os error 5)». Ahora se instala.
+- **GLM-OCR y Qwen solo con GPU NVIDIA.** Configuración ya no ofrece bajar estos modelos (1,4 y 2,9 GB) en un equipo sin GPU NVIDIA, donde no pueden correr: en su lugar explica por qué.
+- **Descargas de modelos más seguras.** Antes de bajar un modelo, la app revisa que haya espacio en el disco; al terminar, que haya llegado completo. Los errores de descarga ahora están en español y dicen qué hacer.
 - **Sin volver a descargar el runtime.** A partir del runtime de esta versión, una actualización que no cambia el runtime lo sigue usando, sin descargar varios GB otra vez. Esta actualización todavía descarga uno nuevo.
 - **Hablantes en todas las palabras.** En una transcripción con identificación de hablantes, las palabras que caían entre dos turnos quedaban sin hablante. Ahora toman el turno más cercano.
 - **Puntuación en las transcripciones.** Las comas y los puntos van pegados a la palabra anterior («bueno, la» en lugar de «bueno , la»).
@@ -37,6 +39,8 @@ It adds no migrations: devices on 1.8.5 can update in any order.
 - **Old runtimes.** Once the new runtime is ready, the app sets aside the runtimes it no longer uses and deletes them. If a program still uses one, the app leaves it whole and deletes it on a later start. It also deletes what an interrupted deletion left behind in 1.8.5 (up to 2 GB) and the downloaded archive of every installed runtime, about 2.3 GB per version that nothing used.
 - **Runtime in use.** The app no longer loads parts of an old runtime when one for its own version is present. That was what kept the old one from being deleted.
 - **llama-server on Windows.** The llama-server download, which local GLM-OCR and the local Qwen corrector need, always failed at the end with "Access denied (os error 5)". It now installs.
+- **GLM-OCR and Qwen need an NVIDIA GPU.** Settings no longer offers these models (1.4 and 2.9 GB) on a computer without an NVIDIA GPU, where they cannot run; it explains why instead.
+- **Safer model downloads.** Before downloading a model, the app checks that the disk has room; when it finishes, that the whole file arrived. Download errors are now in Spanish and say what to do.
 - **No more runtime re-downloads.** From this version's runtime on, an update that leaves the runtime unchanged keeps using it instead of downloading several GB again. This update still downloads a new one.
 - **Speakers on every word.** In a transcription with speaker labels, words that fell between two turns had no speaker. They now take the nearest turn.
 - **Punctuation in transcriptions.** Commas and periods attach to the word before them ("bueno, la" instead of "bueno , la").

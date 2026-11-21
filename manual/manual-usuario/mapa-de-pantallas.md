@@ -2624,6 +2624,7 @@
 - «Modelo de OCR de alta precisión que corre en la GPU de este equipo (NVIDIA, o AMD, Intel o Apple con 4 GB o más). Se usa cuando el Modo OCRH es Local.»
 - «Modelo que transcribe audio y dictado en este equipo, en 25 idiomas. Se usa cuando el Modo STT está en Local o Automático.»
 - «Modelo que vectoriza el texto en este equipo para la búsqueda semántica y el Chat. Se usa cuando Embeddings está en Local ONNX.»
+- «Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos {gb} GB de memoria de video: este equipo no tiene, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.»
 - «OCRH local (GLM-OCR)»
 - «Transcripción local (Parakeet)»
 

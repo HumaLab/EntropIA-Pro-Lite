@@ -169,6 +169,31 @@ pub(crate) fn server_ready(server: &Path, db_path: &Path) -> bool {
             && managed_server_stale(db_path))
 }
 
+/// Why `engine` is not offered on this machine: both local vision engines run
+/// only on a GPU, NVIDIA or one with enough memory. Shown wherever a download
+/// of their models is refused.
+pub(crate) fn needs_gpu(engine: llama_gpu::Engine) -> String {
+    format!(
+        "Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos {} GB de memoria de \
+         video: este equipo no tiene, así que no se descarga. Esta función usa el motor \
+         remoto o PaddleOCR-VL.",
+        engine.min_vram_gb()
+    )
+}
+
+/// Refuses a download of `engine`'s models on a machine whose GPU cannot run
+/// it (`runs` comes from [`llama_gpu::engine_runs`]).
+pub(crate) fn ensure_gpu_for_vision_models(
+    engine: llama_gpu::Engine,
+    runs: bool,
+) -> Result<(), String> {
+    if runs {
+        Ok(())
+    } else {
+        Err(needs_gpu(engine))
+    }
+}
+
 pub(crate) fn server_source() -> ServerSource {
     server_source_for(Platform::current(), llama_gpu::detected().as_ref())
 }
@@ -478,6 +503,31 @@ fn kill_stale_server(db_path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vision_models_are_refused_without_a_gpu_that_runs_them() {
+        use super::llama_gpu::Engine;
+        assert_eq!(
+            super::ensure_gpu_for_vision_models(Engine::GlmOcr, false),
+            Err(
+                "Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos 4 GB de memoria \
+                 de video: este equipo no tiene, así que no se descarga. Esta función usa el \
+                 motor remoto o PaddleOCR-VL."
+                    .to_string()
+            )
+        );
+        assert!(super::ensure_gpu_for_vision_models(Engine::Qwen, false)
+            .unwrap_err()
+            .contains("al menos 6 GB"));
+        assert_eq!(
+            super::ensure_gpu_for_vision_models(Engine::GlmOcr, true),
+            Ok(())
+        );
+        assert_eq!(
+            super::ensure_gpu_for_vision_models(Engine::Qwen, true),
+            Ok(())
+        );
+    }
+
     use super::*;
 
     #[test]

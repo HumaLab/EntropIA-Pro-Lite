@@ -433,6 +433,13 @@ pub(crate) fn start_glm_ocr_download(
     if missing.is_empty() {
         return Ok("already complete".to_string());
     }
+    {
+        use crate::ocr::llama_gpu::{engine_runs, Engine};
+        crate::ocr::local_server::ensure_gpu_for_vision_models(
+            Engine::GlmOcr,
+            engine_runs(Engine::GlmOcr),
+        )?;
+    }
     // Validated eagerly so a broken models dir fails fast, before queueing;
     // each file re-opens it inside the worker thread.
     open_managed_models_dir(&dir)?;
@@ -572,6 +579,13 @@ pub(crate) fn start_qwen_correction_download(
         .collect();
     if missing.is_empty() {
         return Ok("already complete".to_string());
+    }
+    {
+        use crate::ocr::llama_gpu::{engine_runs, Engine};
+        crate::ocr::local_server::ensure_gpu_for_vision_models(
+            Engine::Qwen,
+            engine_runs(Engine::Qwen),
+        )?;
     }
     // Validated eagerly so a broken models dir fails fast, before queueing;
     // each file re-opens it inside the worker thread.

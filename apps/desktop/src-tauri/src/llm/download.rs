@@ -184,6 +184,45 @@ pub(crate) fn persist_gguf_download<R: Read>(
     temporary.finish(filename)
 }
 
+/// Free space a model download leaves on top of the file itself, so it never
+/// fills the disk the archive and the app also live on.
+const DOWNLOAD_FREE_SPACE_MARGIN: u64 = 512 * 1024 * 1024;
+
+/// Refuses a download the disk cannot hold. With the free space or the size
+/// unknown there is nothing to compare, and the download goes ahead.
+fn ensure_room_for_download(
+    free_bytes: Option<u64>,
+    needed_bytes: Option<u64>,
+) -> Result<(), String> {
+    let (Some(free), Some(needed)) = (free_bytes, needed_bytes) else {
+        return Ok(());
+    };
+    let required = needed.saturating_add(DOWNLOAD_FREE_SPACE_MARGIN);
+    if free >= required {
+        return Ok(());
+    }
+    Err(format!(
+        "Espacio en disco insuficiente para descargar el modelo: se requieren ~{:.1} GB libres y hay {:.1} GB. Liberá espacio y volvé a intentar.",
+        required as f64 / 1_000_000_000.0,
+        free as f64 / 1_000_000_000.0
+    ))
+}
+
+/// Refuses a download that ended before the size the server announced.
+fn ensure_download_complete(
+    received_bytes: u64,
+    expected_bytes: Option<u64>,
+) -> Result<(), String> {
+    match expected_bytes {
+        Some(expected) if received_bytes != expected => Err(format!(
+            "La descarga del modelo quedó incompleta: llegaron {:.1} MB de {:.1} MB. Volvé a intentar.",
+            received_bytes as f64 / 1_000_000.0,
+            expected as f64 / 1_000_000.0
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Build the model download client with transport-level HTTPS enforcement,
 /// including redirect targets.
 pub(crate) fn build_model_download_client() -> Result<reqwest::blocking::Client, String> {
@@ -213,14 +252,22 @@ pub fn download_model_file(
     let response = client
         .get(url)
         .send()
-        .map_err(|e| format!("Failed to start download: {e}"))?;
+        .map_err(|e| format!("No se pudo iniciar la descarga del modelo: {e}"))?;
 
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("Download request failed with HTTP {status}"));
+        return Err(format!(
+            "El servidor rechazó la descarga del modelo (HTTP {status}). Volvé a intentar más tarde."
+        ));
     }
 
     let total_bytes = response.content_length();
+    ensure_room_for_download(
+        display_destination
+            .parent()
+            .and_then(|dir| fs2::available_space(dir).ok()),
+        total_bytes,
+    )?;
     let mut reader = response;
     let mut temporary = ManagedTemporaryFile::create(&managed_dir, filename)?;
     let mut downloaded_bytes = 0_u64;
@@ -235,13 +282,13 @@ pub fn download_model_file(
         loop {
             let read = reader
                 .read(&mut buffer)
-                .map_err(|e| format!("Failed while reading download stream: {e}"))?;
+                .map_err(|e| format!("Se cortó la descarga del modelo: {e}. Volvé a intentar."))?;
             if read == 0 {
                 break;
             }
             writer
                 .write_all(&buffer[..read])
-                .map_err(|e| format!("Failed while writing download: {e}"))?;
+                .map_err(|e| format!("No se pudo guardar el modelo en el disco: {e}"))?;
             downloaded_bytes += read as u64;
 
             let pct = total_bytes.and_then(|total| {
@@ -273,9 +320,10 @@ pub fn download_model_file(
         }
         writer
             .flush()
-            .map_err(|e| format!("Failed while writing download: {e}"))?;
+            .map_err(|e| format!("No se pudo guardar el modelo en el disco: {e}"))?;
     }
 
+    ensure_download_complete(downloaded_bytes, total_bytes)?;
     temporary.finish(filename)?;
     let display_path = display_destination.to_string_lossy().to_string();
     let _ = app_handle.emit(
@@ -427,5 +475,54 @@ mod tests {
         let error = validate_gguf_download(&path).unwrap_err();
 
         assert!(error.contains("not a GGUF file"));
+    }
+
+    const GB: u64 = 1_000_000_000;
+
+    #[test]
+    fn a_download_the_disk_cannot_hold_is_refused_before_it_starts() {
+        let error = ensure_room_for_download(Some(2 * GB), Some(2_900_000_000)).unwrap_err();
+        assert!(
+            error.starts_with("Espacio en disco insuficiente para descargar el modelo"),
+            "{error}"
+        );
+        assert!(
+            error.contains("se requieren ~3.4 GB libres y hay 2.0 GB"),
+            "{error}"
+        );
+        assert!(
+            error.contains("Liberá espacio y volvé a intentar."),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_free_space_margin_counts_against_the_download() {
+        let size = 2 * GB;
+        assert!(ensure_room_for_download(Some(size), Some(size)).is_err());
+        assert!(
+            ensure_room_for_download(Some(size + DOWNLOAD_FREE_SPACE_MARGIN), Some(size)).is_ok()
+        );
+    }
+
+    #[test]
+    fn an_unknown_free_space_or_size_lets_the_download_start() {
+        assert!(ensure_room_for_download(None, Some(10 * GB)).is_ok());
+        assert!(ensure_room_for_download(Some(1), None).is_ok());
+    }
+
+    #[test]
+    fn a_download_shorter_than_announced_is_refused() {
+        let error = ensure_download_complete(812_400_000, Some(906_400_000)).unwrap_err();
+        assert_eq!(
+            error,
+            "La descarga del modelo quedó incompleta: llegaron 812.4 MB de 906.4 MB. Volvé a intentar."
+        );
+    }
+
+    #[test]
+    fn a_complete_or_unsized_download_is_accepted() {
+        assert!(ensure_download_complete(906_400_000, Some(906_400_000)).is_ok());
+        assert!(ensure_download_complete(5, None).is_ok());
     }
 }

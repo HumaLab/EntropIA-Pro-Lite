@@ -960,7 +960,7 @@ pub fn create_paddle_vl_engine_result(
             }),
         };
         return PaddleVlEngine::init(config)
-            .map_err(|e| format!("❌ Failed to create GLM-OCR local engine: {e}"));
+            .map_err(|e| format!("No se pudo iniciar GLM-OCR local: {e}"));
     }
 
     let device = if has_gpu {

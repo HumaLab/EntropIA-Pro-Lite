@@ -196,14 +196,7 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
     let mut components = Vec::new();
     let resource_dir = app_handle.and_then(|handle| handle.path().resource_dir().ok());
     use crate::ocr::llama_gpu::{engine_runs, Engine};
-    let needs_gpu = |engine: Engine| {
-        format!(
-            "Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos {} GB de memoria de \
-             video: este equipo no tiene, así que no se descarga. Esta función usa el motor \
-             remoto o PaddleOCR-VL.",
-            engine.min_vram_gb()
-        )
-    };
+    use crate::ocr::local_server::needs_gpu;
 
     // Runtime pack (Python, venv, Paddle deps, scripts): needed for every
     // local OCR path. Needs the app handle for bundle/data-dir resolution.

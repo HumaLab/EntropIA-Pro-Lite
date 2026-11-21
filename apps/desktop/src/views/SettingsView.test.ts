@@ -522,6 +522,60 @@ describe('SettingsView', () => {
     }
   })
 
+  describe.runIf(LOCAL_ML)('local vision models on this machine', () => {
+    const missingModels = (command: string, gpuFits: boolean) => ({
+      model_present: false,
+      mmproj_present: false,
+      server_present: false,
+      server_source: gpuFits ? 'download' : 'requires_gpu',
+      gpu_fits: gpuFits,
+      min_vram_gb: command === 'qwen_correction_local_info' ? 6 : 4,
+      models_dir: 'C:/cache/models/glm-ocr',
+      repo_url: 'https://huggingface.co/ggml-org/GLM-OCR-GGUF',
+    })
+
+    function answerVisionInfo(gpuFits: boolean) {
+      settingsGetMock.mockImplementation(async () => null)
+      invokeMock.mockImplementation(async (command: string) =>
+        command === 'glm_ocr_local_info' || command === 'qwen_correction_local_info'
+          ? missingModels(command, gpuFits)
+          : undefined
+      )
+    }
+
+    it('explains why GLM-OCR and Qwen are not downloaded without a GPU that runs them', async () => {
+      answerVisionInfo(false)
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(
+          await screen.findByText(
+            'Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos 4 GB de memoria de video: este equipo no tiene, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.'
+          )
+        ).toBeInTheDocument()
+        expect(
+          screen.getByText(/con al menos 6 GB de memoria de video: este equipo no tiene/)
+        ).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Descargar modelos/ })).toBeNull()
+        expect(screen.queryByRole('button', { name: /Descargar llama-server/ })).toBeNull()
+      } finally {
+        unmount()
+      }
+    })
+
+    it('offers the GLM-OCR and Qwen downloads on a GPU that runs them', async () => {
+      answerVisionInfo(true)
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(await screen.findAllByRole('button', { name: /Descargar modelos/ })).toHaveLength(2)
+        expect(screen.queryByText(/este equipo no tiene, así que no se descarga/)).toBeNull()
+      } finally {
+        unmount()
+      }
+    })
+  })
+
   it.runIf(LOCAL_ML)('shows the Parakeet model as ready once it is on disk', async () => {
     settingsGetMock.mockImplementation(async (key: string) => {
       if (key === 'stt_mode') return 'local'
