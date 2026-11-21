@@ -2846,7 +2846,14 @@
           {#snippet llamaServerStatus(info: {
             server_present: boolean
             server_source: LlamaServerSource
+            gpu_fits: boolean
+            min_vram_gb: number
           })}
+            {#if info.server_source !== 'requires_gpu' && !info.gpu_fits}
+              <p class="settings__hint">
+                {t('settings.llamaServer.notEnoughVram', { gb: info.min_vram_gb })}
+              </p>
+            {/if}
             {#if !info.server_present}
               {#if info.server_source === 'download'}
                 <p class="settings__hint">{t('settings.llamaServer.missing')}</p>
@@ -2873,8 +2880,8 @@
                     </Button>
                   </p>
                 {/if}
-              {:else if info.server_source === 'requires_nvidia_gpu'}
-                <p class="settings__hint">{t('settings.llamaServer.requiresNvidia')}</p>
+              {:else if info.server_source === 'requires_gpu'}
+                <p class="settings__hint">{t('settings.llamaServer.requiresGpu')}</p>
               {:else}
                 <p class="settings__hint">{t('settings.glmOcrLocal.serverMissing')}</p>
               {/if}
@@ -2911,8 +2918,10 @@
                     {/if}
                   </div>
 
-                  {#if !glmOcrLocal.gpu_available && (!glmOcrLocal.model_present || !glmOcrLocal.mmproj_present)}
-                    <p class="settings__hint">{t('settings.localModels.needsNvidiaGpu')}</p>
+                  {#if !glmOcrLocal.gpu_fits && (!glmOcrLocal.model_present || !glmOcrLocal.mmproj_present)}
+                    <p class="settings__hint">
+                      {t('settings.localModels.needsGpu', { gb: glmOcrLocal.min_vram_gb })}
+                    </p>
                   {:else}
                     {@render llamaServerStatus(glmOcrLocal)}
                   {/if}
@@ -2927,7 +2936,7 @@
                         {glmOcrDownloadPct}% — {t('settings.glmOcrLocal.downloading')}
                       </span>
                     </div>
-                  {:else if glmOcrLocal.gpu_available && (!glmOcrLocal.model_present || !glmOcrLocal.mmproj_present)}
+                  {:else if glmOcrLocal.gpu_fits && (!glmOcrLocal.model_present || !glmOcrLocal.mmproj_present)}
                     <Button variant="primary" size="sm" onclick={handleDownloadGlmOcrModels}>
                       {t('settings.glmOcrLocal.download')}
                     </Button>
@@ -2972,8 +2981,10 @@
                       </code>
                     {/if}
                   </div>
-                  {#if !qwenLocal.gpu_available && (!qwenLocal.model_present || !qwenLocal.mmproj_present)}
-                    <p class="settings__hint">{t('settings.localModels.needsNvidiaGpu')}</p>
+                  {#if !qwenLocal.gpu_fits && (!qwenLocal.model_present || !qwenLocal.mmproj_present)}
+                    <p class="settings__hint">
+                      {t('settings.localModels.needsGpu', { gb: qwenLocal.min_vram_gb })}
+                    </p>
                   {:else}
                     {@render llamaServerStatus(qwenLocal)}
                   {/if}
@@ -2988,7 +2999,7 @@
                         {qwenDownloadPct}% — {t('settings.qwenCorrectLocal.downloading')}
                       </span>
                     </div>
-                  {:else if qwenLocal.gpu_available && (!qwenLocal.model_present || !qwenLocal.mmproj_present)}
+                  {:else if qwenLocal.gpu_fits && (!qwenLocal.model_present || !qwenLocal.mmproj_present)}
                     <Button variant="primary" size="sm" onclick={handleDownloadQwenModels}>
                       {t('settings.qwenCorrectLocal.download')}
                     </Button>

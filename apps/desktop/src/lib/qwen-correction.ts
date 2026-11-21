@@ -16,8 +16,10 @@ export interface QwenLocalInfo {
   mmproj_present: boolean
   server_present: boolean
   server_source: LlamaServerSource
-  /** False without an NVIDIA GPU: the models are then neither offered nor run. */
-  gpu_available: boolean
+  /** This machine has a GPU with enough memory for the corrector. */
+  gpu_fits: boolean
+  /** The memory floor for a non-NVIDIA GPU, in nominal GB. */
+  min_vram_gb: number
   models_dir: string
   repo_url: string
 }

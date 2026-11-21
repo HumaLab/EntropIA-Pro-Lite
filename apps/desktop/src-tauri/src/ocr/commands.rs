@@ -433,7 +433,13 @@ pub(crate) fn start_glm_ocr_download(
     if missing.is_empty() {
         return Ok("already complete".to_string());
     }
-    crate::ocr::local_server::ensure_gpu_for_vision_models(crate::llm::has_nvidia_gpu())?;
+    {
+        use crate::ocr::llama_gpu::{engine_runs, Engine};
+        crate::ocr::local_server::ensure_gpu_for_vision_models(
+            Engine::GlmOcr,
+            engine_runs(Engine::GlmOcr),
+        )?;
+    }
     // Validated eagerly so a broken models dir fails fast, before queueing;
     // each file re-opens it inside the worker thread.
     open_managed_models_dir(&dir)?;
@@ -574,7 +580,13 @@ pub(crate) fn start_qwen_correction_download(
     if missing.is_empty() {
         return Ok("already complete".to_string());
     }
-    crate::ocr::local_server::ensure_gpu_for_vision_models(crate::llm::has_nvidia_gpu())?;
+    {
+        use crate::ocr::llama_gpu::{engine_runs, Engine};
+        crate::ocr::local_server::ensure_gpu_for_vision_models(
+            Engine::Qwen,
+            engine_runs(Engine::Qwen),
+        )?;
+    }
     // Validated eagerly so a broken models dir fails fast, before queueing;
     // each file re-opens it inside the worker thread.
     open_managed_models_dir(&dir)?;
@@ -704,7 +716,7 @@ pub async fn ocr_local_high_info(db: State<'_, AppDbState>) -> Result<LocalOcrhI
             Ok(local_ocrh_info(
                 &mode,
                 has_glm_key,
-                crate::llm::has_nvidia_gpu(),
+                crate::ocr::llama_gpu::engine_runs(crate::ocr::llama_gpu::Engine::GlmOcr),
             ))
         })
         .await

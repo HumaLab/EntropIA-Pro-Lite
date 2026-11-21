@@ -156,7 +156,7 @@
 - «Escribe un resumen por página.» `batch.opSummaryHint`
 - «Esquema propio» `batch.schema`
 - «Estado» `batch.colState, batch.filterState`
-- «Este equipo no tiene GPU NVIDIA: OCRH local corre en el procesador y tarda unos 15 minutos por página.» `batch.ocrhCpuNotice`
+- «Este equipo no tiene una GPU que pueda correr GLM-OCR (NVIDIA, o AMD, Intel o Apple con 4 GB): OCRH local corre en el procesador y tarda unos 15 minutos por página.» `batch.ocrhCpuNotice`
 - «Extrae relaciones sujeto-verbo-objeto de cada documento con texto. Saltea los que ya tienen tripletes.» `batch.opTriplesHint`
 - «Fecha» `batch.colDate`
 - «Flujo guardado» `batch.flow`
@@ -660,7 +660,7 @@
 - «Descargar»
 - «Falta»
 - «Listo»
-- «Lo que usan los motores locales. Los que necesitan GPU NVIDIA se indican y no se descargan en equipos sin ella.»
+- «Lo que usan los motores locales. Los que necesitan GPU (NVIDIA, o AMD, Intel o Apple con memoria suficiente) se indican y no se descargan en equipos sin ella.»
 - «Modelos y servidores locales»
 - «No aplica en este equipo»
 - «Reintentar»
@@ -1862,7 +1862,7 @@
 - «Escribí una nota...» `item.writeNote`
 - «Esta imagen tiene anotaciones. Pueden no coincidir con la versión que elegiste. ¿Continuar?» `item.imageVersionAnnotationsWarning`
 - «Esta página todavía no tiene layout persistido.» `item.layoutMissing`
-- «Este equipo no tiene GPU NVIDIA: OCRH local corre en el procesador y tarda unos 15 minutos por página. OCRL tarda segundos.» `item.ocrhCpuWarning`
+- «Este equipo no tiene una GPU que pueda correr GLM-OCR (NVIDIA, o AMD, Intel o Apple con 4 GB): OCRH local corre en el procesador y tarda unos 15 minutos por página. OCRL tarda segundos.» `item.ocrhCpuWarning`
 - «Este layout corresponde a otra versión de la imagen ({width}×{height}); la actual mide {currentWidth}×{currentHeight}.» `item.layoutOtherVersionSized`
 - «Este layout corresponde a otra versión de la imagen.» `item.layoutOtherVersion`
 - «Este texto se extrajo de otra versión de la imagen. Puede no coincidir con lo que ves.» `item.textOtherVersion`
@@ -2578,9 +2578,10 @@
 ### llamaServer
 
 - «Descargando llama-server…»
-- «Descargar llama-server (~610 MB)»
-- «Falta llama-server, el programa que ejecuta estos modelos en la GPU (~1,1 GB en disco).»
-- «Falta llama-server: se descarga solo en equipos con GPU NVIDIA, la única con la que corren estos modelos.»
+- «Descargar llama-server»
+- «Falta llama-server, el programa que ejecuta estos modelos en la GPU. Se descarga el build de la placa de este equipo (CUDA, HIP, Vulkan o Metal).»
+- «Falta llama-server: se descarga solo en equipos con GPU NVIDIA, o AMD, Intel o Apple con al menos 4 GB de memoria de video. Estos modelos no corren en el procesador.»
+- «La GPU de este equipo tiene menos de {gb} GB de memoria de video: este modelo no entra, así que no se usa.»
 - «Reintentar descarga»
 
 ### llmMode
@@ -2620,10 +2621,10 @@
 ### Modelos locales
 
 - «Embeddings locales (BGE-M3)»
-- «Modelo de OCR de alta precisión que corre en la GPU NVIDIA de este equipo. Se usa cuando el Modo OCRH es Local.»
+- «Modelo de OCR de alta precisión que corre en la GPU de este equipo (NVIDIA, o AMD, Intel o Apple con 4 GB o más). Se usa cuando el Modo OCRH es Local.»
 - «Modelo que transcribe audio y dictado en este equipo, en 25 idiomas. Se usa cuando el Modo STT está en Local o Automático.»
 - «Modelo que vectoriza el texto en este equipo para la búsqueda semántica y el Chat. Se usa cuando Embeddings está en Local ONNX.»
-- «Necesita una GPU NVIDIA y no se detectó ninguna en este equipo, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.»
+- «Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos {gb} GB de memoria de video: este equipo no tiene, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.»
 - «OCRH local (GLM-OCR)»
 - «Transcripción local (Parakeet)»
 
@@ -2685,10 +2686,10 @@
 
 - «Automático»
 - «GLM-OCR local»
-- «GLM-OCR local con GPU NVIDIA cuando está instalado; si no, PaddleOCR-VL.»
+- «GLM-OCR local en la GPU cuando está instalado y la placa alcanza; si no, PaddleOCR-VL.»
 - «Motor OCRH local»
 - «PaddleOCR-VL»
-- «Siempre GLM-OCR local. Requiere los modelos y GPU NVIDIA; falla si faltan.»
+- «Siempre GLM-OCR local. Requiere los modelos y una GPU NVIDIA, o AMD, Intel o Apple con 4 GB; falla si faltan.»
 - «Siempre PaddleOCR-VL local.»
 
 ### ocrhMode
@@ -2732,7 +2733,7 @@
 ### qwenCorrectLocal
 
 - «Corrector local (Qwen3-VL)»
-- «Corrige OCR en este equipo con un modelo de 4B cuando el modo LLM no es OpenRouter. Requiere GPU NVIDIA; sin ella, la corrección usa el modelo remoto.»
+- «Corrige OCR en este equipo con un modelo de 4B cuando el modo LLM no es OpenRouter. Requiere GPU NVIDIA, o AMD, Intel o Apple con 6 GB; sin ella, la corrección usa el modelo remoto.»
 - «Descargando modelos…»
 - «Descargar modelos (~2,9 GB)»
 - «Faltan modelos:»

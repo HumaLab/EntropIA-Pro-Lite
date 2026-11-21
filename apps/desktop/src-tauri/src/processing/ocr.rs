@@ -111,6 +111,9 @@ pub fn publish_ocr_output(
     Ok(())
 }
 
+/// The method `scripts/glm_ocr_local.py` reports.
+const LOCAL_GLM_METHOD: &str = "glm_ocr_local";
+
 /// The history row of a published OCR: which engine and model read the
 /// asset, with the per-page engines of a PDF.
 pub(crate) fn ocr_history_event(
@@ -118,11 +121,21 @@ pub(crate) fn ocr_history_event(
     output: &OcrComputeOutput,
 ) -> crate::asset_history::ProcessEvent {
     use crate::asset_history::{ProcessEvent, PROCESS_OCR};
-    let uses_glm =
-        output.provider == "glm" || output.page_methods.iter().any(|m| m.contains("glm"));
+    // Local GLM-OCR runs inside the PaddleOCR-VL pipeline and reports
+    // `provider: paddle`; its method is the only mark it leaves.
+    let is_local_glm = |method: &str| method == LOCAL_GLM_METHOD;
+    let uses_local_glm =
+        is_local_glm(&output.method) || output.page_methods.iter().any(|m| is_local_glm(m));
+    let uses_glm = output.provider == "glm"
+        || output
+            .page_methods
+            .iter()
+            .any(|m| m.contains("glm") && !is_local_glm(m));
     let all_native = output.method == "native";
     let mut event = if all_native {
         ProcessEvent::new(asset_id, PROCESS_OCR, "pdfium (capa de texto del PDF)")
+    } else if uses_local_glm && !uses_glm {
+        ProcessEvent::new(asset_id, PROCESS_OCR, "GLM-OCR (local, llama-server)").model("GLM-OCR")
     } else if uses_glm {
         ProcessEvent::new(asset_id, PROCESS_OCR, "GLM-OCR API (z.ai layout_parsing)")
             .tool_version("paas/v4")
@@ -136,7 +149,7 @@ pub(crate) fn ocr_history_event(
             },
         )
     };
-    if uses_glm && !output.layout_model.is_empty() {
+    if (uses_glm || uses_local_glm) && !output.layout_model.is_empty() {
         event = event.model_version(output.layout_model.clone());
     }
     let mut params = serde_json::json!({
@@ -1074,5 +1087,65 @@ mod tests {
         let mixed = merge_pages(vec![page_output("native"), page_output("pdf_glm_ocr")])
             .expect("merge mixed pages");
         assert_eq!(mixed.method, "pdf_ocr");
+    }
+
+    /// Local GLM-OCR runs inside the PaddleOCR-VL pipeline, so its output
+    /// says `provider: paddle`; only the method tells it apart.
+    fn local_glm_output() -> OcrComputeOutput {
+        OcrComputeOutput {
+            provider: "paddle".to_string(),
+            layout_model: "PP-DocLayoutV3".to_string(),
+            ..page_output("glm_ocr_local")
+        }
+    }
+
+    #[test]
+    fn history_names_local_glm_ocr_not_paddle() {
+        let event = ocr_history_event("a1", &local_glm_output());
+
+        assert_eq!(event.tool, "GLM-OCR (local, llama-server)");
+        assert_eq!(event.model.as_deref(), Some("GLM-OCR"));
+        assert_eq!(event.model_version.as_deref(), Some("PP-DocLayoutV3"));
+        let params = event.params.expect("params");
+        assert_eq!(params["method"], "glm_ocr_local");
+        assert_eq!(params["provider"], "paddle");
+    }
+
+    #[test]
+    fn history_names_a_pdf_read_by_local_glm_ocr_as_local() {
+        let output = OcrComputeOutput {
+            method: "pdf_ocr".to_string(),
+            page_count: 2,
+            page_methods: vec!["native".to_string(), "glm_ocr_local".to_string()],
+            ..local_glm_output()
+        };
+
+        let event = ocr_history_event("a1", &output);
+
+        assert_eq!(event.tool, "GLM-OCR (local, llama-server)");
+    }
+
+    #[test]
+    fn history_keeps_the_glm_api_and_paddle_names() {
+        let api = OcrComputeOutput {
+            provider: "glm".to_string(),
+            ..page_output("glm_ocr")
+        };
+        assert_eq!(
+            ocr_history_event("a1", &api).tool,
+            "GLM-OCR API (z.ai layout_parsing)"
+        );
+        let api_pdf = OcrComputeOutput {
+            provider: "paddle".to_string(),
+            page_methods: vec!["pdf_glm_ocr".to_string()],
+            ..page_output("pdf_ocr")
+        };
+        assert_eq!(
+            ocr_history_event("a1", &api_pdf).tool,
+            "GLM-OCR API (z.ai layout_parsing)"
+        );
+        let paddle = ocr_history_event("a1", &page_output("paddle"));
+        assert_eq!(paddle.tool, "PaddleOCR (local)");
+        assert_eq!(paddle.model.as_deref(), Some("paddle"));
     }
 }

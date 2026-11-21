@@ -55,9 +55,10 @@ pub struct QwenLocalInfo {
     pub mmproj_present: bool,
     pub server_present: bool,
     pub server_source: ServerSource,
-    /// False without an NVIDIA GPU: the models then are neither offered nor
-    /// run, and Settings says why instead of offering the download.
-    pub gpu_available: bool,
+    /// This machine has a GPU with enough memory for this engine.
+    pub gpu_fits: bool,
+    /// The memory floor for a non-NVIDIA GPU, in nominal GB.
+    pub min_vram_gb: u32,
     pub models_dir: String,
     pub repo_url: String,
 }
@@ -68,9 +69,13 @@ pub fn local_info(db_path: &Path, resource_dir: Option<&Path>) -> QwenLocalInfo 
     QwenLocalInfo {
         model_present: models.join(MODEL_FILENAME).is_file(),
         mmproj_present: models.join(MMPROJ_FILENAME).is_file(),
-        server_present: resolve_server(db_path, env_server_override(), resource_dir).is_file(),
+        server_present: super::local_server::server_ready(
+            &resolve_server(db_path, env_server_override(), resource_dir),
+            db_path,
+        ),
         server_source: super::local_server::server_source(),
-        gpu_available: crate::llm::has_nvidia_gpu(),
+        gpu_fits: super::llama_gpu::engine_runs(super::llama_gpu::Engine::Qwen),
+        min_vram_gb: super::llama_gpu::Engine::Qwen.min_vram_gb(),
         models_dir: models.display().to_string(),
         repo_url: MODELS_REPO_URL.to_string(),
     }

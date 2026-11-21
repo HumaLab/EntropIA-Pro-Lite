@@ -458,36 +458,104 @@ describe('SettingsView', () => {
     }
   })
 
+  // The local vision engines run on NVIDIA, AMD, Intel or Apple GPUs; a
+  // non-NVIDIA one needs 4 GB for GLM-OCR and 6 GB for the Qwen corrector.
+  const visionInfo = (overrides: Record<string, unknown>) => ({
+    model_present: true,
+    mmproj_present: true,
+    server_present: false,
+    server_source: 'download',
+    gpu_fits: true,
+    min_vram_gb: 4,
+    models_dir: 'C:/models',
+    repo_url: 'https://huggingface.co',
+    ...overrides,
+  })
+
+  it.runIf(LOCAL_ML)(
+    'offers llama-server on a GPU that fits and warns where one does not',
+    async () => {
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'glm_ocr_local_info') return visionInfo({})
+        if (command === 'qwen_correction_local_info')
+          return visionInfo({ gpu_fits: false, min_vram_gb: 6 })
+        return undefined
+      })
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(
+          await screen.findAllByRole('button', { name: 'Descargar llama-server' })
+        ).toHaveLength(2)
+        expect(
+          screen.getAllByText(
+            'La GPU de este equipo tiene menos de 6 GB de memoria de video: este modelo no entra, así que no se usa.'
+          )
+        ).toHaveLength(1)
+        expect(screen.queryByText(/menos de 4 GB/)).not.toBeInTheDocument()
+      } finally {
+        unmount()
+      }
+    }
+  )
+
+  it.runIf(LOCAL_ML)('says llama-server is not offered without a usable GPU', async () => {
+    invokeMock.mockImplementation(async (command: string) =>
+      command === 'glm_ocr_local_info' || command === 'qwen_correction_local_info'
+        ? visionInfo({ server_source: 'requires_gpu', gpu_fits: false })
+        : undefined
+    )
+    const { unmount } = render(SettingsView)
+    try {
+      await openTab('Modelos locales')
+      expect(
+        await screen.findAllByText(
+          /se descarga solo en equipos con GPU NVIDIA, o AMD, Intel o Apple/
+        )
+      ).toHaveLength(2)
+      expect(
+        screen.queryByRole('button', { name: 'Descargar llama-server' })
+      ).not.toBeInTheDocument()
+      expect(screen.queryByText(/memoria de video: este modelo no entra/)).not.toBeInTheDocument()
+    } finally {
+      unmount()
+    }
+  })
+
   describe.runIf(LOCAL_ML)('local vision models on this machine', () => {
-    const visionInfo = (gpuAvailable: boolean) => ({
+    const missingModels = (command: string, gpuFits: boolean) => ({
       model_present: false,
       mmproj_present: false,
       server_present: false,
-      server_source: gpuAvailable ? 'download' : 'requires_nvidia_gpu',
-      gpu_available: gpuAvailable,
+      server_source: gpuFits ? 'download' : 'requires_gpu',
+      gpu_fits: gpuFits,
+      min_vram_gb: command === 'qwen_correction_local_info' ? 6 : 4,
       models_dir: 'C:/cache/models/glm-ocr',
       repo_url: 'https://huggingface.co/ggml-org/GLM-OCR-GGUF',
     })
 
-    function answerVisionInfo(gpuAvailable: boolean) {
+    function answerVisionInfo(gpuFits: boolean) {
       settingsGetMock.mockImplementation(async () => null)
       invokeMock.mockImplementation(async (command: string) =>
         command === 'glm_ocr_local_info' || command === 'qwen_correction_local_info'
-          ? visionInfo(gpuAvailable)
+          ? missingModels(command, gpuFits)
           : undefined
       )
     }
 
-    it('explains why GLM-OCR and Qwen are not downloaded without an NVIDIA GPU', async () => {
+    it('explains why GLM-OCR and Qwen are not downloaded without a GPU that runs them', async () => {
       answerVisionInfo(false)
       const { unmount } = render(SettingsView)
       try {
         await openTab('Modelos locales')
         expect(
-          await screen.findAllByText(
-            'Necesita una GPU NVIDIA y no se detectó ninguna en este equipo, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.'
+          await screen.findByText(
+            'Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos 4 GB de memoria de video: este equipo no tiene, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.'
           )
-        ).toHaveLength(2)
+        ).toBeInTheDocument()
+        expect(
+          screen.getByText(/con al menos 6 GB de memoria de video: este equipo no tiene/)
+        ).toBeInTheDocument()
         expect(screen.queryByRole('button', { name: /Descargar modelos/ })).toBeNull()
         expect(screen.queryByRole('button', { name: /Descargar llama-server/ })).toBeNull()
       } finally {
@@ -495,13 +563,13 @@ describe('SettingsView', () => {
       }
     })
 
-    it('offers the GLM-OCR and Qwen downloads with an NVIDIA GPU', async () => {
+    it('offers the GLM-OCR and Qwen downloads on a GPU that runs them', async () => {
       answerVisionInfo(true)
       const { unmount } = render(SettingsView)
       try {
         await openTab('Modelos locales')
         expect(await screen.findAllByRole('button', { name: /Descargar modelos/ })).toHaveLength(2)
-        expect(screen.queryByText(/no se detectó ninguna en este equipo/)).toBeNull()
+        expect(screen.queryByText(/este equipo no tiene, así que no se descarga/)).toBeNull()
       } finally {
         unmount()
       }
