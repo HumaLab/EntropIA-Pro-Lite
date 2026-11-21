@@ -3010,12 +3010,14 @@
 - «Sesión»
 - «Sesión iniciada como {email}»
 - «Sincronización automática»
+- «Sincronización completa.»
 - «Sincronización en la nube»
 - «Sincronizando…»
 - «Sincronizar ahora»
 - «Sincronizar automáticamente»
 - «Sincronizá tus datos y archivos entre dispositivos. Es opcional: si no la activás, nada sale de tu equipo.»
 - «Tabla {table} · fila {row}»
+- «Todavía no se sincronizó»
 - «URL del servidor»
 - «Usá una URL https (o http solo para localhost).»
 - «Ver detalle»
