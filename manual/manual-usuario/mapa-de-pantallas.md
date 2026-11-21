@@ -2842,6 +2842,7 @@
 - «Asistentes» `settings.assistantsTab`
 - «AssemblyAI» `settings.assemblyai.title`
 - «Ayuda» `settings.helpTab`
+- «Cambios sin guardar» `settings.unsavedChanges`
 - «Cargando la configuración…» `settings.loading`
 - «Clave cargada: {key}» `settings.loadedKey`
 - «Clave en formato anterior (texto plano); guardá de nuevo para protegerla en el almacén de credenciales» `settings.keyStoredLegacyPlaintext`
@@ -2924,7 +2925,7 @@
 - «Sincronización» `settings.syncTab`
 - «Sólo aplica a transcripciones STT de audios de colección. El dictado de notas siempre envía speaker_labels=false.» `settings.assemblyAiSpeakerLabelsHint`
 - «Tema» `settings.appearance.themeLabel`
-- «Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y volver?» `settings.discardMessage`
+- «Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y salir?» `settings.discardMessage`
 - «Usar esta API» `settings.apiSwitch.label`
 - «aai-...» `settings.assemblyAiApiKeyPlaceholder`
 - «google/gemma-4-26b-a4b-it» `settings.modelPlaceholder`
