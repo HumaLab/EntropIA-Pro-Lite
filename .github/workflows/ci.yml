@@ -64,8 +64,10 @@ jobs:
     runs-on: windows-latest
     # First (cold-cache) run compiles MNN from source twice (~35min), and the Pro
     # clippy and test legs add their own compiles; subsequent runs hit the
-    # rust-cache below and finish in minutes. Wide ceiling seeds the cache.
-    timeout-minutes: 90
+    # rust-cache below and finish in minutes. A cold run takes ~89min, so the
+    # ceiling must leave room for the post-job cache save: at 90 the save was
+    # cancelled every time, the cache never seeded, and every run stayed cold.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
