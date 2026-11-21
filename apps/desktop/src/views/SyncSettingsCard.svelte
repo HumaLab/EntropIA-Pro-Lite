@@ -26,7 +26,6 @@
     syncListPlans,
     syncLogin,
     syncLogout,
-    syncNow,
     syncRegisterAccount,
     syncRequestPlanChange,
     syncReverifyBlobs,
@@ -39,7 +38,7 @@
     type SyncStatus,
     type SyncUsage,
   } from '$lib/sync'
-  import { syncStore } from '$lib/sync-store'
+  import { syncAndWait, syncStore } from '$lib/sync-store'
   import { writing } from '$lib/writing'
   import { appendLog } from '$lib/logs'
   import { isInflight, trackInflight, whenInflightSettles } from '$lib/inflight.svelte'
@@ -368,8 +367,10 @@
       // W-GUARD1: flush the open writing editor first (canonical save). A flush
       // failure surfaces through `setError` below and never reaches `syncNow`.
       await writing.flush()
-      const next = await syncNow()
-      syncStore.setStatus(next)
+      // `syncNow` only queues the pass; wait for it so the button stays on
+      // «Sincronizando…» while it runs and the result can be reported.
+      await syncAndWait()
+      setSuccess(t('sync.card.syncDone'))
     } catch (error) {
       setError(error)
     } finally {
@@ -658,6 +659,13 @@
               {busy === 'logout' ? t('sync.card.loggingOut') : t('sync.card.logout')}
             </Button>
           </div>
+          <p class="settings__hint">
+            {status.last_sync_at
+              ? t('sync.statusbar.lastSync', {
+                  when: new Date(status.last_sync_at).toLocaleString(),
+                })
+              : t('sync.card.neverSynced')}
+          </p>
         </div>
 
         <!-- ── Auto-sync ── -->

@@ -384,7 +384,8 @@ export async function applyMigrations(client: DbClient): Promise<void> {
         name === '0062_triple_evidence' ||
         name === '0063_collection_ai_context' ||
         name === '0064_derived_source_path' ||
-        name === '0065_entity_aliases'
+        name === '0065_entity_aliases' ||
+        name === '0066_transcription_versions'
       ) {
         const appliedAt = Math.floor(Date.now() / 1000)
         const escapedName = name.replaceAll("'", "''")

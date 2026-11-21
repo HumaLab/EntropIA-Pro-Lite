@@ -16,6 +16,12 @@ const LA_MUJER_TITLE_CHAR: usize = 12_034;
 
 const LA_MUJER_TITLE: &str = "## La Mujer";
 
+/// A cue as it reads in the context: sources carry the page as plain text,
+/// so the heading `## La Mujer` arrives as `La Mujer`.
+fn as_sent(cue: &str) -> String {
+    crate::ocr::markup::ocr_plain_text(cue)
+}
+
 /// Posición, en escalares Unicode, de la primera aparición de `needle`.
 fn char_position(text: &str, needle: &str) -> Option<usize> {
     text.find(needle)
@@ -331,9 +337,10 @@ fn evaluate_press_case(
     )
     .expect("pack sources");
 
+    let sent_cue = as_sent(case.cue);
     let evidence = Evidence {
         asset_id: PAGE_ASSET,
-        cue: case.cue,
+        cue: &sent_cue,
     };
     let sent: Vec<SentSource<'_>> = sources
         .iter()
@@ -461,7 +468,7 @@ fn press_default_unit_sends_the_la_mujer_article_and_keeps_the_other_cases() {
 
     let article = sources
         .iter()
-        .find(|source| source.snippet.contains(LA_MUJER_TITLE))
+        .find(|source| source.snippet.contains(&as_sent(LA_MUJER_TITLE)))
         .expect("the La Mujer article reaches the context");
     assert!(article.snippet.contains("emancipación moral y económica"));
     let span = article.provenance.as_ref().expect("chunk provenance");
@@ -514,5 +521,5 @@ fn press_page_without_chunks_still_reaches_the_context_by_the_asset_path() {
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0].asset_id, PAGE_ASSET);
     assert!(sources[0].provenance.is_none(), "a whole page, not a chunk");
-    assert!(sources[0].snippet.contains(LA_MUJER_TITLE));
+    assert!(sources[0].snippet.contains(&as_sent(LA_MUJER_TITLE)));
 }

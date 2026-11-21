@@ -591,7 +591,7 @@ La corrección y el resumen pueden omitir datos o cambiar el sentido. Si la cole
 
 **Renombrar hablantes.** Cuando la transcripción tiene etiquetas de hablantes (de AssemblyAI o del motor local), **Renombrar hablantes** en el panel **Texto** permite reemplazar «Hablante A» por el nombre de la persona en todo el texto; **Aplicar nombres** guarda el cambio y **Ocultar** cierra el formulario. Revisá las atribuciones escuchando el audio: identificar turnos no confirma la identidad de una persona.
 
-**Volver a transcribir.** Si corregiste la transcripción a mano, **Transcribir de nuevo** te avisa que esas correcciones se van a reemplazar y pide confirmación.
+**Volver a transcribir.** Si el audio ya tiene una transcripción, **Transcribir de nuevo** pide confirmación antes de reemplazarla. La transcripción que se reemplaza no se pierde: queda, con sus nombres de hablante, en **Versiones anteriores**, debajo de la transcripción. Ahí cada versión muestra cuándo se reemplazó, con qué motor se hizo y su primera línea; **Restaurar** la vuelve a poner como transcripción actual, y la que estaba pasa a la lista. Las versiones anteriores se guardan solo en este equipo: no viajan con la sincronización.
 
 El dictado por micrófono usa el mismo motor (AssemblyAI en Lite; el del **Modo STT** en Pro) y no usa la identificación de hablantes. **Resumir la transcripción es otra tarea y necesita OpenRouter** (o, en Pro, el modelo local), además de disponer del texto.
 

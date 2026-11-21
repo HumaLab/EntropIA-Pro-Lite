@@ -640,6 +640,7 @@ describe('AssetRepo', () => {
       expect(sql).toContain('DELETE FROM extractions')
       expect(sql).toContain('DELETE FROM layouts')
       expect(sql).toContain('DELETE FROM transcriptions')
+      expect(sql).toContain('DELETE FROM transcription_versions WHERE asset_id = ?')
       expect(sql).toContain('DELETE FROM llm_results')
       expect(sql).toContain('DELETE FROM annotations')
       expect(sql).toContain('DELETE FROM entities')

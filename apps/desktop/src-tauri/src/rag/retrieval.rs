@@ -1272,8 +1272,11 @@ fn push_window_source(
     snippet_max_chars: usize,
     context_max_chars: usize,
 ) -> bool {
-    let (mut snippet, window_start) =
-        snippet_window(&record.text_content, terms, snippet_max_chars);
+    let (snippet, window_start) = snippet_window(&record.text_content, terms, snippet_max_chars);
+    // The page keeps its GLM markup in storage; the reader and the model get
+    // the words. Cleaning after the window keeps `window_start` in source
+    // offsets for the transcript timestamps.
+    let mut snippet = crate::ocr::markup::ocr_plain_text(&snippet);
     let snippet_chars = snippet.chars().count();
     if *total_chars + snippet_chars > context_max_chars {
         if !sources.is_empty() {
@@ -1521,7 +1524,7 @@ pub(crate) fn pack_sources(
             item_title: record.item_title,
             collection_id: record.collection_id,
             collection_name: record.collection_name,
-            snippet: record.text_content,
+            snippet: crate::ocr::markup::ocr_plain_text(&record.text_content),
             score,
             start_seconds: timestamps.map(|(start, _)| start),
             end_seconds: timestamps.map(|(_, end)| end),
@@ -4224,6 +4227,72 @@ mod tests {
             provenance.chunk_ids,
             ["chunk-prev", "chunk-center", "chunk-next"]
         );
+    }
+
+    const GLM_PAGE: &str = "<div align=\"center\">
+
+# Acta del cabildo
+
+</div>
+
+![](page=0,bbox=[325, 120, 640, 410])
+
+El cabildo abierto sesionó en la plaza.";
+
+    fn assert_plain_preview(snippet: &str) {
+        assert!(snippet.contains("Acta del cabildo"), "{snippet:?}");
+        assert!(snippet.contains("El cabildo abierto"), "{snippet:?}");
+        for markup in ["<div", "</div>", "bbox", "![", "# "] {
+            assert!(!snippet.contains(markup), "{markup:?} left in {snippet:?}");
+        }
+    }
+
+    #[test]
+    fn page_sources_preview_the_words_not_the_glm_markup() {
+        let sources = build_sources(
+            vec![candidate("a", GLM_PAGE, 1.0)],
+            "cabildo",
+            1,
+            1600,
+            10_000,
+        );
+        assert_plain_preview(&sources[0].snippet);
+    }
+
+    #[test]
+    fn chunk_sources_preview_the_words_not_the_glm_markup() {
+        let conn = setup_chunk_packing_db();
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-1", "Acta"),
+            "asset-1",
+            GLM_PAGE,
+            None,
+        );
+        insert_chunk(
+            &conn,
+            "chunk-glm",
+            "asset-1",
+            "item-1",
+            "extraction",
+            "ext-asset-1",
+            0,
+            GLM_PAGE,
+            0,
+            GLM_PAGE.chars().count() as i64,
+        );
+        let sources = pack_sources(
+            &conn,
+            vec![chunk_candidate(&conn, "chunk-glm", 0.9)],
+            "cabildo",
+            1,
+            1600,
+            1600,
+            10_000,
+        )
+        .expect("chunk evidence should pack");
+        assert_plain_preview(&sources[0].snippet);
     }
 
     /// Una página con `count` chunks canónicos de 10 chars sin solape, todos

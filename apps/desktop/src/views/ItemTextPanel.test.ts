@@ -53,6 +53,7 @@ function setup(edited = false, pendingEdit = false, overrides: Partial<Props> = 
     onTranscribeAudio,
     onOcrTextInput: vi.fn(),
     onTranscriptionTextInput: vi.fn(),
+    onRestoreTranscriptVersion: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
   render(ItemTextPanel, props)
@@ -77,7 +78,7 @@ it('asks before replacing edited text and cancel does not transcribe', async () 
   const transcribe = setup(true)
   await fireEvent.click(screen.getByRole('button', { name: 'STT' }))
   expect(await screen.findByRole('dialog')).toHaveTextContent(
-    'La transcripción tiene correcciones hechas a mano. Si la volvés a transcribir, se reemplazan. ¿Continuar?'
+    'La transcripción tiene correcciones hechas a mano. Si la volvés a transcribir, se reemplaza; la versión corregida queda en «Versiones anteriores». ¿Continuar?'
   )
   expect(transcribe).not.toHaveBeenCalled()
   await fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
@@ -115,7 +116,7 @@ it('asks before replacing an existing transcript, even without hand edits', asyn
   const transcribe = setup(false)
   await fireEvent.click(screen.getByRole('button', { name: 'STT' }))
   expect(await screen.findByRole('dialog')).toHaveTextContent(
-    'Este audio ya tiene una transcripción. Si lo volvés a transcribir, se reemplaza, con sus nombres de hablante, y no se puede recuperar. ¿Continuar?'
+    'Este audio ya tiene una transcripción. Si lo volvés a transcribir, se reemplaza; la actual, con sus nombres de hablante, queda en «Versiones anteriores» y la podés restaurar. ¿Continuar?'
   )
   expect(transcribe).not.toHaveBeenCalled()
   await fireEvent.click(screen.getByRole('button', { name: 'Transcribir de nuevo' }))
@@ -197,4 +198,12 @@ it('reports transcription edits from the disclosed field', async () => {
   expect(field).toHaveValue('original')
   await fireEvent.input(field, { target: { value: 'corregido' } })
   expect(onTranscriptionTextInput).toHaveBeenCalledWith('audio-1', 'corregido')
+})
+
+it('offers the previous versions of a done transcript', async () => {
+  // Finding 14: a replaced transcript stays recoverable from the panel.
+  setup(false)
+  vi.mocked(invoke).mockResolvedValue([])
+  await fireEvent.click(screen.getByRole('button', { name: 'Versiones anteriores' }))
+  expect(invoke).toHaveBeenCalledWith('list_transcription_versions', { assetId: 'audio-1' })
 })
