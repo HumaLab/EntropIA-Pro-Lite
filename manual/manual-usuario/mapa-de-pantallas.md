@@ -1149,7 +1149,7 @@
 - «Falta el modelo de texto local (Gemma): descargalo en Configuración › Modelos locales.» `help.engineLocalMissing`
 - «Fragmentos de tus documentos viajarán a OpenRouter solo por esta pregunta.» `help.documentsHint`
 - «Fuentes y pasos ({count})» `help.metaToggle`
-- «Gemma local no puede leer tus documentos. Marcá «Usar OpenRouter» para esta pregunta.» `help.documentsNeedRemote`
+- «Gemma local no puede leer tus documentos. Marcá «OpenRouter» para esta pregunta.» `help.documentsNeedRemote`
 - «Historial» `help.history`
 - «Historial ({count})» `help.historyCount`
 - «La ayuda pide aprobación» `help.approvalTitle`

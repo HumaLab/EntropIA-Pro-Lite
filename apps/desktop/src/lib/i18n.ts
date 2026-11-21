@@ -1332,7 +1332,7 @@ const es = {
   'help.diagnosticsHintLocal':
     'Lo lee Gemma local en este equipo: no viaja a ningún servicio. No incluye claves.',
   'help.documentsNeedRemote':
-    'Gemma local no puede leer tus documentos. Marcá «Usar OpenRouter» para esta pregunta.',
+    'Gemma local no puede leer tus documentos. Marcá «OpenRouter» para esta pregunta.',
   'help.suggestionsLabel': 'Probá con:',
   'help.suggestion1': '¿Cómo importo un PDF?',
   'help.suggestion2': '¿Cómo cargo mi clave de OpenRouter?',
@@ -5530,7 +5530,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'help.diagnosticsHintLocal':
     'Local Gemma reads it on this computer: it goes to no service. It includes no keys.',
   'help.documentsNeedRemote':
-    'Local Gemma cannot read your documents. Tick «Use OpenRouter» for this question.',
+    'Local Gemma cannot read your documents. Tick «OpenRouter» for this question.',
   'help.suggestionsLabel': 'Try:',
   'help.suggestion1': 'How do I import a PDF?',
   'help.suggestion2': 'How do I load my OpenRouter key?',
