@@ -154,7 +154,7 @@ La importación **no** ejecuta OCR ni transcribe audio automáticamente. La úni
 Si ya hay texto procesado —por ejemplo, el texto nativo de un PDF digital—, elegí **Texto extraído** para verlo. Si la página es un escaneo o una foto, todavía no tiene texto: hay que reconocerlo.
 
 1. Con un PDF o una imagen **PNG/JPG** abierto, elegí **Texto** en el panel derecho.
-2. Pulsá **OCRH** para reconocer las palabras visibles en la página y esperá a que termine. En Pro también está **OCRL**, un reconocimiento local más rápido y sin conexión.
+2. Pulsá **OCRH** para reconocer las palabras visibles en la página y esperá a que termine. En Pro también está **OCRL**, un reconocimiento local más rápido y sin conexión. Si tu equipo no tiene una GPU que pueda correr GLM-OCR (NVIDIA, o AMD, Intel o Apple con 4 GB de memoria de video), usá **OCRL**: OCRH local corre en el procesador y tarda unos 15 minutos por página, mientras que OCRL tarda segundos.
 3. **En Lite**, OCRH usa GLM-OCR por Internet y necesita una clave válida. **En Pro**, OCRH usa el motor local o GLM-OCR según el **Modo OCRH** de Configuración. En los dos casos, pulsar OCRH siempre pasa la página por el motor de OCR, aunque ya tuviera texto nativo, y lo reemplaza.
 4. Cuando aparezca el resultado, comparalo con la página original.
 
