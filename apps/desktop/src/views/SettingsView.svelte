@@ -2911,7 +2911,11 @@
                     {/if}
                   </div>
 
-                  {@render llamaServerStatus(glmOcrLocal)}
+                  {#if !glmOcrLocal.gpu_available && (!glmOcrLocal.model_present || !glmOcrLocal.mmproj_present)}
+                    <p class="settings__hint">{t('settings.localModels.needsNvidiaGpu')}</p>
+                  {:else}
+                    {@render llamaServerStatus(glmOcrLocal)}
+                  {/if}
 
                   {#if glmOcrDownloading}
                     <div class="settings__download-progress">
@@ -2923,7 +2927,7 @@
                         {glmOcrDownloadPct}% — {t('settings.glmOcrLocal.downloading')}
                       </span>
                     </div>
-                  {:else if !glmOcrLocal.model_present || !glmOcrLocal.mmproj_present}
+                  {:else if glmOcrLocal.gpu_available && (!glmOcrLocal.model_present || !glmOcrLocal.mmproj_present)}
                     <Button variant="primary" size="sm" onclick={handleDownloadGlmOcrModels}>
                       {t('settings.glmOcrLocal.download')}
                     </Button>
@@ -2968,7 +2972,11 @@
                       </code>
                     {/if}
                   </div>
-                  {@render llamaServerStatus(qwenLocal)}
+                  {#if !qwenLocal.gpu_available && (!qwenLocal.model_present || !qwenLocal.mmproj_present)}
+                    <p class="settings__hint">{t('settings.localModels.needsNvidiaGpu')}</p>
+                  {:else}
+                    {@render llamaServerStatus(qwenLocal)}
+                  {/if}
 
                   {#if qwenDownloading}
                     <div class="settings__download-progress">
@@ -2980,7 +2988,7 @@
                         {qwenDownloadPct}% — {t('settings.qwenCorrectLocal.downloading')}
                       </span>
                     </div>
-                  {:else if !qwenLocal.model_present || !qwenLocal.mmproj_present}
+                  {:else if qwenLocal.gpu_available && (!qwenLocal.model_present || !qwenLocal.mmproj_present)}
                     <Button variant="primary" size="sm" onclick={handleDownloadQwenModels}>
                       {t('settings.qwenCorrectLocal.download')}
                     </Button>

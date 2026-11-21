@@ -458,6 +458,56 @@ describe('SettingsView', () => {
     }
   })
 
+  describe.runIf(LOCAL_ML)('local vision models on this machine', () => {
+    const visionInfo = (gpuAvailable: boolean) => ({
+      model_present: false,
+      mmproj_present: false,
+      server_present: false,
+      server_source: gpuAvailable ? 'download' : 'requires_nvidia_gpu',
+      gpu_available: gpuAvailable,
+      models_dir: 'C:/cache/models/glm-ocr',
+      repo_url: 'https://huggingface.co/ggml-org/GLM-OCR-GGUF',
+    })
+
+    function answerVisionInfo(gpuAvailable: boolean) {
+      settingsGetMock.mockImplementation(async () => null)
+      invokeMock.mockImplementation(async (command: string) =>
+        command === 'glm_ocr_local_info' || command === 'qwen_correction_local_info'
+          ? visionInfo(gpuAvailable)
+          : undefined
+      )
+    }
+
+    it('explains why GLM-OCR and Qwen are not downloaded without an NVIDIA GPU', async () => {
+      answerVisionInfo(false)
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(
+          await screen.findAllByText(
+            'Necesita una GPU NVIDIA y no se detectó ninguna en este equipo, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.'
+          )
+        ).toHaveLength(2)
+        expect(screen.queryByRole('button', { name: /Descargar modelos/ })).toBeNull()
+        expect(screen.queryByRole('button', { name: /Descargar llama-server/ })).toBeNull()
+      } finally {
+        unmount()
+      }
+    })
+
+    it('offers the GLM-OCR and Qwen downloads with an NVIDIA GPU', async () => {
+      answerVisionInfo(true)
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(await screen.findAllByRole('button', { name: /Descargar modelos/ })).toHaveLength(2)
+        expect(screen.queryByText(/no se detectó ninguna en este equipo/)).toBeNull()
+      } finally {
+        unmount()
+      }
+    })
+  })
+
   it.runIf(LOCAL_ML)('shows the Parakeet model as ready once it is on disk', async () => {
     settingsGetMock.mockImplementation(async (key: string) => {
       if (key === 'stt_mode') return 'local'

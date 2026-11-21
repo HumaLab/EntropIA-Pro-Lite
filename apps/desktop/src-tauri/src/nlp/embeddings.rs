@@ -1724,7 +1724,7 @@ pub fn download_local_embedding_model_files(
     let info = get_local_embedding_model_info(Some(model_dir.to_path_buf()));
     if !info.available {
         return Err(format!(
-            "Local BGE-M3 install incomplete. Missing: {}",
+            "La instalación de BGE-M3 quedó incompleta. Faltan: {}. Volvé a descargarlo desde Configuración.",
             info.missing_files
                 .iter()
                 .map(|file| file.filename.as_str())
@@ -2540,7 +2540,7 @@ fn local_embedding_model_incomplete_error(model_dir: &Path) -> Option<String> {
         .iter()
         .map(|file| {
             format!(
-                "{} (expected at {})",
+                "{} (se espera en {})",
                 file.filename,
                 PathBuf::from(&file.destination).display()
             )
@@ -2549,7 +2549,7 @@ fn local_embedding_model_incomplete_error(model_dir: &Path) -> Option<String> {
         .join(", ");
 
     Some(format!(
-        "Local BGE-M3 model incomplete at {}. Missing required files: {missing}. Install BGE-M3 from Settings or place all required files ({LOCAL_EMBEDDING_MODEL_FILE}, {LOCAL_EMBEDDING_ONNX_DATA_FILE}, {LOCAL_EMBEDDING_TOKENIZER_FILE}) in that folder. The EMBED action only uses the configured BGE-M3 provider.",
+        "El modelo BGE-M3 local está incompleto en {}. Faltan: {missing}. Descargalo desde Configuración o copiá en esa carpeta todos sus archivos ({LOCAL_EMBEDDING_MODEL_FILE}, {LOCAL_EMBEDDING_ONNX_DATA_FILE}, {LOCAL_EMBEDDING_TOKENIZER_FILE}). La búsqueda semántica (EMBED) usa solo el proveedor BGE-M3 configurado.",
         info.directory
     ))
 }
@@ -2979,13 +2979,13 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.contains("Local BGE-M3 model incomplete"));
+        assert!(error.contains("El modelo BGE-M3 local está incompleto"));
         assert!(error.contains(&temp.path().to_string_lossy().to_string()));
         assert!(error.contains(LOCAL_EMBEDDING_MODEL_FILE));
         assert!(error.contains(LOCAL_EMBEDDING_ONNX_DATA_FILE));
         assert!(error.contains(LOCAL_EMBEDDING_TOKENIZER_FILE));
-        assert!(error.contains("Install BGE-M3 from Settings"));
-        assert!(error.contains("configured BGE-M3 provider"));
+        assert!(error.contains("Descargalo desde Configuración"));
+        assert!(error.contains("proveedor BGE-M3 configurado"));
     }
     #[cfg(feature = "local-ml")]
     #[test]
@@ -3172,7 +3172,7 @@ mod tests {
             "expected runtime or tokenizer initialization error, got: {error}"
         );
         assert!(error.contains(&temp.path().to_string_lossy().to_string()));
-        assert!(!error.contains("Local BGE-M3 model incomplete"));
+        assert!(!error.contains("El modelo BGE-M3 local está incompleto"));
     }
 
     #[cfg(feature = "local-ml")]

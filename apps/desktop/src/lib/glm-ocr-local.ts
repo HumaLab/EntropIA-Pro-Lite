@@ -22,6 +22,8 @@ export interface GlmOcrLocalInfo {
   mmproj_present: boolean
   server_present: boolean
   server_source: LlamaServerSource
+  /** False without an NVIDIA GPU: the models are then neither offered nor run. */
+  gpu_available: boolean
   models_dir: string
   repo_url: string
 }

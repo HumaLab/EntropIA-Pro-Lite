@@ -128,6 +128,20 @@ pub enum ServerSource {
     RequiresNvidiaGpu,
 }
 
+/// Why the local vision models (GLM-OCR, Qwen3-VL) are not offered: both run
+/// only on an NVIDIA GPU. Shown wherever a download of them is refused.
+pub(crate) const NEEDS_NVIDIA_GPU: &str = "Necesita una GPU NVIDIA y no se detectó ninguna en este equipo, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.";
+
+/// Refuses a download of the local vision models on a machine without an
+/// NVIDIA GPU, where they cannot run.
+pub(crate) fn ensure_gpu_for_vision_models(has_nvidia_gpu: bool) -> Result<(), String> {
+    if has_nvidia_gpu {
+        Ok(())
+    } else {
+        Err(NEEDS_NVIDIA_GPU.to_string())
+    }
+}
+
 /// Platforms whose installers ship no server (see `llama_server_download`).
 pub(crate) const SERVER_DOWNLOADED: bool = cfg!(all(windows, target_arch = "x86_64"));
 
@@ -388,6 +402,15 @@ fn kill_stale_server(db_path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vision_models_are_refused_without_an_nvidia_gpu() {
+        assert_eq!(
+            super::ensure_gpu_for_vision_models(false),
+            Err(super::NEEDS_NVIDIA_GPU.to_string())
+        );
+        assert_eq!(super::ensure_gpu_for_vision_models(true), Ok(()));
+    }
+
     use super::*;
 
     #[test]
