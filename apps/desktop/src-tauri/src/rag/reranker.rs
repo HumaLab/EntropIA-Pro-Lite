@@ -378,7 +378,7 @@ impl LocalCrossEncoder {
                 .map_err(|_| LocalRerankFailure::ModelUnavailable)?;
         }
 
-        crate::nlp::embeddings::ensure_local_ort_init(model_dir)
+        let environment = crate::nlp::embeddings::ensure_local_ort_init(model_dir)
             .map_err(|_| LocalRerankFailure::InitializationFailed)?;
 
         let tokenizer_path = model_dir.join(LOCAL_RERANKER_TOKENIZER_FILE);
@@ -398,7 +398,7 @@ impl LocalCrossEncoder {
             .or_else(|| tokenizer.token_to_id("[PAD]"))
             .ok_or(LocalRerankFailure::InitializationFailed)?;
 
-        let session = Session::builder()
+        let session = Session::builder(&environment)
             .map_err(|_| LocalRerankFailure::InitializationFailed)?
             .with_optimization_level(GraphOptimizationLevel::Level1)
             .map_err(|_| LocalRerankFailure::InitializationFailed)?

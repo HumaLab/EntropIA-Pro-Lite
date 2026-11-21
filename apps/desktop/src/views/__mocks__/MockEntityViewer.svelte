@@ -104,8 +104,10 @@
                 onclick={() => {
                   onnewentitytypechange(type)
                   typeMenuOpen = false
-                }}>{type}</button
+                }}
               >
+                {type}
+              </button>
             {/each}
           </div>
         {/if}

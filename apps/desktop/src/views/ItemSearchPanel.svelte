@@ -127,9 +127,9 @@
                       {/if}
                     {/each}
                   </span>
-                  <span class="similar-score similar-score--rank"
-                    >{translate('item.rank', { value: result.rank.toFixed(3) })}</span
-                  >
+                  <span class="similar-score similar-score--rank">
+                    {translate('item.rank', { value: result.rank.toFixed(3) })}
+                  </span>
                 </button>
               </li>
             {/each}
@@ -202,9 +202,9 @@
                     {#if getSimilarAssetPreview(asset)}
                       <span class="similar-preview">{getSimilarAssetPreview(asset)}</span>
                     {:else}
-                      <span class="similar-preview similar-preview--empty"
-                        >{translate('item.similarAssetsNoPreview')}</span
-                      >
+                      <span class="similar-preview similar-preview--empty">
+                        {translate('item.similarAssetsNoPreview')}
+                      </span>
                     {/if}
                   </span>
                 </button>

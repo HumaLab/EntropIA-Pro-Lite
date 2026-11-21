@@ -67,8 +67,10 @@
   <legend
     id="{uid}-legend"
     class="radio-group__legend"
-    class:radio-group__legend--hidden={hideLabel}>{label}</legend
+    class:radio-group__legend--hidden={hideLabel}
   >
+    {label}
+  </legend>
   <div class="radio-group__options">
     {@render children()}
   </div>

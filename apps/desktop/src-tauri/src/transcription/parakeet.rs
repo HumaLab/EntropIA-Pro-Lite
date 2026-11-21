@@ -9,7 +9,7 @@
 /// Long audio is processed in overlapping windows and rejoined on TDT word
 /// timestamps (midpoint ownership), so no word is cut at a window edge.
 #[cfg(feature = "local-ml")]
-use parakeet_rs::sortformer::Sortformer;
+use parakeet_rs::sortformer::{DiarizationConfig, Sortformer};
 #[cfg(feature = "local-ml")]
 use parakeet_rs::{ParakeetTDT, TimestampMode, Transcriber as _};
 
@@ -142,11 +142,9 @@ impl ParakeetEngine {
         }
         on_progress(85, "loading");
 
-        // Global ORT env is shared with embeddings/layout (idempotent).
-        crate::nlp::embeddings::ensure_local_ort_init(&config.model_dir)?;
-
-        let model = ParakeetTDT::from_pretrained(&config.model_dir, None)
-            .map_err(|e| format!("Failed to load Parakeet TDT model: {e}"))?;
+        let model =
+            ParakeetTDT::from_pretrained(&config.model_dir, Some(ort_config(&config.model_dir)?))
+                .map_err(|e| format!("Failed to load Parakeet TDT model: {e}"))?;
         on_progress(100, "ready");
         log::info!(target: "transcription", "Parakeet engine ready");
         Ok(Self {
@@ -254,7 +252,7 @@ impl ParakeetEngine {
     ) -> Result<(Vec<Segment>, Option<String>), String> {
         let diarizer = self.ensure_diarizer()?;
         let raw = diarizer
-            .diarize(sortformer_safe_samples(samples), SAMPLE_RATE, 1)
+            .diarize(samples.to_vec(), SAMPLE_RATE, 1)
             .map_err(|e| format!("Parakeet diarization failed: {e}"))?;
         let spans: Vec<SpeakerSpan> = raw
             .iter()
@@ -310,14 +308,27 @@ impl ParakeetEngine {
                 )
             })?;
             download_model_files(&dir, DIAR_FILES, &mut |_, _| {})?;
-            let diarizer = Sortformer::new(dir.join("nemotron3_diar_v3.onnx"))
-                .map_err(|e| format!("Failed to load diarization model: {e}"))?;
+            let diarizer = Sortformer::with_config(
+                dir.join("nemotron3_diar_v3.onnx"),
+                Some(ort_config(&self.model_dir)?),
+                DiarizationConfig::default(),
+            )
+            .map_err(|e| format!("Failed to load diarization model: {e}"))?;
             self.diarizer = Some(diarizer);
         }
         self.diarizer
             .as_mut()
             .ok_or_else(|| "Diarizer just initialized".to_string())
     }
+}
+
+/// Run Parakeet sessions in the process-wide ONNX Runtime environment, shared
+/// with embeddings and OCR layout: since ort 2.0.0-rc.15 a session needs an
+/// explicit environment and a process may build only one.
+#[cfg(feature = "local-ml")]
+fn ort_config(model_dir: &std::path::Path) -> Result<parakeet_rs::ExecutionConfig, String> {
+    let environment = crate::nlp::embeddings::ensure_local_ort_init(model_dir)?;
+    Ok(parakeet_rs::ExecutionConfig::new().with_environment(environment))
 }
 
 /// A window over the sample buffer.
@@ -412,36 +423,6 @@ fn owner_of(mid: f32, windows: &[AudioWindow]) -> usize {
         }
     }
     windows.len().saturating_sub(1)
-}
-
-/// Sortformer's STFT hop: one mel frame per 160 samples (10 ms at 16 kHz).
-#[cfg(feature = "local-ml")]
-const SORTFORMER_HOP: usize = 160;
-
-/// Sortformer's subsampling factor (mel frames per model frame).
-#[cfg(feature = "local-ml")]
-const SORTFORMER_SUBSAMPLING: usize = 8;
-
-/// The samples to hand Sortformer, padded so it never sees a mel frame
-/// count that is a multiple of 8.
-///
-/// parakeet-rs 0.3.8 builds the mel features column-major. When a whole
-/// clip fits in one chunk and its frame count (`samples / 160 + 1`) is a
-/// multiple of 8, the crate passes that array to ONNX Runtime unchanged,
-/// and ONNX Runtime rejects it ("Array has a non-contiguous layout").
-/// Any other frame count goes through a copy that fixes the layout. One
-/// extra hop of silence (10 ms at the end) moves the count off the multiple
-/// and leaves every speaker span where it was.
-///
-/// Fixed upstream in parakeet-rs 0.4.4, which needs ort 2.0.0-rc.15 and
-/// Rust 1.92. Remove this when that upgrade lands.
-#[cfg(feature = "local-ml")]
-fn sortformer_safe_samples(samples: &[f32]) -> Vec<f32> {
-    let mut out = samples.to_vec();
-    if (samples.len() / SORTFORMER_HOP + 1).is_multiple_of(SORTFORMER_SUBSAMPLING) {
-        out.resize(samples.len() + SORTFORMER_HOP, 0.0);
-    }
-    out
 }
 
 /// A diarization span in seconds with the Sortformer speaker id.
@@ -1246,38 +1227,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sortformer_samples_never_reach_a_frame_count_multiple_of_8() {
-        let frames = |n: usize| n / SORTFORMER_HOP + 1;
-        // 2399 hops = 2400 frames, the count ONNX Runtime refused.
-        let failing = vec![0.25f32; 2399 * SORTFORMER_HOP];
-        let padded = sortformer_safe_samples(&failing);
-        assert_eq!(frames(padded.len()), 2401);
-        assert_eq!(&padded[..failing.len()], &failing[..], "audio kept");
-        assert!(
-            padded[failing.len()..].iter().all(|s| *s == 0.0),
-            "silence added"
-        );
-        // Any other count is handed over untouched.
-        for n in [0, 1, 2400 * SORTFORMER_HOP, 2400 * SORTFORMER_HOP + 37] {
-            let samples = vec![0.5f32; n];
-            assert_eq!(sortformer_safe_samples(&samples), samples, "{n} samples");
-        }
-        // Every length across twelve frames lands off the multiple.
-        for n in (2390 * SORTFORMER_HOP)..(2402 * SORTFORMER_HOP) {
-            let got = frames(sortformer_safe_samples(&vec![0.0; n]).len());
-            assert!(
-                !got.is_multiple_of(SORTFORMER_SUBSAMPLING),
-                "{n} samples -> {got} frames"
-            );
-        }
-    }
-
     /// Live check (ignored by default) against the real Sortformer model.
     /// parakeet-rs 0.3.8 built the mel features column-major, and ONNX
     /// Runtime refused them ("Array has a non-contiguous layout") whenever
     /// the whole clip fit in one chunk with a frame count that is a multiple
-    /// of 8. `sortformer_safe_samples` steers clear of that count.
+    /// of 8. 0.4.4 hands them over in standard layout; this pins that fix.
     ///
     /// Run: `PARAKEET_DIAR_MODEL_DIR=<models>/parakeet-tdt-0.6b-v3/nemotron-3-diarization
     ///   ORT_DYLIB_PATH=/path/to/onnxruntime.dll
@@ -1287,16 +1241,20 @@ mod tests {
     fn sortformer_diarizes_single_chunk_clips() {
         let dir = std::env::var("PARAKEET_DIAR_MODEL_DIR")
             .expect("set PARAKEET_DIAR_MODEL_DIR to the nemotron-3-diarization dir");
-        let mut diarizer =
-            Sortformer::new(std::path::Path::new(&dir).join("nemotron3_diar_v3.onnx"))
-                .expect("load diarization model");
+        let dir = std::path::Path::new(&dir);
+        let mut diarizer = Sortformer::with_config(
+            dir.join("nemotron3_diar_v3.onnx"),
+            Some(ort_config(dir).expect("ONNX Runtime environment")),
+            DiarizationConfig::default(),
+        )
+        .expect("load diarization model");
         // Frames = samples / 160 + 1: 2400 frames is a multiple of 8, 2401 is not.
         for frames in [2400usize, 2401] {
             let samples: Vec<f32> = (0..(frames - 1) * 160)
                 .map(|i| 0.1 * (i as f32 * 2.0 * std::f32::consts::PI * 220.0 / 16_000.0).sin())
                 .collect();
             diarizer
-                .diarize(sortformer_safe_samples(&samples), SAMPLE_RATE, 1)
+                .diarize(samples.clone(), SAMPLE_RATE, 1)
                 .unwrap_or_else(|e| panic!("diarize failed at {frames} frames: {e}"));
         }
     }

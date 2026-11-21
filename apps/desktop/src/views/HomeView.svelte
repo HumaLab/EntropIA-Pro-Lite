@@ -459,9 +459,9 @@
   {#if modeOffer.length > 0}
     <section class="home-panel home-view__mode-offer" aria-labelledby="home-mode-offer-{paneId}">
       <div class="home-panel__header">
-        <span id="home-mode-offer-{paneId}" class="home-panel__label"
-          >{t('home.localModes.title')}</span
-        >
+        <span id="home-mode-offer-{paneId}" class="home-panel__label">
+          {t('home.localModes.title')}
+        </span>
       </div>
       <div class="home-view__mode-offer-body">
         <p>{t('home.localModes.description')}</p>
@@ -513,9 +513,9 @@
     >
       {#if !loading && snapshot?.isFirstRun}
         <div class="home-panel__header">
-          <span id="home-continuar-title-{paneId}" class="home-panel__label"
-            >{$currentLocale && t('home.firstRun.title')}</span
-          >
+          <span id="home-continuar-title-{paneId}" class="home-panel__label">
+            {$currentLocale && t('home.firstRun.title')}
+          </span>
         </div>
         <div class="home-view__first-run">
           <h2>{$currentLocale && t('home.firstRun.heading')}</h2>
@@ -535,9 +535,9 @@
         </div>
       {:else}
         <div class="home-panel__header">
-          <span id="home-continuar-title-{paneId}" class="home-panel__label"
-            >{$currentLocale && t('home.continuar.title')}</span
-          >
+          <span id="home-continuar-title-{paneId}" class="home-panel__label">
+            {$currentLocale && t('home.continuar.title')}
+          </span>
         </div>
         {#if !loading}
           {#if continuarHasError}
@@ -574,9 +574,9 @@
 
     <section class="home-panel home-view__corpus" aria-labelledby="home-corpus-title-{paneId}">
       <div class="home-panel__header">
-        <span id="home-corpus-title-{paneId}" class="home-panel__label"
-          >{$currentLocale && t('home.corpus.title')}</span
-        >
+        <span id="home-corpus-title-{paneId}" class="home-panel__label">
+          {$currentLocale && t('home.corpus.title')}
+        </span>
       </div>
 
       {#snippet corpusCell(icon: ActionIconName, value: string, labelKey: I18nKey)}
@@ -602,15 +602,15 @@
           <div class="home-view__corpus-stage-body">
             <div class="home-view__corpus-stage-head">
               <span class="home-view__corpus-stage-label">{$currentLocale && t(labelKey)}</span>
-              <span class="home-view__corpus-stage-value"
-                >{part !== null && total !== null ? ratioLabel(part, total) : '—'}</span
-              >
+              <span class="home-view__corpus-stage-value">
+                {part !== null && total !== null ? ratioLabel(part, total) : '—'}
+              </span>
             </div>
-            <span class="home-view__corpus-stage-meta"
-              >{$currentLocale && t(metaKey)}{part !== null && total !== null
+            <span class="home-view__corpus-stage-meta">
+              {$currentLocale && t(metaKey)}{part !== null && total !== null
                 ? ` · ${percentLabel(part, total)}`
-                : ''}</span
-            >
+                : ''}
+            </span>
             <div class="home-view__corpus-bar">
               <div
                 class="home-view__corpus-bar-fill"
@@ -710,9 +710,9 @@
   </div>
 
   <section class="home-view__quick-access" aria-labelledby="home-quick-access-title-{paneId}">
-    <span id="home-quick-access-title-{paneId}" class="home-view__section-label"
-      >{$currentLocale && t('home.quickAccess.title')}</span
-    >
+    <span id="home-quick-access-title-{paneId}" class="home-view__section-label">
+      {$currentLocale && t('home.quickAccess.title')}
+    </span>
     {#snippet quickAccessCard(
       icon: ActionIconName,
       titleKey: I18nKey,
@@ -759,9 +759,9 @@
 
   {#if snapshot && !snapshot.isFirstRun && (activityEntries.length > 0 || activityHasError)}
     <section class="home-view__activity" aria-labelledby="home-activity-title-{paneId}">
-      <span id="home-activity-title-{paneId}" class="home-view__section-label"
-        >{$currentLocale && t('home.activity.title')}</span
-      >
+      <span id="home-activity-title-{paneId}" class="home-view__section-label">
+        {$currentLocale && t('home.activity.title')}
+      </span>
       {#if activityHasError}
         <div class="home-panel home-view__recent">
           <p class="surface-message surface-message--error home-view__panel-error" role="alert">
@@ -777,9 +777,9 @@
           <div class="home-view__recent-row home-view__recent-row--header" role="row">
             <span role="columnheader">{$currentLocale && t('home.activity.columnDocument')}</span>
             <span role="columnheader">{$currentLocale && t('home.activity.columnCollection')}</span>
-            <span role="columnheader" class="home-view__recent-cell--end"
-              >{$currentLocale && t('home.recent.columnModified')}</span
-            >
+            <span role="columnheader" class="home-view__recent-cell--end">
+              {$currentLocale && t('home.recent.columnModified')}
+            </span>
           </div>
           {#each activityEntries as entry (entry.id)}
             <div
@@ -794,8 +794,9 @@
                 <span class="home-view__recent-name-text">{entry.title}</span>
               </span>
               <span role="cell" class="home-view__recent-cell">{entry.collectionName}</span>
-              <span role="cell" class="home-view__recent-cell--end">{activityDateLabel(entry)}</span
-              >
+              <span role="cell" class="home-view__recent-cell--end">
+                {activityDateLabel(entry)}
+              </span>
             </div>
           {/each}
         </div>

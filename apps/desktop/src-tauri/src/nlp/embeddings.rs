@@ -166,9 +166,6 @@ const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024;
 #[cfg(feature = "local-ml")]
 const DOWNLOAD_TIMEOUT_SECS: u64 = 900;
 
-#[cfg(feature = "local-ml")]
-static LOCAL_ORT_INIT: OnceLock<()> = OnceLock::new();
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingProvider {
     Api,
@@ -1402,7 +1399,7 @@ impl LocalBgeM3EmbeddingEngine {
             return Err(error);
         }
 
-        ensure_local_ort_init(model_dir)?;
+        let environment = ensure_local_ort_init(model_dir)?;
 
         let tokenizer = Tokenizer::from_file(&paths.tokenizer_path).map_err(|e| {
             format!(
@@ -1411,7 +1408,7 @@ impl LocalBgeM3EmbeddingEngine {
             )
         })?;
 
-        let session = Session::builder()
+        let session = Session::builder(&environment)
             .map_err(|e| format!("Failed to create local BGE-M3 ORT session builder: {e}"))?
             .with_optimization_level(GraphOptimizationLevel::Level1)
             .map_err(|e| format!("Failed to configure local BGE-M3 ORT optimization: {e}"))?
@@ -1890,23 +1887,16 @@ fn is_legacy_resource_embedding_dir(value: &str) -> bool {
 }
 
 #[cfg(feature = "local-ml")]
-pub(crate) fn ensure_local_ort_init(model_dir: &Path) -> Result<(), String> {
-    if LOCAL_ORT_INIT.get().is_some() {
-        return Ok(());
-    }
-
-    initialize_local_ort(model_dir.to_path_buf())?;
-    let _ = LOCAL_ORT_INIT.set(());
-    Ok(())
+pub(crate) fn ensure_local_ort_init(
+    model_dir: &Path,
+) -> Result<ort::environment::Environment, String> {
+    crate::ort_env::get_or_init(|| local_ort_builder(model_dir.to_path_buf()))
 }
 
 #[cfg(feature = "local-ml")]
-fn initialize_local_ort(model_dir: PathBuf) -> Result<(), String> {
-    // rc.13: `commit()` returns whether this call initialized (no error);
-    // double init is benign, the OnceLock above still serializes first setup.
+fn local_ort_builder(model_dir: PathBuf) -> Result<ort::environment::EnvironmentBuilder, String> {
     if std::env::var_os("ORT_DYLIB_PATH").is_some() {
-        ort::init().commit();
-        return Ok(());
+        return Ok(ort::init());
     }
 
     let dylib_path = find_ort_dylib(&model_dir).ok_or_else(|| {
@@ -1916,16 +1906,12 @@ fn initialize_local_ort(model_dir: PathBuf) -> Result<(), String> {
          )
      })?;
 
-    ort::init_from(dylib_path.display().to_string())
-        .map_err(|e| {
-            format!(
-                "Failed to initialize ORT from {}: {e}",
-                dylib_path.display()
-            )
-        })?
-        .commit();
-
-    Ok(())
+    ort::init_from(dylib_path.display().to_string()).map_err(|e| {
+        format!(
+            "Failed to initialize ORT from {}: {e}",
+            dylib_path.display()
+        )
+    })
 }
 
 #[cfg(feature = "local-ml")]
@@ -1933,6 +1919,40 @@ fn find_ort_dylib(model_dir: &Path) -> Option<PathBuf> {
     runtime_candidates(model_dir)
         .into_iter()
         .find(|path| path.exists())
+}
+
+/// The runtime folders under `runtime_root` that may lend their ONNX Runtime
+/// library: those that serve the running app (built for it, or reused from
+/// another version, see `runtime_serves_running_app`), the ones built for
+/// this exact version first. Any other runtime, and every `.`-prefixed
+/// staging or retired folder, is deleted after an update; a library loaded
+/// from it would keep that folder in use for the whole session.
+#[cfg(feature = "local-ml")]
+fn runtimes_serving_the_running_app(runtime_root: &Path) -> Vec<PathBuf> {
+    use crate::runtime::manifest::RuntimeManifest;
+
+    let Ok(entries) = std::fs::read_dir(runtime_root) else {
+        return Vec::new();
+    };
+    let mut serving: Vec<(bool, PathBuf)> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| !name.starts_with('.'))
+        })
+        .filter_map(|path| {
+            let manifest = RuntimeManifest::load_from_path(&path.join("manifest.json")).ok()?;
+            crate::runtime::manager::runtime_serves_running_app(&manifest).then(|| {
+                let reused = manifest.app_version != env!("CARGO_PKG_VERSION");
+                (reused, path)
+            })
+        })
+        .collect();
+    serving.sort();
+    serving.into_iter().map(|(_, path)| path).collect()
 }
 
 #[cfg(feature = "local-ml")]
@@ -1960,16 +1980,10 @@ fn runtime_candidates(model_dir: &Path) -> Vec<PathBuf> {
     }
 
     if let Some(app_data_root) = app_data_root_from_local_model_dir(model_dir) {
-        let runtime_root = app_data_root.join("runtime");
-        if let Ok(entries) = std::fs::read_dir(&runtime_root) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    push_names(&path.join("resources").join("lib"));
-                    for capi_dir in managed_venv_onnxruntime_capi_dirs(&path) {
-                        push_names(&capi_dir);
-                    }
-                }
+        for path in runtimes_serving_the_running_app(&app_data_root.join("runtime")) {
+            push_names(&path.join("resources").join("lib"));
+            for capi_dir in managed_venv_onnxruntime_capi_dirs(&path) {
+                push_names(&capi_dir);
             }
         }
         push_names(&app_data_root.join("resources").join("lib"));
@@ -3039,12 +3053,66 @@ mod tests {
             .join("lib");
         std::fs::create_dir_all(&model_dir).expect("model dir should be created");
         std::fs::create_dir_all(&runtime_lib_dir).expect("runtime lib dir should be created");
+        write_runtime_manifest(
+            &app_data_root.join("runtime").join("2026.05.0"),
+            env!("CARGO_PKG_VERSION"),
+        );
         let expected = runtime_lib_dir.join(runtime_file_names()[0]);
         std::fs::write(&expected, b"runtime").expect("runtime dll should be writable");
 
         let resolved = find_ort_dylib(&model_dir).expect("runtime dll should resolve");
 
         assert_eq!(resolved, expected);
+    }
+
+    #[cfg(feature = "local-ml")]
+    fn write_runtime_manifest(runtime_dir: &Path, app_version: &str) {
+        std::fs::create_dir_all(runtime_dir).expect("runtime dir should be created");
+        std::fs::write(
+            runtime_dir.join("manifest.json"),
+            format!(
+                r#"{{"pack_version":"x","app_version":"{app_version}","platform":"windows-x86_64","python_relpath":"python/python.exe","uv_relpath":"uv/uv.exe"}}"#
+            ),
+        )
+        .expect("manifest should be writable");
+    }
+
+    /// After an update the old runtime sorts first (2026.11.8 < 2026.11.9)
+    /// and its retired copy sorts before both. Loading its library would pin
+    /// that folder for the session and stop the sweep from deleting it.
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn find_ort_dylib_only_uses_a_runtime_of_the_running_app_version() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        let app_data_root = temp.path().join("com.entropia.shared");
+        let model_dir = app_data_root
+            .join("models")
+            .join("embeddings")
+            .join("bge-m3");
+        std::fs::create_dir_all(&model_dir).expect("model dir should be created");
+        let runtime_root = app_data_root.join("runtime");
+        let lib = |name: &str| {
+            let dir = runtime_root.join(name).join("resources").join("lib");
+            std::fs::create_dir_all(&dir).expect("lib dir should be created");
+            let dll = dir.join(runtime_file_names()[0]);
+            std::fs::write(&dll, b"runtime").expect("dll should be writable");
+            dll
+        };
+        lib(".retired-2026.11.7-1");
+        write_runtime_manifest(
+            &runtime_root.join(".retired-2026.11.7-1"),
+            env!("CARGO_PKG_VERSION"),
+        );
+        lib("2026.11.8");
+        write_runtime_manifest(&runtime_root.join("2026.11.8"), "0.0.1");
+        // Leftover of an interrupted deletion: no manifest at all.
+        lib("2026.11.6");
+        let current = lib("2026.11.9");
+        write_runtime_manifest(&runtime_root.join("2026.11.9"), env!("CARGO_PKG_VERSION"));
+
+        let resolved = find_ort_dylib(&model_dir).expect("runtime dll should resolve");
+
+        assert_eq!(resolved, current);
     }
 
     #[cfg(feature = "local-ml")]

@@ -2,7 +2,7 @@
 name = "entropia-agent-connector"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.92"
 publish = false
 description = "stdio↔loopback connector shipped with EntropIA: finds the running app, reads the client token from the OS keyring and relays JSON-RPC to its local MCP endpoint."
 

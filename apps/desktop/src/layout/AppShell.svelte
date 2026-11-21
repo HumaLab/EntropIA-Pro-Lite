@@ -971,8 +971,8 @@
         <SyncStatusIndicator />
         <BatchStatusIndicator />
         <NotificationBell />
-        <span
-          >{t('appshell.developedBy')}
+        <span>
+          {t('appshell.developedBy')}
           <a class="statusbar__link" href={HLAB_URL} onclick={openHlabWebsite}><b>HLab</b></a>
         </span>
       </div>

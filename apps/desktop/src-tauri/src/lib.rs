@@ -43,6 +43,8 @@ mod logging;
 mod navegador;
 mod nlp;
 mod ocr;
+#[cfg(feature = "local-ml")]
+mod ort_env;
 mod path_utils;
 // `pub` so the recovery integration test (tests/processing_recovery.rs) can
 // drive claim/recover through the real module boundary, like sync_e2e.rs
@@ -1280,10 +1282,17 @@ pub fn run() {
                     // dev-profile / test, non-fixture, no source) starts
                     // nothing. Err path keeps main's log-facade convention
                     // (no raw eprintln).
-                    Ok(status) => app
-                        .state::<runtime::manager::RuntimeManager>()
-                        .inner()
-                        .trigger_startup_bootstrap(&app.handle().clone(), &status),
+                    Ok(status) => {
+                        let manager = app.state::<runtime::manager::RuntimeManager>();
+                        // Runtimes of other app versions and folders retired
+                        // in an earlier session are deleted in the background.
+                        manager
+                            .inner()
+                            .sweep_unused_runtimes_in_background(&app.handle().clone(), &status);
+                        manager
+                            .inner()
+                            .trigger_startup_bootstrap(&app.handle().clone(), &status)
+                    }
                     Err(error) => {
                         app_logs::error(
                             &app.handle().clone(),

@@ -95,17 +95,12 @@ pub struct DocumentCitationInput {
 /// The provenance channel for a Zotero work. Keeping this as an enum makes
 /// malformed save payloads fail during deserialization instead of reaching the
 /// database as an invalid string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ZoteroSourceOrigin {
+    #[default]
     Local,
     Web,
-}
-
-impl Default for ZoteroSourceOrigin {
-    fn default() -> Self {
-        Self::Local
-    }
 }
 
 impl ZoteroSourceOrigin {

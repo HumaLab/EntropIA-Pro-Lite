@@ -475,7 +475,6 @@ pub(crate) fn link_batch_task_subject(
 /// with `bibliography_sync`) delegates to the library arm below, which admits
 /// only after proving the `zotero_libraries` row exists. Anything else fails
 /// honestly with `unsupported_subject` — never a silent corpus fallback.
-#[allow(clippy::too_many_arguments)]
 pub fn admit_subject_or_attach(
     conn: &Connection,
     batch_id: &str,

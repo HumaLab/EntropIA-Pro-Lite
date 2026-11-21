@@ -272,8 +272,7 @@ fn reference_spans(source: &str) -> Vec<ReferenceSpan> {
 fn last_anchor_word(value: &str) -> Option<String> {
     value
         .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .next_back()
+        .rfind(|word| !word.is_empty())
         .map(str::to_string)
 }
 

@@ -60,9 +60,9 @@
   <section class="phrases__section">
     <h3 class="phrases__title">{t('phraseAnalysis.phrasesTitle')}</h3>
     <div class="phrases__field">
-      <span class="phrases__label number-field-label" id="phrase-length-label"
-        >{t('phraseAnalysis.length')}</span
-      >
+      <span class="phrases__label number-field-label" id="phrase-length-label">
+        {t('phraseAnalysis.length')}
+      </span>
       <NumberField
         bind:value={length}
         min={2}
@@ -130,14 +130,18 @@
             variant={side === 'right' ? 'secondary' : 'ghost'}
             size="sm"
             aria-pressed={side === 'right'}
-            onclick={() => (side = 'right')}>{t('phraseAnalysis.after')}</Button
+            onclick={() => (side = 'right')}
           >
+            {t('phraseAnalysis.after')}
+          </Button>
           <Button
             variant={side === 'left' ? 'secondary' : 'ghost'}
             size="sm"
             aria-pressed={side === 'left'}
-            onclick={() => (side = 'left')}>{t('phraseAnalysis.before')}</Button
+            onclick={() => (side = 'left')}
           >
+            {t('phraseAnalysis.before')}
+          </Button>
         </div>
       </div>
       <ul class="phrases__tree" role="tree" aria-label={t('phraseAnalysis.treeTitle')}>

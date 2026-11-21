@@ -191,8 +191,9 @@
       variant="secondary"
       size="sm"
       onclick={() => onchange(normalizeGraphSettings(undefined))}
-      >{translate('graphSettings.restoreDefaults')}</Button
     >
+      {translate('graphSettings.restoreDefaults')}
+    </Button>
   </div>
   <p class="graph-settings__hint">{translate('graphSettings.hint')}</p>
 
@@ -251,8 +252,9 @@
           class="graph-settings__toggle"
           checked={read(control.group, control.field) as boolean}
           onchange={(checked) => emit(control.group, control.field, checked)}
-          >{translate(control.label)}</Checkbox
         >
+          {translate(control.label)}
+        </Checkbox>
       {/each}
     </fieldset>
   {/each}

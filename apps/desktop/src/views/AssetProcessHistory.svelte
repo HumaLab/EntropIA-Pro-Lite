@@ -147,26 +147,26 @@
         <li class="history-event" data-testid={`asset-process-event-${event.process}`}>
           <div class="history-event__head">
             <strong>{processLabel(event.process)}</strong>
-            <time datetime={new Date(event.createdAt).toISOString()}
-              >{formatDate(event.createdAt)}</time
-            >
+            <time datetime={new Date(event.createdAt).toISOString()}>
+              {formatDate(event.createdAt)}
+            </time>
           </div>
           <dl class="history-event__details">
             <div>
               <dt>{translate('item.processHistoryTool')}</dt>
               <dd>
-                {event.tool}{#if event.toolVersion}&nbsp;<span class="version"
-                    >{event.toolVersion}</span
-                  >{/if}
+                {event.tool}{#if event.toolVersion}&nbsp;<span class="version">
+                    {event.toolVersion}
+                  </span>{/if}
               </dd>
             </div>
             {#if event.model}
               <div>
                 <dt>{translate('item.processHistoryModel')}</dt>
                 <dd>
-                  {event.model}{#if event.modelVersion}&nbsp;<span class="version"
-                      >{event.modelVersion}</span
-                    >{/if}
+                  {event.model}{#if event.modelVersion}&nbsp;<span class="version">
+                      {event.modelVersion}
+                    </span>{/if}
                 </dd>
               </div>
             {/if}

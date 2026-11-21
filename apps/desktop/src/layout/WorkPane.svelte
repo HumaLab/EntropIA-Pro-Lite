@@ -376,9 +376,9 @@
 <div class="work-pane" bind:this={rootEl}>
   <div class="location-strip" data-pane-id={paneId}>
     {#if $nav.canGoBack}
-      <Button variant="ghost" size="sm" onclick={() => nav.back()}
-        >{$currentLocale && t('topbar.back')}</Button
-      >
+      <Button variant="ghost" size="sm" onclick={() => nav.back()}>
+        {$currentLocale && t('topbar.back')}
+      </Button>
     {/if}
     <nav class="breadcrumb" aria-label={$currentLocale && t('topbar.breadcrumb')}>
       {#each breadcrumbEntries as crumb, i (i)}
@@ -498,9 +498,9 @@
             <h2>{t('app.initError')}</h2>
             <p>{routeError instanceof Error ? routeError.message : t('app.initError')}</p>
           </div>
-          <button type="button" class="startup-action" onclick={retryRouteLoad}
-            >{t('app.retryInit')}</button
-          >
+          <button type="button" class="startup-action" onclick={retryRouteLoad}>
+            {t('app.retryInit')}
+          </button>
         </section>
       </div>
     {/if}

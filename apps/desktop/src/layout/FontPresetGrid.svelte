@@ -67,12 +67,12 @@
         aria-hidden="true"
       >
         <span class="font-preset-grid__sample font-preset-grid__sample--ui">EntropIA</span>
-        <span class="font-preset-grid__sample font-preset-grid__sample--reading"
-          >{sampleReading}</span
-        >
-        <span class="font-preset-grid__sample font-preset-grid__sample--mono"
-          >Aa 01 / corpus_1948</span
-        >
+        <span class="font-preset-grid__sample font-preset-grid__sample--reading">
+          {sampleReading}
+        </span>
+        <span class="font-preset-grid__sample font-preset-grid__sample--mono">
+          Aa 01 / corpus_1948
+        </span>
       </span>
     </RadioCard>
   {/each}

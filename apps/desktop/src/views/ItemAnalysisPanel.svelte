@@ -343,8 +343,10 @@
           <StatusBadge
             variant={getJobStatusBadgeVariant(nlpState.fts, ftsIndexed)}
             size="sm"
-            class="nlp-badge">{nlpState.fts}</StatusBadge
+            class="nlp-badge"
           >
+            {nlpState.fts}
+          </StatusBadge>
         </Button>
 
         <Button
@@ -358,8 +360,10 @@
           <StatusBadge
             variant={getJobStatusBadgeVariant(nlpState.embed, assetEmbedded)}
             size="sm"
-            class="nlp-badge">{nlpState.embed}</StatusBadge
+            class="nlp-badge"
           >
+            {nlpState.embed}
+          </StatusBadge>
         </Button>
 
         <Button
@@ -374,10 +378,11 @@
             variant={getJobStatusBadgeVariant(nlpState.ner, entities.length > 0)}
             size="sm"
             class="nlp-badge"
-            >{nlpState.ner === 'done' && nlpState.entityCount === 0
-              ? `${nlpState.ner} · 0`
-              : nlpState.ner}</StatusBadge
           >
+            {nlpState.ner === 'done' && nlpState.entityCount === 0
+              ? `${nlpState.ner} · 0`
+              : nlpState.ner}
+          </StatusBadge>
         </Button>
 
         <Button
@@ -393,8 +398,10 @@
           <StatusBadge
             variant={getJobStatusBadgeVariant(nlpState.triples, triples.length > 0)}
             size="sm"
-            class="nlp-badge">{nlpState.triples}</StatusBadge
+            class="nlp-badge"
           >
+            {nlpState.triples}
+          </StatusBadge>
         </Button>
       </div>
 
@@ -576,9 +583,9 @@
                       onkeydown={(event) => handleTripleDeleteKeydown(event, triple.id)}
                     >
                       {#if pendingDeleteTripleId === triple.id}
-                        <span aria-hidden="true" class="triple-action__label"
-                          >{translate('item.tripleDeletePrompt')}</span
-                        >
+                        <span aria-hidden="true" class="triple-action__label">
+                          {translate('item.tripleDeletePrompt')}
+                        </span>
                       {:else}
                         <ActionIcon name="delete" size={12} />
                       {/if}

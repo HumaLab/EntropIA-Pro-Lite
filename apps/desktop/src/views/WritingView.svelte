@@ -1438,29 +1438,33 @@
                         variant="ghost"
                         label={t('writing.sectionUp')}
                         onclick={() => editorRef?.moveOutlineSection(entry.childIndex, -1)}
-                        ><ActionIcon name="chevron-up" size={12} /></IconButton
                       >
+                        <ActionIcon name="chevron-up" size={12} />
+                      </IconButton>
                       <IconButton
                         size="sm"
                         variant="ghost"
                         label={t('writing.sectionDown')}
                         onclick={() => editorRef?.moveOutlineSection(entry.childIndex, 1)}
-                        ><ActionIcon name="chevron-down" size={12} /></IconButton
                       >
+                        <ActionIcon name="chevron-down" size={12} />
+                      </IconButton>
                       <IconButton
                         size="sm"
                         variant="ghost"
                         label={t('writing.sectionRename')}
                         onclick={() => (renamingSection = entry.childIndex)}
-                        ><ActionIcon name="edit" size={12} /></IconButton
                       >
+                        <ActionIcon name="edit" size={12} />
+                      </IconButton>
                       <IconButton
                         size="sm"
                         variant="ghost"
                         label={t('writing.sectionAdd')}
                         onclick={() => editorRef?.addSectionAfter(entry.childIndex)}
-                        ><ActionIcon name="add" size={12} /></IconButton
                       >
+                        <ActionIcon name="add" size={12} />
+                      </IconButton>
                       <IconButton
                         size="sm"
                         variant="ghost"
@@ -1469,8 +1473,10 @@
                           askDeleteSection(
                             entry.childIndex,
                             entry.text || t('writing.outlineUntitled')
-                          )}><ActionIcon name="delete" size={12} /></IconButton
+                          )}
                       >
+                        <ActionIcon name="delete" size={12} />
+                      </IconButton>
                     </span>
                   {/if}
                 </li>

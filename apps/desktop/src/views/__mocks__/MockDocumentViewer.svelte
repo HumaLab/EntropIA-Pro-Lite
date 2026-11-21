@@ -127,8 +127,9 @@
   </button>
   <button type="button" onclick={() => onPageChange(1, 2)}>Go to page 1</button>
   {#if !readOnly}
-    <button type="button" onclick={() => onAnnotationToolChange('rectangle')}>Rectangle tool</button
-    >
+    <button type="button" onclick={() => onAnnotationToolChange('rectangle')}>
+      Rectangle tool
+    </button>
     <button type="button" onclick={() => onEditToolChange('crop')}>Crop tool</button>
     <button type="button" onclick={() => onEditToolChange('erase')}>Erase tool</button>
     <button

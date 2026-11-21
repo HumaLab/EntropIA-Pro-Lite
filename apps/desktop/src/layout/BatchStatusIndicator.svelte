@@ -164,8 +164,10 @@
     <StatusBadge
       variant={failedCount > 0 || parkedBibliography ? 'danger' : 'info'}
       size="sm"
-      class="batch-indicator__badge">{label}</StatusBadge
+      class="batch-indicator__badge"
     >
+      {label}
+    </StatusBadge>
   </button>
 {/if}
 

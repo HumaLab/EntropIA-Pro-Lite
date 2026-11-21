@@ -647,9 +647,9 @@
               <div class="left-text-panel-body left-text-panel-body--plain">
                 <!-- Keyed so a text change replaces the node: a mark splits the
                      text node, and Svelte must not patch a node it no longer owns. -->
-                {#key transcriptionEditedText}<span bind:this={transcriptEl}
-                    >{transcriptionEditedText}</span
-                  >{/key}
+                {#key transcriptionEditedText}<span bind:this={transcriptEl}>
+                    {transcriptionEditedText}
+                  </span>{/key}
               </div>
             {:else}
               <p class="empty-text">{translate('item.noExtractedText')}</p>
