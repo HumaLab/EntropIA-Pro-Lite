@@ -279,7 +279,7 @@ describe.runIf(LOCAL_ML)('DependenciasTab', () => {
           detail: 'Faltan los modelos (unos 1,4 GB).',
           enables: 'OCRH',
           unavailableReason:
-            'Necesita una GPU NVIDIA: este equipo no tiene, así que no se descarga.',
+            'Necesita una GPU NVIDIA y no se detectó ninguna en este equipo, así que no se descarga.',
         },
       ],
     })

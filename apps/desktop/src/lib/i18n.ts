@@ -248,6 +248,8 @@ const es = {
   'settings.localModels.parakeetDescription':
     'Modelo que transcribe audio y dictado en este equipo, en 25 idiomas. Se usa cuando el Modo STT está en Local o Automático.',
   'settings.localModels.glmOcrTitle': 'OCRH local (GLM-OCR)',
+  'settings.localModels.needsNvidiaGpu':
+    'Necesita una GPU NVIDIA y no se detectó ninguna en este equipo, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.',
   'settings.localModels.glmOcrDescription':
     'Modelo de OCR de alta precisión que corre en la GPU NVIDIA de este equipo. Se usa cuando el Modo OCRH es Local.',
   'settings.apiSwitch.label': 'Usar esta API',
@@ -3674,6 +3676,7 @@ type ExtraI18nKey =
   | 'settings.qwenCorrectLocal.retry'
   | 'settings.llamaServer.missing'
   | 'settings.llamaServer.requiresNvidia'
+  | 'settings.localModels.needsNvidiaGpu'
   | 'settings.llamaServer.download'
   | 'settings.llamaServer.downloading'
   | 'settings.llamaServer.retry'
@@ -4441,6 +4444,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.enginesTab': 'Engines',
   'settings.localModelsTab': 'Local models',
   'settings.localModels.bgeTitle': 'Local embeddings (BGE-M3)',
+  'settings.localModels.needsNvidiaGpu':
+    'Needs an NVIDIA GPU and none was detected on this computer, so it is not downloaded. This feature uses the remote engine or PaddleOCR-VL.',
   'settings.localModels.bgeDescription':
     'Model that embeds text on this computer for semantic search and the Chat. Used when Embeddings is set to Local ONNX.',
   'settings.localModels.parakeetTitle': 'Local transcription (Parakeet)',
