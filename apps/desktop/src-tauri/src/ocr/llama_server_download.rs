@@ -300,13 +300,26 @@ fn device_lines(listing: &str) -> String {
 /// Replace whatever the managed directory holds with the staged build: a
 /// CUDA install left in place would leave its `ggml-cuda.dll` for a Vulkan
 /// server to load. A running server holds its files, so it stops first.
+/// The directory itself stays: Windows refuses to delete a directory that
+/// Explorer or an antivirus scan has open, while its entries still go.
 fn replace_install(staging: &Path, target: &Path) -> Result<(), String> {
     if target.exists() {
         super::local_server::shutdown();
-        std::fs::remove_dir_all(target)
-            .map_err(|e| format!("Cannot remove the previous llama-server: {e}"))?;
+        clear_dir(target).map_err(|e| format!("Cannot remove the previous llama-server: {e}"))?;
     }
     move_into_place(staging, target)
+}
+
+fn clear_dir(dir: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn download_and_stage(
@@ -855,6 +868,39 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(target.join(BACKEND_MARKER)).unwrap(),
             "vulkan"
+        );
+    }
+
+    /// Explorer or an antivirus scan holding the managed directory open must
+    /// not fail the install: Windows refuses to delete an open directory.
+    #[cfg(windows)]
+    #[test]
+    fn replacing_an_install_works_while_the_directory_is_held_open() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        // FILE_SHARE_READ | FILE_SHARE_WRITE, without FILE_SHARE_DELETE.
+        const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+
+        let dir = tempfile::tempdir().unwrap();
+        let staging = dir.path().join("staging");
+        let target = dir.path().join("tools/llama-server");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("ggml-cuda.dll"), b"cuda").unwrap();
+        std::fs::write(staging.join(server_binary_name()), b"new").unwrap();
+        let _held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(SHARE_READ_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&target)
+            .unwrap();
+
+        replace_install(&staging, &target).unwrap();
+
+        assert!(!target.join("ggml-cuda.dll").exists());
+        assert_eq!(
+            std::fs::read(target.join(server_binary_name())).unwrap(),
+            b"new"
         );
     }
 
