@@ -249,7 +249,7 @@ const es = {
     'Modelo que transcribe audio y dictado en este equipo, en 25 idiomas. Se usa cuando el Modo STT está en Local o Automático.',
   'settings.localModels.glmOcrTitle': 'OCRH local (GLM-OCR)',
   'settings.localModels.glmOcrDescription':
-    'Modelo de OCR de alta precisión que corre en la GPU NVIDIA de este equipo. Se usa cuando el Modo OCRH es Local.',
+    'Modelo de OCR de alta precisión que corre en la GPU de este equipo (NVIDIA, o AMD, Intel o Apple con 4 GB o más). Se usa cuando el Modo OCRH es Local.',
   'settings.apiSwitch.label': 'Usar esta API',
   'settings.apiSwitch.on': 'EntropIA usa {service} cuando una función lo necesita.',
   'settings.apiSwitch.off':
@@ -267,7 +267,7 @@ const es = {
     'No se pueden instalar los paquetes de Python: la base de IA todavía no está lista.',
   'deps.models.title': 'Modelos y servidores locales',
   'deps.models.hint':
-    'Lo que usan los motores locales. Los que necesitan GPU NVIDIA se indican y no se descargan en equipos sin ella.',
+    'Lo que usan los motores locales. Los que necesitan GPU (NVIDIA, o AMD, Intel o Apple con memoria suficiente) se indican y no se descargan en equipos sin ella.',
   'deps.models.ready': 'Listo',
   'deps.models.missing': 'Falta',
   'deps.models.notForThisMachine': 'No aplica en este equipo',
@@ -437,7 +437,7 @@ const es = {
   'batch.opOcrLocalHighHint':
     'Con el modo OCRH en local, el lote usa OCRL (layout + PaddleOCR, segundos por página). Marcado, usa layout + OCRH local (PaddleOCR-VL o GLM-OCR): más preciso y mucho más lento.',
   'batch.ocrhCpuNotice':
-    'Este equipo no tiene GPU NVIDIA: OCRH local corre en el procesador y tarda unos 15 minutos por página.',
+    'Este equipo no tiene una GPU que pueda correr GLM-OCR (NVIDIA, o AMD, Intel o Apple con 4 GB): OCRH local corre en el procesador y tarda unos 15 minutos por página.',
   'batch.opEmbeddingsHint':
     'Genera embeddings cuando el OCR produzca texto. Si lo destildás, esas páginas no se vectorizan solas y quedan fuera de la búsqueda semántica hasta que las vectorices.',
   'batch.opNer': 'Entidades',
@@ -889,10 +889,10 @@ const es = {
   'settings.ocrhLocalEngine.title': 'Motor OCRH local',
   'settings.ocrhLocalEngine.auto.label': 'Automático',
   'settings.ocrhLocalEngine.auto.description':
-    'GLM-OCR local con GPU NVIDIA cuando está instalado; si no, PaddleOCR-VL.',
+    'GLM-OCR local en la GPU cuando está instalado y la placa alcanza; si no, PaddleOCR-VL.',
   'settings.ocrhLocalEngine.glm_ocr.label': 'GLM-OCR local',
   'settings.ocrhLocalEngine.glm_ocr.description':
-    'Siempre GLM-OCR local. Requiere los modelos y GPU NVIDIA; falla si faltan.',
+    'Siempre GLM-OCR local. Requiere los modelos y una GPU NVIDIA, o AMD, Intel o Apple con 4 GB; falla si faltan.',
   'settings.ocrhLocalEngine.paddle_vl.label': 'PaddleOCR-VL',
   'settings.ocrhLocalEngine.paddle_vl.description': 'Siempre PaddleOCR-VL local.',
   'settings.glmOcrLocal.modelsReady': 'Modelos GLM-OCR instalados.',
@@ -903,17 +903,19 @@ const es = {
   'settings.glmOcrLocal.retry': 'Reintentar descarga',
   'settings.qwenCorrectLocal.title': 'Corrector local (Qwen3-VL)',
   'settings.qwenCorrectLocal.description':
-    'Corrige OCR en este equipo con un modelo de 4B cuando el modo LLM no es OpenRouter. Requiere GPU NVIDIA; sin ella, la corrección usa el modelo remoto.',
+    'Corrige OCR en este equipo con un modelo de 4B cuando el modo LLM no es OpenRouter. Requiere GPU NVIDIA, o AMD, Intel o Apple con 6 GB; sin ella, la corrección usa el modelo remoto.',
   'settings.qwenCorrectLocal.modelsReady': 'Modelos Qwen instalados.',
   'settings.qwenCorrectLocal.modelsMissing': 'Faltan modelos:',
   'settings.qwenCorrectLocal.download': 'Descargar modelos (~2,9 GB)',
   'settings.qwenCorrectLocal.downloading': 'Descargando modelos…',
   'settings.qwenCorrectLocal.retry': 'Reintentar descarga',
   'settings.llamaServer.missing':
-    'Falta llama-server, el programa que ejecuta estos modelos en la GPU (~1,1 GB en disco).',
-  'settings.llamaServer.requiresNvidia':
-    'Falta llama-server: se descarga solo en equipos con GPU NVIDIA, la única con la que corren estos modelos.',
-  'settings.llamaServer.download': 'Descargar llama-server (~610 MB)',
+    'Falta llama-server, el programa que ejecuta estos modelos en la GPU. Se descarga el build de la placa de este equipo (CUDA, HIP, Vulkan o Metal).',
+  'settings.llamaServer.requiresGpu':
+    'Falta llama-server: se descarga solo en equipos con GPU NVIDIA, o AMD, Intel o Apple con al menos 4 GB de memoria de video. Estos modelos no corren en el procesador.',
+  'settings.llamaServer.notEnoughVram':
+    'La GPU de este equipo tiene menos de {gb} GB de memoria de video: este modelo no entra, así que no se usa.',
+  'settings.llamaServer.download': 'Descargar llama-server',
   'settings.llamaServer.downloading': 'Descargando llama-server…',
   'settings.llamaServer.retry': 'Reintentar descarga',
   'settings.badge.available': 'Disponible',
@@ -2601,7 +2603,7 @@ const es = {
     'El texto tiene correcciones hechas a mano. Si volvés a correr el OCR, se reemplazan. ¿Continuar?',
   'item.ocrhCpuTitle': 'OCRH local sin GPU',
   'item.ocrhCpuWarning':
-    'Este equipo no tiene GPU NVIDIA: OCRH local corre en el procesador y tarda unos 15 minutos por página. OCRL tarda segundos.',
+    'Este equipo no tiene una GPU que pueda correr GLM-OCR (NVIDIA, o AMD, Intel o Apple con 4 GB): OCRH local corre en el procesador y tarda unos 15 minutos por página. OCRL tarda segundos.',
   'item.ocrhCpuContinue': 'Correr OCRH igual',
   'item.ocrhCpuUseOcrl': 'Usar OCRL',
   'item.imageVersions': 'Versiones de la imagen',
@@ -3673,7 +3675,8 @@ type ExtraI18nKey =
   | 'settings.qwenCorrectLocal.downloading'
   | 'settings.qwenCorrectLocal.retry'
   | 'settings.llamaServer.missing'
-  | 'settings.llamaServer.requiresNvidia'
+  | 'settings.llamaServer.requiresGpu'
+  | 'settings.llamaServer.notEnoughVram'
   | 'settings.llamaServer.download'
   | 'settings.llamaServer.downloading'
   | 'settings.llamaServer.retry'
@@ -4448,7 +4451,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Model that transcribes audio and dictation on this computer, in 25 languages. Used when the STT mode is Local or Automatic.',
   'settings.localModels.glmOcrTitle': 'Local OCRH (GLM-OCR)',
   'settings.localModels.glmOcrDescription':
-    "High-accuracy OCR model that runs on this computer's NVIDIA GPU. Used when the OCRH mode is Local.",
+    "High-accuracy OCR model that runs on this computer's GPU (NVIDIA, or AMD, Intel or Apple with 4 GB or more). Used when the OCRH mode is Local.",
   'settings.apiSwitch.label': 'Use this API',
   'settings.apiSwitch.on': 'EntropIA uses {service} when a feature needs it.',
   'settings.apiSwitch.off':
@@ -4466,7 +4469,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'The Python packages cannot be installed: the AI base is not ready yet.',
   'deps.models.title': 'Local models and servers',
   'deps.models.hint':
-    'What the local engines use. The ones that need an NVIDIA GPU are marked and are not downloaded on computers without one.',
+    'What the local engines use. The ones that need a GPU (NVIDIA, or AMD, Intel or Apple with enough memory) are marked and are not downloaded on computers without one.',
   'deps.models.ready': 'Ready',
   'deps.models.missing': 'Missing',
   'deps.models.notForThisMachine': 'Not for this computer',
@@ -4637,7 +4640,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.opOcrLocalHighHint':
     'With the OCRH mode set to local, the batch uses OCRL (layout + PaddleOCR, seconds per page). Ticked, it uses layout + local OCRH (PaddleOCR-VL or GLM-OCR): more accurate and much slower.',
   'batch.ocrhCpuNotice':
-    'This computer has no NVIDIA GPU: local OCRH runs on the processor and takes about 15 minutes per page.',
+    'This computer has no GPU that can run GLM-OCR (NVIDIA, or AMD, Intel or Apple with 4 GB): local OCRH runs on the processor and takes about 15 minutes per page.',
   'batch.opEmbeddingsHint':
     'Generate embeddings once OCR produces text. Unchecked, those pages are not embedded automatically and stay out of semantic search until you embed them.',
   'batch.opNer': 'Entities',
@@ -5086,10 +5089,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.ocrhLocalEngine.title': 'Local OCRH engine',
   'settings.ocrhLocalEngine.auto.label': 'Automatic',
   'settings.ocrhLocalEngine.auto.description':
-    'Local GLM-OCR on NVIDIA GPU when installed; otherwise PaddleOCR-VL.',
+    'Local GLM-OCR on the GPU when installed and the card has room; otherwise PaddleOCR-VL.',
   'settings.ocrhLocalEngine.glm_ocr.label': 'Local GLM-OCR',
   'settings.ocrhLocalEngine.glm_ocr.description':
-    'Always local GLM-OCR. Requires the models and an NVIDIA GPU; fails when missing.',
+    'Always local GLM-OCR. Requires the models and an NVIDIA GPU, or an AMD, Intel or Apple one with 4 GB; fails when missing.',
   'settings.ocrhLocalEngine.paddle_vl.label': 'PaddleOCR-VL',
   'settings.ocrhLocalEngine.paddle_vl.description': 'Always local PaddleOCR-VL.',
   'settings.glmOcrLocal.modelsReady': 'GLM-OCR models installed.',
@@ -5100,17 +5103,19 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.glmOcrLocal.retry': 'Retry download',
   'settings.qwenCorrectLocal.title': 'Local corrector (Qwen3-VL)',
   'settings.qwenCorrectLocal.description':
-    'Corrects OCR on this computer with a 4B model unless the LLM mode is OpenRouter. Needs an NVIDIA GPU; without one, correction uses the remote model.',
+    'Corrects OCR on this computer with a 4B model unless the LLM mode is OpenRouter. Needs an NVIDIA GPU, or an AMD, Intel or Apple one with 6 GB; without one, correction uses the remote model.',
   'settings.qwenCorrectLocal.modelsReady': 'Qwen models installed.',
   'settings.qwenCorrectLocal.modelsMissing': 'Missing models:',
   'settings.qwenCorrectLocal.download': 'Download models (~2.9 GB)',
   'settings.qwenCorrectLocal.downloading': 'Downloading models…',
   'settings.qwenCorrectLocal.retry': 'Retry download',
   'settings.llamaServer.missing':
-    'llama-server missing: the program that runs these models on the GPU (~1.1 GB on disk).',
-  'settings.llamaServer.requiresNvidia':
-    'llama-server missing: it downloads only on computers with an NVIDIA GPU, the only kind these models run on.',
-  'settings.llamaServer.download': 'Download llama-server (~610 MB)',
+    "llama-server missing: the program that runs these models on the GPU. The build for this computer's card downloads (CUDA, HIP, Vulkan or Metal).",
+  'settings.llamaServer.requiresGpu':
+    'llama-server missing: it downloads only on computers with an NVIDIA GPU, or an AMD, Intel or Apple one with at least 4 GB of video memory. These models do not run on the processor.',
+  'settings.llamaServer.notEnoughVram':
+    "This computer's GPU has less than {gb} GB of video memory: this model does not fit, so it is not used.",
+  'settings.llamaServer.download': 'Download llama-server',
   'settings.llamaServer.downloading': 'Downloading llama-server…',
   'settings.llamaServer.retry': 'Retry download',
   'settings.badge.available': 'Available',
@@ -6246,7 +6251,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'The text has manual corrections. Running the OCR again will replace them. Continue?',
   'item.ocrhCpuTitle': 'Local OCRH without a GPU',
   'item.ocrhCpuWarning':
-    'This computer has no NVIDIA GPU: local OCRH runs on the processor and takes about 15 minutes per page. OCRL takes seconds.',
+    'This computer has no GPU that can run GLM-OCR (NVIDIA, or AMD, Intel or Apple with 4 GB): local OCRH runs on the processor and takes about 15 minutes per page. OCRL takes seconds.',
   'item.ocrhCpuContinue': 'Run OCRH anyway',
   'item.ocrhCpuUseOcrl': 'Use OCRL',
   'item.imageVersions': 'Image versions',

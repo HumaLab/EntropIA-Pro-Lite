@@ -10,7 +10,7 @@ EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resulta
 
 |                         | **EntropIA Pro**                                        | **EntropIA Lite**                                                                                 |
 | ----------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| OCR                     | PaddleOCR local con layout (Light) + PaddleOCR-VL, GLM-OCR local (GPU NVIDIA) o GLM-OCR remoto (High); corrector local Qwen3-VL | GLM-OCR remoto (Light y High usan el mismo proveedor)                                             |
+| OCR                     | PaddleOCR local con layout (Light) + PaddleOCR-VL, GLM-OCR local (GPU NVIDIA, AMD, Intel o Apple) o GLM-OCR remoto (High); corrector local Qwen3-VL | GLM-OCR remoto (Light y High usan el mismo proveedor)                                             |
 | Transcripción           | Parakeet TDT o faster-whisper locales (diarización opcional con Sortformer) + AssemblyAI | AssemblyAI                                                                                        |
 | LLM / NER / RAG         | Gemma 4 local + OpenRouter; spaCy local para NER; reranker BGE local | OpenRouter (Gemma 4 por defecto) o un servidor propio compatible con OpenAI; Vercel AI Gateway como respaldo opcional |
 | Embeddings              | BGE-M3 local (ONNX) + OpenRouter (`baai/bge-m3`)        | OpenRouter (`baai/bge-m3`)                                                                        |

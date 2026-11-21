@@ -458,6 +458,70 @@ describe('SettingsView', () => {
     }
   })
 
+  // The local vision engines run on NVIDIA, AMD, Intel or Apple GPUs; a
+  // non-NVIDIA one needs 4 GB for GLM-OCR and 6 GB for the Qwen corrector.
+  const visionInfo = (overrides: Record<string, unknown>) => ({
+    model_present: true,
+    mmproj_present: true,
+    server_present: false,
+    server_source: 'download',
+    gpu_fits: true,
+    min_vram_gb: 4,
+    models_dir: 'C:/models',
+    repo_url: 'https://huggingface.co',
+    ...overrides,
+  })
+
+  it.runIf(LOCAL_ML)(
+    'offers llama-server on a GPU that fits and warns where one does not',
+    async () => {
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'glm_ocr_local_info') return visionInfo({})
+        if (command === 'qwen_correction_local_info')
+          return visionInfo({ gpu_fits: false, min_vram_gb: 6 })
+        return undefined
+      })
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(
+          await screen.findAllByRole('button', { name: 'Descargar llama-server' })
+        ).toHaveLength(2)
+        expect(
+          screen.getAllByText(
+            'La GPU de este equipo tiene menos de 6 GB de memoria de video: este modelo no entra, así que no se usa.'
+          )
+        ).toHaveLength(1)
+        expect(screen.queryByText(/menos de 4 GB/)).not.toBeInTheDocument()
+      } finally {
+        unmount()
+      }
+    }
+  )
+
+  it.runIf(LOCAL_ML)('says llama-server is not offered without a usable GPU', async () => {
+    invokeMock.mockImplementation(async (command: string) =>
+      command === 'glm_ocr_local_info' || command === 'qwen_correction_local_info'
+        ? visionInfo({ server_source: 'requires_gpu', gpu_fits: false })
+        : undefined
+    )
+    const { unmount } = render(SettingsView)
+    try {
+      await openTab('Modelos locales')
+      expect(
+        await screen.findAllByText(
+          /se descarga solo en equipos con GPU NVIDIA, o AMD, Intel o Apple/
+        )
+      ).toHaveLength(2)
+      expect(
+        screen.queryByRole('button', { name: 'Descargar llama-server' })
+      ).not.toBeInTheDocument()
+      expect(screen.queryByText(/memoria de video: este modelo no entra/)).not.toBeInTheDocument()
+    } finally {
+      unmount()
+    }
+  })
+
   it.runIf(LOCAL_ML)('shows the Parakeet model as ready once it is on disk', async () => {
     settingsGetMock.mockImplementation(async (key: string) => {
       if (key === 'stt_mode') return 'local'
