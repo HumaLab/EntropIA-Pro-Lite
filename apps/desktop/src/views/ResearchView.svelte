@@ -697,9 +697,13 @@
       <ConfirmDialog
         title={$currentLocale && t('research.deleteTitle')}
         titleId="research-delete-title"
-        message={$currentLocale && t('research.deleteMessage')}
+        message={$currentLocale &&
+          t('research.deleteMessage', {
+            title: jobs.find((job) => job.id === pendingDeleteId)?.title ?? '',
+          })}
         cancelLabel={$currentLocale && t('collections.cancel')}
         confirmLabel={$currentLocale && t('research.confirmDelete')}
+        confirming={deleting}
         variant="destructive"
         oncancel={() => {
           pendingDeleteId = null

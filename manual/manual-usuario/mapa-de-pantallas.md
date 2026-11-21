@@ -2453,7 +2453,7 @@
 - «Profundizar con el Agente» `research.deepen`
 - «Proyecto» `research.projectLabel`
 - «Revisar mensajes preservados» `research.handoffPreview`
-- «Se van el informe, la evidencia, los juicios y los archivos. No se puede deshacer.» `research.deleteMessage`
+- «Se borra «{title}»: el informe, la evidencia, los juicios y los archivos. No se puede deshacer.» `research.deleteMessage`
 - «Seleccionar todas» `research.selectAll`
 - «Sin límite» `research.maxCostPlaceholder`
 - «Todavía no hay investigaciones. Escribí una pregunta para empezar.» `research.empty`

@@ -1909,7 +1909,7 @@ const es = {
   'research.modelLabel': 'Modelo',
   'research.deleteTitle': 'Borrar la investigación',
   'research.deleteMessage':
-    'Se van el informe, la evidencia, los juicios y los archivos. No se puede deshacer.',
+    'Se borra «{title}»: el informe, la evidencia, los juicios y los archivos. No se puede deshacer.',
   'research.confirmDelete': 'Borrar',
   'research.deleteError': 'No se pudo borrar la investigación.',
   'research.questionPlaceholder': '¿Qué querés investigar?',
@@ -5572,7 +5572,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'research.modelLabel': 'Model',
   'research.deleteTitle': 'Delete the investigation',
   'research.deleteMessage':
-    'The report, the evidence, the judgments and the files all go. This cannot be undone.',
+    'Deletes “{title}”: the report, the evidence, the judgments and the files. This cannot be undone.',
   'research.confirmDelete': 'Delete',
   'research.deleteError': 'The investigation could not be deleted.',
   'research.questionPlaceholder': 'What do you want to investigate?',
