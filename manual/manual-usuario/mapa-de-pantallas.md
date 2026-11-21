@@ -909,6 +909,7 @@
 - «No se pudo restaurar la versión original del OCR.»
 - «No se pudo restaurar la versión: {error}»
 - «No se pudo transcribir el audio.»
+- «error»
 
 ### navegador (1/2)
 
@@ -1780,7 +1781,7 @@
 - «Rotar 90° a la izquierda»
 - «Éxito»
 
-### Varios (1/6)
+### Varios (1/7)
 
 - « para esta página» `item.noTriplesPageSuffix`
 - «Actual» `item.imageVersionCurrent`
@@ -1832,7 +1833,7 @@
 - «Descargar» `item.downloadExtractedText`
 - «Descargar texto extraído» `item.downloadExtractedTextAria`
 
-### Varios (2/6)
+### Varios (2/7)
 
 - «Descartar la nueva entidad» `item.newEntityCancelAria`
 - «Descartar la nueva tripleta» `item.newTripleCancelAria`
@@ -1873,7 +1874,7 @@
 - «Exportar JSON» `item.processHistoryExport`
 - «Extracción de texto» `item.textExtraction`
 
-### Varios (3/6)
+### Varios (3/7)
 
 - «Extracción en progreso…» `item.ocrFastBusyTitle, item.ocrHighBusyTitle`
 - «Extraer texto» `item.ocrFastTitle`
@@ -1924,7 +1925,7 @@
 - «NER» `item.nerAction`
 - «No hay archivos de esta imagen en el disco.» `item.imageVersionsEmpty`
 
-### Varios (4/6)
+### Varios (4/7)
 
 - «No hay bloques del tipo seleccionado para la página visible.» `item.layoutNoFilterBlocks`
 - «No hay bloques para la página visible.» `item.layoutNoPageBlocks`
@@ -1977,7 +1978,7 @@
 - «Recargar» `item.processHistoryReload`
 - «Reconocer texto de la caja» `item.layoutBoxEditApply`
 
-### Varios (5/6)
+### Varios (5/7)
 
 - «Reconociendo…» `item.layoutBoxEditApplying`
 - «Reemplazada el {date} · {model} · {count} caracteres» `item.transcriptVersionMeta`
@@ -2021,7 +2022,7 @@
 - «Todavía no hay entidades extraídas.» `item.entitiesEmpty`
 - «Todavía no hay notas.» `item.noNotes`
 
-### Varios (6/6)
+### Varios (6/7)
 
 - «Todavía no hay procesos registrados para este documento. Los documentos importados antes de la versión con historial no tienen sus procesos anteriores.» `item.processHistoryEmpty`
 - «Todavía no hay páginas similares. Generá embeddings para esta página y compararla contra el resto.» `item.similarAssetsEmpty`
@@ -2050,13 +2051,17 @@
 - «Word (.docx)» `item.exportExtractedTextDocx`
 - «corre en este equipo con {model}» `item.ocrCorrectEngineLocal`
 - «desconocido» `item.ocrMethodUnknown`
+- «en cola» `item.jobStatus.pending`
+- «en curso» `item.jobStatus.running`
 - «enviando a AssemblyAI» `item.transcriptionStage.submitting_remote`
 - «envía el texto a {tool} ({model})» `item.ocrCorrectEngineRemote`
 - «esperando respuesta remota» `item.transcriptionStage.polling_remote`
+- «hecho» `item.jobStatus.done, item.jobStatus.stored`
 - «no se pudo leer el archivo de la imagen para comprobar a qué versión corresponde.» `item.layoutVersionUnknown`
 - «nueva» `item.layoutBoxEditNewLabel`
 - «página {assetId} · documento {itemId} · colección {collectionId}» `item.assetMetaLine`
 - «rank {value}» `item.rank`
+- «sin hacer» `item.jobStatus.idle`
 - «subiendo audio» `item.transcriptionStage.uploading`
 - «{count} bloques» `item.layoutBlocksCount`
 - «{count} caracteres» `item.characters`
@@ -2064,6 +2069,9 @@
 - «{count}s» `item.audioDurationSeconds`
 - «· Página {page}» `item.pageInline`
 - «¿Eliminar?» `item.entityDeletePrompt, item.tripleDeletePrompt`
+
+### Varios (7/7)
+
 - «¿Seguro que querés eliminar esta nota? Esta acción no se puede deshacer.» `item.deleteNoteMessage`
 
 ## Navegación
@@ -3010,12 +3018,14 @@
 - «Sesión»
 - «Sesión iniciada como {email}»
 - «Sincronización automática»
+- «Sincronización completa.»
 - «Sincronización en la nube»
 - «Sincronizando…»
 - «Sincronizar ahora»
 - «Sincronizar automáticamente»
 - «Sincronizá tus datos y archivos entre dispositivos. Es opcional: si no la activás, nada sale de tu equipo.»
 - «Tabla {table} · fila {row}»
+- «Todavía no se sincronizó»
 - «URL del servidor»
 - «Usá una URL https (o http solo para localhost).»
 - «Ver detalle»

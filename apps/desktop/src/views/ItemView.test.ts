@@ -1825,13 +1825,13 @@ describe('ItemView semantic triples panel', () => {
     await fireEvent.click(triplesBtn)
     expect(llmExtractTriplesAssetMock).toHaveBeenCalledWith('asset-1')
     expect(triplesBtn).toBeDisabled()
-    expect(screen.getByText('pending')).toBeInTheDocument()
+    expect(screen.getByText('en cola')).toBeInTheDocument()
 
     nlpEventHandlers.get('llm:progress')?.({
       payload: { id: 'asset-1', job: 'extract_triples', pct: 25 },
     })
     await waitFor(() => {
-      expect(screen.getByText('running')).toBeInTheDocument()
+      expect(screen.getByText('en curso')).toBeInTheDocument()
       expect(triplesBtn).toBeDisabled()
     })
 
@@ -1842,7 +1842,7 @@ describe('ItemView semantic triples panel', () => {
       payload: { item_id: 'item-1', job: 'triples' },
     })
     await waitFor(() => {
-      expect(screen.getByText('done')).toBeInTheDocument()
+      expect(screen.getByText('hecho')).toBeInTheDocument()
       expect(screen.getByText('Moreno')).toBeInTheDocument()
       expect(screen.getByText('La Gazeta')).toBeInTheDocument()
     })
@@ -1871,7 +1871,7 @@ describe('ItemView semantic triples panel', () => {
     await renderItemViewWith([])
     const triplesBtn = await screen.findByRole('button', { name: /^TRIPLET\b/ })
     await waitFor(() => expect(triplesBtn).toBeDisabled())
-    expect(within(triplesBtn).getByText('pending')).toBeInTheDocument()
+    expect(within(triplesBtn).getByText('en cola')).toBeInTheDocument()
 
     nlpEventHandlers.get('llm:complete')?.({
       payload: { id: 'asset-1', job: 'extract_triples', result: '[]' },
@@ -1893,7 +1893,7 @@ describe('ItemView semantic triples panel', () => {
     await renderItemViewWith([])
     const triplesBtn = await screen.findByRole('button', { name: /^TRIPLET\b/ })
     await waitFor(() => expect(triplesBtn).toBeEnabled())
-    expect(within(triplesBtn).queryByText('pending')).toBeNull()
+    expect(within(triplesBtn).queryByText('en cola')).toBeNull()
   })
 })
 
@@ -1989,12 +1989,12 @@ describe('ItemView asset-level embedding and similarity', () => {
 
     await openAnalysis(store())
     const embedBtn = await screen.findByRole('button', { name: /EMBED/i })
-    await waitFor(() => expect(within(embedBtn).getByText('pending')).toBeInTheDocument())
+    await waitFor(() => expect(within(embedBtn).getByText('en cola')).toBeInTheDocument())
 
     nlpEventHandlers.get('nlp:complete')?.({
       payload: { item_id: 'item-1', asset_id: 'asset-embed-1', job: 'embed' },
     })
-    await waitFor(() => expect(within(embedBtn).getByText('done')).toBeInTheDocument())
+    await waitFor(() => expect(within(embedBtn).getByText('hecho')).toBeInTheDocument())
   })
 
   it('does not show asset A embedding completion as ready on asset B', async () => {
@@ -2025,7 +2025,7 @@ describe('ItemView asset-level embedding and similarity', () => {
 
     await waitFor(() => {
       expect(
-        within(screen.getByRole('button', { name: /EMBED/i })).getByText('done')
+        within(screen.getByRole('button', { name: /EMBED/i })).getByText('hecho')
       ).toBeInTheDocument()
     })
 
@@ -2033,7 +2033,7 @@ describe('ItemView asset-level embedding and similarity', () => {
 
     await waitFor(() => {
       expect(
-        within(screen.getByRole('button', { name: /EMBED/i })).getByText('idle')
+        within(screen.getByRole('button', { name: /EMBED/i })).getByText('sin hacer')
       ).toBeInTheDocument()
     })
   })
@@ -2089,7 +2089,7 @@ describe('ItemView asset-level embedding and similarity', () => {
 
     await waitFor(() => {
       expect(
-        within(screen.getByRole('button', { name: /^NER/ })).getByText('done · 0')
+        within(screen.getByRole('button', { name: /^NER/ })).getByText('hecho · 0')
       ).toBeInTheDocument()
     })
   })
@@ -2115,7 +2115,7 @@ describe('ItemView asset-level embedding and similarity', () => {
 
     await waitFor(() => {
       expect(
-        within(screen.getByRole('button', { name: /^NER/ })).getByText('done')
+        within(screen.getByRole('button', { name: /^NER/ })).getByText('hecho')
       ).toBeInTheDocument()
     })
   })
