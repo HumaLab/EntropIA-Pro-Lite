@@ -648,7 +648,15 @@ impl OcrExecutor {
             *vl = None;
         }
         if vl.is_none() {
-            match ocr::paddle_vl::create_paddle_vl_engine_result(&self.app, &self.db_path) {
+            match ocr::paddle_vl::create_paddle_vl_engine_result(
+                &self.app,
+                &self.db_path,
+                if requested_high {
+                    ocr::OcrMode::High
+                } else {
+                    ocr::OcrMode::Light
+                },
+            ) {
                 Ok(engine) => *vl = Some(engine),
                 Err(error) => {
                     log::warn!(
