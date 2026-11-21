@@ -11,6 +11,7 @@
     type StatusBadgeVariant,
   } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
+  import { jobStatusLabelKey } from '$lib/job-status'
   import type { Asset } from '@entropia/store'
   import type { AssetOcrState, OcrMode } from '$lib/ocr'
   import {
@@ -218,7 +219,7 @@
         </span>
         <span class="ocr-status">
           <StatusBadge variant={getJobStatusBadgeVariant(ocrState.status)} size="sm">
-            {ocrState.status}
+            {translate(jobStatusLabelKey(ocrState.status))}
           </StatusBadge>
         </span>
         <div class="ocr-btn-group">
@@ -364,7 +365,7 @@
         </span>
         <span class="ocr-status">
           <StatusBadge variant={getJobStatusBadgeVariant(transcriptionState.status)} size="sm">
-            {transcriptionState.status}
+            {translate(jobStatusLabelKey(transcriptionState.status))}
           </StatusBadge>
         </span>
         <div class="ocr-btn-group">
