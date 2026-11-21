@@ -1638,13 +1638,13 @@ mod tests {
         };
 
         let expected_dir = temp.path().join("models").join("embeddings").join("bge-m3");
-        assert!(error.contains("Local BGE-M3 model incomplete"));
+        assert!(error.contains("El modelo BGE-M3 local está incompleto"));
         assert!(error.contains(&expected_dir.to_string_lossy().to_string()));
         assert!(error.contains("model.onnx"));
         assert!(error.contains("model.onnx_data"));
         assert!(error.contains("tokenizer.json"));
-        assert!(error.contains("Install BGE-M3 from Settings"));
-        assert!(error.contains("configured BGE-M3 provider"));
+        assert!(error.contains("Descargalo desde Configuración"));
+        assert!(error.contains("proveedor BGE-M3 configurado"));
     }
 
     #[test]
@@ -1728,6 +1728,6 @@ mod tests {
             "invalid local settings must not silently keep using stale API engine"
         );
         let error = last_error.expect("local init error should be recorded");
-        assert!(error.contains("Local BGE-M3 model incomplete"));
+        assert!(error.contains("El modelo BGE-M3 local está incompleto"));
     }
 }
