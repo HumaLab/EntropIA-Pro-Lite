@@ -208,7 +208,7 @@
           </StatusBadge>
         </span>
         <div class="ocr-btn-group">
-          {#if !isPdfAsset && localOcrAvailable}
+          {#if localOcrAvailable}
             <Button
               variant="secondary"
               size="sm"
