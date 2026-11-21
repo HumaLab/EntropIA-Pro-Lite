@@ -1,5 +1,13 @@
-import { Node, mergeAttributes, type Attributes, type Extensions } from '@tiptap/core'
-import { Plugin, PluginKey } from '@tiptap/pm/state'
+import {
+  Node,
+  mergeAttributes,
+  type Attributes,
+  type Extension,
+  type Extensions,
+} from '@tiptap/core'
+import { Plugin, PluginKey, type Transaction } from '@tiptap/pm/state'
+import { ReplaceStep } from '@tiptap/pm/transform'
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import StarterKit from '@tiptap/starter-kit'
 import { mount, unmount } from 'svelte'
 import ActionIcon from '../Button/ActionIcon.svelte'
@@ -916,6 +924,97 @@ const WritingTableHeader = TableHeader.extend({
   },
 })
 
+/** Whether `transactions` add or remove a footnote marker (version 3's test). */
+function touchesFootnoteReferences(transactions: readonly Transaction[]): boolean {
+  const isReference = (node: ProseMirrorNode) => node.type.name === 'footnoteReference'
+  return transactions.some((tr) =>
+    tr.steps.some((step, index) => {
+      if (!(step instanceof ReplaceStep)) return false
+      let found = false
+      step.slice.content.descendants((node) => {
+        found ||= isReference(node)
+        return !found
+      })
+      const before = tr.docs[index]
+      if (!found && before && step.from < step.to) {
+        before.nodesBetween(step.from, Math.min(step.to, before.content.size), (node) => {
+          found ||= isReference(node)
+          return !found
+        })
+      }
+      return found
+    })
+  )
+}
+
+/**
+ * `tiptap-footnotes@4` syncs the footnote list when the editor mounts and after
+ * every edit, renumbering markers and deleting every footnote no marker points
+ * at. Version 3, which every stored manuscript was written under, synced only
+ * when an edit added or removed a marker: opening a document, or typing in
+ * one, never touched its notes. Keep that: no sync at mount, and the sync runs
+ * only for marker edits. Version 4's selection clamping still runs on every
+ * transaction. The package does not export the rules extension; `Footnotes`
+ * is what adds it.
+ */
+const [FootnoteRules] = (Footnotes.config.addExtensions as () => Extensions)()
+const footnoteRulesPlugins = (FootnoteRules as Extension).config.addProseMirrorPlugins as (
+  this: unknown
+) => Plugin[]
+const WritingFootnoteRules = (FootnoteRules as Extension).extend({
+  onBeforeCreate() {},
+  addProseMirrorPlugins() {
+    return footnoteRulesPlugins.call(this).map((plugin) => {
+      const append = plugin.spec.appendTransaction
+      if (!append) return plugin
+      return new Plugin({
+        ...plugin.spec,
+        appendTransaction: (transactions, oldState, newState) =>
+          append(touchesFootnoteReferences(transactions) ? transactions : [], oldState, newState),
+      })
+    })
+  },
+})
+
+/**
+ * Version 4 dropped the `class` attribute the stored JSON carries
+ * (`"class": "footnotes"`). Rendering already adds that class.
+ */
+const WritingFootnotes = Footnotes.extend({
+  addAttributes() {
+    return { class: { default: 'footnotes', rendered: false } }
+  },
+  addExtensions() {
+    return [WritingFootnoteRules]
+  },
+})
+
+/**
+ * Version 4 made the marker a leaf and dropped its `class` and `href`
+ * attributes; stored markers carry both, and one parsed from HTML holds its
+ * drawn number as text. Restore version 3's shape so stored manuscripts open
+ * and write back unchanged. Rendering already computes the class and link.
+ */
+const WritingFootnoteReference = FootnoteReference.extend({
+  content: 'text*',
+  // Version 3 took the marker's content from the `<a>` inside `<sup>`; without
+  // this the `<a>` itself parses as a link mark around the number.
+  parseHTML() {
+    return (this.parent?.() ?? []).map((rule) => ({
+      ...rule,
+      contentElement: (node: HTMLElement) => node.firstChild as HTMLElement,
+    }))
+  },
+  addAttributes() {
+    // Version 3's key order, so a marker serializes to the same bytes.
+    return {
+      class: { default: 'footnote-ref', rendered: false },
+      ...this.parent?.(),
+      href: { default: null, rendered: false },
+    }
+  },
+})
+
 /**
  * `tiptap-footnotes@3` marks both ids required. Tiptap 2 gave every attribute a
  * null default, so a stored footnote may lack either; it must still open.
@@ -1013,9 +1112,9 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}): 
     TableRow,
     WritingTableCell,
     WritingTableHeader,
-    Footnotes,
+    WritingFootnotes,
     WritingFootnote,
-    FootnoteReference,
+    WritingFootnoteReference,
     DocumentCitation.configure({ resolveImage: options.resolveImage ?? null }),
     ZoteroCitation,
     NoteLink,
