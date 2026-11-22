@@ -126,8 +126,9 @@ pub async fn probe_all_once(
     Ok(results)
 }
 
-pub fn emit_probe_complete(
+pub async fn emit_probe_complete(
     app: &tauri::AppHandle,
+    _state: &DepsState,
     results: &HashMap<DependencyId, DependencyStatus>,
 ) {
     crate::app_logs::info(
@@ -168,7 +169,7 @@ pub async fn deps_check_all(
         "EntropIA Lite: dependencias de IA resueltas mediante proveedores remotos",
     );
     let results_map = probe_all_once(state.inner(), db.inner()).await?;
-    emit_probe_complete(&app, &results_map);
+    emit_probe_complete(&app, state.inner(), &results_map).await;
     Ok(lite_dependency_results())
 }
 
@@ -203,7 +204,7 @@ pub async fn deps_install_all(
         data.statuses = results.clone();
         data.cached_probe_results = Some(results.clone());
     }
-    emit_probe_complete(&app, &results);
+    emit_probe_complete(&app, state.inner(), &results).await;
     crate::app_logs::info(
         &app,
         "deps",
@@ -231,7 +232,7 @@ pub async fn deps_install_one(
         data.statuses = lite_dependency_statuses();
         data.cached_probe_results = Some(data.statuses.clone());
     }
-    emit_probe_complete(&app, &lite_dependency_statuses());
+    emit_probe_complete(&app, state.inner(), &lite_dependency_statuses()).await;
     crate::app_logs::info(
         &app,
         "deps",

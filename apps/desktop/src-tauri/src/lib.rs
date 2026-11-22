@@ -1337,7 +1337,8 @@ pub fn run() {
                 let deps_state = app_handle_deps.state::<deps::DepsState>();
                 match deps::probe_all_once(deps_state.inner(), db_state.inner()).await {
                     Ok(results) => {
-                        deps::emit_probe_complete(&app_handle_deps, &results);
+                        deps::emit_probe_complete(&app_handle_deps, deps_state.inner(), &results)
+                            .await;
                         app_logs::info(
                             &app_handle_deps,
                             "deps",
