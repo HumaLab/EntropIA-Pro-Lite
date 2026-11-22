@@ -109,6 +109,16 @@ pub fn parakeet_supports_language(language: &str) -> bool {
     PARAKEET_LANGUAGES.contains(&base)
 }
 
+/// Whether `language` ("es", "es-AR", "ES") asks for Spanish.
+#[cfg(feature = "local-ml")]
+fn is_spanish(language: &str) -> bool {
+    language
+        .trim()
+        .split(['-', '_'])
+        .next()
+        .is_some_and(|base| base.eq_ignore_ascii_case("es"))
+}
+
 /// Whether a transcript asked for in Spanish came out largely in English.
 ///
 /// Parakeet TDT v3 takes no language parameter: it picks the language per
@@ -117,6 +127,24 @@ pub fn parakeet_supports_language(language: &str) -> bool {
 /// like `a`, `no` or `me`, are left out).
 #[cfg(feature = "local-ml")]
 pub(crate) fn drifted_from_spanish(text: &str) -> bool {
+    let (english, spanish) = function_word_counts(text);
+    // A few English function words (a quote, a title) are not drift; a third
+    // of the function words in English is.
+    english >= 8 && english * 3 >= english + spanish
+}
+
+/// Whether one ~30 s window drifted into English. The whole-file check
+/// needs 8 English function words, more than a single window holds; here 3
+/// are enough when they are at least 30% of the function words.
+#[cfg(feature = "local-ml")]
+fn window_drifted(text: &str) -> bool {
+    let (english, spanish) = function_word_counts(text);
+    english >= 3 && english * 10 >= (english + spanish) * 3
+}
+
+/// (English, Spanish) function words in `text`.
+#[cfg(feature = "local-ml")]
+fn function_word_counts(text: &str) -> (usize, usize) {
     const ENGLISH: &[&str] = &[
         "the", "of", "and", "to", "in", "is", "that", "it", "was", "for", "with", "they", "this",
         "from", "by", "are", "were", "which", "their", "been", "would", "there", "what", "when",
@@ -141,9 +169,7 @@ pub(crate) fn drifted_from_spanish(text: &str) -> bool {
             spanish += 1;
         }
     }
-    // A few English function words (a quote, a title) are not drift; a third
-    // of the function words in English is.
-    english >= 8 && english * 3 >= english + spanish
+    (english, spanish)
 }
 
 /// Configuration for the Parakeet engine.
@@ -223,24 +249,26 @@ impl ParakeetEngine {
             TimestampMode::Sentences
         };
         let windows = split_windows(audio.samples.len());
-        let mut kept: Vec<WindowToken> = Vec::new();
-        for (index, window) in windows.iter().enumerate() {
-            let chunk = audio.samples[window.start_sample..window.end_sample].to_vec();
-            let result = self
-                .model
-                .transcribe_samples(chunk, SAMPLE_RATE, 1, Some(mode))
-                .map_err(|e| format!("Parakeet transcription failed: {e}"))?;
-            for token in result.tokens {
-                kept.push(WindowToken {
-                    start: window.start_secs + token.start,
-                    end: window.start_secs + token.end,
-                    text: token.text,
-                    owner: index,
-                });
-            }
-            on_progress(
-                stage_progress(index + 1, windows.len(), 10, 80),
-                "transcribing",
+        // Parakeet takes no language; on Spanish audio a window can drift into
+        // English and is decoded again in short pieces.
+        let redo_drift = is_spanish(&self.language);
+        let (kept, redone) = decode_windows(
+            &mut TdtDecoder {
+                model: &mut self.model,
+                mode,
+            },
+            &audio.samples,
+            &windows,
+            redo_drift,
+            |done| {
+                on_progress(stage_progress(done, windows.len(), 10, 80), "transcribing");
+            },
+        )?;
+        if redone > 0 {
+            log::warn!(
+                target: "transcription",
+                "Parakeet re-decoded {redone} of {} windows in short segments (English drift)",
+                windows.len()
             );
         }
 
@@ -399,6 +427,150 @@ fn split_windows(total_samples: usize) -> Vec<AudioWindow> {
         start += step;
     }
     windows
+}
+
+/// Shortest and longest piece a drifted window is decoded again in. Parakeet
+/// v3 drifts into English on long Spanish context and stays Spanish on short
+/// pieces: on the radio program that drifted, 3-6 s pieces took the English
+/// share of function words from 0.75 to 0.02 (lab run 2026-11-22, see
+/// `odd/plans/parakeet-spanish-drift-1.8.8.md`). Shorter pieces lose context.
+#[cfg(feature = "local-ml")]
+const PIECE_MIN_SECS: f32 = 3.0;
+#[cfg(feature = "local-ml")]
+const PIECE_MAX_SECS: f32 = 6.0;
+/// Frame the quietest-point search measures loudness over.
+#[cfg(feature = "local-ml")]
+const PAUSE_FRAME_SECS: f32 = 0.02;
+
+/// Split `samples` into contiguous pieces of `min_secs`..`max_secs`, each cut
+/// at the quietest 20 ms frame in that range, so a cut falls in a pause and
+/// not inside a word. The last piece takes what is left and may be shorter.
+/// Returns sample ranges `(start, end)` relative to `samples`.
+#[cfg(feature = "local-ml")]
+fn pause_cuts(samples: &[f32], min_secs: f32, max_secs: f32) -> Vec<(usize, usize)> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let frame = ((PAUSE_FRAME_SECS * SAMPLE_RATE as f32) as usize).max(1);
+    let loudness: Vec<f32> = samples
+        .chunks(frame)
+        .map(|chunk| chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32)
+        .collect();
+    let min_frames = ((min_secs / PAUSE_FRAME_SECS) as usize).max(1);
+    let max_frames = ((max_secs / PAUSE_FRAME_SECS) as usize).max(min_frames);
+    let mut cuts = vec![0usize];
+    loop {
+        let last = *cuts.last().unwrap_or(&0);
+        if last + max_frames >= loudness.len() {
+            break;
+        }
+        let quietest = (last + min_frames..=last + max_frames)
+            .min_by(|a, b| {
+                loudness[*a]
+                    .partial_cmp(&loudness[*b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(last + max_frames);
+        cuts.push(quietest);
+    }
+    let mut pieces: Vec<(usize, usize)> = cuts
+        .windows(2)
+        .map(|pair| (pair[0] * frame, pair[1] * frame))
+        .collect();
+    let tail_start = cuts.last().copied().unwrap_or(0) * frame;
+    pieces.push((tail_start, samples.len()));
+    pieces
+}
+
+/// A token as the model returns it, timed from the start of its input.
+#[cfg(feature = "local-ml")]
+#[derive(Debug, Clone)]
+struct DecodedToken {
+    start: f32,
+    end: f32,
+    text: String,
+}
+
+/// Turns one stretch of samples into timed tokens: the seam between the
+/// window logic and the model, so the logic is tested without the model.
+#[cfg(feature = "local-ml")]
+trait WindowDecoder {
+    fn decode(&mut self, samples: &[f32]) -> Result<Vec<DecodedToken>, String>;
+}
+
+/// Parakeet TDT with the timestamp mode of the current request.
+#[cfg(feature = "local-ml")]
+struct TdtDecoder<'a> {
+    model: &'a mut ParakeetTDT,
+    mode: TimestampMode,
+}
+
+#[cfg(feature = "local-ml")]
+impl WindowDecoder for TdtDecoder<'_> {
+    fn decode(&mut self, samples: &[f32]) -> Result<Vec<DecodedToken>, String> {
+        let result = self
+            .model
+            .transcribe_samples(samples.to_vec(), SAMPLE_RATE, 1, Some(self.mode))
+            .map_err(|e| format!("Parakeet transcription failed: {e}"))?;
+        Ok(result
+            .tokens
+            .into_iter()
+            .map(|token| DecodedToken {
+                start: token.start,
+                end: token.end,
+                text: token.text,
+            })
+            .collect())
+    }
+}
+
+/// Decode every window. With `redo_drift` (Spanish audio), a window whose
+/// text drifted into English ([`window_drifted`]) is decoded again as short
+/// pause-cut pieces ([`pause_cuts`]), which keep Spanish. The pieces' tokens
+/// get absolute times and keep the window as their owner, so the midpoint
+/// ownership and the speaker pass work as for any window. Returns the
+/// tokens and how many windows were decoded again. `on_window` receives the
+/// count of windows done.
+#[cfg(feature = "local-ml")]
+fn decode_windows(
+    decoder: &mut impl WindowDecoder,
+    samples: &[f32],
+    windows: &[AudioWindow],
+    redo_drift: bool,
+    mut on_window: impl FnMut(usize),
+) -> Result<(Vec<WindowToken>, usize), String> {
+    let mut kept = Vec::new();
+    let mut redone = 0;
+    for (index, window) in windows.iter().enumerate() {
+        let chunk = &samples[window.start_sample..window.end_sample];
+        let mut pieces = vec![(0usize, decoder.decode(chunk)?)];
+        if redo_drift {
+            let text = pieces[0]
+                .1
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if window_drifted(&text) {
+                redone += 1;
+                pieces = pause_cuts(chunk, PIECE_MIN_SECS, PIECE_MAX_SECS)
+                    .into_iter()
+                    .map(|(start, end)| decoder.decode(&chunk[start..end]).map(|t| (start, t)))
+                    .collect::<Result<_, _>>()?;
+            }
+        }
+        for (offset, tokens) in pieces {
+            let offset_secs = window.start_secs + offset as f32 / SAMPLE_RATE as f32;
+            kept.extend(tokens.into_iter().map(|token| WindowToken {
+                start: offset_secs + token.start,
+                end: offset_secs + token.end,
+                text: token.text,
+                owner: index,
+            }));
+        }
+        on_window(index + 1);
+    }
+    Ok((kept, redone))
 }
 
 /// A token with absolute timestamps and the window that produced it.
@@ -1222,6 +1394,183 @@ mod tests {
         assert_eq!(texts, vec!["inicio", "mundo"]);
     }
 
+    /// One 30 s window of the radio program where Parakeet switched to
+    /// English (HACIENDO SOCIALES MICRO 2, 30-60 s, lab run 2026-11-22).
+    const DRIFTED_WINDOW: &str = "The control obrero de la production, sin the figure of the \
+        empresario patron burgués, has numerosas referencias historias. The mayor of the \
+        empresas recuperadas by the trabajadores del presente in our país have adopted the \
+        form of cooperative.";
+
+    #[test]
+    fn only_spanish_turns_the_drift_redo_on() {
+        assert!(is_spanish("es"));
+        assert!(is_spanish("ES"));
+        assert!(is_spanish("es-AR"));
+        assert!(!is_spanish("auto"));
+        assert!(!is_spanish("en"));
+        assert!(!is_spanish(""));
+    }
+
+    #[test]
+    fn a_single_drifted_window_is_detected() {
+        assert!(window_drifted(DRIFTED_WINDOW));
+        // A window that starts drifting midway: too few English words for the
+        // whole-file check (it needs 8), enough for the window check.
+        let starting = "La cooperativa de trabajo presenta el programa sobre las fábricas. \
+            The control obrero of the production was la respuesta de los trabajadores.";
+        assert!(window_drifted(starting));
+        assert!(!drifted_from_spanish(starting));
+    }
+
+    #[test]
+    fn a_spanish_window_is_not_drift() {
+        let interview = "Entrevistador: ¿Y cuándo fue la toma? Entrevistado: No sé, por ahí en \
+            el dos mil uno, cuando la patronal se fue y nosotros nos quedamos con las máquinas, \
+            porque no había otra.";
+        assert!(!window_drifted(interview));
+        // A title or a quote in English is not drift.
+        let quote = "Ellos leían a Owen, el de New Harmony, y decían que the people united \
+            iba a ganar, pero la cooperativa de la fábrica se armó con los vecinos del barrio.";
+        assert!(!window_drifted(quote));
+        assert!(!window_drifted(""));
+    }
+
+    /// Ten seconds of tone, then a silent gap, repeated: silence at
+    /// 4.0-4.3 s, 9.0-9.3 s and 14.0-14.3 s.
+    fn tone_with_gaps(total_secs: f32) -> Vec<f32> {
+        let rate = SAMPLE_RATE as f32;
+        (0..(total_secs * rate) as usize)
+            .map(|i| {
+                let t = i as f32 / rate;
+                let in_gap = (t % 5.0) >= 4.0 && (t % 5.0) < 4.3;
+                if in_gap {
+                    0.0
+                } else {
+                    (t * 440.0 * std::f32::consts::TAU).sin() * 0.5
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pause_cuts_split_inside_the_silences_within_bounds() {
+        let samples = tone_with_gaps(17.0);
+        let cuts = pause_cuts(&samples, 3.0, 6.0);
+        let rate = SAMPLE_RATE as f32;
+        assert_eq!(cuts.first().unwrap().0, 0);
+        assert_eq!(cuts.last().unwrap().1, samples.len());
+        for pair in cuts.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0, "pieces are contiguous");
+        }
+        for (index, (start, end)) in cuts.iter().enumerate() {
+            let secs = (end - start) as f32 / rate;
+            assert!(secs <= 6.0 + 1e-3, "piece {index} is {secs} s");
+            if index + 1 < cuts.len() {
+                assert!(secs >= 3.0 - 1e-3, "piece {index} is {secs} s");
+                let cut = *end as f32 / rate;
+                assert!((cut % 5.0) >= 4.0 && (cut % 5.0) <= 4.3, "cut at {cut} s");
+            }
+        }
+    }
+
+    #[test]
+    fn pause_cuts_keep_short_audio_whole() {
+        let samples = tone_with_gaps(5.0);
+        assert_eq!(pause_cuts(&samples, 3.0, 6.0), vec![(0, samples.len())]);
+        assert!(pause_cuts(&[], 3.0, 6.0).is_empty());
+    }
+
+    /// Stands in for Parakeet: drifts into English on inputs longer than
+    /// 10 s, stays Spanish on shorter ones (the behaviour measured on the
+    /// radio program). Emits one word per second of input.
+    struct FakeDecoder {
+        calls: Vec<usize>,
+        always_spanish: bool,
+    }
+
+    impl WindowDecoder for FakeDecoder {
+        fn decode(&mut self, samples: &[f32]) -> Result<Vec<DecodedToken>, String> {
+            self.calls.push(samples.len());
+            let secs = samples.len() / SAMPLE_RATE as usize;
+            let english = !self.always_spanish && secs > 10;
+            let words: Vec<&str> = if english {
+                DRIFTED_WINDOW.split_whitespace().collect()
+            } else {
+                "la cooperativa de los trabajadores"
+                    .split_whitespace()
+                    .collect()
+            };
+            Ok((0..secs)
+                .map(|i| DecodedToken {
+                    start: i as f32,
+                    end: i as f32 + 0.5,
+                    text: words[i % words.len()].to_string(),
+                })
+                .collect())
+        }
+    }
+
+    #[test]
+    fn only_a_drifted_window_is_decoded_again_in_short_pieces() {
+        let samples = tone_with_gaps(33.0);
+        let windows = split_windows(samples.len());
+        assert_eq!(windows.len(), 2);
+        let mut decoder = FakeDecoder {
+            calls: Vec::new(),
+            always_spanish: false,
+        };
+        let (tokens, redone) =
+            decode_windows(&mut decoder, &samples, &windows, true, |_| {}).expect("decode");
+        // Window 0 (30 s) drifts and is redone in pieces; window 1 (6 s) is not.
+        assert_eq!(redone, 1);
+        let pieces = pause_cuts(
+            &samples[windows[0].start_sample..windows[0].end_sample],
+            3.0,
+            6.0,
+        );
+        assert_eq!(decoder.calls.len(), 1 + pieces.len() + 1);
+        let window_0: Vec<_> = tokens.iter().filter(|t| t.owner == 0).collect();
+        assert!(window_0.iter().all(|t| !t.text.contains("the")));
+        // Piece tokens carry absolute times: the second piece starts where
+        // the first one ends, so its first word sits at that offset.
+        let second_piece_start = pieces[1].0 as f32 / SAMPLE_RATE as f32;
+        assert!(window_0
+            .iter()
+            .any(|t| (t.start - second_piece_start).abs() < 1e-3));
+        let window_1: Vec<_> = tokens.iter().filter(|t| t.owner == 1).collect();
+        assert!(window_1
+            .iter()
+            .all(|t| t.start >= windows[1].start_secs - 1e-3));
+    }
+
+    #[test]
+    fn clean_windows_are_decoded_once() {
+        let samples = tone_with_gaps(33.0);
+        let windows = split_windows(samples.len());
+        let mut decoder = FakeDecoder {
+            calls: Vec::new(),
+            always_spanish: true,
+        };
+        let (_, redone) =
+            decode_windows(&mut decoder, &samples, &windows, true, |_| {}).expect("decode");
+        assert_eq!(redone, 0);
+        assert_eq!(decoder.calls.len(), windows.len());
+    }
+
+    #[test]
+    fn drift_is_not_redone_when_the_language_is_not_spanish() {
+        let samples = tone_with_gaps(33.0);
+        let windows = split_windows(samples.len());
+        let mut decoder = FakeDecoder {
+            calls: Vec::new(),
+            always_spanish: false,
+        };
+        let (_, redone) =
+            decode_windows(&mut decoder, &samples, &windows, false, |_| {}).expect("decode");
+        assert_eq!(redone, 0);
+        assert_eq!(decoder.calls.len(), windows.len());
+    }
+
     /// Manual benchmark harness (ignored by default). Protocol: three ES
     /// audios — 2-person interview, 4-person meeting, noisy clip — placed
     /// in a directory and measured with and without diarization.
@@ -1285,6 +1634,52 @@ mod tests {
                      result.text.replace('\n', " | "),
                  );
                 assert!(!result.text.trim().is_empty(), "empty transcription");
+            }
+        }
+    }
+
+    /// Live check (ignored by default): Spanish audio that Parakeet used to
+    /// translate into English comes out Spanish, with and without speakers.
+    /// Archive audio is never committed; point the test at a local wav.
+    ///
+    /// Run: `PARAKEET_DRIFT_AUDIO=/path/audio.wav
+    ///   PARAKEET_BENCH_MODELS=/path/to/models
+    ///   ORT_DYLIB_PATH=/path/to/onnxruntime.dll
+    ///   cargo test --features local-ml -- --ignored spanish_audio_stays_spanish
+    ///   --nocapture`
+    #[test]
+    #[ignore]
+    fn spanish_audio_stays_spanish() {
+        let audio = std::env::var("PARAKEET_DRIFT_AUDIO")
+            .expect("set PARAKEET_DRIFT_AUDIO to a Spanish wav");
+        let models = std::env::var("PARAKEET_BENCH_MODELS")
+            .expect("set PARAKEET_BENCH_MODELS to the models dir");
+        let nop = |_: u8, _: &str| {};
+        let mut engine = ParakeetEngine::init(
+            ParakeetConfig {
+                model_dir: std::path::PathBuf::from(&models).join(PARAKEET_MODEL_SUBDIR),
+                language: "es".to_string(),
+            },
+            nop,
+        )
+        .expect("load parakeet");
+        for diarize in [false, true] {
+            let (result, _) = engine.transcribe(&audio, diarize, nop).expect("transcribe");
+            let (english, spanish) = function_word_counts(&result.text);
+            let share = english as f32 / (english + spanish).max(1) as f32;
+            let speakers = result
+                .segments
+                .iter()
+                .filter_map(|s| s.speaker.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            println!(
+                "DRIFT diarize={diarize} english={english} spanish={spanish} share={share:.3} speakers={speakers} text={:.120}",
+                result.text.replace('\n', " | ")
+            );
+            assert!(share < 0.10, "English share {share:.3} on Spanish audio");
+            if diarize {
+                assert!(speakers >= 1, "speaker labels lost");
             }
         }
     }
