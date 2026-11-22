@@ -85,6 +85,67 @@ fn acquire_named(name: &str, data_dir: &Path) -> Result<InstanceGuard, GuardErro
     }
 }
 
+/// Bringing the open window forward.
+///
+/// A refused launch has nothing to show the person who started it, and the
+/// window they want is the one already open — possibly behind other windows or
+/// minimized. So the refused process asks the running one to come forward
+/// through a named event next to the mutex, under the same name: whatever
+/// variant is running answers, as with the guard itself.
+///
+/// Windows only. Elsewhere a request is never delivered and the refused launch
+/// still shows its notice.
+pub struct FocusListener {
+    #[cfg(windows)]
+    _inner: windows::FocusListener,
+}
+
+/// Listens for focus requests for this process's archive. `on_request` runs on
+/// a background thread, once per request.
+pub fn listen_for_focus(on_request: impl Fn() + Send + 'static) -> Result<FocusListener, String> {
+    listen_for_focus_named(&instance_name(crate::dev_profile::active()), on_request)
+}
+
+/// Asks the instance holding the archive to bring its window forward. Returns
+/// whether anyone was listening.
+pub fn request_focus() -> bool {
+    request_focus_named(&instance_name(crate::dev_profile::active()))
+}
+
+#[cfg(windows)]
+fn focus_event_name(name: &str) -> String {
+    format!("Local\\{name}-focus")
+}
+
+#[cfg(windows)]
+fn listen_for_focus_named(
+    name: &str,
+    on_request: impl Fn() + Send + 'static,
+) -> Result<FocusListener, String> {
+    windows::FocusListener::start(&focus_event_name(name), Box::new(on_request))
+        .map(|inner| FocusListener { _inner: inner })
+}
+
+/// Nothing to listen on here, and nothing will ever ask: an empty listener
+/// keeps startup quiet instead of warning on every launch.
+#[cfg(not(windows))]
+fn listen_for_focus_named(
+    _name: &str,
+    _on_request: impl Fn() + Send + 'static,
+) -> Result<FocusListener, String> {
+    Ok(FocusListener {})
+}
+
+#[cfg(windows)]
+fn request_focus_named(name: &str) -> bool {
+    windows::signal_event(&focus_event_name(name))
+}
+
+#[cfg(not(windows))]
+fn request_focus_named(_name: &str) -> bool {
+    false
+}
+
 #[cfg(windows)]
 impl Drop for InstanceGuard {
     fn drop(&mut self) {
@@ -97,8 +158,9 @@ mod windows {
     use super::GuardError;
     use std::ffi::c_void;
 
-    // Three kernel32 calls. The standard library already links kernel32, so
-    // declaring them costs no dependency.
+    // A few kernel32/user32 calls. The standard library already links
+    // kernel32 and the windowing stack links user32, so declaring them costs
+    // no dependency.
     #[link(name = "kernel32")]
     extern "system" {
         fn CreateMutexW(
@@ -106,12 +168,122 @@ mod windows {
             initial_owner: i32,
             name: *const u16,
         ) -> *mut c_void;
+        fn CreateEventW(
+            attributes: *const c_void,
+            manual_reset: i32,
+            initial_state: i32,
+            name: *const u16,
+        ) -> *mut c_void;
+        fn OpenEventW(desired_access: u32, inherit_handle: i32, name: *const u16) -> *mut c_void;
+        fn SetEvent(handle: *mut c_void) -> i32;
+        fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
         fn GetLastError() -> u32;
         fn CloseHandle(handle: *mut c_void) -> i32;
     }
 
+    #[link(name = "user32")]
+    extern "system" {
+        fn AllowSetForegroundWindow(process_id: u32) -> i32;
+    }
+
     const ERROR_ALREADY_EXISTS: u32 = 183;
     const ERROR_ACCESS_DENIED: u32 = 5;
+    const EVENT_MODIFY_STATE: u32 = 0x0002;
+    const INFINITE: u32 = u32::MAX;
+    const WAIT_OBJECT_0: u32 = 0;
+    const ASFW_ANY: u32 = u32::MAX;
+
+    fn wide(name: &str) -> Vec<u16> {
+        name.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// An event handle the listener thread waits on and `Drop` closes.
+    struct EventHandle(*mut c_void);
+
+    // Waited on by one thread and signalled/closed by the owner after that
+    // thread is told to stop; the kernel object is thread-safe.
+    unsafe impl Send for EventHandle {}
+    unsafe impl Sync for EventHandle {}
+
+    pub struct FocusListener {
+        event: std::sync::Arc<EventHandle>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl FocusListener {
+        pub fn start(
+            name: &str,
+            on_request: Box<dyn Fn() + Send + 'static>,
+        ) -> Result<Self, String> {
+            let name = wide(name);
+            // Auto-reset: each wait consumes one request.
+            // SAFETY: `name` is NUL-terminated and outlives the call; null
+            // attributes mean the default security descriptor.
+            let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+            if handle.is_null() {
+                // SAFETY: read immediately after the call it reports on.
+                return Err(format!("CreateEventW failed: {}", unsafe {
+                    GetLastError()
+                }));
+            }
+            let event = std::sync::Arc::new(EventHandle(handle));
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let thread = {
+                let event = event.clone();
+                let stop = stop.clone();
+                std::thread::Builder::new()
+                    .name("instance-focus".into())
+                    .spawn(move || loop {
+                        // SAFETY: the handle stays open until this thread has
+                        // been joined (see Drop).
+                        let woke = unsafe { WaitForSingleObject(event.0, INFINITE) };
+                        if woke != WAIT_OBJECT_0 || stop.load(std::sync::atomic::Ordering::SeqCst) {
+                            break;
+                        }
+                        on_request();
+                    })
+                    .map_err(|e| e.to_string())?
+            };
+            Ok(Self {
+                event,
+                stop,
+                thread: Some(thread),
+            })
+        }
+    }
+
+    impl Drop for FocusListener {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            // SAFETY: the handle is still open; this wakes the waiting thread.
+            unsafe { SetEvent(self.event.0) };
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+            // SAFETY: the only waiter has exited; closed exactly once.
+            unsafe { CloseHandle(self.event.0) };
+        }
+    }
+
+    /// Signals the named event if some process created it. The caller is the
+    /// process the person just launched, so it may hand its right to take the
+    /// foreground to whoever answers.
+    pub fn signal_event(name: &str) -> bool {
+        let name = wide(name);
+        // SAFETY: `name` is NUL-terminated and outlives the call.
+        let handle = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+        if handle.is_null() {
+            return false;
+        }
+        // SAFETY: plain calls on a handle just opened, closed once.
+        unsafe {
+            AllowSetForegroundWindow(ASFW_ANY);
+            let delivered = SetEvent(handle) != 0;
+            CloseHandle(handle);
+            delivered
+        }
+    }
 
     pub struct Handle(*mut c_void);
 
@@ -120,7 +292,7 @@ mod windows {
     unsafe impl Sync for Handle {}
 
     pub fn create_mutex(name: &str) -> Result<Handle, GuardError> {
-        let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide = wide(name);
         // SAFETY: `wide` is NUL-terminated and outlives the call; null
         // attributes are allowed and mean the default security descriptor.
         let handle = unsafe { CreateMutexW(std::ptr::null(), 0, wide.as_ptr()) };
@@ -262,6 +434,40 @@ mod tests {
         let _ = child.wait();
 
         assert!(matches!(refused, Err(GuardError::AlreadyRunning)));
+    }
+
+    /// A refused launch has no window of its own to show, so the one that is
+    /// already open has to come forward: the request must reach its listener.
+    #[cfg(windows)]
+    #[test]
+    fn a_focus_request_reaches_the_running_instance() {
+        let name = unique("focus");
+        let (sender, received) = std::sync::mpsc::channel();
+        let _listener = listen_for_focus_named(&name, move || {
+            let _ = sender.send(());
+        })
+        .expect("the running instance listens");
+
+        assert!(request_focus_named(&name), "the request is delivered");
+        received
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the listener is woken");
+    }
+
+    #[test]
+    fn a_focus_request_with_nobody_listening_is_not_delivered() {
+        assert!(!request_focus_named(&unique("nobody")));
+    }
+
+    /// The listener lives as long as the guard; once it is gone the name must
+    /// not keep answering for an instance that no longer exists.
+    #[cfg(windows)]
+    #[test]
+    fn a_dropped_listener_no_longer_answers() {
+        let name = unique("dropped");
+        drop(listen_for_focus_named(&name, || {}).expect("listener"));
+
+        assert!(!request_focus_named(&name));
     }
 
     #[test]

@@ -846,13 +846,6 @@ pub fn run() {
             #[cfg(debug_assertions)]
             apply_development_window_title(app)?;
 
-            // First thing on screen: the main window is configured hidden, so the
-            // startup mark stands in for it while the work below runs. The frontend
-            // closes it via `splash_finish` once it is ready; the watchdog reveals the
-            // main window anyway if that signal never arrives.
-            splash::open(&app.handle().clone());
-            splash::start_watchdog(&app.handle().clone());
-
             use tauri_plugin_dialog::MessageDialogKind;
             // On a clean/varied Windows PC the data dir or DB can be unreachable
             // (redirected/roaming AppData, read-only or full disk, AV locking the
@@ -901,9 +894,27 @@ pub fn run() {
             match instance_guard::acquire(&app_dir) {
                 Ok(guard) => {
                     app.manage(guard);
+                    // A later launch that the guard refuses asks this one to
+                    // come forward. Not fatal: without it that launch still
+                    // explains itself.
+                    let focus_handle = app.handle().clone();
+                    match instance_guard::listen_for_focus(move || {
+                        let target = focus_handle.clone();
+                        let _ = focus_handle
+                            .run_on_main_thread(move || splash::bring_forward(&target));
+                    }) {
+                        Ok(listener) => {
+                            app.manage(listener);
+                        }
+                        Err(error) => {
+                            log::warn!(target: "setup", "focus requests unavailable: {error}");
+                        }
+                    }
                 }
                 Err(instance_guard::GuardError::AlreadyRunning) => {
-                    splash::finish_now(app.handle());
+                    // No window of this process is ever shown: the startup mark
+                    // opens only after this check, and the main window, which
+                    // never loaded, stays hidden.
                     show_setup_dialog(
                         app.handle(),
                         "EntropIA ya está abierta",
@@ -913,7 +924,14 @@ pub fn run() {
                             .to_string(),
                         MessageDialogKind::Warning,
                     );
-                    return Err("another EntropIA instance holds the archive".into());
+                    // Once the notice is read, the open one comes forward.
+                    if !instance_guard::request_focus() {
+                        log::info!(target: "setup", "the running instance did not answer the focus request");
+                    }
+                    // A refused launch is an expected outcome, not a failure:
+                    // returning an error from setup makes Tauri panic. Nothing
+                    // has been opened yet, so there is nothing to unwind.
+                    std::process::exit(0);
                 }
                 // The guard failing is not evidence of another instance, and
                 // refusing to start over it would lock someone out of their
@@ -922,6 +940,14 @@ pub fn run() {
                     log::warn!(target: "setup", "instance guard unavailable: {error}");
                 }
             }
+
+            // First thing on screen once this process owns the archive: the main
+            // window is configured hidden, so the startup mark stands in for it
+            // while the work below runs. The frontend closes it via
+            // `splash_finish` once it is ready; the watchdog reveals the main
+            // window anyway if that signal never arrives.
+            splash::open(&app.handle().clone());
+            splash::start_watchdog(&app.handle().clone());
 
             // An isolated dev profile starts empty: it never pulls a legacy
             // archive into itself.
