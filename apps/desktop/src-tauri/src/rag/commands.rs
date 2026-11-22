@@ -253,6 +253,22 @@ pub async fn rag_chunk_coverage(
     .map_err(|e| format!("RAG chunk coverage task panicked: {e}"))?
 }
 
+/// Cuántas páginas esperan sus pasajes. El Chat lo relee mientras la cola
+/// trabaja para avisar que un documento recién leído todavía no se encuentra.
+#[tauri::command]
+pub async fn rag_embedding_queue(
+    db: tauri::State<'_, crate::db::state::AppDbState>,
+) -> Result<i64, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = crate::db::open::open_archive_connection(&db_path)
+            .map_err(|e| format!("Failed to open DB for the embedding queue: {e}"))?;
+        retrieval::embedding_queue_count(&conn)
+    })
+    .await
+    .map_err(|e| format!("Embedding queue task panicked: {e}"))?
+}
+
 // Each argument is a field of the IPC payload: grouping them would change it.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]

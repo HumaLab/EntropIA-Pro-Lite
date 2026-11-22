@@ -190,6 +190,7 @@ const APP_COMMANDS: &[&str] = &[
     "help_history_clear",
     "help_history_append",
     "rag_chunk_coverage",
+    "rag_embedding_queue",
     "rag_list_conversations",
     "rag_search_conversations",
     "rag_get_conversation",

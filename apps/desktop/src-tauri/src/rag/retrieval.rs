@@ -484,6 +484,23 @@ pub(crate) fn chunk_coverage(conn: &Connection) -> Result<RagChunkCoverage, Stri
     .map_err(|e| format!("Failed to read RAG chunk coverage: {e}"))
 }
 
+/// Páginas del corpus cuyo embedding espera o se está calculando: su texto
+/// nuevo todavía no se encuentra por pasaje. Consulta solo la cola (índice por
+/// estado), así que el Chat la puede releer mientras la cola trabaja sin
+/// recorrer el texto del corpus. Las unidades en pausa (`blocked`) no cuentan:
+/// no avanzan solas y Inicio las muestra aparte.
+pub(crate) fn embedding_queue_count(conn: &Connection) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(DISTINCT subject_id) FROM processing_tasks
+         WHERE state IN ('pending', 'running', 'retry_wait', 'interrupted')
+           AND kind = 'embedding'
+           AND domain = 'corpus'",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("Failed to read the embedding queue: {e}"))
+}
+
 #[cfg(test)]
 fn hybrid_retrieve(
     conn: &Connection,
@@ -3756,6 +3773,43 @@ mod tests {
             chunk_coverage(&conn).expect("coverage").assets_with_chunks,
             0
         );
+    }
+
+    #[test]
+    fn embedding_queue_counts_documents_whose_passages_are_still_coming() {
+        let conn = Connection::open_in_memory().expect("in-memory DB");
+        conn.execute_batch(
+            "CREATE TABLE processing_tasks (
+                 id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL,
+                 domain TEXT NOT NULL DEFAULT 'corpus', subject_id TEXT NOT NULL DEFAULT ''
+             );",
+        )
+        .expect("schema");
+        assert_eq!(embedding_queue_count(&conn).expect("queue"), 0);
+
+        let task = |id: &str, kind: &str, subject: &str, state: &str, domain: &str| {
+            conn.execute(
+                "INSERT INTO processing_tasks(id, kind, subject_id, state, domain)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![id, kind, subject, state, domain],
+            )
+            .expect("task");
+        };
+        // Waiting or in flight: the new text is not searchable by passage yet.
+        task("t1", "embedding", "asset-a", "pending", "corpus");
+        task("t2", "embedding", "asset-b", "running", "corpus");
+        task("t3", "embedding", "asset-c", "retry_wait", "corpus");
+        task("t4", "embedding", "asset-d", "interrupted", "corpus");
+        // A second live unit for the same page counts the page once.
+        task("t5", "embedding", "asset-a", "retry_wait", "corpus");
+        // Settled or paused units, other kinds and the bibliography never count.
+        task("t6", "embedding", "asset-e", "succeeded", "corpus");
+        task("t7", "embedding", "asset-f", "skipped", "corpus");
+        task("t8", "embedding", "asset-g", "blocked", "corpus");
+        task("t9", "ocr", "asset-h", "pending", "corpus");
+        task("t10", "embedding", "asset-i", "pending", "bibliography");
+
+        assert_eq!(embedding_queue_count(&conn).expect("queue"), 4);
     }
 
     #[test]

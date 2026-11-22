@@ -1225,6 +1225,10 @@ const es = {
     'Hay bibliotecas sincronizadas, pero todavía no tienen vectores para buscar por significado: los pasajes no se pueden consultar hasta que termine el indexado.',
   'ragChat.chunkCoveragePartial':
     'Pasajes indexados en {chunked} de {total} documentos con texto en este equipo. El resto se busca por página entera, con menos precisión.',
+  'ragChat.embeddingQueueOne':
+    '1 documento espera sus pasajes: se indexa en segundo plano y, hasta que termine, el chat no encuentra su texto nuevo.',
+  'ragChat.embeddingQueueMany':
+    '{count} documentos esperan sus pasajes: se indexan en segundo plano y, hasta que terminen, el chat no encuentra su texto nuevo.',
   'ragChat.biblioNotice.noLibrarySynced':
     'No se buscó en la Biblioteca: no hay ninguna de las bibliotecas elegidas sincronizada en EntropIA.',
   'ragChat.biblioNotice.noEmbeddings':
@@ -5447,6 +5451,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Libraries are synced, but they have no vectors for meaning-based search yet: passages cannot be queried until indexing finishes.',
   'ragChat.chunkCoveragePartial':
     'Passages indexed for {chunked} of {total} documents with text on this device. The rest are searched as whole pages, less precisely.',
+  'ragChat.embeddingQueueOne':
+    '1 document is waiting for its passages: it is indexed in the background, and until that finishes the chat cannot find its new text.',
+  'ragChat.embeddingQueueMany':
+    '{count} documents are waiting for their passages: they are indexed in the background, and until that finishes the chat cannot find their new text.',
   'ragChat.biblioNotice.noLibrarySynced':
     'The Library was not searched: none of the chosen libraries is synced into EntropIA.',
   'ragChat.biblioNotice.noEmbeddings':

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { locale } from '$lib/i18n'
 import type { RagAnswer, RagChunkCoverage, RagConversation, RagConversationSummary } from '$lib/rag'
 import { ragChat } from '$lib/rag-chat'
@@ -57,6 +58,7 @@ interface BackendState {
   conversations: Record<string, RagConversation>
   ask: (args: { question: string; conversationId?: string }) => Promise<RagAnswer> | RagAnswer
   coverage?: RagChunkCoverage
+  queued?: number
 }
 
 function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
@@ -103,6 +105,8 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
         return undefined
       case 'rag_chunk_coverage':
         return state.coverage ?? { assetsWithText: 0, assetsWithChunks: 0 }
+      case 'rag_embedding_queue':
+        return state.queued ?? 0
       default:
         throw new Error(`unexpected command: ${command}`)
     }
@@ -236,7 +240,9 @@ describe('RagChatView', () => {
   })
 
   it('says when only part of the corpus has indexed passages on this device', async () => {
-    setupBackend({ coverage: { assetsWithText: 10, assetsWithChunks: 4 } })
+    setupBackend({
+      coverage: { assetsWithText: 10, assetsWithChunks: 4 },
+    })
     render(RagChatView)
 
     expect(
@@ -247,12 +253,95 @@ describe('RagChatView', () => {
   })
 
   it('says nothing about coverage once every document with text has passages', async () => {
-    setupBackend({ coverage: { assetsWithText: 10, assetsWithChunks: 10 } })
+    setupBackend({
+      coverage: { assetsWithText: 10, assetsWithChunks: 10 },
+    })
     render(RagChatView)
 
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith('rag_chunk_coverage'))
     await tick()
     expect(screen.queryByText(/Pasajes indexados en/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/esperan? sus pasajes/)).not.toBeInTheDocument()
+  })
+
+  it('says a freshly read document still waits for its passages', async () => {
+    setupBackend({
+      coverage: { assetsWithText: 10, assetsWithChunks: 10 },
+      queued: 1,
+    })
+    render(RagChatView)
+
+    expect(
+      await screen.findByText(
+        '1 documento espera sus pasajes: se indexa en segundo plano y, hasta que termine, el chat no encuentra su texto nuevo.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('counts several documents waiting for their passages', async () => {
+    setupBackend({
+      coverage: { assetsWithText: 10, assetsWithChunks: 7 },
+      queued: 3,
+    })
+    render(RagChatView)
+
+    expect(
+      await screen.findByText(
+        '3 documentos esperan sus pasajes: se indexan en segundo plano y, hasta que terminen, el chat no encuentra su texto nuevo.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Pasajes indexados en 7 de 10/)).toBeInTheDocument()
+  })
+
+  it('drops the waiting note once the queue reports the passages are done', async () => {
+    const handlers = new Map<string, () => void>()
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      handlers.set(event, handler as unknown as () => void)
+      return () => handlers.delete(event)
+    })
+    const state = setupBackend({
+      coverage: { assetsWithText: 10, assetsWithChunks: 10 },
+      queued: 1,
+    })
+    render(RagChatView)
+    expect(await screen.findByText(/1 documento espera sus pasajes/)).toBeInTheDocument()
+
+    state.queued = 0
+    await waitFor(() => expect(handlers.has('processing:changed')).toBe(true))
+    handlers.get('processing:changed')?.()
+
+    await waitFor(() =>
+      expect(screen.queryByText(/1 documento espera sus pasajes/)).not.toBeInTheDocument()
+    )
+    // The drained queue changed the coverage too: it is read once more.
+    await waitFor(() => expect(callsFor('rag_chunk_coverage')).toHaveLength(2))
+  })
+
+  it('re-reads the waiting count while the queue keeps settling tasks', async () => {
+    const handlers = new Map<string, () => void>()
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      handlers.set(event, handler as unknown as () => void)
+      return () => handlers.delete(event)
+    })
+    const state = setupBackend({
+      coverage: { assetsWithText: 10, assetsWithChunks: 10 },
+      queued: 3,
+    })
+    render(RagChatView)
+    expect(await screen.findByText(/3 documentos esperan sus pasajes/)).toBeInTheDocument()
+    await waitFor(() => expect(handlers.has('processing:changed')).toBe(true))
+
+    // A busy queue settles a task every few hundred milliseconds: the note must
+    // follow it instead of waiting for the queue to go quiet.
+    state.queued = 2
+    const stream = setInterval(() => handlers.get('processing:changed')?.(), 100)
+    try {
+      expect(
+        await screen.findByText(/2 documentos esperan sus pasajes/, undefined, { timeout: 2000 })
+      ).toBeInTheDocument()
+    } finally {
+      clearInterval(stream)
+    }
   })
 
   it('sends a question with Enter and renders the answer with its sources', async () => {

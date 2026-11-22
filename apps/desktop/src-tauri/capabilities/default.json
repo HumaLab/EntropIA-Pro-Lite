@@ -183,6 +183,7 @@
     "allow-help-history-clear",
     "allow-help-history-append",
     "allow-rag-chunk-coverage",
+    "allow-rag-embedding-queue",
     "allow-rag-list-conversations",
     "allow-rag-search-conversations",
     "allow-rag-get-conversation",
