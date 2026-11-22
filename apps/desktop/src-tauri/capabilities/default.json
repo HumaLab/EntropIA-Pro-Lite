@@ -106,6 +106,8 @@
     "allow-glm-ocr-download-models",
     "allow-qwen-correction-local-info",
     "allow-qwen-correction-download-models",
+    "allow-glm-ocr-delete-models",
+    "allow-qwen-correction-delete-models",
     "allow-llama-server-download",
     "allow-local-modes-offer",
     "allow-ocr-local-high-info",

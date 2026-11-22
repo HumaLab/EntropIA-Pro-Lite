@@ -57,6 +57,12 @@ export function glmOcrDownloadModels(): Promise<string> {
   return invoke<string>('glm_ocr_download_models')
 }
 
+/** Delete the local GLM-OCR GGUF files; resolves to the bytes freed. */
+export function glmOcrDeleteModels(): Promise<number> {
+  if (OFF) return Promise.resolve(0)
+  return invoke<number>('glm_ocr_delete_models')
+}
+
 /**
  * Start downloading llama-server, shared by GLM-OCR and the Qwen corrector.
  * Progress arrives as `llama-server:download_*` events.

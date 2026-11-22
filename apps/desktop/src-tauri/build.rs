@@ -113,6 +113,8 @@ const APP_COMMANDS: &[&str] = &[
     "glm_ocr_download_models",
     "qwen_correction_local_info",
     "qwen_correction_download_models",
+    "glm_ocr_delete_models",
+    "qwen_correction_delete_models",
     "llama_server_download",
     "local_modes_offer",
     "ocr_local_high_info",

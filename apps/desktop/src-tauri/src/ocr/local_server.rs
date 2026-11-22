@@ -267,6 +267,46 @@ pub(crate) fn shutdown() {
     }
 }
 
+/// Stop the server if it runs a model from `dir`. Windows refuses to delete a
+/// file another process holds open, and the server keeps both GGUF files open
+/// while it lives; it is started again on the next run that needs it.
+pub(crate) fn stop_if_serving_from(dir: &Path) {
+    if let Ok(mut slot) = SERVER.lock() {
+        let serving = slot
+            .as_ref()
+            .is_some_and(|running| running.assets.model.starts_with(dir));
+        if serving {
+            if let Some(running) = slot.as_mut() {
+                stop(running);
+            }
+            *slot = None;
+        }
+    }
+}
+
+/// Delete the named model files in `dir`, and the partial download of each,
+/// returning the bytes freed. Files that are not there are skipped, so a second
+/// call, or a folder that was never created, frees nothing and is not an error.
+/// Only the listed names are touched: the folder and anything else in it stay.
+pub(crate) fn delete_model_files(dir: &Path, filenames: &[&str]) -> Result<u64, String> {
+    let mut freed = 0;
+    for filename in filenames {
+        let partial = Path::new(filename).with_extension("download.tmp");
+        for path in [dir.join(filename), dir.join(partial)] {
+            let size = match std::fs::metadata(&path) {
+                Ok(meta) if meta.is_file() => meta.len(),
+                Ok(_) => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(format!("No se pudo leer {}: {e}", path.display())),
+            };
+            std::fs::remove_file(&path)
+                .map_err(|e| format!("No se pudo borrar {}: {e}", path.display()))?;
+            freed += size;
+        }
+    }
+    Ok(freed)
+}
+
 fn base_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
 }
@@ -503,6 +543,35 @@ fn kill_stale_server(db_path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deleting_models_removes_only_the_named_files_and_their_partial_downloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("models").join("qwen");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("model.gguf"), vec![0u8; 30]).unwrap();
+        std::fs::write(models.join("mmproj.gguf"), vec![0u8; 12]).unwrap();
+        std::fs::write(models.join("model.download.tmp"), vec![0u8; 5]).unwrap();
+        std::fs::write(models.join("notes.txt"), b"kept").unwrap();
+
+        let freed = super::delete_model_files(&models, &["model.gguf", "mmproj.gguf"]).unwrap();
+
+        assert_eq!(freed, 47);
+        assert!(!models.join("model.gguf").exists());
+        assert!(!models.join("mmproj.gguf").exists());
+        assert!(!models.join("model.download.tmp").exists());
+        assert!(models.join("notes.txt").is_file());
+
+        // Nothing left to delete is not an error, and a missing folder neither.
+        assert_eq!(
+            super::delete_model_files(&models, &["model.gguf", "mmproj.gguf"]).unwrap(),
+            0
+        );
+        assert_eq!(
+            super::delete_model_files(&dir.path().join("absent"), &["model.gguf"]).unwrap(),
+            0
+        );
+    }
+
     #[test]
     fn vision_models_are_refused_without_a_gpu_that_runs_them() {
         use super::llama_gpu::Engine;

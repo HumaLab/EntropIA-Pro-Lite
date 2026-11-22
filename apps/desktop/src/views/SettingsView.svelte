@@ -131,6 +131,7 @@
   import {
     glmOcrLocalInfo,
     glmOcrDownloadModels,
+    glmOcrDeleteModels,
     llamaServerDownload,
     type LlamaServerSource,
     type GlmOcrLocalInfo,
@@ -141,6 +142,7 @@
   import {
     qwenCorrectionLocalInfo,
     qwenCorrectionDownloadModels,
+    qwenCorrectionDeleteModels,
     type QwenLocalInfo,
     type QwenCorrectionDownloadProgressPayload,
     type QwenCorrectionDownloadCompletePayload,
@@ -428,6 +430,15 @@
     zotero: 'Zotero',
   }
   let pendingClearKey = $state<ClearableKey | null>(null)
+  // Local vision models the card can delete; sizes are the two GGUF files together.
+  const LOCAL_VISION_MODELS = {
+    glmOcr: { name: 'GLM-OCR', gb: 1.4 },
+    qwen: { name: 'Qwen3-VL', gb: 2.9 },
+  } as const
+  type LocalVisionModel = keyof typeof LOCAL_VISION_MODELS
+  let pendingDeleteModels = $state<LocalVisionModel | null>(null)
+  let deletingModels = $state(false)
+  let deleteModelsError = $state<string | null>(null)
   // "Usar esta API": a switched-off provider keeps its key, but the backend
   // reads it as absent (settings.rs `api_key_disabled`).
   const allApisOn = (): Record<ClearableKey, boolean> => ({
@@ -1708,6 +1719,34 @@
     }
   }
 
+  function openDeleteModels(target: LocalVisionModel) {
+    deleteModelsError = null
+    pendingDeleteModels = target
+  }
+
+  async function handleDeleteModelsConfirm() {
+    const target = pendingDeleteModels
+    if (!target) return
+    deletingModels = true
+    deleteModelsError = null
+    try {
+      if (target === 'glmOcr') {
+        await glmOcrDeleteModels()
+        glmOcrLocal = await glmOcrLocalInfo().catch(() => null)
+      } else {
+        await qwenCorrectionDeleteModels()
+        qwenLocal = await qwenCorrectionLocalInfo().catch(() => null)
+      }
+      pendingDeleteModels = null
+    } catch (e) {
+      deleteModelsError = e instanceof Error ? e.message : String(e)
+    } finally {
+      deletingModels = false
+    }
+  }
+
+  const formatGb = (gb: number) => gb.toLocaleString(activeLocale)
+
   async function handleSave() {
     if (!settingsLoaded) return
     saving = true
@@ -2972,6 +3011,23 @@
                     </Button>
                   {/if}
 
+                  {#if !glmOcrDownloading && (glmOcrLocal.model_present || glmOcrLocal.mmproj_present)}
+                    {#if !glmOcrLocal.gpu_fits}
+                      <p class="settings__hint">
+                        {t('settings.localModels.deleteToFree', {
+                          gb: formatGb(LOCAL_VISION_MODELS.glmOcr.gb),
+                        })}
+                      </p>
+                    {/if}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onclick={() => openDeleteModels('glmOcr')}
+                    >
+                      {t('settings.localModels.deleteModels')}
+                    </Button>
+                  {/if}
+
                   {#if glmOcrDownloadError}
                     <p class="surface-message surface-message--error">
                       {glmOcrDownloadError}
@@ -3032,6 +3088,19 @@
                   {:else if qwenLocal.gpu_fits && (!qwenLocal.model_present || !qwenLocal.mmproj_present)}
                     <Button variant="primary" size="sm" onclick={handleDownloadQwenModels}>
                       {t('settings.qwenCorrectLocal.download')}
+                    </Button>
+                  {/if}
+
+                  {#if !qwenDownloading && (qwenLocal.model_present || qwenLocal.mmproj_present)}
+                    {#if !qwenLocal.gpu_fits}
+                      <p class="settings__hint">
+                        {t('settings.localModels.deleteToFree', {
+                          gb: formatGb(LOCAL_VISION_MODELS.qwen.gb),
+                        })}
+                      </p>
+                    {/if}
+                    <Button variant="secondary" size="sm" onclick={() => openDeleteModels('qwen')}>
+                      {t('settings.localModels.deleteModels')}
                     </Button>
                   {/if}
 
@@ -4009,6 +4078,25 @@
         confirming={clearingKey}
         oncancel={() => (pendingClearKey = null)}
         onconfirm={handleClearKeyConfirm}
+      />
+    {/if}
+
+    {#if pendingDeleteModels}
+      <ConfirmDialog
+        title={t('settings.localModels.deleteTitle', {
+          model: LOCAL_VISION_MODELS[pendingDeleteModels].name,
+        })}
+        titleId="settings-delete-models-title"
+        message={t('settings.localModels.deleteMessage', {
+          gb: formatGb(LOCAL_VISION_MODELS[pendingDeleteModels].gb),
+        })}
+        error={deleteModelsError}
+        cancelLabel={t('collections.cancel')}
+        confirmLabel={t('settings.localModels.deleteModels')}
+        variant="destructive"
+        confirming={deletingModels}
+        oncancel={() => (pendingDeleteModels = null)}
+        onconfirm={handleDeleteModelsConfirm}
       />
     {/if}
   </div>

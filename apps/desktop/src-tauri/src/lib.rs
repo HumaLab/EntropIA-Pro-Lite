@@ -1736,6 +1736,8 @@ pub fn run() {
             ocr::commands::glm_ocr_download_models,
             ocr::commands::qwen_correction_local_info,
             ocr::commands::qwen_correction_download_models,
+            ocr::commands::glm_ocr_delete_models,
+            ocr::commands::qwen_correction_delete_models,
             ocr::commands::llama_server_download,
             local_modes_offer::local_modes_offer,
             ocr::commands::ocr_local_high_info,

@@ -574,6 +574,103 @@ describe('SettingsView', () => {
         unmount()
       }
     })
+
+    function answerInstalledModels(gpuFits: boolean, deleteFails = false) {
+      let qwenDeleted = false
+      settingsGetMock.mockImplementation(async () => null)
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'glm_ocr_local_info') return visionInfo({ gpu_fits: gpuFits })
+        if (command === 'qwen_correction_local_info')
+          return qwenDeleted
+            ? missingModels(command, gpuFits)
+            : visionInfo({ gpu_fits: gpuFits, min_vram_gb: 6 })
+        if (command === 'qwen_correction_delete_models') {
+          if (deleteFails) throw new Error('No se pudo borrar el modelo: está en uso')
+          qwenDeleted = true
+          return 3_100_000_000
+        }
+        return undefined
+      })
+    }
+
+    it('offers to delete installed models and not missing ones', async () => {
+      answerInstalledModels(true)
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(await screen.findAllByRole('button', { name: 'Borrar modelos' })).toHaveLength(2)
+        expect(screen.queryByText(/Podés borrarlos para liberar/)).toBeNull()
+      } finally {
+        unmount()
+      }
+
+      answerVisionInfo(true)
+      const missing = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        await screen.findAllByRole('button', { name: /Descargar modelos/ })
+        expect(screen.queryByRole('button', { name: 'Borrar modelos' })).toBeNull()
+      } finally {
+        missing.unmount()
+      }
+    })
+
+    it('says how much space deleting frees when the GPU cannot run the models', async () => {
+      answerInstalledModels(false)
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(
+          await screen.findByText('Podés borrarlos para liberar unos 1,4 GB.')
+        ).toBeInTheDocument()
+        expect(screen.getByText('Podés borrarlos para liberar unos 2,9 GB.')).toBeInTheDocument()
+      } finally {
+        unmount()
+      }
+    })
+
+    it('deletes the models only after confirming, then shows them missing', async () => {
+      answerInstalledModels(true)
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        const buttons = await screen.findAllByRole('button', { name: 'Borrar modelos' })
+        await fireEvent.click(buttons[1]!)
+        const dialog = await screen.findByRole('dialog')
+        expect(within(dialog).getByText('¿Borrar los modelos de Qwen3-VL?')).toBeInTheDocument()
+        expect(within(dialog).getByText(/se liberan unos 2,9 GB/)).toBeInTheDocument()
+        expect(invokeMock).not.toHaveBeenCalledWith('qwen_correction_delete_models')
+
+        await fireEvent.click(within(dialog).getByRole('button', { name: 'Borrar modelos' }))
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+        expect(invokeMock).toHaveBeenCalledWith('qwen_correction_delete_models')
+        expect(invokeMock).not.toHaveBeenCalledWith('glm_ocr_delete_models')
+        expect(
+          screen.getByText('Qwen3VL-4B-Instruct-Q4_K_M.gguf mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf')
+        ).toBeInTheDocument()
+        expect(screen.getAllByRole('button', { name: 'Borrar modelos' })).toHaveLength(1)
+      } finally {
+        unmount()
+      }
+    })
+
+    it('keeps the dialog open with the reason when the files cannot be deleted', async () => {
+      answerInstalledModels(true, true)
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        const buttons = await screen.findAllByRole('button', { name: 'Borrar modelos' })
+        await fireEvent.click(buttons[1]!)
+        const dialog = await screen.findByRole('dialog')
+        await fireEvent.click(within(dialog).getByRole('button', { name: 'Borrar modelos' }))
+        expect(
+          await within(dialog).findByText('No se pudo borrar el modelo: está en uso')
+        ).toBeInTheDocument()
+        expect(screen.getAllByRole('button', { name: 'Borrar modelos' }).length).toBeGreaterThan(1)
+      } finally {
+        unmount()
+      }
+    })
   })
 
   it.runIf(LOCAL_ML)('shows the Parakeet model as ready once it is on disk', async () => {
