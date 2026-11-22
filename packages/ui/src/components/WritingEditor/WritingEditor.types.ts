@@ -236,6 +236,7 @@ export const DEFAULT_WRITING_EDITOR_LABELS: WritingEditorLabels = {
   dictationProcessing: 'Procesando dictado...',
   dictationNoMicrophone: 'No hay micrófono disponible en este dispositivo.',
   dictationNoAudio: 'No se pudo capturar audio del micrófono.',
+  dictationSilentMicrophone: 'El micrófono no envía sonido: desconectá y reconectá el dispositivo.',
   dictationAutoStopProcessing: 'Se alcanzó el máximo de {duration}. Procesando audio...',
   dictationTranscribing: 'Transcribiendo audio...',
   dictationAutoStopInserted: 'Se alcanzó el máximo de {duration}. Texto insertado.',

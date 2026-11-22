@@ -2952,6 +2952,8 @@ const es = {
   'item.noteEditor.helper': 'Tip: seleccioná texto para aplicar formato o links.',
   'item.noteEditor.noMicrophone': 'No hay micrófono disponible en este dispositivo.',
   'item.noteEditor.noAudio': 'No se pudo capturar audio del micrófono.',
+  'item.noteEditor.silentMicrophone':
+    'El micrófono no envía sonido: desconectá y reconectá el dispositivo.',
   'item.noteEditor.autoStopProcessing': 'Se alcanzó el máximo de {duration}. Procesando audio...',
   'item.noteEditor.transcribing': 'Transcribiendo audio...',
   'item.noteEditor.autoStopInserted': 'Se alcanzó el máximo de {duration}. Texto insertado.',
@@ -6623,6 +6625,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.noteEditor.helper': 'Tip: select text to apply formatting or links.',
   'item.noteEditor.noMicrophone': 'Microphone is not available on this device.',
   'item.noteEditor.noAudio': 'Could not capture audio from the microphone.',
+  'item.noteEditor.silentMicrophone':
+    'The microphone is not sending sound: unplug the device and plug it in again.',
   'item.noteEditor.autoStopProcessing': 'Reached the maximum of {duration}. Processing audio...',
   'item.noteEditor.transcribing': 'Transcribing audio...',
   'item.noteEditor.autoStopInserted': 'Reached the maximum of {duration}. Text inserted.',

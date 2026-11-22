@@ -1325,7 +1325,7 @@
           data-testid="writing-editor-dictation-message"
         >
           {dictation.message}
-          {#if dictation.state === 'error' && ondictationhelp}
+          {#if dictation.offersAppFix && ondictationhelp}
             <Button
               size="sm"
               variant="ghost"

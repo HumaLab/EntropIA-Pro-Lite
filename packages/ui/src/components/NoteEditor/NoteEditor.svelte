@@ -58,6 +58,8 @@
     helperText: 'Tip: select text to apply formatting or links.',
     dictationNoMicrophone: 'Microphone is not available on this device.',
     dictationNoAudio: 'Could not capture audio from the microphone.',
+    dictationSilentMicrophone:
+      'The microphone is not sending sound: unplug the device and plug it in again.',
     dictationAutoStopProcessing: 'Reached the maximum of {duration}. Processing audio...',
     dictationTranscribing: 'Transcribing audio...',
     dictationAutoStopInserted: 'Reached the maximum of {duration}. Text inserted.',
@@ -530,7 +532,7 @@
       data-testid="note-editor-dictation-message"
     >
       {dictation.message}
-      {#if dictation.state === 'error' && ondictationhelp}
+      {#if dictation.offersAppFix && ondictationhelp}
         <Button
           size="sm"
           variant="ghost"

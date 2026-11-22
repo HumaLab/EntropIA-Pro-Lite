@@ -3,6 +3,7 @@ import type { Editor } from '@tiptap/core'
 import {
   chooseDictationCaptureStrategy,
   encodeWavFromPcm,
+  isSilentPcm,
   type DictationCaptureStrategy,
 } from './dictation'
 
@@ -25,6 +26,8 @@ export interface DictationLabels {
   dictationProcessing: string
   dictationNoMicrophone: string
   dictationNoAudio: string
+  /** The recording has samples but no sound: the microphone dropped out. */
+  dictationSilentMicrophone: string
   dictationAutoStopProcessing: string
   dictationTranscribing: string
   dictationAutoStopInserted: string
@@ -91,6 +94,7 @@ export function createDictation(options: DictationOptions) {
   let dictationState = $state<DictationState>('idle')
   let dictationSeconds = $state(0)
   let dictationMessage = $state<string | null>(null)
+  let dictationMicrophoneFault = $state(false)
   let dictationAutoStopped = false
   let dictationStrategy: DictationCaptureStrategy | null = null
   let mediaRecorder: MediaRecorder | null = null
@@ -152,8 +156,13 @@ export function createDictation(options: DictationOptions) {
     }
   }
 
-  function setDictationMessage(message: string | null, tone: 'idle' | 'error' = 'idle') {
+  function setDictationMessage(
+    message: string | null,
+    tone: 'idle' | 'error' = 'idle',
+    microphoneFault = false
+  ) {
     dictationMessage = message
+    dictationMicrophoneFault = microphoneFault
     if (tone === 'error') {
       dictationState = 'error'
     }
@@ -260,7 +269,7 @@ export function createDictation(options: DictationOptions) {
     options.oninserted?.()
   }
 
-  async function finalizeCapturedAudio(audioBlob: Blob, details: string) {
+  async function finalizeCapturedAudio(audioBlob: Blob, details: string, silent = false) {
     const wasAutoStopped = dictationAutoStopped
 
     await resetDictationCaptureState()
@@ -277,6 +286,15 @@ export function createDictation(options: DictationOptions) {
         logDictation('warn', 'recording finished without usable audio data')
         setDictationMessage(options.labels.dictationNoAudio, 'error')
       }
+      return
+    }
+
+    // The engine would only answer with no text (or, for AssemblyAI, an
+    // English error) for a microphone that sent nothing; say so instead.
+    if (silent) {
+      dictationState = 'idle'
+      logDictation('warn', 'recording is silent; the engine was not called')
+      setDictationMessage(options.labels.dictationSilentMicrophone, 'error', true)
       return
     }
 
@@ -353,7 +371,8 @@ export function createDictation(options: DictationOptions) {
         : new Blob([], { type: 'audio/wav' })
     await finalizeCapturedAudio(
       audioBlob,
-      `strategy=pcm-wav; chunks=${dictationPcmChunks.length}; sampleCount=${sampleCount}; sampleRate=${sampleRate}`
+      `strategy=pcm-wav; chunks=${dictationPcmChunks.length}; sampleCount=${sampleCount}; sampleRate=${sampleRate}`,
+      sampleCount > 0 && isSilentPcm(dictationPcmChunks)
     )
   }
 
@@ -605,6 +624,13 @@ export function createDictation(options: DictationOptions) {
     },
     get message() {
       return dictationMessage
+    },
+    /**
+     * Whether the app's fix (AI dependencies) can help with the current
+     * error. Not for a microphone that sent nothing: the engine never ran.
+     */
+    get offersAppFix() {
+      return dictationState === 'error' && !dictationMicrophoneFault
     },
     /** What the microphone button is called in the current state. */
     get buttonLabel() {

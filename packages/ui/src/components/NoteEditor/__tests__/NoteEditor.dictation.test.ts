@@ -419,6 +419,42 @@ describe('NoteEditor dictation', () => {
     expect(ondictate).not.toHaveBeenCalled()
   })
 
+  // 2026-11-22: a webcam microphone that came back from USB suspend recorded
+  // pure silence; Parakeet returned no text and the message blamed the engine.
+  it('does not transcribe a silent recording and says the microphone sends no sound', async () => {
+    Object.defineProperty(window, 'AudioContext', {
+      configurable: true,
+      value: FakeAudioContext,
+    })
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {},
+    })
+
+    const ondictate = vi.fn().mockResolvedValue('should not be used')
+    const ondictationlog = vi.fn()
+    const ondictationhelp = vi.fn()
+    render(NoteEditor, { props: { ondictate, ondictationlog, ondictationhelp } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Start dictation' }))
+    FakeAudioContext.instances[0]?.lastProcessor?.emit([0, 0, 0, 0])
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop dictation' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('note-editor-dictation-message')).toHaveTextContent(
+        'The microphone is not sending sound: unplug the device and plug it in again.'
+      )
+    })
+    expect(ondictate).not.toHaveBeenCalled()
+    expect(ondictationlog).toHaveBeenCalledWith(
+      'warn',
+      expect.stringContaining('recording is silent')
+    )
+    expect(screen.getByRole('button', { name: 'Start dictation' })).toBeInTheDocument()
+    // The AI dependencies are not what failed: no button sends the user there.
+    expect(screen.queryByTestId('note-editor-dictation-help')).not.toBeInTheDocument()
+  })
+
   it('cleans up recorder state when MediaRecorder errors at runtime', async () => {
     render(NoteEditor, { props: { ondictate: vi.fn() } })
 

@@ -38,6 +38,7 @@ export interface NoteEditorLabels {
   helperText: string
   dictationNoMicrophone: string
   dictationNoAudio: string
+  dictationSilentMicrophone: string
   dictationAutoStopProcessing: string
   dictationTranscribing: string
   dictationAutoStopInserted: string

@@ -40,6 +40,23 @@ export function chooseDictationCaptureStrategy(
   return null
 }
 
+/**
+ * A recording whose loudest sample stays below this (about -60 dBFS) carries
+ * no sound at all: a working microphone picks up more room noise than that,
+ * and speech peaks far above it. A microphone that dropped out (a webcam
+ * back from USB suspend) records exactly this.
+ */
+export const SILENT_PEAK = 0.001
+
+export function isSilentPcm(samples: Float32Array[]): boolean {
+  for (const chunk of samples) {
+    for (const sample of chunk) {
+      if (Math.abs(sample) >= SILENT_PEAK) return false
+    }
+  }
+  return true
+}
+
 function clampPcmSample(sample: number) {
   return Math.max(-1, Math.min(1, sample))
 }

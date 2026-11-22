@@ -50,6 +50,19 @@ struct AssemblyAiApiError {
     error: Option<String>,
 }
 
+/// The message for a transcript AssemblyAI finished with `status: error`.
+/// Its silent-audio error reaches the user in English; it is the one they
+/// meet when a microphone records nothing, so it is said in Spanish.
+fn transcript_error_message(error: Option<String>) -> String {
+    match error {
+        Some(error) if error.contains("no spoken audio") => {
+            "El audio no tiene voz: AssemblyAI no encontró habla para transcribir.".to_string()
+        }
+        Some(error) => error,
+        None => "AssemblyAI returned an unknown transcription error".to_string(),
+    }
+}
+
 #[derive(Deserialize)]
 struct UploadResponse {
     upload_url: String,
@@ -255,11 +268,7 @@ impl AssemblyAiClient {
                         duration_ms,
                     });
                 }
-                "error" => {
-                    return Err(transcript.error.unwrap_or_else(|| {
-                        "AssemblyAI returned an unknown transcription error".to_string()
-                    }))
-                }
+                "error" => return Err(transcript_error_message(transcript.error)),
                 _ => {
                     if poll_attempt >= MAX_POLL_ATTEMPTS {
                         return Err(polling_exhausted_error(&transcript.status, poll_attempt));
@@ -659,6 +668,31 @@ mod tests {
     use super::transporter::CreateTranscriptOutcome;
     use super::*;
     use serde_json::json;
+
+    // 2026-11-22: a dictation from a microphone that recorded silence showed
+    // AssemblyAI's own English error in the app.
+    #[test]
+    fn the_no_spoken_audio_error_is_said_in_spanish() {
+        let message = transcript_error_message(Some(
+            "language_detection cannot be performed on files with no spoken audio.".to_string(),
+        ));
+        assert_eq!(
+            message,
+            "El audio no tiene voz: AssemblyAI no encontró habla para transcribir."
+        );
+    }
+
+    #[test]
+    fn other_transcript_errors_pass_through_unchanged() {
+        assert_eq!(
+            transcript_error_message(Some("Download error: 404".to_string())),
+            "Download error: 404"
+        );
+        assert_eq!(
+            transcript_error_message(None),
+            "AssemblyAI returned an unknown transcription error"
+        );
+    }
 
     fn current_only_config() -> AssemblyAiConfig {
         AssemblyAiConfig {

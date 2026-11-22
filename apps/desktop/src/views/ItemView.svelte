@@ -800,6 +800,7 @@
       helperText: translate('item.noteEditor.helper'),
       dictationNoMicrophone: translate('item.noteEditor.noMicrophone'),
       dictationNoAudio: translate('item.noteEditor.noAudio'),
+      dictationSilentMicrophone: translate('item.noteEditor.silentMicrophone'),
       dictationAutoStopProcessing: translate('item.noteEditor.autoStopProcessing', {
         duration: '{duration}',
       }),
