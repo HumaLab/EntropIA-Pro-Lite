@@ -144,7 +144,11 @@ type CollectionStatsRow = {
  * `pendingOcr`/`pendingEmbeddings` count assets with a non-terminal
  * `processing_tasks` row of that kind — the same "active" definition the
  * queue's own `idx_processing_tasks_active_unique` index uses (any state
- * other than `succeeded`, `failed`, `skipped` or `cancelled`).
+ * other than `succeeded`, `failed`, `skipped` or `cancelled`) — except that
+ * `pendingEmbeddings` leaves out `blocked` units.
+ * - `pausedEmbeddings`: embedding units parked `blocked` (the embedding
+ *   configuration changed while they waited). They never run on their own;
+ *   counting them as pending read as work in progress that never finished.
  */
 export type CorpusStats = {
   collections: number
@@ -158,6 +162,7 @@ export type CorpusStats = {
   embeddings: number
   pendingOcr: number
   pendingEmbeddings: number
+  pausedEmbeddings: number
 }
 
 type CorpusStatsRow = {
@@ -172,6 +177,7 @@ type CorpusStatsRow = {
   embed_count: number | null
   pending_ocr_count: number | null
   pending_embed_count: number | null
+  paused_embed_count: number | null
 }
 
 /**
@@ -1241,8 +1247,13 @@ export class ItemRepo {
             (SELECT COUNT(*)
                FROM processing_tasks pt
               WHERE pt.kind = 'embedding'
-                AND pt.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')
-            ) AS pending_embed_count
+                AND pt.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled', 'blocked')
+            ) AS pending_embed_count,
+            (SELECT COUNT(*)
+               FROM processing_tasks pt
+              WHERE pt.kind = 'embedding'
+                AND pt.state = 'blocked'
+            ) AS paused_embed_count
             FROM totals
         `)
 
@@ -1259,6 +1270,7 @@ export class ItemRepo {
         embeddings: Number(row.embed_count ?? 0),
         pendingOcr: Number(row.pending_ocr_count ?? 0),
         pendingEmbeddings: Number(row.pending_embed_count ?? 0),
+        pausedEmbeddings: Number(row.paused_embed_count ?? 0),
       }
     }
 
@@ -1326,6 +1338,7 @@ export class ItemRepo {
       embedRows,
       pendingOcrRows,
       pendingEmbedRows,
+      pausedEmbedRows,
     ] = await Promise.all([
       this.db.select({ count: sql<number>`count(*)` }).from(collections),
       this.db.select({ count: sql<number>`count(*)` }).from(items),
@@ -1372,9 +1385,13 @@ export class ItemRepo {
         .where(
           and(
             eq(processingTasks.kind, 'embedding'),
-            sql`${processingTasks.state} NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')`
+            sql`${processingTasks.state} NOT IN ('succeeded', 'failed', 'skipped', 'cancelled', 'blocked')`
           )
         ),
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(processingTasks)
+        .where(and(eq(processingTasks.kind, 'embedding'), eq(processingTasks.state, 'blocked'))),
     ])
 
     return {
@@ -1389,6 +1406,7 @@ export class ItemRepo {
       embeddings: Number(embedRows[0]?.count ?? 0),
       pendingOcr: Number(pendingOcrRows[0]?.count ?? 0),
       pendingEmbeddings: Number(pendingEmbedRows[0]?.count ?? 0),
+      pausedEmbeddings: Number(pausedEmbedRows[0]?.count ?? 0),
     }
   }
 

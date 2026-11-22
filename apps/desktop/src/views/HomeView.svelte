@@ -23,6 +23,7 @@
   import { workspace } from '$lib/workspace'
   import {
     loadHomeSnapshot,
+    resumePausedEmbeddings,
     CONTINUAR_LIMIT,
     isUntitledWritingTitle,
     type HomeRecentEntry,
@@ -75,6 +76,22 @@
       return true
     } catch {
       return false
+    }
+  }
+
+  let resumingEmbeddings = $state(false)
+  let resumeEmbeddingsError = $state<string | null>(null)
+
+  async function resumeEmbeddings() {
+    resumingEmbeddings = true
+    resumeEmbeddingsError = null
+    try {
+      await resumePausedEmbeddings()
+      await loadSnapshot()
+    } catch (caught) {
+      resumeEmbeddingsError = caught instanceof Error ? caught.message : String(caught)
+    } finally {
+      resumingEmbeddings = false
     }
   }
 
@@ -311,9 +328,17 @@
     return `${formatCount(part)} / ${formatCount(total)}`
   }
 
-  /** Guards the 0/0 case: an empty corpus reads as 0%, never NaN. */
+  /**
+   * Guards the 0/0 case: an empty corpus reads as 0%, never NaN. Rounding
+   * never claims the ends it has not reached: one file missing out of 1.372
+   * reads 99 %, not 100 %, and one done out of 1.000 reads 1 %, not 0 %.
+   */
   function percentValue(part: number, total: number): number {
-    return total > 0 ? Math.round((part / total) * 100) : 0
+    if (total <= 0) return 0
+    const rounded = Math.round((part / total) * 100)
+    if (part < total && rounded >= 100) return 99
+    if (part > 0 && rounded <= 0) return 1
+    return rounded
   }
 
   /**
@@ -680,7 +705,7 @@
             true
           )}
         </div>
-        {#if stats && snapshot && !snapshot.isFirstRun && (stats.pendingOcr > 0 || stats.pendingEmbeddings > 0)}
+        {#if stats && snapshot && !snapshot.isFirstRun && (stats.pendingOcr > 0 || stats.pendingEmbeddings > 0 || stats.pausedEmbeddings > 0)}
           <div class="home-view__corpus-footer">
             {#if stats.pendingOcr > 0}
               <button
@@ -702,6 +727,30 @@
                 {$currentLocale &&
                   t('home.corpus.pendingEmbeddings', { count: stats.pendingEmbeddings })}
               </button>
+            {/if}
+            {#if stats.pausedEmbeddings > 0}
+              <div class="home-view__corpus-paused">
+                <span class="home-view__corpus-paused-label">
+                  <span class="home-view__corpus-dot" aria-hidden="true"></span>
+                  {$currentLocale &&
+                    t('home.corpus.pausedEmbeddings', { count: stats.pausedEmbeddings })}
+                </span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={resumingEmbeddings}
+                  disabled={resumingEmbeddings}
+                  onclick={resumeEmbeddings}
+                >
+                  {$currentLocale && t('home.corpus.resumeEmbeddings')}
+                </Button>
+              </div>
+            {/if}
+            {#if resumeEmbeddingsError}
+              <p class="surface-message surface-message--error" role="alert">
+                {$currentLocale &&
+                  t('home.corpus.resumeEmbeddingsFailed', { error: resumeEmbeddingsError })}
+              </p>
             {/if}
           </div>
         {/if}
@@ -1207,6 +1256,20 @@
     color: var(--color-text-primary);
     outline: none;
     box-shadow: var(--focus-ring);
+  }
+
+  .home-view__corpus-paused {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    color: var(--color-text-secondary);
+  }
+
+  .home-view__corpus-paused-label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .home-view__corpus-dot {

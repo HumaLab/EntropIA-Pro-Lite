@@ -1045,6 +1045,7 @@
 - «No se pudieron cargar las obras.» `biblioteca.error`
 - «No se pudieron cargar los documentos de ejemplo: {error}» `home.firstRun.sampleFailed`
 - «No se pudieron cargar los trabajos.» `research.loadError`
+- «No se pudieron reanudar los embeddings: {error}» `home.corpus.resumeEmbeddingsFailed`
 - «No se pudieron revisar las dependencias: {error}» `deps.checkFailed`
 - «No se pudo abrir Microsoft Store.» `storeUpdate.openError`
 - «No se pudo analizar el texto de la colección.» `collectionAnalysis.error`
@@ -1211,12 +1212,14 @@
 - «Embeddings»
 - «Estado del corpus»
 - «OCR»
+- «Reanudar»
 - «STT»
 - «Texto»
 - «con OCR»
 - «con STT»
 - «con embeddings»
 - «con texto»
+- «{count} embeddings en pausa: cambió la configuración»
 - «{count} pendientes de OCR»
 - «{count} pendientes de embeddings»
 

@@ -1029,8 +1029,9 @@ describe('ItemRepo', () => {
       //     not OCR-derived) and is excluded from the OCR universe.
       // processing_tasks: one active OCR task (cap-none, pending) and one
       // terminal OCR task (cap-ocr, succeeded, never counted); one active
-      // embedding task (img-vec-only, running) and one terminal embedding
-      // task (pdf-ocr-vec, failed).
+      // embedding task (img-vec-only, running), one terminal embedding
+      // task (pdf-ocr-vec, failed) and one embedding task parked on a
+      // configuration change (img-ocr, blocked): paused, not pending.
       db.exec(`
         INSERT INTO collections VALUES ('col-1','Uno',0,0), ('col-2','Dos',0,0);
         INSERT INTO items VALUES
@@ -1068,7 +1069,8 @@ describe('ItemRepo', () => {
           ('t1','ocr','cap-none','pending',0,0),
           ('t2','ocr','cap-ocr','succeeded',0,0),
           ('t3','embedding','img-vec-only','running',0,0),
-          ('t4','embedding','pdf-ocr-vec','failed',0,0);
+          ('t4','embedding','pdf-ocr-vec','failed',0,0),
+          ('t5','embedding','img-ocr','blocked',0,0);
       `)
       return db
     }
@@ -1110,6 +1112,7 @@ describe('ItemRepo', () => {
         embeddings: 2,
         pendingOcr: 1,
         pendingEmbeddings: 1,
+        pausedEmbeddings: 1,
       })
       // Numerators are always a subset of their universe.
       expect(result.ocr).toBeLessThanOrEqual(result.ocrUniverse)
@@ -1132,6 +1135,7 @@ describe('ItemRepo', () => {
           embed_count: 10,
           pending_ocr_count: 3,
           pending_embed_count: 1,
+          paused_embed_count: 17,
         },
       ])
       const rawClient = {
@@ -1156,6 +1160,7 @@ describe('ItemRepo', () => {
       expect(sql).toContain("type = 'image'")
       expect(sql).toContain("type = 'pdf'")
       expect(sql).toContain("type = 'audio'")
+      expect(sql).toContain("state = 'blocked'")
       expect(result).toEqual({
         collections: 4,
         items: 20,
@@ -1168,6 +1173,7 @@ describe('ItemRepo', () => {
         embeddings: 10,
         pendingOcr: 3,
         pendingEmbeddings: 1,
+        pausedEmbeddings: 17,
       })
     })
 
@@ -1185,6 +1191,7 @@ describe('ItemRepo', () => {
         embeddings: 0,
         pendingOcr: 0,
         pendingEmbeddings: 0,
+        pausedEmbeddings: 0,
       })
     })
   })

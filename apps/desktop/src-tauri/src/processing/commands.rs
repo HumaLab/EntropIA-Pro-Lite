@@ -1171,6 +1171,21 @@ pub async fn processing_retry(
     .await
 }
 
+/// Requeues the embedding units parked on a configuration change under the
+/// current configuration (see [`super::repository::resume_paused_embeddings`]).
+/// Inicio's «Reanudar»: the click is the consent to run them.
+#[tauri::command]
+pub async fn processing_resume_paused_embeddings(
+    db: State<'_, AppDbState>,
+) -> Result<usize, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_ready(&db_path)?;
+        super::repository::resume_paused_embeddings(&conn)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn processing_list_batches(
     states: Option<Vec<String>>,
