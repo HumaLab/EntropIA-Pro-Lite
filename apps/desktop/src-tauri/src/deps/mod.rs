@@ -505,10 +505,14 @@ fn all_critical_installed(results: &HashMap<DependencyId, DependencyStatus>) -> 
         })
 }
 
-pub fn emit_probe_complete(
-    app: &tauri::AppHandle,
+/// The log line for a finished probe. Without a ready runtime the count
+/// describes whatever Python answered (after an update, the previous
+/// runtime's venv while the new one downloads), so the line names it.
+fn probe_summary(
     results: &HashMap<DependencyId, DependencyStatus>,
-) {
+    probed_python: Option<&std::path::Path>,
+    runtime_ready: bool,
+) -> String {
     let failed = results
         .values()
         .filter(|status| matches!(status, DependencyStatus::Failed { .. }))
@@ -517,13 +521,35 @@ pub fn emit_probe_complete(
         .values()
         .filter(|status| matches!(status, DependencyStatus::Missing))
         .count();
+    let count = format!(
+        "Verificación completada: {} dependencias, {missing} faltantes, {failed} fallidas",
+        results.len()
+    );
+    match probed_python {
+        Some(python) if !runtime_ready => format!(
+            "{count} (sin runtime de IA listo: respondió el Python de {})",
+            python.display()
+        ),
+        _ => count,
+    }
+}
+
+pub async fn emit_probe_complete(
+    app: &tauri::AppHandle,
+    state: &DepsState,
+    results: &HashMap<DependencyId, DependencyStatus>,
+) {
+    let (probed_python, runtime_ready) = {
+        let data = state.0.lock().await;
+        (
+            data.cached_probe_python.clone(),
+            data.cached_probe_runtime_root.is_some(),
+        )
+    };
     crate::app_logs::info(
         app,
         "deps",
-        format!(
-            "Verificación completada: {} dependencias, {missing} faltantes, {failed} fallidas",
-            results.len()
-        ),
+        probe_summary(results, probed_python.as_deref(), runtime_ready),
     );
 
     let payload = install::DepsCompletePayload {
@@ -549,7 +575,7 @@ pub async fn deps_check_all(
 ) -> Result<Vec<DepCheckResult>, String> {
     crate::app_logs::info(&app, "deps", "Verificando dependencias de IA");
     let results_map = probe_all_once(state.inner(), db.inner()).await?;
-    emit_probe_complete(&app, &results_map);
+    emit_probe_complete(&app, state.inner(), &results_map).await;
     Ok(dep_results_from_map(results_map))
 }
 
@@ -1136,6 +1162,54 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
+
+    fn all_installed() -> HashMap<DependencyId, DependencyStatus> {
+        registry::all_deps()
+            .iter()
+            .map(|dep| {
+                (
+                    dep.id.clone(),
+                    DependencyStatus::Installed { version: None },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_probe_summary_with_a_ready_runtime_is_the_plain_count() {
+        let python = PathBuf::from("/runtime/2026.11.10/venv/python");
+
+        assert_eq!(
+            probe_summary(&all_installed(), Some(&python), true),
+            "Verificación completada: 5 dependencias, 0 faltantes, 0 fallidas"
+        );
+    }
+
+    /// 1.8.6 after an update: the new runtime was still downloading and the
+    /// log said everything was there, because the previous venv answered.
+    #[test]
+    fn the_probe_summary_names_the_python_that_answered_without_a_ready_runtime() {
+        let python = PathBuf::from("/runtime/2026.11.6/venv/python");
+
+        let summary = probe_summary(&all_installed(), Some(&python), false);
+
+        assert_eq!(
+            summary,
+            format!(
+                "Verificación completada: 5 dependencias, 0 faltantes, 0 fallidas \
+                 (sin runtime de IA listo: respondió el Python de {})",
+                python.display()
+            )
+        );
+    }
+
+    #[test]
+    fn the_probe_summary_without_any_python_is_the_plain_count() {
+        assert_eq!(
+            probe_summary(&missing_dependency_statuses(), None, false),
+            "Verificación completada: 5 dependencias, 5 faltantes, 0 fallidas"
+        );
+    }
 
     #[test]
     fn clear_missing_python_paths_forgets_only_paths_that_no_longer_exist() {
