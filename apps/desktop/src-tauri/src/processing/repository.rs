@@ -4457,6 +4457,60 @@ pub fn resume_embedding_configuration_blocked(conn: &Connection) -> Result<usize
     .map_err(|e| format!("Failed to resume configuration-blocked units: {e}"))
 }
 
+/// Requeues the corpus embedding units parked `configuration_changed` (the
+/// effective contract changed while they waited) or `source_unstable`, under
+/// the CURRENT contract. The pin is what makes it stick: a unit set back to
+/// pending with its old contract is parked again by the next
+/// `reconcile_contracts`, and nothing else re-pins one. A forced re-embed
+/// keeps its `force:` intent. Works across every batch, the hidden system
+/// ones included, which no batch control can reach.
+///
+/// Never called automatically: the current contract may be a paid provider,
+/// so the user's explicit resume is the consent. Returns how many units were
+/// requeued.
+pub fn resume_paused_embeddings(conn: &Connection) -> Result<usize, String> {
+    let effective = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("Failed to begin resuming paused embeddings: {e}"))?;
+    let resumed = (|| -> Result<usize, String> {
+        conn.execute(
+            "UPDATE processing_batch_tasks SET request_state = 'active'
+             WHERE request_state = 'paused'
+               AND task_id IN (SELECT id FROM processing_tasks
+                                WHERE kind = 'embedding' AND domain = 'corpus'
+                                  AND state = 'blocked'
+                                  AND outcome IN ('configuration_changed', 'source_unstable'))",
+            [],
+        )
+        .map_err(|e| format!("Failed to reactivate paused embedding links: {e}"))?;
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'pending', outcome = '',
+               contract_hash = CASE WHEN contract_hash LIKE 'force:%'
+                                    THEN 'force:' || ?1 ELSE ?1 END,
+               owner_session = NULL, next_retry_at = NULL,
+               last_error_code = NULL, last_error_message = NULL,
+               source_invalidation_count = 0,
+               retry_cycle = retry_cycle + 1, retry_count = 0,
+               updated_at = strftime('%s', 'now') * 1000
+             WHERE kind = 'embedding' AND domain = 'corpus' AND state = 'blocked'
+               AND outcome IN ('configuration_changed', 'source_unstable')",
+            [&effective],
+        )
+        .map_err(|e| format!("Failed to resume paused embeddings: {e}"))
+    })();
+    match resumed {
+        Ok(count) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| format!("Failed to commit resumed embeddings: {e}"))?;
+            Ok(count)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
 /// Requeues the units the OCR engine parked on its configuration (corpus
 /// OCR and bibliography extractions) once the selected OCR engine can
 /// initialize from the current settings: every unit parked
@@ -12140,6 +12194,78 @@ mod tests {
             "other block reasons keep their own resume path"
         );
         assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 0);
+    }
+
+    /// 1.8.6: 17 embedding units parked on a contract change in the hidden
+    /// repair batch never ran again — Resume left their old contract pinned
+    /// and the next tick parked them once more. Resuming pins the current
+    /// contract, so they stay queued and run.
+    #[test]
+    fn resuming_paused_embeddings_pins_the_current_contract_so_they_stay_queued() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        )
+        .expect("settings table");
+        let effective = super::super::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("effective contract")
+            .hash;
+        insert_blocked_embedding(&conn, "t-changed", "configuration_changed");
+        insert_blocked_embedding(&conn, "t-forced", "configuration_changed");
+        insert_blocked_embedding(&conn, "t-unstable", "source_unstable");
+        insert_blocked_embedding(&conn, "t-engine", "configuration_required_embedding");
+        conn.execute(
+            "UPDATE processing_tasks SET contract_hash = 'old-contract',
+               retry_count = 2
+             WHERE id IN ('t-changed', 't-unstable', 't-engine')",
+            [],
+        )
+        .expect("old contract");
+        conn.execute(
+            "UPDATE processing_tasks SET contract_hash = 'force:old-contract' WHERE id = 't-forced'",
+            [],
+        )
+        .expect("forced old contract");
+
+        assert_eq!(resume_paused_embeddings(&conn).expect("resume"), 3);
+
+        let row = |id: &str| -> (String, String, String, Option<String>, i64) {
+            conn.query_row(
+                "SELECT state, outcome, contract_hash, last_error_code, retry_count
+                   FROM processing_tasks WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("task row")
+        };
+        assert_eq!(
+            row("t-changed"),
+            ("pending".into(), String::new(), effective.clone(), None, 0)
+        );
+        assert_eq!(row("t-unstable").2, effective, "every resumed unit re-pins");
+        assert_eq!(
+            row("t-forced").2,
+            format!("force:{effective}"),
+            "a forced re-embed stays forced, under the current contract"
+        );
+        assert_eq!(
+            row("t-engine").0,
+            "blocked",
+            "a missing engine keeps its own resume path"
+        );
+
+        assert_eq!(reconcile_contracts(&conn).expect("reconcile"), 0);
+        assert_eq!(task_state(&conn, "t-changed"), "pending");
+        assert_eq!(task_state(&conn, "t-forced"), "pending");
+        assert_eq!(resume_paused_embeddings(&conn).expect("again"), 0);
     }
 
     // ── Restart-safe bibliography progress (P3 follow-up) ────────────────

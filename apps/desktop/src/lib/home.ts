@@ -4,6 +4,7 @@
  * jobs (odd/tasks/home-view.md, T2).
  */
 
+import { invoke } from '@tauri-apps/api/core'
 import type { CorpusStats } from '@entropia/store'
 import { getStore } from './db'
 import { writing } from './writing'
@@ -379,4 +380,14 @@ export async function loadHomeSnapshot(): Promise<HomeSnapshot> {
   if (activityResult.error) errors.activity = activityResult.error
 
   return { stats: statsResult.stats, continuar, activity, isFirstRun, errors }
+}
+
+/**
+ * Re-evaluates the embedding units parked when the embedding configuration
+ * changed (`pausedEmbeddings`) under the current configuration. They never
+ * resume on their own: the new configuration may be a paid provider, so the
+ * click is the consent. Resolves to how many units were requeued.
+ */
+export async function resumePausedEmbeddings(): Promise<number> {
+  return invoke<number>('processing_resume_paused_embeddings')
 }

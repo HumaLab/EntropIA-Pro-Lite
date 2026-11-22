@@ -36,6 +36,7 @@ const {
 } = vi.hoisted(() => ({
   homeRef: {
     loadHomeSnapshot: vi.fn(),
+    resumePausedEmbeddings: vi.fn(),
   },
   navigationRef: {
     navigate: vi.fn(),
@@ -79,6 +80,7 @@ vi.mock('$lib/home', async (importOriginal) => {
   return {
     ...actual,
     loadHomeSnapshot: homeRef.loadHomeSnapshot,
+    resumePausedEmbeddings: homeRef.resumePausedEmbeddings,
   }
 })
 
@@ -276,6 +278,7 @@ function makeSnapshot(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
       embeddings: 630,
       pendingOcr: 4,
       pendingEmbeddings: 12,
+      pausedEmbeddings: 0,
     },
     continuar: [
       {
@@ -585,6 +588,7 @@ describe('HomeView', () => {
             embeddings: 630,
             pendingOcr: 0,
             pendingEmbeddings: 0,
+            pausedEmbeddings: 0,
           },
         })
       )
@@ -593,6 +597,51 @@ describe('HomeView', () => {
       await screen.findByText('Estado del corpus')
       expect(screen.queryByText(/pendientes de OCR/)).not.toBeInTheDocument()
       expect(screen.queryByText(/pendientes de embeddings/)).not.toBeInTheDocument()
+    })
+
+    // 1.8.6: 17 embedding units parked on a configuration change read as
+    // "17 pendientes de embeddings" forever; they never run on their own.
+    it('shows paused embeddings apart from pending ones, with a resume action', async () => {
+      const stats = { ...makeSnapshot().stats!, pendingEmbeddings: 0, pausedEmbeddings: 17 }
+      homeRef.loadHomeSnapshot.mockResolvedValue(makeSnapshot({ stats }))
+      homeRef.resumePausedEmbeddings.mockResolvedValue(17)
+      render(HomeView)
+
+      expect(
+        await screen.findByText('17 embeddings en pausa: cambió la configuración')
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/pendientes de embeddings/)).not.toBeInTheDocument()
+
+      const callsBefore = homeRef.loadHomeSnapshot.mock.calls.length
+      await fireEvent.click(screen.getByRole('button', { name: 'Reanudar' }))
+
+      expect(homeRef.resumePausedEmbeddings).toHaveBeenCalledTimes(1)
+      await waitFor(() =>
+        expect(homeRef.loadHomeSnapshot.mock.calls.length).toBeGreaterThan(callsBefore)
+      )
+    })
+
+    it('says why paused embeddings could not be resumed', async () => {
+      const stats = { ...makeSnapshot().stats!, pendingEmbeddings: 0, pausedEmbeddings: 17 }
+      homeRef.loadHomeSnapshot.mockResolvedValue(makeSnapshot({ stats }))
+      homeRef.resumePausedEmbeddings.mockRejectedValue(new Error('db busy'))
+      render(HomeView)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Reanudar' }))
+
+      expect(
+        await screen.findByText('No se pudieron reanudar los embeddings: db busy')
+      ).toBeInTheDocument()
+    })
+
+    // 1.8.6: 1.377 / 1.378 read "100 %" with one file still missing.
+    it('never reads 100 % while a file with text still lacks its embedding', async () => {
+      const stats = { ...makeSnapshot().stats!, text: 1372, embeddings: 1371 }
+      homeRef.loadHomeSnapshot.mockResolvedValue(makeSnapshot({ stats }))
+      render(HomeView)
+
+      expect(await screen.findByText('1.371 / 1.372')).toBeInTheDocument()
+      expect(screen.getByText(/con embeddings/)).toHaveTextContent('con embeddings · 99 %')
     })
 
     it('opens Lotes when a pending OCR/embeddings line is clicked', async () => {
@@ -639,6 +688,7 @@ describe('HomeView', () => {
             embeddings: 0,
             pendingOcr: 0,
             pendingEmbeddings: 0,
+            pausedEmbeddings: 0,
           },
         })
       )
@@ -1206,6 +1256,7 @@ describe('HomeView', () => {
             embeddings: 0,
             pendingOcr: 0,
             pendingEmbeddings: 0,
+            pausedEmbeddings: 0,
           },
         })
       )

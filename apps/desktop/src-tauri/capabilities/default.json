@@ -28,6 +28,7 @@
     "allow-processing-control",
     "allow-processing-set-priority",
     "allow-processing-retry",
+    "allow-processing-resume-paused-embeddings",
     "allow-processing-sync-bibliography-library",
     "allow-processing-bibliography-sync-status",
     "allow-processing-latest-bibliography-sync-status",

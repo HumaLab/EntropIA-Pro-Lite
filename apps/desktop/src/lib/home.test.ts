@@ -369,6 +369,7 @@ describe('loadHomeSnapshot', () => {
       embeddings: 2,
       pendingOcr: 1,
       pendingEmbeddings: 0,
+      pausedEmbeddings: 0,
     })
     storeRef.current.items.findRecentlyImported.mockReset().mockResolvedValue([])
     storeRef.current.collections.findAll.mockReset().mockResolvedValue([])
@@ -405,6 +406,7 @@ describe('loadHomeSnapshot', () => {
       embeddings: 2,
       pendingOcr: 1,
       pendingEmbeddings: 0,
+      pausedEmbeddings: 0,
     })
     expect(snapshot.continuar.map((entry) => entry.id)).toEqual(['w1', 'c1', 'j1'])
     expect(snapshot.isFirstRun).toBe(false)

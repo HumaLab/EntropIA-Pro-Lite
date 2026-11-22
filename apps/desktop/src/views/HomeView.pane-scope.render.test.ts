@@ -121,6 +121,7 @@ function makeSnapshot(): HomeSnapshot {
       embeddings: 0,
       pendingOcr: 0,
       pendingEmbeddings: 0,
+      pausedEmbeddings: 0,
     },
     continuar: [],
     activity: [

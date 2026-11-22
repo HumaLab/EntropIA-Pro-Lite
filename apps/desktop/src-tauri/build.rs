@@ -35,6 +35,7 @@ const APP_COMMANDS: &[&str] = &[
     "processing_control",
     "processing_set_priority",
     "processing_retry",
+    "processing_resume_paused_embeddings",
     "processing_sync_bibliography_library",
     "processing_bibliography_sync_status",
     "processing_latest_bibliography_sync_status",
