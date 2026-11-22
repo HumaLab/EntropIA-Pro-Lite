@@ -48,6 +48,8 @@ function setupBackend(ask: (args: Record<string, unknown>) => RagAnswer = () => 
         return []
       case 'rag_chunk_coverage':
         return { assetsWithText: 0, assetsWithChunks: 0 }
+      case 'rag_embedding_queue':
+        return 0
       case 'rag_ask':
         return askMock(args as Record<string, unknown>)
       case 'bibliography_library_status':

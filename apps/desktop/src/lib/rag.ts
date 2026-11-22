@@ -150,6 +150,15 @@ export function ragChunkCoverage(): Promise<RagChunkCoverage> {
   return invoke<RagChunkCoverage>('rag_chunk_coverage')
 }
 
+/**
+ * Documents whose passages are still waiting or being computed: their new text
+ * is not found by passage yet. Reads only the processing queue, so it is cheap
+ * to re-read while the queue works.
+ */
+export function ragEmbeddingQueue(): Promise<number> {
+  return invoke<number>('rag_embedding_queue')
+}
+
 /** List persisted conversations ordered by updatedAt DESC. */
 export function ragListConversations(): Promise<RagConversationSummary[]> {
   return invoke<RagConversationSummary[]>('rag_list_conversations')

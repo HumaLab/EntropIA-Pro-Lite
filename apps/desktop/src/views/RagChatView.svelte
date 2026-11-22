@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tooltip } from '@entropia/ui'
   import { onDestroy, tick, untrack } from 'svelte'
+  import { listen } from '@tauri-apps/api/event'
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { locale, t, type Locale } from '$lib/i18n'
   import {
@@ -10,6 +11,7 @@
   import PassageReaderDialog from '../components/PassageReaderDialog.svelte'
   import {
     ragChunkCoverage,
+    ragEmbeddingQueue,
     ragSearchConversations,
     type RagChunkCoverage,
     type RagConversationSummary,
@@ -148,18 +150,63 @@
   })
 
   // Read once per view: it scans the whole corpus, and a half-indexed corpus
-  // must not read as a search with no results.
+  // must not read as a search with no results. It is read again when the
+  // embedding queue drains, since that is what changes it.
   let chunkCoverage = $state<RagChunkCoverage | null>(null)
   let chunkCoverageRequested = false
+  function readChunkCoverage() {
+    ragChunkCoverage()
+      .then((coverage) => (chunkCoverage = coverage))
+      .catch(() => (chunkCoverage = null))
+  }
+
+  // Documents whose passages are still coming: a freshly read page is not
+  // found by passage until its embedding lands, and the chat says so.
+  const QUEUE_REFRESH_DELAY_MS = 1000
+  let embeddingQueued = $state(0)
+  let queueRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  let queueRead = 0
+  function readEmbeddingQueue() {
+    const read = ++queueRead
+    ragEmbeddingQueue()
+      .then((queued) => {
+        if (read !== queueRead) return
+        const drained = embeddingQueued > 0 && queued === 0
+        embeddingQueued = queued
+        if (drained) readChunkCoverage()
+      })
+      .catch(() => {
+        if (read === queueRead) embeddingQueued = 0
+      })
+  }
+
   $effect(() => {
     if (scope === 'biblioteca' || chunkCoverageRequested) return
     chunkCoverageRequested = true
     untrack(() => {
-      ragChunkCoverage()
-        .then((coverage) => (chunkCoverage = coverage))
-        .catch(() => (chunkCoverage = null))
+      readChunkCoverage()
+      readEmbeddingQueue()
     })
   })
+
+  // One `processing:changed` tick arrives per settled task. A busy queue sends
+  // them every few hundred milliseconds without a pause, so the re-read is
+  // throttled, not debounced: at most one per window, never postponed by the
+  // next tick.
+  let unlistenProcessing: (() => void) | null = null
+  let viewDestroyed = false
+  listen('processing:changed', () => {
+    if (!chunkCoverageRequested || queueRefreshTimer) return
+    queueRefreshTimer = setTimeout(() => {
+      queueRefreshTimer = null
+      readEmbeddingQueue()
+    }, QUEUE_REFRESH_DELAY_MS)
+  })
+    .then((unlisten) => {
+      if (viewDestroyed) unlisten()
+      else unlistenProcessing = unlisten
+    })
+    .catch(() => {})
 
   const chunkCoverageMessage = $derived.by(() => {
     if (scope === 'biblioteca' || !chunkCoverage) return null
@@ -169,6 +216,13 @@
       chunked: assetsWithChunks,
       total: assetsWithText,
     })
+  })
+
+  const embeddingQueueMessage = $derived.by(() => {
+    if (scope === 'biblioteca' || embeddingQueued <= 0) return null
+    return embeddingQueued === 1
+      ? t('ragChat.embeddingQueueOne')
+      : t('ragChat.embeddingQueueMany', { count: embeddingQueued })
   })
 
   const libraryRefs = $derived<RagLibraryRef[]>(
@@ -668,6 +722,9 @@
   }
 
   onDestroy(() => {
+    viewDestroyed = true
+    unlistenProcessing?.()
+    if (queueRefreshTimer) clearTimeout(queueRefreshTimer)
     if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer)
     if (conversationSearchTimer) clearTimeout(conversationSearchTimer)
     for (const timer of downloadFeedbackTimers.values()) clearTimeout(timer)
@@ -910,6 +967,11 @@
         {#if chunkCoverageMessage}
           <p class="rag-chat__scope-note" role="status">
             {$currentLocale && chunkCoverageMessage}
+          </p>
+        {/if}
+        {#if embeddingQueueMessage}
+          <p class="rag-chat__scope-note" role="status">
+            {$currentLocale && embeddingQueueMessage}
           </p>
         {/if}
         <form

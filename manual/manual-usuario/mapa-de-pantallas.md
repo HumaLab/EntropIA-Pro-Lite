@@ -2361,6 +2361,7 @@
 
 ### Varios (1/2)
 
+- «1 documento espera sus pasajes: se indexa en segundo plano y, hasta que termine, el chat no encuentra su texto nuevo.» `ragChat.embeddingQueueOne`
 - «Abrir fuente» `ragChat.openSource`
 - «Abrir original» `ragChat.passageOpenOriginal`
 - «Abrir pasaje» `ragChat.openPassage`
@@ -2400,10 +2401,10 @@
 - «Hay bibliotecas sincronizadas, pero todavía no tienen vectores para buscar por significado: los pasajes no se pueden consultar hasta que termine el indexado.» `ragChat.libraryStatusNoEmbeddings`
 - «Limpiar búsqueda» `ragChat.searchClear`
 - «Ninguna colección» `ragChat.collectionsNone`
-- «No encontré contenido relevante en la base de conocimiento para esa pregunta.» `ragChat.noResults`
 
 ### Varios (2/2)
 
+- «No encontré contenido relevante en la base de conocimiento para esa pregunta.» `ragChat.noResults`
 - «No se buscó en la Biblioteca: no hay ninguna de las bibliotecas elegidas sincronizada en EntropIA.» `ragChat.biblioNotice.noLibrarySynced`
 - «No se buscó en la Biblioteca: no se pudo calcular el vector de la pregunta (revisá el proveedor de embeddings).» `ragChat.biblioNotice.embeddingUnavailable`
 - «No se buscó en la Biblioteca: todavía no tiene vectores para buscar por significado (el indexado no terminó).» `ragChat.biblioNotice.noEmbeddings`
@@ -2429,6 +2430,7 @@
 - «{count} de {total} colecciones» `ragChat.collectionsSome`
 - «{count} documento» `ragChat.collectionItemsOne`
 - «{count} documentos» `ragChat.collectionItemsMany`
+- «{count} documentos esperan sus pasajes: se indexan en segundo plano y, hasta que terminen, el chat no encuentra su texto nuevo.» `ragChat.embeddingQueueMany`
 - «{works} obras · {passages} pasajes» `ragChat.libraryCounts`
 - «¿Eliminar esta conversación?» `ragChat.deleteConversationTitle`
 

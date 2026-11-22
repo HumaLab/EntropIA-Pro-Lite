@@ -1814,6 +1814,7 @@ pub fn run() {
             help::history::help_history_clear,
             help::history::help_history_append,
             rag::commands::rag_chunk_coverage,
+            rag::commands::rag_embedding_queue,
             rag::commands::rag_list_conversations,
             rag::commands::rag_search_conversations,
             rag::commands::rag_get_conversation,
