@@ -99,6 +99,7 @@ export function writingEditorLabels(): WritingEditorLabels {
     dictationProcessing: t('item.noteEditor.dictationProcessing'),
     dictationNoMicrophone: t('item.noteEditor.noMicrophone'),
     dictationNoAudio: t('item.noteEditor.noAudio'),
+    dictationSilentMicrophone: t('item.noteEditor.silentMicrophone'),
     dictationAutoStopProcessing: t('item.noteEditor.autoStopProcessing', {
       duration: '{duration}',
     }),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { chooseDictationCaptureStrategy, encodeWavFromPcm } from '../dictation'
+import { chooseDictationCaptureStrategy, encodeWavFromPcm, isSilentPcm } from '../dictation'
 
 describe('dictation helpers', () => {
   it('prefers the PCM/WAV fallback on Linux WebKitGTK Tauri runtimes', () => {
@@ -41,6 +41,16 @@ describe('dictation helpers', () => {
         hasTauriRuntime: false,
       })
     ).toBe('media-recorder')
+  })
+
+  it('calls a recording of zeros or near-zero noise silent', () => {
+    expect(isSilentPcm([new Float32Array(16000), new Float32Array(16000)])).toBe(true)
+    expect(isSilentPcm([Float32Array.from([0.0004, -0.0003, 0])])).toBe(true)
+  })
+
+  it('does not call quiet speech silent, wherever its loudest sample falls', () => {
+    expect(isSilentPcm([new Float32Array(16000), Float32Array.from([0, -0.01, 0])])).toBe(false)
+    expect(isSilentPcm([Float32Array.from([0.2, -0.2])])).toBe(false)
   })
 
   it('encodes captured PCM samples into a non-empty WAV blob', async () => {

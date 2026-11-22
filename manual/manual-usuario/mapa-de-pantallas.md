@@ -1673,6 +1673,7 @@
 - «Código inline»
 - «Detener dictado»
 - «Dictado»
+- «El micrófono no envía sonido: desconectá y reconectá el dispositivo.»
 - «Encabezado 1»
 - «Encabezado 2»
 - «Encabezado 3»
