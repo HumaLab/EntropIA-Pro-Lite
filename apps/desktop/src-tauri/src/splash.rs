@@ -111,6 +111,21 @@ pub fn finish_now(app: &AppHandle) {
     reveal_main(app);
 }
 
+/// Bring this instance forward, for a second launch the guard refused. While
+/// the startup window is still up the main one is not ready to be seen, so the
+/// startup window is what comes forward.
+pub fn bring_forward(app: &AppHandle) {
+    if let Some(splash) = app.get_webview_window(SPLASH_LABEL) {
+        let _ = splash.set_focus();
+        return;
+    }
+    if let Some(main) = app.get_webview_window(MAIN_LABEL) {
+        let _ = main.unminimize();
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+}
+
 fn reveal_main(app: &AppHandle) {
     if let Some(main) = app.get_webview_window(MAIN_LABEL) {
         let _ = main.show();
