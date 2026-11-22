@@ -1,7 +1,7 @@
 {
   "pack_version": "2026.05.0",
   "runtime_abi": 1,
-  "app_version": "1.8.7",
+  "app_version": "1.8.8",
   "platform": "windows-x86_64",
   "payload_profile": "fixture",
   "release_injection_required": true,
