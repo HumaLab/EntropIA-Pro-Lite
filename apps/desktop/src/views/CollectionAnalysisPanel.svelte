@@ -3,6 +3,7 @@
   import { save } from '@tauri-apps/plugin-dialog'
   import { writeFile } from '@tauri-apps/plugin-fs'
   import { getStore } from '$lib/db'
+  import { buildAnalysisCorpus } from '$lib/analysis-corpus'
   import { locale, t, type I18nKey, type I18nParams } from '$lib/i18n'
   import { LatestRequestGuard } from '$lib/item-view-load-guards'
   import {
@@ -119,21 +120,6 @@
     return 'var(--color-text-secondary)'
   }
 
-  // Defensive dedupe: upsert guarantees one row per asset, but if older rows
-  // survive a migration we keep only the newest text per asset.
-  function dedupeByAsset(
-    rows: Array<{ assetId: string; textContent: string; createdAt: number }>
-  ): string[] {
-    const latest = new Map<string, { textContent: string; createdAt: number }>()
-    for (const row of rows) {
-      const existing = latest.get(row.assetId)
-      if (!existing || row.createdAt > existing.createdAt) {
-        latest.set(row.assetId, row)
-      }
-    }
-    return [...latest.values()].map((row) => row.textContent)
-  }
-
   async function loadCorpus() {
     const requestToken = fetchGuard.next()
     status = 'loading'
@@ -144,16 +130,9 @@
         store.transcriptions.findTextByCollection(collectionId),
       ])
       if (!fetchGuard.isCurrent(requestToken)) return
-      corpus = [
-        ...dedupeByAsset(extractionRows).map((text) => ({
-          text,
-          kind: 'extraction' as const,
-        })),
-        ...dedupeByAsset(transcriptionRows).map((text) => ({
-          text,
-          kind: 'transcription' as const,
-        })),
-      ]
+      const texts = await buildAnalysisCorpus(extractionRows, transcriptionRows)
+      if (!fetchGuard.isCurrent(requestToken)) return
+      corpus = texts
     } catch (e) {
       if (!fetchGuard.isCurrent(requestToken)) return
       console.error('[CollectionAnalysisPanel] Failed to load corpus:', e)

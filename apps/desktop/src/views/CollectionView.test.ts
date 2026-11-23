@@ -2023,6 +2023,19 @@ describe('CollectionView analysis panel', () => {
         metadata: null,
       },
     ])
+    // The backend's markup stripping: these fixtures carry none, so echo them.
+    vi.mocked(invoke).mockImplementation((async (command: string, args?: { texts?: string[] }) =>
+      command === 'ocr_plain_texts'
+        ? args?.texts
+        : command === 'resolve_data_dir'
+          ? '/mock/app-data'
+          : undefined) as typeof invoke)
+  })
+
+  afterEach(() => {
+    vi.mocked(invoke).mockImplementation(async (command: string) =>
+      command === 'resolve_data_dir' ? '/mock/app-data' : undefined
+    )
   })
 
   it('renders the toggle but does not load the corpus while the panel is closed', async () => {

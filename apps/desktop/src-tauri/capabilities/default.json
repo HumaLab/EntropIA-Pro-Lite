@@ -136,6 +136,7 @@
     "allow-extract-entities-for-asset",
     "allow-extract-triples",
     "allow-extract-triples-for-asset",
+    "allow-ocr-plain-texts",
     "allow-enrich-item",
     "allow-fts-search",
     "allow-similar-assets",
