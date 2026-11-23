@@ -2190,7 +2190,7 @@
 - «Dirección original»
 - «El archivo guardado no está disponible en este equipo.»
 - «El texto es largo y está guardado en un archivo.»
-- «Eliminando…»
+- «Eliminar»
 - «Eliminar fuente»
 - «Eliminar fuente guardada»
 - «Eliminar {title}»

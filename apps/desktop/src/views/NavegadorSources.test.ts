@@ -458,6 +458,14 @@ describe('deleting a saved source', () => {
     expect(calls('navegador_delete_source')).toHaveLength(0)
   })
 
+  // A destructive confirm names what it does (release 1.8.7 findings).
+  it('confirms with a button that says Eliminar', async () => {
+    const dialog = await askToDelete()
+    const confirm = within(dialog).getByRole('button', { name: 'Eliminar Title of alpha' })
+    expect(confirm).toHaveTextContent(/^Eliminar$/)
+    expect(confirm.querySelector('svg')).not.toBeInTheDocument()
+  })
+
   it('does nothing when cancelled', async () => {
     const dialog = await askToDelete()
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }))

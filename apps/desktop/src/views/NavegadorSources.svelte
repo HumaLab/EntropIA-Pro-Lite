@@ -683,9 +683,8 @@
       count: confirming.count,
     })}
     cancelLabel={t('navegador.sources.deleteCancel')}
-    confirmIcon="delete"
+    confirmLabel={t('navegador.sources.deleteConfirmLabel')}
     confirmAriaLabel={t('navegador.sources.deleteConfirm', { title: confirming.title })}
-    confirmTitle={deleting ? t('navegador.sources.deleting') : undefined}
     variant="destructive"
     confirming={deleting}
     cancelDisabled={deleting}
