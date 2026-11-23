@@ -93,6 +93,59 @@ describe('suggestEntityAliases', () => {
     expect(suggestions[0]!.variants).toEqual(['Carmela Cuevas', 'Mdme. Cuevas'])
   })
 
+  it('prefers the accented, mixed-case form over a louder all-caps one', () => {
+    const suggestions = suggestEntityAliases(
+      input([
+        { value: 'NESTOR RAMIREZ', mentions: 7 },
+        { value: 'Néstor Ramírez', mentions: 2 },
+        { value: 'Ramirez', mentions: 1 },
+      ])
+    )
+
+    expect(suggestions).toHaveLength(1)
+    expect(suggestions[0]!.canonical).toBe('Néstor Ramírez')
+    expect(suggestions[0]!.variants).toEqual(['NESTOR RAMIREZ', 'Ramirez'])
+  })
+
+  it('shows the best written spelling of a name that only differs in case', () => {
+    const suggestions = suggestEntityAliases(
+      input([
+        { value: 'CAYO AYALA', mentions: 3 },
+        { value: 'Cayo Ayala', mentions: 2 },
+        { value: 'AYALA', mentions: 2 },
+      ])
+    )
+
+    expect(suggestions).toHaveLength(1)
+    expect(suggestions[0]!.canonical).toBe('Cayo Ayala')
+    expect(suggestions[0]!.variants).toEqual(['AYALA'])
+  })
+
+  it('never takes a name with a leading "ex" as the canonical', () => {
+    const suggestions = suggestEntityAliases(
+      input([
+        { value: 'ex Dodero', mentions: 4 },
+        { value: 'Alberto Dodero', mentions: 1 },
+        { value: 'Dodero', mentions: 3 },
+      ])
+    )
+
+    expect(suggestions).toHaveLength(1)
+    expect(suggestions[0]!.canonical).toBe('Alberto Dodero')
+    expect(suggestions[0]!.variants).toEqual(['Dodero', 'ex Dodero'])
+  })
+
+  it('proposes nothing when a prefix is the only thing that made a name look full', () => {
+    expect(
+      suggestEntityAliases(
+        input([
+          { value: 'ex Dodero', mentions: 4 },
+          { value: 'Dodero', mentions: 3 },
+        ])
+      )
+    ).toEqual([])
+  })
+
   it('does not attach short forms when two different fuller names share a surname', () => {
     const suggestions = suggestEntityAliases(
       input([

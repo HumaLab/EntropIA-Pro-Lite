@@ -1,7 +1,7 @@
 import { eq, and, asc, ne, or, isNull, inArray, sql } from 'drizzle-orm'
 import type { DrizzleClient } from '../types'
 import { entities } from '../schema'
-import { normalizeEntityAliasKey } from './entity-alias.repo'
+import { entityNameWritingScore, normalizeEntityAliasKey } from './entity-alias.repo'
 
 export type Entity = typeof entities.$inferSelect
 export type NewEntity = {
@@ -168,8 +168,9 @@ export class EntityRepo {
    * Distinct entity values of the given types with mention counts across
    * the whole archive (T5 suggestions, S5). Rows are grouped in JS by the
    * alias key (`normalizeEntityAliasKey`), so values that differ only in
-   * case or whitespace count as one; the display form is the one with most
-   * mentions (ties: longest, then alphabetical). Manually deleted mentions
+   * case or whitespace count as one; the display form is the best written
+   * one (`entityNameWritingScore`), then the one with most mentions (ties:
+   * longest, then alphabetical). Manually deleted mentions
    * (`source = 'manual_deleted'`) are excluded, like every other read.
    */
   async listDistinctValues(input: { types: string[] }): Promise<DistinctEntityValue[]> {
@@ -204,10 +205,13 @@ export class EntityRepo {
       let total = 0
       for (const [raw, count] of counts) {
         total += count
+        const written = display ? entityNameWritingScore(raw) - entityNameWritingScore(display) : 1
         if (
-          count > displayMentions ||
-          (count === displayMentions &&
-            (raw.length > display.length || (raw.length === display.length && raw < display)))
+          written > 0 ||
+          (written === 0 &&
+            (count > displayMentions ||
+              (count === displayMentions &&
+                (raw.length > display.length || (raw.length === display.length && raw < display)))))
         ) {
           display = raw
           displayMentions = count

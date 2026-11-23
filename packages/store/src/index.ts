@@ -49,6 +49,7 @@ export { AssetProcessEventRepo } from './repos/asset-process-event.repo'
 export {
   EntityAliasRepo,
   buildAliasResolver,
+  entityNameWritingScore,
   normalizeEntityAliasKey,
 } from './repos/entity-alias.repo'
 export type { EntityAlias, AliasResolverRow } from './repos/entity-alias.repo'

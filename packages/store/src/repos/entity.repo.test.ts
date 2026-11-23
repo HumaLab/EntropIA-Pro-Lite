@@ -327,6 +327,15 @@ describe('EntityRepo', () => {
       ])
     })
 
+    it('shows the best written spelling of values that only differ in case', async () => {
+      seed('CAYO AYALA', 'person', null, 3)
+      seed('Cayo Ayala', 'person', null, 2)
+
+      expect(await realRepo.listDistinctValues({ types: ['person'] })).toEqual([
+        { value: 'Cayo Ayala', mentions: 5 },
+      ])
+    })
+
     it('excludes manually deleted mentions', async () => {
       seed('Carmela Cuevas', 'person', null, 2)
       seed('Carmela Cuevas', 'person', 'manual_deleted', 4)
