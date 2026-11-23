@@ -2,7 +2,8 @@ import { getStore } from '$lib/db'
 import { readPageSource } from './page-text'
 import { visibleAssets } from './asset-visibility'
 import { getAssetPathLabel } from './item-metadata'
-import { getFtsTerms } from './item-view-search'
+import { getFtsTerms, type HighlightSegment } from './item-view-search'
+import { fetchSearchSnippets } from './search-snippets'
 import { SearchPreferences, searchPreferences } from './search-preferences'
 
 /**
@@ -46,7 +47,19 @@ export interface CorpusHit {
    * a typo was corrected to). Shown so the writer knows why it is here.
    */
   foundAs?: string[]
+  /**
+   * The passage around the first match, matched words marked, so the writer
+   * can choose what to cite without opening each document. Absent when the
+   * passage could not be read.
+   */
+  snippet?: HighlightSegment[]
 }
+
+/** Reads the passage each hit matched; `fetchSearchSnippets` in the app. */
+export type CorpusSnippetReader = (
+  itemIds: string[],
+  terms: string[]
+) => Promise<Map<string, HighlightSegment[]>>
 
 /** One page of an open item. The asset is the page (migration 0024). */
 export interface CorpusPage {
@@ -124,13 +137,16 @@ export class WritingCorpusStore {
   #prefs: SearchPreferences
   /** Read once, on the first search: after that the state is the truth. */
   #prefsLoaded: Promise<void> | null = null
+  #snippets: CorpusSnippetReader
 
   constructor(
     store: () => ReturnType<typeof getStore> = getStore,
-    prefs: SearchPreferences = searchPreferences
+    prefs: SearchPreferences = searchPreferences,
+    snippets: CorpusSnippetReader = fetchSearchSnippets
   ) {
     this.#store = store
     this.#prefs = prefs
+    this.#snippets = snippets
   }
 
   /** Reads the saved switch, once, so the panel shows it before any search. */
@@ -203,9 +219,23 @@ export class WritingCorpusStore {
         })
       )
       if (token !== this.#searchToken) return
+      const results = hydrated.filter((hit): hit is CorpusHit => hit !== null)
+      // The same passages the item view's search shows. Variants count as
+      // terms: an approximate hit holds the variant, not the word typed.
+      const terms = [
+        ...new Set([...getFtsTerms(query), ...results.flatMap((hit) => hit.foundAs ?? [])]),
+      ]
+      const snippets = await this.#snippets(
+        results.map((hit) => hit.itemId),
+        terms
+      )
+      if (token !== this.#searchToken) return
       this.#set({
         searching: false,
-        results: hydrated.filter((hit): hit is CorpusHit => hit !== null),
+        results: results.map((hit) => {
+          const snippet = snippets.get(hit.itemId)
+          return snippet ? { ...hit, snippet } : hit
+        }),
       })
     } catch (error) {
       if (token !== this.#searchToken) return
