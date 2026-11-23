@@ -46,7 +46,8 @@
         settingsGet(key).catch(() => null)
       )
     )
-    dir = d ?? ''
+    // Folders granted before 1.8.9 were stored with Windows' verbatim prefix.
+    dir = (d ?? '').replace(/^\\\\\?\\UNC\\/, '\\\\').replace(/^\\\\\?\\/, '')
     lastAt = last ? Number(last) : null
     frequency = FREQUENCIES.includes(freq as Frequency) ? (freq as Frequency) : 'never'
     keep = k ?? String(DEFAULT_KEEP)
