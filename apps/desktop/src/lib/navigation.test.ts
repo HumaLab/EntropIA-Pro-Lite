@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { NavigationStore, type View } from './navigation'
+import { NavigationStore, rightPanelOnArrival, type View } from './navigation'
 import { locale } from './i18n'
 
 describe('NavigationStore', () => {
@@ -1037,5 +1037,26 @@ describe('NavigationStore — leave guard', () => {
     nav.setLeaveGuard(null)
     nav.back()
     expect(nav.current).toEqual({ name: 'settings' })
+  })
+})
+
+describe('rightPanelOnArrival', () => {
+  const item = (extra: Partial<Extract<View, { name: 'item' }>> = {}): View => ({
+    name: 'item',
+    collectionId: 'c1',
+    collectionName: '',
+    itemId: 'i1',
+    itemTitle: 'Acta',
+    ...extra,
+  })
+
+  it('opens the Layout tab of the asset the view was opened on', () => {
+    expect(rightPanelOnArrival(item({ assetId: 'a1', panel: 'layout' }), 'a1')).toBe('layout')
+  })
+
+  it('opens Notes for any other asset, for a view without a panel, and for other views', () => {
+    expect(rightPanelOnArrival(item({ assetId: 'a1', panel: 'layout' }), 'a2')).toBe('notes')
+    expect(rightPanelOnArrival(item({ assetId: 'a1' }), 'a1')).toBe('notes')
+    expect(rightPanelOnArrival({ name: 'home' }, 'a1')).toBe('notes')
   })
 })

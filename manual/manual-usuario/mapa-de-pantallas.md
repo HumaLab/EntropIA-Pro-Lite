@@ -2664,6 +2664,8 @@
 
 ### Mantenimiento
 
+- «Abrir»
+- «Abrí cada una y usá «Volver a correr el layout» en su pestaña Layout. Eso vuelve a hacer su OCR y reemplaza el texto extraído.»
 - «Anotar también el origen de {count} layout anterior»
 - «Anotar también el origen de {count} layouts anteriores»
 - «Aplicar»
@@ -2672,6 +2674,7 @@
 - «El archivo cambió después de la revisión y no se aplicó nada. Volvé a revisar.»
 - «El archivo de la imagen no está en disco»
 - «Imágenes a reparar: {count}»
+- «Imágenes con el layout de otra versión: {count}»
 - «Imágenes con layout revisadas»
 - «La imagen es más nueva que su layout: hay que volver a correr el layout»
 - «La imagen mostrada coincide con su layout»

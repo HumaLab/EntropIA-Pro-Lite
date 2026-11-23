@@ -171,6 +171,7 @@
   import { listen, emit } from '@tauri-apps/api/event'
   import { invoke } from '@tauri-apps/api/core'
   import { getNavigation } from '$lib/pane-context'
+  import { rightPanelOnArrival } from '$lib/navigation'
   import { registerEscapeInterceptor } from '$lib/keyboard'
   import { LOCAL_ML } from '$lib/capabilities'
   import { dictationHelp } from '$lib/dictation-help'
@@ -3311,6 +3312,7 @@
       if (navigation.current.assetId && navigation.current.assetId !== nextAssetId) {
         delete nextNavigation.citationRange
         delete nextNavigation.citationSeconds
+        delete nextNavigation.panel
       }
       // Same document, only the selected page (asset) changes: replace so
       // paging through pages doesn't add a Back stop per page.
@@ -3376,7 +3378,7 @@
     const requestToken = selectedAssetStateLoadGuard.next()
     untrack(() => restoreInflightJobs(asset.id))
 
-    rightPanelTab = 'notes'
+    rightPanelTab = untrack(() => rightPanelOnArrival(navigation.current, asset.id))
 
     // Reload notes for this asset (plus item-level notes)
     void refreshNotesForAsset(asset)

@@ -10,10 +10,12 @@
    */
   import { ActionIcon, Button, Card, Checkbox, ConfirmDialog } from '@entropia/ui'
   import { t } from '$lib/i18n'
+  import { workspace } from '$lib/workspace'
   import {
     applyImageVersionRepairs,
     isStaleProposalError,
     scanImageVersionRepairs,
+    type LayoutRerun,
     type RepairCounts,
     type RepairFile,
     type RepairScan,
@@ -49,6 +51,23 @@
 
   const repairs = $derived(scan?.repairs ?? [])
   const completions = $derived(scan?.completions ?? [])
+  const layoutReruns = $derived(scan?.layoutReruns ?? [])
+  let renderedReruns = $state(PAGE_SIZE)
+  const visibleReruns = $derived(layoutReruns.slice(0, renderedReruns))
+  const hiddenReruns = $derived(Math.max(0, layoutReruns.length - renderedReruns))
+
+  // A tab of its own, so this list stays here while each image is fixed.
+  function openLayout(rerun: LayoutRerun) {
+    workspace.openTab({
+      name: 'item',
+      itemId: rerun.itemId,
+      collectionId: rerun.collectionId,
+      collectionName: rerun.collectionName,
+      itemTitle: rerun.name,
+      assetId: rerun.assetId,
+      panel: 'layout',
+    })
+  }
   const visibleRepairs = $derived(repairs.slice(0, rendered))
   const hiddenCount = $derived(Math.max(0, repairs.length - rendered))
   const selectedRepairs = $derived(repairs.filter((repair) => selected.has(repair.assetId)))
@@ -228,6 +247,30 @@
         {/if}
       </div>
 
+      {#if layoutReruns.length > 0}
+        <div class="maintenance__block">
+          <h3 class="maintenance__subtitle">
+            {t('settings.maintenance.layoutRerunsTitle', { count: layoutReruns.length })}
+          </h3>
+          <p class="maintenance__hint">{t('settings.maintenance.layoutRerunsHint')}</p>
+          <ul class="maintenance__list">
+            {#each visibleReruns as rerun (rerun.assetId)}
+              <li class="maintenance__rerun" data-testid="maintenance-layout-rerun">
+                <span class="maintenance__name">{rerun.name}</span>
+                <Button variant="secondary" size="sm" onclick={() => openLayout(rerun)}>
+                  {t('settings.maintenance.layoutRerunOpen')}
+                </Button>
+              </li>
+            {/each}
+          </ul>
+          {#if hiddenReruns > 0}
+            <Button variant="ghost" size="sm" onclick={() => (renderedReruns += PAGE_SIZE)}>
+              {t('settings.maintenance.showMore', { count: Math.min(PAGE_SIZE, hiddenReruns) })}
+            </Button>
+          {/if}
+        </div>
+      {/if}
+
       {#if completions.length > 0}
         <div class="maintenance__block">
           <Checkbox bind:checked={completeSources} disabled={busy}>
@@ -378,6 +421,13 @@
     padding: 0;
     overflow-y: auto;
     list-style: none;
+  }
+
+  .maintenance__rerun {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
   }
 
   .maintenance__name {

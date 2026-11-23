@@ -395,6 +395,10 @@ const es = {
   'settings.maintenance.count.fileMissing': 'El archivo de la imagen no está en disco',
   'settings.maintenance.repairsTitle': 'Imágenes a reparar: {count}',
   'settings.maintenance.repairsEmpty': 'No hay imágenes para reparar.',
+  'settings.maintenance.layoutRerunsTitle': 'Imágenes con el layout de otra versión: {count}',
+  'settings.maintenance.layoutRerunsHint':
+    'Abrí cada una y usá «Volver a correr el layout» en su pestaña Layout. Eso vuelve a hacer su OCR y reemplaza el texto extraído.',
+  'settings.maintenance.layoutRerunOpen': 'Abrir',
   'settings.maintenance.selected': 'Seleccionadas: {count}',
   'settings.maintenance.selectAll': 'Seleccionar todas',
   'settings.maintenance.selectNone': 'Ninguna',
@@ -4643,6 +4647,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.maintenance.count.fileMissing': 'The image file is not on disk',
   'settings.maintenance.repairsTitle': 'Images to repair: {count}',
   'settings.maintenance.repairsEmpty': 'There are no images to repair.',
+  'settings.maintenance.layoutRerunsTitle': 'Images with the layout of another version: {count}',
+  'settings.maintenance.layoutRerunsHint':
+    'Open each one and use “Run the layout again” on its Layout tab. That runs its OCR again and replaces the extracted text.',
+  'settings.maintenance.layoutRerunOpen': 'Open',
   'settings.maintenance.selected': 'Selected: {count}',
   'settings.maintenance.selectAll': 'Select all',
   'settings.maintenance.selectNone': 'None',

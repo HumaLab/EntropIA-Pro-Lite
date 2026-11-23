@@ -29,6 +29,12 @@ export type View =
       itemTitle: string
       assetId?: string | null
       assetLabel?: string | null
+      /**
+       * The right-panel tab to show on arrival at `assetId`, when the view
+       * was opened to work on it (Mantenimiento opens a stale layout on the
+       * Layout tab). Without it the panel opens on Notes as always.
+       */
+      panel?: 'layout' | null
       /** Contextual graph navigation; stepping replaces this history entry. */
       occurrenceSession?: OccurrenceSession | null
       /**
@@ -366,4 +372,11 @@ export class NavigationStore {
   private historyEqual(a: View[], b: View[]): boolean {
     return a.length === b.length && a.every((view, index) => viewsEqual(view, b[index]))
   }
+}
+
+/** The right-panel tab an item view shows when `assetId` becomes the selected asset. */
+export function rightPanelOnArrival(view: View, assetId: string): 'layout' | 'notes' {
+  return view.name === 'item' && view.panel === 'layout' && view.assetId === assetId
+    ? 'layout'
+    : 'notes'
 }

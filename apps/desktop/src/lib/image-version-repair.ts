@@ -51,10 +51,21 @@ export interface RepairCounts {
   fileMissing: number
 }
 
+/** An image whose layout belongs to an older version: its Layout tab runs it again. */
+export interface LayoutRerun {
+  assetId: string
+  itemId: string
+  collectionId: string
+  collectionName: string
+  /** The item's title, or the file name when it has none. */
+  name: string
+}
+
 export interface RepairScan {
   counts: RepairCounts
   repairs: PathRepair[]
   completions: SourceCompletion[]
+  layoutReruns: LayoutRerun[]
 }
 
 export interface RepairApplied {
