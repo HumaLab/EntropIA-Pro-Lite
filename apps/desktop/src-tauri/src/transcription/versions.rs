@@ -26,32 +26,58 @@ pub struct TranscriptVersion {
     pub replaced_at: i64,
 }
 
+/// How many replaced transcripts an asset keeps; the oldest goes first.
+pub(crate) const MAX_VERSIONS_PER_ASSET: usize = 10;
+
 /// Runs `work` inside a savepoint: everything it wrote is kept, or nothing.
+///
+/// On a connection with no open transaction the savepoint would start a
+/// DEFERRED one, which reads under a snapshot and cannot upgrade to a write
+/// once another connection has committed: `database is locked` at once,
+/// busy_timeout notwithstanding. So the outermost call takes the write lock
+/// first with `BEGIN IMMEDIATE` (waiting its busy_timeout) and commits at the
+/// end; a nested call only adds the savepoint.
 pub(crate) fn in_savepoint<T>(
     conn: &Connection,
     work: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
-    conn.execute_batch("SAVEPOINT transcript_swap")
-        .map_err(|e| format!("Failed to open the transcript savepoint: {e}"))?;
-    match work() {
-        Ok(value) => match conn.execute_batch("RELEASE transcript_swap") {
-            Ok(()) => Ok(value),
-            Err(error) => {
-                // Never leave the savepoint open on a shared connection.
-                let _ = conn.execute_batch("ROLLBACK TO transcript_swap; RELEASE transcript_swap");
-                Err(format!("Failed to commit the transcript change: {error}"))
-            }
-        },
-        Err(error) => {
-            let _ = conn.execute_batch("ROLLBACK TO transcript_swap; RELEASE transcript_swap");
-            Err(error)
-        }
+    let outermost = conn.is_autocommit();
+    if outermost {
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| format!("Failed to open the transcript transaction: {e}"))?;
     }
+    let end = |commit: bool| {
+        if outermost {
+            conn.execute_batch(if commit { "COMMIT" } else { "ROLLBACK" })
+        } else {
+            Ok(())
+        }
+    };
+    if let Err(error) = conn.execute_batch("SAVEPOINT transcript_swap") {
+        let _ = end(false);
+        return Err(format!("Failed to open the transcript savepoint: {error}"));
+    }
+    let committed = match work() {
+        Ok(value) => conn
+            .execute_batch("RELEASE transcript_swap")
+            .and_then(|()| end(true))
+            .map(|()| value)
+            .map_err(|error| format!("Failed to commit the transcript change: {error}")),
+        Err(error) => Err(error),
+    };
+    if committed.is_err() && !conn.is_autocommit() {
+        // Never leave the change open on a shared connection.
+        let _ = conn.execute_batch("ROLLBACK TO transcript_swap; RELEASE transcript_swap");
+        let _ = end(false);
+    }
+    committed
 }
 
 /// Copies the asset's current transcript into the versions, stamped
 /// `replaced_at`. Does nothing when the asset has no transcript or only an
-/// empty one. Call inside the savepoint of the write that replaces it.
+/// empty one. Keeps the asset's [`MAX_VERSIONS_PER_ASSET`] most recently
+/// replaced versions and drops older ones. Call inside the savepoint of the
+/// write that replaces it.
 pub(crate) fn archive_current(
     conn: &Connection,
     asset_id: &str,
@@ -68,6 +94,16 @@ pub(crate) fn archive_current(
         params![uuid::Uuid::new_v4().to_string(), replaced_at, asset_id],
     )
     .map_err(|e| format!("Failed to keep the previous transcript: {e}"))?;
+    conn.execute(
+        "DELETE FROM transcription_versions
+          WHERE asset_id = ?1
+            AND id NOT IN (SELECT id FROM transcription_versions
+                            WHERE asset_id = ?1
+                            ORDER BY replaced_at DESC, rowid DESC
+                            LIMIT ?2)",
+        params![asset_id, MAX_VERSIONS_PER_ASSET as i64],
+    )
+    .map_err(|e| format!("Failed to drop the oldest transcript versions: {e}"))?;
     Ok(())
 }
 
@@ -139,6 +175,13 @@ pub(crate) fn restore(conn: &Connection, version_id: &str, now: i64) -> Result<S
             return Err("transcript_version_not_found".to_string());
         };
 
+        // The restored version leaves the list before the current transcript
+        // enters it, so a swap at the cap drops no other version.
+        conn.execute(
+            "DELETE FROM transcription_versions WHERE id = ?1",
+            [version_id],
+        )
+        .map_err(|e| format!("Failed to restore the transcript: {e}"))?;
         archive_current(conn, &asset_id, now)?;
         // Same deterministic id and UPSERT as `save_transcription`, so sync
         // sees an UPDATE of the one row per asset.
@@ -166,11 +209,6 @@ pub(crate) fn restore(conn: &Connection, version_id: &str, now: i64) -> Result<S
                 confidence,
                 made_at,
             ],
-        )
-        .map_err(|e| format!("Failed to restore the transcript: {e}"))?;
-        conn.execute(
-            "DELETE FROM transcription_versions WHERE id = ?1",
-            [version_id],
         )
         .map_err(|e| format!("Failed to restore the transcript: {e}"))?;
 
@@ -322,6 +360,83 @@ mod tests {
         });
         assert_eq!(result.unwrap_err(), "boom");
         assert!(list(&conn, "a1").unwrap().is_empty());
+    }
+
+    /// Restoring reads the version, then writes. A worker that commits in
+    /// between must not make the restore fail: the swap takes the write lock
+    /// before its first read, so the worker waits instead.
+    #[test]
+    fn a_commit_from_another_connection_mid_swap_does_not_fail_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entropia.sqlite");
+        let conn = crate::db::open::open_archive_connection(&path).unwrap();
+        conn.execute_batch(include_str!("../../tests/fixtures/schema_full.sql"))
+            .unwrap();
+        conn.execute_batch(
+            "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'C', 0, 0);
+             INSERT INTO items (id, title, collection_id, created_at, updated_at) VALUES ('i1', 'I', 'c1', 0, 0);
+             INSERT INTO assets (id, item_id, path, type, created_at) VALUES ('a1', 'i1', 'assets/a.mp3', 'audio', 0);",
+        )
+        .unwrap();
+        set_current(&conn, "current", "m", 10);
+        let worker = Connection::open(&path).unwrap();
+        worker.busy_timeout(std::time::Duration::ZERO).unwrap();
+
+        let result = in_savepoint(&conn, || {
+            let _seen: i64 = conn
+                .query_row("SELECT COUNT(*) FROM transcriptions", [], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            // The worker's commit lands between the swap's read and its write.
+            let _ = worker.execute("UPDATE collections SET name = 'worker' WHERE id = 'c1'", []);
+            archive_current(&conn, "a1", 20)
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(list(&conn, "a1").unwrap().len(), 1);
+        assert!(conn.is_autocommit(), "the swap left its transaction open");
+    }
+
+    fn version_texts(conn: &Connection) -> Vec<String> {
+        list(conn, "a1")
+            .unwrap()
+            .into_iter()
+            .map(|version| version.text_content)
+            .collect()
+    }
+
+    #[test]
+    fn an_audio_keeps_its_ten_most_recent_versions() {
+        let conn = archive();
+        for n in 1..=11 {
+            set_current(&conn, &format!("take {n}"), "m", n);
+            archive_current(&conn, "a1", 100 + n).unwrap();
+        }
+
+        let texts = version_texts(&conn);
+        assert_eq!(texts.len(), MAX_VERSIONS_PER_ASSET);
+        assert_eq!(texts.first().map(String::as_str), Some("take 11"));
+        assert_eq!(texts.last().map(String::as_str), Some("take 2"));
+    }
+
+    #[test]
+    fn restoring_at_the_cap_keeps_every_other_version() {
+        let conn = archive();
+        for n in 1..=10 {
+            set_current(&conn, &format!("take {n}"), "m", n);
+            archive_current(&conn, "a1", 100 + n).unwrap();
+        }
+        set_current(&conn, "current", "m", 50);
+        let oldest = list(&conn, "a1").unwrap().pop().unwrap();
+        assert_eq!(oldest.text_content, "take 1");
+        let middle = list(&conn, "a1").unwrap().remove(4);
+
+        restore(&conn, &middle.id, 200).unwrap();
+
+        let texts = version_texts(&conn);
+        assert_eq!(texts.len(), MAX_VERSIONS_PER_ASSET);
+        assert_eq!(texts.first().map(String::as_str), Some("current"));
+        assert!(texts.iter().any(|text| text == "take 1"), "{texts:?}");
+        assert!(!texts.contains(&middle.text_content), "{texts:?}");
     }
 
     #[test]
