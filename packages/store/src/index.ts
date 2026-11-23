@@ -83,7 +83,7 @@ export type {
   CollectionItemCardSummary,
   CollectionStats,
   CorpusStats,
-  RecentlyImportedItem,
+  RecentActivityItem,
 } from './repos/item.repo'
 export type { Asset, NewAsset } from './repos/asset.repo'
 export type {

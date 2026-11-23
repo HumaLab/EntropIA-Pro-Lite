@@ -188,7 +188,8 @@ const ACTIVITY_ENTRIES: HomeActivityEntry[] = [
     id: 'item-1',
     title: 'Acta fundacional',
     collectionName: 'Historia argentina',
-    createdAt: new Date(now.getTime() - 1 * 60 * 60 * 1000),
+    process: 'ocr',
+    activityAt: new Date(now.getTime() - 1 * 60 * 60 * 1000),
     view: {
       name: 'item',
       collectionId: 'col-1',
@@ -201,7 +202,8 @@ const ACTIVITY_ENTRIES: HomeActivityEntry[] = [
     id: 'item-2',
     title: 'Carta abierta',
     collectionName: 'Filosofía antigua',
-    createdAt: new Date(now.getTime() - 5 * 60 * 60 * 1000),
+    process: 'import',
+    activityAt: new Date(now.getTime() - 5 * 60 * 60 * 1000),
     view: {
       name: 'item',
       collectionId: 'col-2',
@@ -214,7 +216,8 @@ const ACTIVITY_ENTRIES: HomeActivityEntry[] = [
     id: 'item-3',
     title: 'Informe preliminar',
     collectionName: 'Historia argentina',
-    createdAt: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000),
+    process: 'import',
+    activityAt: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000),
     view: {
       name: 'item',
       collectionId: 'col-1',
@@ -227,7 +230,8 @@ const ACTIVITY_ENTRIES: HomeActivityEntry[] = [
     id: 'item-4',
     title: 'Nota de archivo',
     collectionName: 'Colección extra',
-    createdAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
+    process: 'import',
+    activityAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
     view: {
       name: 'item',
       collectionId: 'col-3',
@@ -240,7 +244,8 @@ const ACTIVITY_ENTRIES: HomeActivityEntry[] = [
     id: 'item-5',
     title: 'Registro fotográfico',
     collectionName: 'Historia argentina',
-    createdAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
+    process: 'import',
+    activityAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
     view: {
       name: 'item',
       collectionId: 'col-1',
@@ -253,7 +258,8 @@ const ACTIVITY_ENTRIES: HomeActivityEntry[] = [
     id: 'item-6',
     title: 'Documento excedente',
     collectionName: 'Colección extra',
-    createdAt: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000),
+    process: 'import',
+    activityAt: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000),
     view: {
       name: 'item',
       collectionId: 'col-3',
@@ -510,7 +516,17 @@ describe('HomeView', () => {
       const headers = Array.from(table.querySelectorAll('[role="columnheader"]')).map((cell) =>
         cell.textContent?.trim()
       )
-      expect(headers).toEqual(['Documento', 'Colección', 'Modificado'])
+      expect(headers).toEqual(['Documento', 'Colección', 'Última actividad'])
+    })
+
+    // Release 1.8.7 findings: OCR and transcription work never showed here.
+    it('says what happened last to each Actividad reciente document, and when', async () => {
+      render(HomeView)
+
+      const ocr = (await screen.findByText('Acta fundacional')).closest('.home-view__recent-row')!
+      expect(ocr.lastElementChild?.textContent?.trim()).toMatch(/^OCR · hace /)
+      const imported = screen.getByText('Registro fotográfico').closest('.home-view__recent-row')!
+      expect(imported.lastElementChild?.textContent?.startsWith('Importación · hace')).toBe(true)
     })
 
     it('shows at most 5 rows in Actividad reciente, most recent first', async () => {

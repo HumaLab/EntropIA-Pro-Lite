@@ -4,7 +4,7 @@ import type {
   HomeCollectionSource,
   HomeResearchJobSource,
   HomeWritingDocumentSource,
-  HomeRecentlyImportedSource,
+  HomeRecentActivitySource,
   HomeRecentEntry,
 } from './home'
 
@@ -12,7 +12,7 @@ const { getStoreMock, storeRef, writingRef, researchListMock } = vi.hoisted(() =
   getStoreMock: vi.fn(),
   storeRef: {
     current: {
-      items: { getCorpusStats: vi.fn(), findRecentlyImported: vi.fn() },
+      items: { getCorpusStats: vi.fn(), findRecentActivity: vi.fn() },
       collections: { findAll: vi.fn(), countItems: vi.fn() },
     },
   },
@@ -48,7 +48,7 @@ vi.mock('$lib/research', () => ({
 
 import {
   mergeRecentActivity,
-  mapRecentlyImported,
+  mapRecentActivity,
   loadHomeSnapshot,
   countManuscriptWords,
   isUntitledWritingTitle,
@@ -143,18 +143,26 @@ describe('mergeRecentActivity', () => {
   })
 })
 
-describe('mapRecentlyImported', () => {
-  it('shapes each recently-imported item with a title, collection name and navigation target', () => {
-    const sources: HomeRecentlyImportedSource[] = [
-      { id: 'i1', title: 'Acta', collectionId: 'c1', collectionName: 'Archivo', createdAt: 5_000 },
+describe('mapRecentActivity', () => {
+  it('shapes each recently touched item with what happened, its collection and navigation target', () => {
+    const sources: HomeRecentActivitySource[] = [
+      {
+        id: 'i1',
+        title: 'Acta',
+        collectionId: 'c1',
+        collectionName: 'Archivo',
+        process: 'ocr',
+        activityAt: 5_000,
+      },
     ]
 
-    expect(mapRecentlyImported(sources)).toEqual([
+    expect(mapRecentActivity(sources)).toEqual([
       {
         id: 'i1',
         title: 'Acta',
         collectionName: 'Archivo',
-        createdAt: new Date(5_000),
+        process: 'ocr',
+        activityAt: new Date(5_000),
         view: {
           name: 'item',
           collectionId: 'c1',
@@ -167,16 +175,30 @@ describe('mapRecentlyImported', () => {
   })
 
   it('preserves the repository order (already newest first)', () => {
-    const sources: HomeRecentlyImportedSource[] = [
-      { id: 'i2', title: 'B', collectionId: 'c1', collectionName: 'A', createdAt: 2_000 },
-      { id: 'i1', title: 'A', collectionId: 'c1', collectionName: 'A', createdAt: 1_000 },
+    const sources: HomeRecentActivitySource[] = [
+      {
+        id: 'i2',
+        title: 'B',
+        collectionId: 'c1',
+        collectionName: 'A',
+        process: 'import',
+        activityAt: 2_000,
+      },
+      {
+        id: 'i1',
+        title: 'A',
+        collectionId: 'c1',
+        collectionName: 'A',
+        process: 'import',
+        activityAt: 1_000,
+      },
     ]
 
-    expect(mapRecentlyImported(sources).map((entry) => entry.id)).toEqual(['i2', 'i1'])
+    expect(mapRecentActivity(sources).map((entry) => entry.id)).toEqual(['i2', 'i1'])
   })
 
   it('returns an empty list for an empty source', () => {
-    expect(mapRecentlyImported([])).toEqual([])
+    expect(mapRecentActivity([])).toEqual([])
   })
 })
 
@@ -371,7 +393,7 @@ describe('loadHomeSnapshot', () => {
       pendingEmbeddings: 0,
       pausedEmbeddings: 0,
     })
-    storeRef.current.items.findRecentlyImported.mockReset().mockResolvedValue([])
+    storeRef.current.items.findRecentActivity.mockReset().mockResolvedValue([])
     storeRef.current.collections.findAll.mockReset().mockResolvedValue([])
     storeRef.current.collections.countItems.mockReset().mockResolvedValue(0)
     writingRef.listDocuments.mockReset().mockResolvedValue(undefined)
@@ -414,19 +436,27 @@ describe('loadHomeSnapshot', () => {
   })
 
   it('loads recently imported items into Actividad reciente, distinct from Continuar', async () => {
-    storeRef.current.items.findRecentlyImported.mockResolvedValue([
-      { id: 'i1', title: 'Acta', collectionId: 'c1', collectionName: 'Archivo', createdAt: 9_000 },
+    storeRef.current.items.findRecentActivity.mockResolvedValue([
+      {
+        id: 'i1',
+        title: 'Acta',
+        collectionId: 'c1',
+        collectionName: 'Archivo',
+        process: 'import',
+        activityAt: 9_000,
+      },
     ])
 
     const snapshot = await loadHomeSnapshot()
 
-    expect(storeRef.current.items.findRecentlyImported).toHaveBeenCalledWith(5)
+    expect(storeRef.current.items.findRecentActivity).toHaveBeenCalledWith(5)
     expect(snapshot.activity).toEqual([
       {
         id: 'i1',
         title: 'Acta',
         collectionName: 'Archivo',
-        createdAt: new Date(9_000),
+        process: 'import',
+        activityAt: new Date(9_000),
         view: {
           name: 'item',
           collectionId: 'c1',
@@ -507,7 +537,7 @@ describe('loadHomeSnapshot', () => {
   })
 
   it('tolerates the recently-imported items query failing without failing the whole snapshot', async () => {
-    storeRef.current.items.findRecentlyImported.mockRejectedValue(new Error('db unavailable'))
+    storeRef.current.items.findRecentActivity.mockRejectedValue(new Error('db unavailable'))
     storeRef.current.collections.findAll.mockResolvedValue([
       { id: 'c1', name: 'Archivo', description: null, createdAt: 0, updatedAt: 1_000 },
     ])
@@ -528,8 +558,15 @@ describe('loadHomeSnapshot', () => {
     storeRef.current.collections.findAll.mockResolvedValue([
       { id: 'c1', name: 'Archivo', description: null, createdAt: 0, updatedAt: 1_000 },
     ])
-    storeRef.current.items.findRecentlyImported.mockResolvedValue([
-      { id: 'i1', title: 'Acta', collectionId: 'c1', collectionName: 'Archivo', createdAt: 9_000 },
+    storeRef.current.items.findRecentActivity.mockResolvedValue([
+      {
+        id: 'i1',
+        title: 'Acta',
+        collectionId: 'c1',
+        collectionName: 'Archivo',
+        process: 'import',
+        activityAt: 9_000,
+      },
     ])
 
     const snapshot = await loadHomeSnapshot()
@@ -544,7 +581,7 @@ describe('loadHomeSnapshot', () => {
   })
 
   it('never rejects and reports an activity error when the recently-imported query fails, leaving stats and Continuar unaffected', async () => {
-    storeRef.current.items.findRecentlyImported.mockRejectedValue(new Error('activity unavailable'))
+    storeRef.current.items.findRecentActivity.mockRejectedValue(new Error('activity unavailable'))
     storeRef.current.collections.findAll.mockResolvedValue([
       { id: 'c1', name: 'Archivo', description: null, createdAt: 0, updatedAt: 1_000 },
     ])

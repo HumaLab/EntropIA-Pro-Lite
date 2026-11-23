@@ -181,26 +181,56 @@ type CorpusStatsRow = {
 }
 
 /**
- * One recently-imported document, for the home overview's "Actividad
- * reciente" panel: distinct from the corpus stats above (which only count),
- * and distinct from Continuar (which resumes collections/writing/research,
- * never individual documents).
+ * One recently touched document, for the home overview's "Actividad reciente"
+ * panel: distinct from the corpus stats above (which only count), and distinct
+ * from Continuar (which resumes collections/writing/research, never individual
+ * documents).
  */
-export type RecentlyImportedItem = {
+export type RecentActivityItem = {
   id: string
   title: string
   collectionId: string
   collectionName: string
-  createdAt: number
+  /** The latest thing that happened to it, an `asset_process_events.process`. */
+  process: string
+  activityAt: number
 }
 
-type RecentlyImportedItemRow = {
+type RecentActivityItemRow = {
   id: string
   title: string
   collection_id: string
   collection_name: string
-  created_at: number
+  process: string
+  activity_at: number
 }
+
+/**
+ * The processes that count as activity on a document: work a person started
+ * on it. Embeddings, entities, triples and summaries run on their own after
+ * every text change, hundreds at a time, and would bury everything else.
+ */
+export const RECENT_ACTIVITY_PROCESSES = [
+  'import',
+  'ocr',
+  'layout_box_ocr',
+  'ocr_correction',
+  'ocr_restore',
+  'text_edit',
+  'text_replace',
+  'transcription',
+  'transcription_edit',
+  'image_crop',
+  'image_erase',
+  'image_rotate',
+  'image_rotate_fine',
+  'image_undo',
+  'image_redo',
+  'image_use_version',
+  'pdf_crop',
+  'pdf_erase',
+  'pdf_rotate',
+] as const
 
 /**
  * Position in the collection's ordering.
@@ -1411,20 +1441,39 @@ export class ItemRepo {
   }
 
   /**
-   * The most recently imported documents across the whole corpus, newest
-   * first, each carrying its collection's name — the home overview's
-   * "Actividad reciente" panel (odd/tasks/home-view.md T3b). One indexed
-   * query, no per-row lookups.
+   * The documents most recently worked on across the whole corpus, newest
+   * first, each once, with what happened last and its collection's name — the
+   * home overview's "Actividad reciente" panel. A document's own creation
+   * counts as its import, so documents from before the process history
+   * (migration 0061) still appear.
    */
-  async findRecentlyImported(limit: number): Promise<RecentlyImportedItem[]> {
+  async findRecentActivity(limit: number): Promise<RecentActivityItem[]> {
     if (this.rawClient) {
-      const rows = await this.rawClient.select<RecentlyImportedItemRow>(
-        `SELECT i.id, i.title, i.collection_id, c.name AS collection_name, i.created_at
-           FROM items i
+      const marks = RECENT_ACTIVITY_PROCESSES.map(() => '?').join(', ')
+      const rows = await this.rawClient.select<RecentActivityItemRow>(
+        `WITH touched AS (
+           SELECT a.item_id AS item_id, e.process AS process, e.created_at AS at
+             FROM asset_process_events e
+             JOIN assets a ON a.id = e.asset_id
+            WHERE e.process IN (${marks})
+           UNION ALL
+           SELECT id, 'import', created_at FROM items
+         ), ranked AS (
+           SELECT item_id, process, at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY item_id ORDER BY at DESC, (process = 'import') ASC
+                  ) AS rn
+             FROM touched
+         )
+         SELECT i.id, i.title, i.collection_id, c.name AS collection_name,
+                r.process, r.at AS activity_at
+           FROM ranked r
+           JOIN items i ON i.id = r.item_id
            JOIN collections c ON c.id = i.collection_id
-          ORDER BY i.created_at DESC, i.id DESC
+          WHERE r.rn = 1
+          ORDER BY r.at DESC, i.id DESC
           LIMIT ?`,
-        [limit]
+        [...RECENT_ACTIVITY_PROCESSES, limit]
       )
 
       return rows.map((row) => ({
@@ -1432,11 +1481,13 @@ export class ItemRepo {
         title: row.title,
         collectionId: row.collection_id,
         collectionName: row.collection_name,
-        createdAt: row.created_at,
+        process: row.process,
+        activityAt: row.activity_at,
       }))
     }
 
-    return this.db
+    // Without the raw client there is no process history to read: imports only.
+    const rows = await this.db
       .select({
         id: items.id,
         title: items.title,
@@ -1448,6 +1499,11 @@ export class ItemRepo {
       .innerJoin(collections, eq(items.collectionId, collections.id))
       .orderBy(desc(items.createdAt), desc(items.id))
       .limit(limit)
+    return rows.map(({ createdAt, ...row }) => ({
+      ...row,
+      process: 'import',
+      activityAt: createdAt,
+    }))
   }
 
   /**
