@@ -119,7 +119,11 @@ function makeProps({
     documentViewerLabels: {} as never,
     annotationToolbarLabels: {} as never,
     translate: (key: string, params?: Record<string, string | number>) =>
-      params?.count === undefined ? key : `${key}:${params.count}`,
+      params?.count !== undefined
+        ? `${key}:${params.count}`
+        : params?.path !== undefined
+          ? `${key}:${params.path}`
+          : key,
     onAnnotationsChange: vi.fn(),
     onSelectedAnnotationIdChange: vi.fn(),
     onAnnotationToolChange: vi.fn(),
@@ -649,7 +653,7 @@ describe('ItemAssetPanel', () => {
     })
   })
 
-  it('keeps copy and export feedback screen-reader-only', async () => {
+  it('keeps copy feedback screen-reader-only and shows an export failure', async () => {
     render(ItemAssetPanel, makeProps())
     await openExtractedTextTab()
 
@@ -685,8 +689,41 @@ describe('ItemAssetPanel', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText('item.exportExtractedTextError')).toHaveClass('sr-only')
+      expect(screen.getByRole('alert')).toHaveTextContent('item.exportExtractedTextError')
     })
+    expect(screen.getByText('item.exportExtractedTextError')).not.toHaveClass('sr-only')
+  })
+
+  // Release 1.8.7 findings: a saved export closed its dialog and said nothing.
+  it('says where the export was saved until the notice is closed', async () => {
+    exportOcrTextMock.mockResolvedValueOnce('D:/exports/scan-texto-extraido.docx')
+    render(ItemAssetPanel, makeProps())
+    await openExtractedTextTab()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'item.downloadExtractedTextAria' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'item.exportExtractedTextDocx' }))
+
+    const saved = await screen.findByText(
+      'item.exportExtractedTextSaved:D:/exports/scan-texto-extraido.docx'
+    )
+    expect(saved).not.toHaveClass('sr-only')
+    expect(saved.closest('[role="status"]')).not.toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'item.exportExtractedTextDismiss' }))
+    expect(screen.queryByText(/item\.exportExtractedTextSaved/)).not.toBeInTheDocument()
+  })
+
+  it('says nothing when the save dialog is cancelled', async () => {
+    exportOcrTextMock.mockResolvedValueOnce(null)
+    render(ItemAssetPanel, makeProps())
+    await openExtractedTextTab()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'item.downloadExtractedTextAria' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'item.exportExtractedTextDocx' }))
+
+    await waitFor(() => expect(exportOcrTextMock).toHaveBeenCalled())
+    expect(screen.queryByText(/item\.exportExtractedTextSaved/)).not.toBeInTheDocument()
+    expect(screen.queryByText('item.exportExtractedTextError')).not.toBeInTheDocument()
   })
   it('closes the download menu when switching tabs and keeps it closed when returning', async () => {
     render(ItemAssetPanel, makeProps())

@@ -37,6 +37,9 @@
   let copyFeedback = $state<'idle' | 'success' | 'error'>('idle')
   let exportingFormat = $state<OcrExportFormat | null>(null)
   let exportError = $state(false)
+  // Where the last export went. The save dialog closes and the file is written
+  // elsewhere, so this stays visible until dismissed.
+  let exportSavedPath = $state<string | null>(null)
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined
   let exportIdentityGeneration = 0
   let copyGeneration = 0
@@ -319,6 +322,7 @@
         feedbackTimer = undefined
       }
       exportError = false
+      exportSavedPath = null
       exportIdentityGeneration += 1
     }
   })
@@ -384,10 +388,11 @@
 
     exportingFormat = format
     exportError = false
+    exportSavedPath = null
     downloadMenuOpen = false
 
     try {
-      await exportOcrText(
+      const savedPath = await exportOcrText(
         {
           source,
           assetUrl: viewerSrc,
@@ -398,6 +403,7 @@
         format,
         buildOcrExportFilename(asset.path, format)
       )
+      if (savedPath && generation === exportIdentityGeneration) exportSavedPath = savedPath
     } catch {
       if (generation === exportIdentityGeneration) exportError = true
     } finally {
@@ -596,14 +602,33 @@
                         {translate('item.exportExtractedTextWorking')}
                       </span>
                     {/if}
-
-                    {#if exportError}
-                      <span class="sr-only" role="alert">
-                        {translate('item.exportExtractedTextError')}
-                      </span>
-                    {/if}
                   {/if}
                 </div>
+              </div>
+            {/if}
+            {#if exportError || exportSavedPath}
+              <div class="left-text-panel-notice">
+                {#if exportError}
+                  <p class="left-text-panel-notice__error" role="alert">
+                    {translate('item.exportExtractedTextError')}
+                  </p>
+                {:else}
+                  <p class="left-text-panel-notice__saved" role="status">
+                    {translate('item.exportExtractedTextSaved', { path: exportSavedPath ?? '' })}
+                  </p>
+                {/if}
+                <IconButton
+                  size="sm"
+                  variant="ghost"
+                  label={translate('item.exportExtractedTextDismiss')}
+                  title={translate('item.exportExtractedTextDismiss')}
+                  onclick={() => {
+                    exportError = false
+                    exportSavedPath = null
+                  }}
+                >
+                  <ActionIcon name="close" size={14} />
+                </IconButton>
               </div>
             {/if}
             {#if ocrEditedText.trim()}
@@ -776,6 +801,32 @@
     flex: 0 0 auto;
     align-items: center;
     gap: var(--space-1);
+  }
+
+  .left-text-panel-notice {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .left-text-panel-notice__saved,
+  .left-text-panel-notice__error {
+    margin: 0;
+    min-width: 0;
+    font-size: var(--font-size-xs);
+    line-height: var(--line-height-base);
+  }
+
+  .left-text-panel-notice__saved {
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+
+  .left-text-panel-notice__error {
+    color: var(--color-danger);
   }
 
   .sr-only {
