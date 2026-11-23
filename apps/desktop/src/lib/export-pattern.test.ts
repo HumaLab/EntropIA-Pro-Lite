@@ -134,6 +134,7 @@ const settings: ExportSettings = {
   style: { kind: 'bundled', name: 'apa' },
   title: 'La huelga de 1919',
   bibliographyHeading: 'Bibliografía',
+  sourcesHeading: 'Fuentes citadas',
 }
 
 beforeEach(() => {

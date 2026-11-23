@@ -106,6 +106,7 @@ const settings: ExportSettings = {
   style: { kind: 'bundled', name: 'apa' },
   title: 'Un capítulo',
   bibliographyHeading: 'Bibliografía',
+  sourcesHeading: 'Fuentes citadas',
 }
 
 beforeEach(() => {

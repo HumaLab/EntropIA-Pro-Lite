@@ -63,6 +63,15 @@ export interface ExportContext {
   /** What the bibliography section is called, in the interface's language. */
   bibliographyHeading: string
   /**
+   * The corpus documents the manuscript quotes, one line each, already
+   * written out (export-citations.ts). They follow the bibliography under
+   * their own heading: a CSL style formats published works, and an archive
+   * document is not one.
+   */
+  sources: string[]
+  /** What the cited-sources section is called, in the interface's language. */
+  sourcesHeading: string
+  /**
    * The images quoted by the citations, by the path they carry, read before the
    * export runs (export-images.ts). Absent — or missing one path — is not an
    * error: the exporters write the words, which is what a quote said before it

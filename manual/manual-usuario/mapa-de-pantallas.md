@@ -3517,12 +3517,13 @@
 - «Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · ~{eta} restantes · {blocked} en espera: {reason}» `writing.zoteroBibliographySyncIndexingWaiting`
 - «Folio» `writing.locatorFolio`
 - «Formato de descarga» `writing.downloadFormats`
+- «Fuentes citadas» `writing.exportSources`
 - «Grupo» `writing.zoteroLibraryTypeGroup`
 - «Guardado» `writing.status.saved`
-- «Guardado automático» `writing.historyAuto`
 
 ### Varios (4/8)
 
+- «Guardado automático» `writing.historyAuto`
 - «Guardado en {path}» `writing.exportSaved`
 - «Guardando» `writing.status.saving`
 - «Guardar clave» `writing.publishSaveKey`
@@ -3563,10 +3564,10 @@
 - «Motivo: {reason}» `writing.zoteroDetailReason`
 - «Nada responde en el puerto local de Zotero. No sabemos si está cerrado, si no está instalado o si algo bloquea el puerto: solo que no contesta.» `writing.zoteroStateUnavailable`
 - «Ninguna de tus notas comparte palabras con este pasaje, así que no se consultó al modelo.» `writing.agentNoRelatedNotes`
-- «Ninguna referencia coincide con esa búsqueda.» `writing.zoteroEmpty`
 
 ### Varios (5/8)
 
+- «Ninguna referencia coincide con esa búsqueda.» `writing.zoteroEmpty`
 - «Ninguna versión cambió este apartado.» `writing.historySectionEmpty`
 - «Ningún documento coincide con esa búsqueda.» `writing.noteCreateNoTargets`
 - «No disponible» `writing.agentUnavailable`
@@ -3600,10 +3601,10 @@
 - «Página» `writing.locatorPage`
 - «Página {page}» `writing.corpusPage`
 - «Párrafo» `writing.locatorParagraph`
-- «Queda afuera: {count} pieza(s), por límite o por estar repetida(s).» `writing.agentOmitted`
 
 ### Varios (6/8)
 
+- «Queda afuera: {count} pieza(s), por límite o por estar repetida(s).» `writing.agentOmitted`
 - «Quita el autor de la cita y conserva el año y la página.» `writing.citeSuppressHelp`
 - «Quitar» `writing.shareRemove`
 - «Quitar esta obra de la cita» `writing.citeRemoveWork`
@@ -3638,10 +3639,10 @@
 - «Sincronizando… {done} de {total} obras» `writing.zoteroBibliographySyncRunningOf`
 - «Sincronizar biblioteca» `writing.zoteroBibliographySync`
 - «Sobre qué se apoya» `writing.agentEvidence`
-- «Solicita la sincronización del catálogo bibliográfico seleccionado en segundo plano. «Actualizar» solo renueva esta lista desde Zotero.» `writing.zoteroBibliographySyncHelp`
 
 ### Varios (7/8)
 
+- «Solicita la sincronización del catálogo bibliográfico seleccionado en segundo plano. «Actualizar» solo renueva esta lista desde Zotero.» `writing.zoteroBibliographySyncHelp`
 - «Solicitando la sincronización…» `writing.zoteroBibliographySyncRequesting`
 - «Solicitud aceptada. Consultando el estado…» `writing.zoteroBibliographySyncRequested`
 - «Solo las colecciones de este documento.» `writing.notesScoped`
@@ -3675,11 +3676,11 @@
 - «Zotero contestó algo que esta versión no sabe leer: {detail}» `writing.zoteroStateInvalid`
 - «Zotero está ahí, pero su API local está apagada. Activala en Zotero: Editar → Configuración → Avanzado → «Permitir que otras aplicaciones se comuniquen con Zotero».» `writing.zoteroStateDisabled`
 - «Zotero responde y la biblioteca está accesible.» `writing.zoteroStateAvailable`
-- «Zotero tardó demasiado en responder. Está ahí, pero no llegó a contestar a tiempo.» `writing.zoteroStateTimeout`
-- «configurá GLM-OCR en Configuración › OCR» `writing.zoteroBlockedReasonOcr`
 
 ### Varios (8/8)
 
+- «Zotero tardó demasiado en responder. Está ahí, pero no llegó a contestar a tiempo.» `writing.zoteroStateTimeout`
+- «configurá GLM-OCR en Configuración › OCR» `writing.zoteroBlockedReasonOcr`
 - «configurá OpenRouter en Configuración» `writing.zoteroBlockedReasonEmbedding`
 - «configurá OpenRouter en Configuración y GLM-OCR en Configuración › OCR» `writing.zoteroBlockedReasonEmbeddingAndOcr`
 - «p. ej. 0, 6680944» `writing.zoteroLibraryIdPlaceholder`

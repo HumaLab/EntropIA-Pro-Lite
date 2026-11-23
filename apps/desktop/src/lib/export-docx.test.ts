@@ -26,6 +26,8 @@ const context: ExportContext = {
   zotero: {},
   bibliography: [],
   bibliographyHeading: 'Bibliografía',
+  sources: [],
+  sourcesHeading: 'Fuentes citadas',
 }
 
 const text = (value: string, marks?: { type: string; attrs?: Record<string, unknown> }[]) => ({

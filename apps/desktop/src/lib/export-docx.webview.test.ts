@@ -45,6 +45,8 @@ describe('a DOCX export in a WebView', () => {
         zotero: {},
         bibliography: [],
         bibliographyHeading: 'Bibliografía',
+        sources: [],
+        sourcesHeading: 'Fuentes citadas',
       }
     )
 

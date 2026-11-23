@@ -561,7 +561,8 @@
       content.doc,
       $exportPreferences,
       DEFAULT_STYLE,
-      t('writing.exportBibliography')
+      t('writing.exportBibliography'),
+      t('writing.exportSources')
     )
   }
 
@@ -578,6 +579,7 @@
         fileName: openDocument?.title || t('writing.untitled'),
         style: DEFAULT_STYLE,
         bibliographyHeading: t('writing.exportBibliography'),
+        sourcesHeading: t('writing.exportSources'),
       })
       exportOutcome = outcome.kind === 'cancelled' ? null : outcome
     } finally {

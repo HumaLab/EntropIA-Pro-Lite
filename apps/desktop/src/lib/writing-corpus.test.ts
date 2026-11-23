@@ -23,10 +23,12 @@ const findById = vi.fn()
 const findByItem = vi.fn()
 const findByAsset = vi.fn()
 const findTranscription = vi.fn()
+const findCollection = vi.fn()
 
 const fakeStore = {
   fts: { search },
   items: { findById },
+  collections: { findById: findCollection },
   assets: { findByItem },
   extractions: { findByAsset },
   transcriptions: { findByAsset: findTranscription },
@@ -52,6 +54,7 @@ beforeEach(() => {
   findByItem.mockReset().mockResolvedValue(ASSETS)
   findByAsset.mockReset().mockResolvedValue({ id: 'e1', assetId: 'as1', textContent: 'el molino' })
   findTranscription.mockReset().mockResolvedValue(null)
+  findCollection.mockReset().mockResolvedValue({ id: 'col1', name: 'Navales' })
 })
 
 describe('searching', () => {
@@ -217,6 +220,25 @@ describe('opening an item', () => {
     expect(store.snapshot.openItem?.itemId).toBe('it1')
     expect(store.snapshot.pages.map((page) => page.assetId)).toEqual(['as1', 'as2'])
     expect(store.snapshot.pages.map((page) => page.pageNumber)).toEqual([1, 2])
+  })
+
+  it('names its collection, which the citation keeps for the list of sources', async () => {
+    const store = makeStore()
+
+    await store.openItem('it1')
+
+    expect(findCollection).toHaveBeenCalledWith('col1')
+    expect(store.snapshot.openItem?.collectionName).toBe('Navales')
+  })
+
+  it('opens an item whose collection cannot be read, without its name', async () => {
+    findCollection.mockRejectedValue(new Error('gone'))
+    const store = makeStore()
+
+    await store.openItem('it1')
+
+    expect(store.snapshot.error).toBeNull()
+    expect(store.snapshot.openItem?.collectionName).toBeNull()
   })
 
   it('reads the extracted text of a page, which is what a citation quotes', async () => {

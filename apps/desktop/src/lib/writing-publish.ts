@@ -50,7 +50,8 @@ export async function articleHtml(
   doc: Node,
   preferences: ExportPreferences,
   style: StyleSource,
-  bibliographyHeading: string
+  bibliographyHeading: string,
+  sourcesHeading: string
 ): Promise<string> {
   const citations =
     preferences.citations === 'comment'
@@ -63,6 +64,7 @@ export async function articleHtml(
     style,
     title: '',
     bibliographyHeading,
+    sourcesHeading,
   })
   if (isExportFailure(result)) throw new Error(result.elements.join(', '))
   return bodyOf(new TextDecoder().decode(result.bytes))

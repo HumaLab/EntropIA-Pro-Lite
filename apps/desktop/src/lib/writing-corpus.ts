@@ -77,6 +77,12 @@ export interface CorpusOpenItem {
   itemId: string
   title: string
   collectionId: string
+  /**
+   * What a citation keeps so the export can name the archive the document is
+   * in. Null when the collection could not be read: the citation still works,
+   * it only names less.
+   */
+  collectionName: string | null
 }
 
 export interface CorpusSnapshot {
@@ -266,10 +272,20 @@ export class WritingCorpusStore {
         }))
         .sort((a, b) => (a.pageNumber ?? 0) - (b.pageNumber ?? 0))
 
+      const collectionName = await store.collections
+        .findById(item.collectionId)
+        .then((collection) => collection?.name ?? null)
+        .catch(() => null)
+
       const hit = this.#state.results.find((result) => result.itemId === itemId)
       this.#set({
         highlight: [...getFtsTerms(this.#state.query), ...(hit?.foundAs ?? [])],
-        openItem: { itemId, title: item.title, collectionId: item.collectionId },
+        openItem: {
+          itemId,
+          title: item.title,
+          collectionId: item.collectionId,
+          collectionName,
+        },
         pages,
         openPageId: null,
         pageText: '',
