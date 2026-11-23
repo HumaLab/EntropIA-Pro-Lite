@@ -65,7 +65,9 @@ function titleOf(snapshot: unknown): string | null {
     }
   }
   if (snapshot && typeof snapshot === 'object') {
-    return text((snapshot as { title?: unknown }).title)
+    // A title copied from a file name or an OCR line can hold a run of spaces;
+    // in a note it reads as a typo.
+    return text((snapshot as { title?: unknown }).title)?.replace(/\s+/g, ' ') ?? null
   }
   return null
 }
@@ -95,17 +97,42 @@ function pageOf(attrs: CorpusCitationAttrs): number | null {
 }
 
 /**
- * The source, named as briefly as it can be: a title and a page.
+ * A document named the one way every export names it: the title, then the
+ * collection that holds it, then where in it — `Acta. SOIP, p. 3`. Without a
+ * collection the title runs straight into the page, `Acta, p. 3`, as before
+ * the snapshot carried one. Null when there is nothing to name it by.
+ */
+function named(title: string | null, collection: string | null, where: string | null) {
+  const after = [collection, where].filter(Boolean).join(', ')
+  if (!title) return after || null
+  if (!after) return title
+  // The collection opens a sentence of its own; a title that already ends in
+  // a period ("72hs.") does not get a second one.
+  return collection ? `${title.replace(/\.+$/, '')}. ${after}` : `${title}, ${after}`
+}
+
+/** A name followed by a period, without doubling one it already ends in. */
+function closed(value: string): string {
+  return `${value.replace(/\.+$/, '')}.`
+}
+
+/**
+ * The source, named as briefly as it can be: a title, its collection and a
+ * page.
  *
- * A citation with neither says so rather than rendering an empty pair of
+ * A citation with none of them says so rather than rendering an empty pair of
  * parentheses. An export that shows `()` looks like a bug in the exporter; one
  * that shows "fuente sin identificar" tells the truth about the manuscript.
  */
 export function sourceLabel(attrs: CorpusCitationAttrs): string {
-  const title = titleOf(attrs.metadataSnapshot)
   const page = pageOf(attrs)
-  const parts = [title, page === null ? null : `p. ${page}`].filter(Boolean)
-  return parts.length > 0 ? parts.join(', ') : 'fuente sin identificar'
+  return (
+    named(
+      titleOf(attrs.metadataSnapshot),
+      collectionOf(attrs.metadataSnapshot),
+      page === null ? null : `p. ${page}`
+    ) ?? 'fuente sin identificar'
+  )
 }
 
 /**
@@ -138,16 +165,11 @@ export function citedSources(citations: (CorpusCitationAttrs & { itemId?: unknow
 
   return [...sources.values()]
     .sort((a, b) => a.title.localeCompare(b.title, 'es'))
-    .map(({ title: full, collection, pages }) => {
-      // The entry adds its own periods: a title that ends in one ("72hs.")
-      // would otherwise read "72hs.." in the list.
-      const title = full.replace(/\.+$/, '')
+    .map(({ title, collection, pages }) => {
       const sorted = [...pages].sort((a, b) => a - b)
       const where =
         sorted.length === 0 ? null : `${sorted.length === 1 ? 'p.' : 'pp.'} ${sorted.join(', ')}`
-      const after = [collection, where].filter(Boolean).join(', ')
-      if (!after) return `${title}.`
-      return collection ? `${title}. ${after}.` : `${title}, ${after}.`
+      return closed(named(title, collection, where) ?? title)
     })
 }
 
@@ -200,7 +222,7 @@ export function renderCorpusCitation(
       // goes to find out what was actually said.
       return {
         inline: '',
-        note: fragment ? `${label}. ${fragment}` : label,
+        note: fragment ? `${closed(label)} ${fragment}` : label,
         fragment: fragment ?? null,
       }
   }

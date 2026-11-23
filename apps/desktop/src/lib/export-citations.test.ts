@@ -38,6 +38,42 @@ describe('naming the source', () => {
   })
 
   /**
+   * The reported case: a footnote read only
+   * `1965-04-19 - lunes - STIA delegados planta  levantan huelga filet`, with
+   * no archive, and with the title's double space.
+   */
+  it('names the collection the document is in, after the title', () => {
+    const snapshot = { title: 'Acta del gremio', pageNumber: 112, collection: 'SOIP 1963-1965' }
+
+    expect(sourceLabel({ ...cited, metadataSnapshot: snapshot })).toBe(
+      'Acta del gremio. SOIP 1963-1965, p. 112'
+    )
+    expect(sourceLabel({ metadataSnapshot: { ...snapshot, pageNumber: undefined } })).toBe(
+      'Acta del gremio. SOIP 1963-1965'
+    )
+  })
+
+  it('does not double the period of a title that ends in one', () => {
+    expect(
+      sourceLabel({ metadataSnapshot: { title: 'Huelga STIA 72hs.', collection: 'SOIP' } })
+    ).toBe('Huelga STIA 72hs. SOIP')
+  })
+
+  it('reads a title with runs of spaces as single spaces', () => {
+    expect(sourceLabel({ metadataSnapshot: { title: 'delegados planta  levantan huelga' } })).toBe(
+      'delegados planta levantan huelga'
+    )
+  })
+
+  it('gives the footnote the collection too', () => {
+    const snapshot = { title: 'Acta del gremio', pageNumber: 112, collection: 'SOIP' }
+
+    expect(renderCorpusCitation({ ...cited, metadataSnapshot: snapshot }, 'footnote').note).toBe(
+      'Acta del gremio. SOIP, p. 112. «los obreros declararon la huelga»'
+    )
+  })
+
+  /**
    * An export that shows `()` looks like a bug in the exporter. One that says
    * the source is unidentified tells the truth about the manuscript.
    */
