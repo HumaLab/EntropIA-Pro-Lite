@@ -10,7 +10,17 @@
   import { onMount } from 'svelte'
   import type { EntityAlias } from '@entropia/store'
   import { normalizeEntityAliasKey } from '@entropia/store'
-  import { ActionIcon, Button, Card, ConfirmDialog, IconButton, Input } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    Card,
+    ConfirmDialog,
+    IconButton,
+    Input,
+    SelectTrigger,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
   import { getStore } from '$lib/db'
   import { describeEntityAliasError, refreshEntityAliases } from '$lib/entity-aliases'
   import { suggestEntityAliases, type EntityAliasSuggestion } from '$lib/entity-alias-suggestions'
@@ -30,6 +40,32 @@
   let suggestionsError = $state<string | null>(null)
   let dismissedKeys = $state<Set<string>>(new Set())
   let acceptingKey = $state<string | null>(null)
+  /** The canonical the owner picked per suggestion, keyed by the suggested one. */
+  let chosenCanonical = $state<Record<string, string>>({})
+
+  function canonicalOf(suggestion: EntityAliasSuggestion): string {
+    return chosenCanonical[normalizeEntityAliasKey(suggestion.canonical)] ?? suggestion.canonical
+  }
+
+  /** Every name of the group but the chosen canonical: each becomes an alias. */
+  function aliasesOf(suggestion: EntityAliasSuggestion): string[] {
+    const canonical = canonicalOf(suggestion)
+    return [suggestion.canonical, ...suggestion.variants].filter((name) => name !== canonical)
+  }
+
+  function canonicalItems(suggestion: EntityAliasSuggestion): ToolbarMenuItem[] {
+    const key = normalizeEntityAliasKey(suggestion.canonical)
+    const current = canonicalOf(suggestion)
+    return [suggestion.canonical, ...suggestion.variants].map((name) => ({
+      kind: 'radio' as const,
+      id: name,
+      label: name,
+      checked: name === current,
+      onselect: () => {
+        chosenCanonical = { ...chosenCanonical, [key]: name }
+      },
+    }))
+  }
 
   const sorted = $derived(
     aliases
@@ -75,7 +111,8 @@
   }
 
   /**
-   * Accepts one suggestion (S5): one alias row per variant. On any refusal
+   * Accepts one suggestion (S5): one alias row per name of the group, all
+   * pointing at the canonical the owner left chosen. On any refusal
    * the readable message is shown and the suggestion stays, so the owner can
    * fix the canonical and retry from «Es la misma persona que…».
    */
@@ -84,22 +121,19 @@
     if (acceptingKey) return
     acceptingKey = key
     suggestionsError = null
-    let failedVariant = suggestion.variants[0] ?? suggestion.canonical
+    const canonical = canonicalOf(suggestion)
+    const variants = aliasesOf(suggestion)
+    let failedVariant = variants[0] ?? canonical
     try {
-      for (const variant of suggestion.variants) {
+      for (const variant of variants) {
         failedVariant = variant
-        await getStore().entityAliases.upsert({ alias: variant, canonical: suggestion.canonical })
+        await getStore().entityAliases.upsert({ alias: variant, canonical })
       }
       await refreshEntityAliases()
       suggestions = suggestions.filter((item) => item !== suggestion)
       await load()
     } catch (acceptFailure) {
-      suggestionsError = describeEntityAliasError(
-        acceptFailure,
-        failedVariant,
-        suggestion.canonical,
-        t
-      )
+      suggestionsError = describeEntityAliasError(acceptFailure, failedVariant, canonical, t)
     } finally {
       acceptingKey = null
     }
@@ -268,9 +302,26 @@
           {@const suggestionKey = normalizeEntityAliasKey(suggestion.canonical)}
           <li class="entity-aliases__row" data-testid={`entity-alias-suggestion-${index}`}>
             <span class="entity-aliases__pair">
-              <span class="entity-aliases__canonical">{suggestion.canonical}</span>
+              <ToolbarMenu
+                label={t('entityAliases.suggestions.canonicalLabel')}
+                items={canonicalItems(suggestion)}
+              >
+                {#snippet trigger(props, { open })}
+                  <SelectTrigger
+                    {...props}
+                    variant="quiet"
+                    size="sm"
+                    {open}
+                    label={canonicalOf(suggestion)}
+                    aria-label={t('entityAliases.suggestions.canonicalAria', {
+                      canonical: canonicalOf(suggestion),
+                    })}
+                    disabled={acceptingKey !== null}
+                  />
+                {/snippet}
+              </ToolbarMenu>
               <span class="entity-aliases__arrow" aria-hidden="true">←</span>
-              <span class="entity-aliases__alias">{suggestion.variants.join(', ')}</span>
+              <span class="entity-aliases__alias">{aliasesOf(suggestion).join(', ')}</span>
             </span>
             <span class="entity-aliases__note entity-aliases__meta">
               {t('entityAliases.suggestions.mentions', { count: suggestion.totalMentions })}

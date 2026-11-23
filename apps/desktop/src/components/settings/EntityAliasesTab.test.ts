@@ -230,6 +230,36 @@ describe('EntityAliasesTab suggestions (T5)', () => {
     await waitFor(() => expect(screen.queryByTestId('entity-alias-suggestion-0')).toBeNull())
   })
 
+  it('lets the owner pick another name of the group as canonical before accepting', async () => {
+    render(EntityAliasesTab)
+    const suggestion = await screen.findByTestId('entity-alias-suggestion-0')
+
+    await fireEvent.click(
+      within(suggestion).getByRole('button', { name: /Nombre canónico.*Carmela Cuevas/ })
+    )
+    const options = screen.getAllByRole('menuitemradio')
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      'Carmela Cuevas',
+      'C. Cuevas',
+      'Mdme. Cuevas',
+    ])
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Mdme. Cuevas' }))
+
+    // The chosen name leaves the variants and the suggested one joins them.
+    expect(within(suggestion).getByText('Carmela Cuevas, C. Cuevas')).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('entity-alias-suggestion-accept-0'))
+
+    await waitFor(() => expect(upsertMock).toHaveBeenCalledTimes(2))
+    expect(upsertMock).toHaveBeenNthCalledWith(1, {
+      alias: 'Carmela Cuevas',
+      canonical: 'Mdme. Cuevas',
+    })
+    expect(upsertMock).toHaveBeenNthCalledWith(2, {
+      alias: 'C. Cuevas',
+      canonical: 'Mdme. Cuevas',
+    })
+  })
+
   it('a refusal shows the readable message and keeps the suggestion', async () => {
     upsertMock.mockRejectedValue(
       new Error(
