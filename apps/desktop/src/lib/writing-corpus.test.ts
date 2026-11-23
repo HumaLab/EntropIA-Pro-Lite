@@ -72,6 +72,45 @@ describe('searching', () => {
     expect(store.snapshot.searching).toBe(false)
   })
 
+  // Release 1.8.7 findings: results listed titles only, so choosing what to
+  // cite meant opening each document.
+  it('shows the passage each hit matched, with the words marked', async () => {
+    const passage = [
+      { text: 'Se paró el ', isMatch: false },
+      { text: 'molino', isMatch: true },
+      { text: ' del puerto.', isMatch: false },
+    ]
+    const snippets = vi.fn(async () => new Map([['it1', passage]]))
+    const store = new WritingCorpusStore(
+      () => fakeStore as never,
+      new SearchPreferences(prefs),
+      snippets
+    )
+
+    await store.search('molino')
+
+    expect(snippets).toHaveBeenCalledWith(['it1'], ['molino'])
+    expect(store.snapshot.results[0]?.snippet).toEqual(passage)
+  })
+
+  it('marks the variants an approximate hit was found as, and keeps a hit with no passage', async () => {
+    search.mockResolvedValue([
+      { itemId: 'it1', rank: -1.2, approximate: true, variants: ['molinso'] },
+    ])
+    const snippets = vi.fn(async () => new Map())
+    const store = new WritingCorpusStore(
+      () => fakeStore as never,
+      new SearchPreferences(prefs),
+      snippets
+    )
+
+    await store.search('molinos')
+
+    expect(snippets).toHaveBeenCalledWith(['it1'], ['molinos', 'molinso'])
+    expect(store.snapshot.results).toHaveLength(1)
+    expect(store.snapshot.results[0]?.snippet).toBeUndefined()
+  })
+
   it('carries the words an approximate hit was found as', async () => {
     search.mockResolvedValue([
       { itemId: 'it1', rank: -1.2, approximate: true, variants: ['molinso'] },

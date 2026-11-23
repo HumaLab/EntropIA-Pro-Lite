@@ -313,6 +313,17 @@
         <li>
           <button type="button" class="corpus__row" onclick={() => store.openItem(hit.itemId)}>
             <span class="corpus__row-title">{hit.title}</span>
+            {#if hit.snippet}
+              <span class="corpus__row-snippet" data-testid="corpus-snippet">
+                {#each hit.snippet as segment, i (`${hit.itemId}-snip-${i}`)}
+                  {#if segment.isMatch}
+                    <mark class="corpus__match">{segment.text}</mark>
+                  {:else}
+                    {segment.text}
+                  {/if}
+                {/each}
+              </span>
+            {/if}
             {#if hit.foundAs}
               <!-- Says why a document without the searched word is here: the
                    variant it holds instead, usually an OCR misreading. -->
@@ -401,6 +412,29 @@
     display: block;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Two lines of the passage: enough to choose from, short enough to scan the
+     list. The row itself does not wrap (it also lists pages). */
+  .corpus__row-snippet {
+    display: -webkit-box;
+    margin-top: 2px;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    line-height: var(--line-height-base);
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .corpus__match {
+    background: color-mix(in srgb, var(--color-warning) 30%, transparent);
+    color: var(--color-text-primary);
+    border-radius: var(--radius-xs);
+    padding: 0 1px;
   }
 
   .corpus__row:hover {
