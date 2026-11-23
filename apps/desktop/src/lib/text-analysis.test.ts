@@ -229,6 +229,20 @@ describe('phrases, associations and word trees', () => {
     expect(buildCollocates(corpus, 'inexistente', { stopwords })).toEqual([])
   })
 
+  it('never lists the node word among its own collocates', () => {
+    const repeated: CorpusText[] = [
+      {
+        kind: 'extraction',
+        text: 'La huelga siguió. Huelga general y huelga textil. Otra huelga larga.',
+      },
+      // A real corpus: the node is rare among everything else it holds.
+      { kind: 'extraction', text: 'El puerto cerró temprano. La fábrica abrió tarde. '.repeat(40) },
+    ]
+    const collocates = buildCollocates(repeated, 'huelga', { stopwords, window: 5, minCount: 1 })
+    expect(collocates.map((c) => c.word)).not.toContain('huelga')
+    expect(collocates.map((c) => c.word)).toEqual(expect.arrayContaining(['general', 'textil']))
+  })
+
   it('keeps G² finite when overlapping windows overcount a neighbour', () => {
     // "guerra" falls 6 times inside the windows of the 2 "paz" (slots), while
     // occurring only 3 times in total: o21 would go negative without clamping.

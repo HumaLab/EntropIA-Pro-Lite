@@ -252,7 +252,10 @@ export function buildCollocates(
         const from = Math.max(0, index - window)
         const to = Math.min(content.length - 1, index + window)
         for (let i = from; i <= to; i++) {
-          if (i === index) continue
+          // Another occurrence of the node in the window is not a neighbour:
+          // "huelga general y huelga textil" would list huelga as its own
+          // collocate.
+          if (i === index || content[i] === target) continue
           slots++
           near.set(content[i]!, (near.get(content[i]!) ?? 0) + 1)
         }
