@@ -1760,6 +1760,8 @@ pub fn run() {
             ocr::commands::render_pdf_pages,
             ocr::commands::split_pdf_pages,
             nlp::commands::index_fts,
+            nlp::commands::fts_get_rejoin_hyphens,
+            nlp::commands::fts_set_rejoin_hyphens,
             nlp::commands::embed_asset,
             nlp::commands::backfill_asset_embeddings,
             nlp::commands::extract_entities,

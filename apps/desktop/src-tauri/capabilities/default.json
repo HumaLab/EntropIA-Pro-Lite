@@ -141,6 +141,8 @@
     "allow-similar-assets",
     "allow-embedding-local-model-info",
     "allow-embedding-open-models-dir",
+    "allow-fts-get-rejoin-hyphens",
+    "allow-fts-set-rejoin-hyphens",
     "allow-embedding-download-model",
     "allow-transcribe-audio",
     "allow-transcription-is-edited-by-hand",

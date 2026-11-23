@@ -1452,7 +1452,7 @@ Abrí **Configuración** con el botón de engranaje de la barra superior. Las pe
 | **Alias** | Ver, editar y borrar los [alias de entidades](#alias-de-entidades) y revisar las **Sugerencias**. | Aceptá solo los grupos que comprobaste. |
 | **Logs** | Leer mensajes de actividad y error. | Anotá el mensaje visible antes de compartirlo con soporte. |
 | **Copias** | Elegir la carpeta y la frecuencia de las copias de seguridad, y hacer una al momento. | Elegí una carpeta en otro disco y activá una copia automática. |
-| **Mantenimiento** | Revisar y reparar las versiones de imágenes que no coinciden con su layout ([16.6](#mantenimiento)). | Usala si ves avisos de «otra versión de la imagen» en muchos documentos. |
+| **Mantenimiento** | **Índice de búsqueda → Unir palabras cortadas con guion al final de línea** (activada por defecto): la búsqueda encuentra «trabajadores» aunque el OCR lo haya dejado como «trabaja-» y «dores» en dos líneas; el texto guardado no cambia, y al cambiarla el índice se rehace en segundo plano. Además, revisar y reparar las versiones de imágenes que no coinciden con su layout ([16.6](#mantenimiento)). | Usala si ves avisos de «otra versión de la imagen» en muchos documentos. |
 | **Apariencia** | Cambiar tema, contraste, zoom de interfaz, tipografía e idioma. | Ajustá la legibilidad antes de comenzar una sesión larga. |
 
 En **Pro**, varias pestañas suman controles de los motores locales: **APIs remotas** muestra además **Modo LLM**, **Modelo local (Gemma)**, **Embeddings BGE-M3**, **Reranker RAG local**, **Modo STT** y **Modo OCRH** con sus motores y descargas ([16.7](#motores-locales-pro)). Lite no tiene motores locales ni esos controles.

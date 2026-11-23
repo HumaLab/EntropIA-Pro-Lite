@@ -1004,6 +1004,8 @@
 - «No se pudieron leer los parámetros del motor: {error}»
 - «No se pudo aplicar: {error}»
 - «No se pudo cargar la configuración guardada: {error}»
+- «No se pudo guardar: {error}»
+- «No se pudo leer el ajuste: {error}»
 - «No se pudo revisar: {error}»
 
 ### sync
@@ -2907,13 +2909,15 @@
 - «Descartar cambios» `settings.discardTitle`
 - «Detectar hablantes» `settings.sttLocalDiarize.label`
 - «Disponible» `settings.badge.available`
+- «El índice de búsqueda se actualiza en segundo plano.» `settings.searchIndex.rebuilding`
 - «Elegí el idioma de la UI. El contenido del usuario no se traduce.» `settings.languageDescription`
-- «English» `settings.languageOptionEn`
-- «EntropIA usa {service} cuando una función lo necesita.» `settings.apiSwitch.on`
-- «Español» `settings.languageOptionEs`
 
 ### Varios (2/3)
 
+- «En el texto de OCR, «trabaja-» al final de una línea y «dores» al comienzo de la siguiente se buscan como «trabajadores». El texto guardado no cambia.» `settings.searchIndex.rejoinHyphens.description`
+- «English» `settings.languageOptionEn`
+- «EntropIA usa {service} cuando una función lo necesita.» `settings.apiSwitch.on`
+- «Español» `settings.languageOptionEs`
 - «Etiqueta cada segmento con Hablante A, B… (máximo 4, solo Parakeet). Requiere descargar el modelo de diarización (~400 MB).» `settings.sttLocalDiarize.description`
 - «GLM-OCR (z.ai)» `settings.glmOcr.title`
 - «Guardar cambios» `settings.save`
@@ -2947,6 +2951,9 @@
 - «Preferencias» `settings.preferences`
 - «Privacidad: si usás AssemblyAI o modo automático con fallback cloud, el audio se envía a un proveedor externo para transcribirlo.» `settings.sttPrivacyNotice`
 - «Privacidad: si usás GLM-OCR o modo automático con fallback cloud, la imagen o PDF se envía a un proveedor externo para OCR.» `settings.ocrhPrivacyNotice`
+
+### Varios (3/3)
+
 - «Probando...» `settings.testingConnection`
 - «Probar conexión» `settings.testConnection`
 - «Prompts» `settings.promptsTab`
@@ -2954,9 +2961,6 @@
 - «Quitar clave de {service}» `settings.clearKey`
 - «RAG Params» `settings.ragParamsTab`
 - «Reintentar carga» `settings.retryLoad`
-
-### Varios (3/3)
-
 - «Se va a eliminar la clave guardada de {service}. Las funciones que dependan de ella van a quedar sin configurar hasta que cargues una nueva.» `settings.clearKeyMessage`
 - «Secciones de configuración» `settings.tabsAria`
 - «Seguir editando» `settings.discardCancel`
@@ -2967,6 +2971,7 @@
 - «Sólo aplica a transcripciones STT de audios de colección. El dictado de notas siempre envía speaker_labels=false.» `settings.assemblyAiSpeakerLabelsHint`
 - «Tema» `settings.appearance.themeLabel`
 - «Tenés cambios sin guardar en la configuración. ¿Querés descartarlos y salir?» `settings.discardMessage`
+- «Unir palabras cortadas con guion al final de línea» `settings.searchIndex.rejoinHyphens.label`
 - «Usar esta API» `settings.apiSwitch.label`
 - «aai-...» `settings.assemblyAiApiKeyPlaceholder`
 - «google/gemma-4-26b-a4b-it» `settings.modelPlaceholder`
@@ -2974,6 +2979,7 @@
 - «zai-... / sk-...» `settings.glmOcrApiKeyPlaceholder`
 - «{count} más: seguí escribiendo para acotar» `settings.modelList.moreMatches`
 - «¿Quitar la clave de {service}?» `settings.clearKeyTitle`
+- «Índice de búsqueda» `settings.searchIndex.title`
 
 ## Actualizaciones
 

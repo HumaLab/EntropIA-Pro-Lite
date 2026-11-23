@@ -1453,7 +1453,7 @@ Open **Settings** with the gear button on the top bar. The tabs are the same in 
 | **Aliases** | See, edit and delete [entity aliases](#alias-de-entidades) and review the **Suggestions**. | Accept only the groups you have checked. |
 | **Logs** | Read activity and error messages. | Note the visible message before sharing it with support. |
 | **Backups** | Choose the backup folder and frequency, and make one right away. | Choose a folder on another disk and turn on an automatic backup. |
-| **Maintenance** | Review and repair image versions that do not match their layout ([16.6](#mantenimiento)). | Use it if you see "another version of the image" notices in many documents. |
+| **Maintenance** | **Search index → Join words cut by a hyphen at a line end** (on by default): search finds "trabajadores" even when the OCR left it as "trabaja-" and "dores" on two lines; the stored text does not change, and changing it rebuilds the index in the background. Also, review and repair image versions that do not match their layout ([16.6](#mantenimiento)). | Use it if you see "another version of the image" notices in many documents. |
 | **Appearance** | Change theme, contrast, interface zoom, typography and language. | Adjust legibility before starting a long session. |
 
 In **Pro**, several tabs add controls for the local engines: **Remote APIs** also shows **LLM mode**, **Local model (Gemma)**, **BGE-M3 embeddings**, **Local RAG reranker**, **STT mode** and **OCRH mode** with their engines and downloads ([16.7](#motores-locales-pro)). Lite has no local engines and none of those controls.

@@ -1395,3 +1395,39 @@ fn truncate_preview(text: &str, max_chars: usize) -> String {
 
 // `decode_embedding_blob` y `cosine_distance` viven en `nlp::vector` para que
 // el pipeline RAG pueda reutilizarlos sin duplicar lógica.
+
+/// Whether the search index joins words cut by a hyphen at a line end.
+#[tauri::command]
+pub async fn fts_get_rejoin_hyphens(db: State<'_, AppDbState>) -> Result<bool, String> {
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock error: {e}"))?;
+        Ok(super::fts::rejoin_hyphens_enabled(&conn))
+    })
+    .await
+}
+
+/// Saves the setting and rebuilds the search index in the background, so the
+/// change reaches every text already indexed.
+#[tauri::command]
+pub async fn fts_set_rejoin_hyphens(
+    enabled: bool,
+    db: State<'_, AppDbState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    let db = db.inner().clone();
+    let db_path = db.db_path.clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock error: {e}"))?;
+        super::fts::set_rejoin_hyphens(&conn, enabled)
+    })
+    .await?;
+    super::fts::spawn_plain_text_reindex(app_handle, db_path);
+    Ok(())
+}

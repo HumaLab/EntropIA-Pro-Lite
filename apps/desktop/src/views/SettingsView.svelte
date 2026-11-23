@@ -188,6 +188,7 @@
   import VercelFallbackCard from './VercelFallbackCard.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
   import MaintenanceSettingsCard from './MaintenanceSettingsCard.svelte'
+  import SearchIndexSettingsCard from './SearchIndexSettingsCard.svelte'
   import { onSettingsTabRequest } from '$lib/settings-tab-request'
   import AgentParametersTab from '../components/settings/AgentParametersTab.svelte'
   import EntityAliasesTab from '../components/settings/EntityAliasesTab.svelte'
@@ -4046,6 +4047,7 @@
     {:else if activeTab === 'backup'}
       <BackupTab />
     {:else if activeTab === 'maintenance'}
+      <SearchIndexSettingsCard />
       <MaintenanceSettingsCard />
     {:else if activeTab === 'appearance'}
       <AppearanceTab />
