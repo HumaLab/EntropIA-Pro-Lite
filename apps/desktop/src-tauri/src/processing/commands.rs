@@ -74,6 +74,7 @@ pub struct BatchSnapshotDto {
     pub last_error: Option<String>,
     pub members_total: i64,
     pub members_classified: i64,
+    pub members_by_classification: Vec<StateCountDto>,
     pub progress_done: i64,
     pub progress_total: Option<i64>,
     pub progress_unknown_tasks: i64,
@@ -417,6 +418,11 @@ fn snapshot_dto(snapshot: repository::BatchSnapshot) -> BatchSnapshotDto {
         last_error: snapshot.last_error,
         members_total: snapshot.members_total,
         members_classified: snapshot.members_classified,
+        members_by_classification: snapshot
+            .members_by_classification
+            .into_iter()
+            .map(|(name, count)| StateCountDto { name, count })
+            .collect(),
         progress_done: snapshot.progress_done,
         progress_total: snapshot.progress_total,
         progress_unknown_tasks: snapshot.progress_unknown_tasks,

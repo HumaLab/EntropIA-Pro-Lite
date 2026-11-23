@@ -14,6 +14,7 @@
   import {
     batchProgress,
     batchStore,
+    draftPlanSummary,
     isTerminalBatchState,
     newBatchRequestId,
     processingControl,
@@ -1377,7 +1378,11 @@
         <BatchSchemaPanel bind:schemaId />
         {#if draft && draftId}
           <div class="batch-tab__draft">
-            <p>{t('batch.preparing')} {draft.membersClassified}/{draft.membersTotal}</p>
+            {#if draft.planningDone}
+              <p>{draftPlanSummary(draft.membersByClassification)}</p>
+            {:else}
+              <p>{t('batch.preparing')} {draft.membersClassified}/{draft.membersTotal}</p>
+            {/if}
             {#if draft.planningDone && draft.operations.some((op) => op.startsWith('schema:'))}
               {@const count =
                 draft.tasksByKind.find((kind) => kind.name === 'schema_extract')?.count ?? 0}

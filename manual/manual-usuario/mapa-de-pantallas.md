@@ -100,12 +100,16 @@
 
 ### Varios (1/4)
 
+- «1 omitido» `batch.planSkipped.one`
+- «1 ya procesado» `batch.planDone.one`
 - «Abrir procesamiento por lote» `batch.openBatchTab`
 - «Acciones» `batch.colActions`
 - «Agregar campo» `batch.schemaFieldAdd`
 - «Alta» `batch.priorityHigh`
 - «Analizando selección…» `batch.preparing`
 - «Analizar selección» `batch.analyze`
+- «Análisis listo: no hay nada que procesar.» `batch.planNothing`
+- «Análisis listo: {parts}.» `batch.planReady`
 - «Bibliografía: esperando resultados de tus otros dispositivos…» `batch.statusBibliographyWaitingSync`
 - «Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal}» `batch.statusBibliography`
 - «Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal} · OCR {pagesDone}/{pagesTotal}» `batch.statusBibliographyOcr`
@@ -134,14 +138,14 @@
 - «Corrección OCR» `batch.opOcrCorrection`
 - «Corrige el texto OCR de cada página con el modelo de Prompts; guarda el original.» `batch.opOcrCorrectionHint`
 - «Código de error» `batch.colErrorCode`
+
+### Varios (2/4)
+
 - «Definí los campos que querés sacar de cada documento (por ejemplo barco, carga, destino) y el lote arma una tabla con una fila por caso.» `batch.schemaHint`
 - «Descargar CSV» `batch.schemaDownload`
 - «Descartar borrador» `batch.discard`
 - «Detalle del lote» `batch.detail`
 - «Documento» `batch.colDocument, batch.schemaDocument`
-
-### Varios (2/4)
-
 - «Editar» `batch.schemaEdit`
 - «Ejecutá OCR y embeddings sobre colecciones enteras en segundo plano, con reanudación ante interrupciones.» `batch.subtitle`
 - «El modelo general» `batch.schemaModelPlaceholder`
@@ -187,13 +191,13 @@
 - «Nombre del flujo» `batch.flowName`
 - «Nuevo esquema» `batch.schemaNew`
 - «Nuevo lote» `batch.newBatch`
+
+### Varios (3/4)
+
 - «OCR» `batch.colOcrShort, batch.opOcr`
 - «OCRH local» `batch.opOcrLocalHigh`
 - «Omitidos» `batch.stateSkipped`
 - «Opcional. Un modelo de OpenRouter solo para este esquema, por ejemplo anthropic/claude-sonnet-4.5.» `batch.schemaModelHint`
-
-### Varios (3/4)
-
 - «OpenRouter está desactivada en Configuración → APIs remotas («Usar esta API»). Activala para pedir embeddings, entidades, tripletes, correcciones o esquemas.» `batch.openrouterDisabled`
 - «Operaciones» `batch.operations`
 - «Operación» `batch.colOperation`
@@ -234,13 +238,13 @@
 - «Todavía no hay resultados con este esquema: corré un lote con él.» `batch.schemaNoResults`
 - «Todos» `batch.filterAll`
 - «Total» `batch.colTotal, batch.summaryTotal`
+
+### Varios (4/4)
+
 - «Total remoto desconocido; todavía no hay cursor confirmado» `batch.bibliographyTotalUnknown`
 - «Total remoto: {total}; todavía no hay cursor confirmado» `batch.bibliographyRemoteTotalOnly`
 - «Tripletes» `batch.opTriples`
 - «Ver detalle» `batch.viewDetail`
-
-### Varios (4/4)
-
 - «Ver intentos de {kind} · {asset}» `batch.expandTask`
 - «Ver resultados» `batch.schemaResults`
 - «{count} checkpoints» `batch.checkpointCount`
@@ -249,11 +253,14 @@
 - «{count} documentos pasan por la extracción de tripletes.» `batch.triplesCount`
 - «{count} filas» `batch.schemaResultCount`
 - «{count} intentos» `batch.attempts`
+- «{count} omitidos» `batch.planSkipped.other`
+- «{count} para procesar» `batch.planAdmitted`
 - «{count} páginas reciben un resumen. Las que ya tienen uno se saltean.» `batch.summaryCount`
 - «{count} páginas se corrigen con el modelo de Prompts. Las que ya están corregidas se saltean.» `batch.ocrCorrectionCount`
 - «{count} requieren atención» `batch.statusAttention`
 - «{count} resultados» `batch.resultCount`
 - «{count} seleccionadas» `batch.selectedCount`
+- «{count} ya procesados» `batch.planDone.other`
 - «{done} de {total} páginas o fragmentos procesados» `batch.unitsOf`
 - «{done} de {total} registros sincronizados» `batch.bibliographyProgress`
 - «{done} de {total} resueltos» `batch.resolvedOf`

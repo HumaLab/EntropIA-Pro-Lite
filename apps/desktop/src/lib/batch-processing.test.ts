@@ -33,6 +33,7 @@ function snapshot(
     lastError: null,
     membersTotal: 0,
     membersClassified: 0,
+    membersByClassification: [],
     progressDone: aggregate.done ?? 0,
     progressTotal: aggregate.total ?? null,
     progressUnknownTasks: aggregate.unknownTasks ?? taskTotal,

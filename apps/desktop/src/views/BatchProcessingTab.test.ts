@@ -248,6 +248,70 @@ describe('BatchProcessingTab batch controls', () => {
     ).toBeInTheDocument()
   })
 
+  it('says what the analysis decided once planning ends, leaving out PDF containers', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'processing_prepare') return { batchId: 'b-draft', created: true, members: 7 }
+      if (command === 'processing_get_batch')
+        return {
+          ...draftSnapshot(),
+          planningDone: true,
+          membersTotal: 7,
+          membersClassified: 7,
+          membersByClassification: [
+            { name: 'admitted', count: 2 },
+            { name: 'already_done', count: 4 },
+            { name: 'parent_has_pages', count: 1 },
+          ],
+          tasksByKind: [{ name: 'ocr', count: 2 }],
+        }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
+
+    expect(
+      await screen.findByText('Análisis listo: 2 para procesar · 4 ya procesados.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Analizando selección/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/7\/7/)).not.toBeInTheDocument()
+  })
+
+  it('names skipped documents and says when nothing is left to process', async () => {
+    let classes = [
+      { name: 'already_done', count: 1 },
+      { name: 'unsupported_type', count: 2 },
+    ]
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'processing_prepare') return { batchId: 'b-draft', created: true, members: 3 }
+      if (command === 'processing_get_batch')
+        return {
+          ...draftSnapshot(),
+          planningDone: true,
+          membersClassified: 3,
+          membersByClassification: classes,
+        }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
+    expect(
+      await screen.findByText('Análisis listo: 1 ya procesado · 2 omitidos.')
+    ).toBeInTheDocument()
+
+    classes = [{ name: 'parent_has_pages', count: 1 }]
+    await fireEvent.click(screen.getByRole('button', { name: 'Descartar borrador' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
+    expect(await screen.findByText('Análisis listo: no hay nada que procesar.')).toBeInTheDocument()
+  })
+
   it('excludes native-text pages by default and sends them only when asked', async () => {
     const sent: unknown[] = []
     mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {

@@ -12,7 +12,7 @@
   import { onDestroy, onMount } from 'svelte'
   import { locale, t } from '$lib/i18n'
   import { workspace } from '$lib/workspace'
-  import { batchStore, type BatchGlobalSummary } from '$lib/batch-processing'
+  import { batchStore, isDraftBatch, type BatchGlobalSummary } from '$lib/batch-processing'
   import {
     bibliographyDerivedProgress,
     writingZotero,
@@ -84,7 +84,8 @@
   })
 
   const currentLocale = locale
-  const activeCount = $derived(summary.active.length)
+  // A draft waits for «Empezar»: nothing is processing yet.
+  const activeCount = $derived(summary.active.filter((batch) => !isDraftBatch(batch)).length)
   const failedCount = $derived(summary.active.reduce((sum, batch) => sum + batch.failedUnits, 0))
   // Only blocked work left: nothing moves by itself, so the badge stops
   // pulsing and wears the attention styling the footer already uses for
