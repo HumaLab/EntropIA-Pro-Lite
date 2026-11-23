@@ -364,9 +364,8 @@
       title={t('collections.deleteTitle')}
       message={t('collections.deleteMessage', { name: deletingName })}
       cancelLabel={t('collections.cancel')}
-      confirmIcon="delete"
+      confirmLabel={t('collections.deleteConfirm')}
       confirmAriaLabel={t('collections.deleteAria')}
-      confirmTitle={deleting ? t('collections.deletingTitle') : t('collections.deleteAria')}
       variant="destructive"
       confirming={deleting}
       cancelDisabled={deleting}

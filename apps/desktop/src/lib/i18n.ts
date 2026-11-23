@@ -2328,7 +2328,7 @@ const es = {
   'collections.deleteMessage':
     '¿Estás seguro que querés eliminar la colección "{name}"? Se eliminarán todos sus documentos y datos asociados.',
   'collections.deleteAria': 'Eliminar colección',
-  'collections.deletingTitle': 'Eliminando colección',
+  'collections.deleteConfirm': 'Eliminar',
   'collections.error.load': 'No se pudieron cargar las colecciones',
   'collections.error.create': 'No se pudo crear la colección',
   'collections.error.update': 'Error al actualizar la colección',
@@ -6049,7 +6049,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collections.deleteMessage':
     'Are you sure you want to delete the collection "{name}"? All its documents and associated data will be removed.',
   'collections.deleteAria': 'Delete collection',
-  'collections.deletingTitle': 'Deleting collection',
+  'collections.deleteConfirm': 'Delete',
   'collections.error.load': 'Failed to load collections',
   'collections.error.create': 'Failed to create collection',
   'collections.error.update': 'Failed to update collection',
