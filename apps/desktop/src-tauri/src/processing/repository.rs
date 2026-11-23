@@ -3533,6 +3533,9 @@ pub struct BatchSnapshot {
     pub last_error: Option<String>,
     pub members_total: i64,
     pub members_classified: i64,
+    /// What planning decided for each member (`admitted`, `already_done`,
+    /// `unsupported_type`, `parent_has_pages`, `unclassified`, ...), by name.
+    pub members_by_classification: Vec<(String, i64)>,
     /// Sum of linked OCR/embedding tasks' durable, checkpoint-backed units.
     /// Bibliography page counts are incompatible with remote item totals and
     /// are deliberately excluded.
@@ -3640,6 +3643,17 @@ pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSna
         .map_err(|e| format!("Failed to count kinds of {batch_id}: {e}"))?
         .collect::<Result<Vec<(String, i64)>, _>>()
         .map_err(|e| format!("Failed to count kinds of {batch_id}: {e}"))?;
+    let mut classes = conn
+        .prepare(
+            "SELECT classification, COUNT(*) FROM processing_batch_members
+             WHERE batch_id = ?1 GROUP BY classification ORDER BY classification",
+        )
+        .map_err(|e| format!("Failed to count classifications of {batch_id}: {e}"))?;
+    let members_by_classification = classes
+        .query_map([batch_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| format!("Failed to count classifications of {batch_id}: {e}"))?
+        .collect::<Result<Vec<(String, i64)>, _>>()
+        .map_err(|e| format!("Failed to count classifications of {batch_id}: {e}"))?;
     let mut cols = conn
         .prepare(
             "SELECT collection_id_snapshot, name_snapshot FROM processing_batch_collections
@@ -3669,6 +3683,7 @@ pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSna
         last_error: batch.13,
         members_total,
         members_classified,
+        members_by_classification,
         progress_done,
         progress_total,
         progress_unknown_tasks,
@@ -3741,7 +3756,12 @@ pub fn list_batches(
     // The listings are the user's own work. `manual` and `repair` containers
     // are always running by construction and never finalize, so listing them
     // puts a permanent row in "active" that no control can move.
-    let mut clauses = vec!["origin = 'user'".to_string()];
+    // A draft discarded before it ever started did no work: it is not part
+    // of the person's history.
+    let mut clauses = vec![
+        "origin = 'user'".to_string(),
+        "NOT (state = 'cancelled' AND started_at IS NULL)".to_string(),
+    ];
     if let Some(list) = state_list {
         if !list.is_empty() {
             clauses.push(format!("state IN ({list})"));
@@ -10060,6 +10080,59 @@ mod tests {
         assert_eq!(page2.len(), 1);
         assert_eq!(page2[0].id, "b0");
         assert!(cursor.is_none());
+    }
+
+    #[test]
+    fn a_discarded_draft_stays_out_of_the_batch_lists() {
+        let (_dir, conn) = batch_db();
+        for (id, state, started) in [
+            ("draft", "cancelled", None),
+            ("stopped", "cancelled", Some(150_i64)),
+            ("done", "completed", Some(160_i64)),
+        ] {
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, created_at, updated_at, started_at)
+                 VALUES (?1, ?1, 'user', ?2, 'cancel', '[\"ocr\"]', 100, 100, ?3)",
+                rusqlite::params![id, state, started],
+            )
+            .expect("insert batch");
+        }
+        let (all, _) = list_batches(&conn, None, None, 50).expect("list");
+        let mut ids: Vec<&str> = all.iter().map(|b| b.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["done", "stopped"]);
+        let cancelled = ["cancelled".to_string()];
+        let (history, _) = list_batches(&conn, Some(&cancelled), None, 50).expect("history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, "stopped");
+    }
+
+    #[test]
+    fn the_snapshot_says_what_planning_decided_for_each_member() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let snapshot = read_batch_snapshot(&conn, "b1").expect("snapshot");
+        let mut expected: Vec<(String, i64)> = conn
+            .prepare(
+                "SELECT classification, COUNT(*) FROM processing_batch_members
+                 WHERE batch_id = 'b1' GROUP BY classification ORDER BY classification",
+            )
+            .expect("prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows");
+        assert!(expected.len() > 1, "the fixture mixes classifications");
+        expected.sort();
+        assert_eq!(snapshot.members_by_classification, expected);
+        let total: i64 = snapshot
+            .members_by_classification
+            .iter()
+            .map(|(_, n)| n)
+            .sum();
+        assert_eq!(total, snapshot.members_total);
     }
 
     #[test]

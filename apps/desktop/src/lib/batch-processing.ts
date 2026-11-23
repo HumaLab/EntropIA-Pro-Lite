@@ -10,6 +10,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import { t } from './i18n'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getProcessingInitState, type ProcessingInitSummary } from './db'
 
@@ -58,6 +59,8 @@ export interface BatchSnapshot {
   lastError: string | null
   membersTotal: number
   membersClassified: number
+  /** What planning decided per member: `admitted`, `already_done`, `parent_has_pages`, ... */
+  membersByClassification: StateCount[]
   /** Durable OCR/embedding checkpoint units; incompatible task kinds are excluded. */
   progressDone: number
   /** Sum of declared positive OCR/embedding totals, or null when none are known. */
@@ -580,6 +583,46 @@ export function taskHasDetail(task: BatchTaskSummary): boolean {
 
 export function isTerminalBatchState(state: string): boolean {
   return state === 'completed' || state === 'completed_with_errors' || state === 'cancelled'
+}
+
+/**
+ * A batch analyzed but not started: «Analizar selección» leaves it preparing
+ * or ready with `desired_state = 'pause'` until «Empezar» asks it to run.
+ */
+export function isDraftBatch(batch: { state: string; desiredState: string }): boolean {
+  return (batch.state === 'preparing' || batch.state === 'ready') && batch.desiredState !== 'run'
+}
+
+/**
+ * The line that replaces the planning counter once a draft is classified.
+ * A PDF that owns page members (`parent_has_pages`) is not a document of its
+ * own: its pages are counted instead.
+ */
+export function draftPlanSummary(classes: StateCount[] | undefined): string {
+  let admitted = 0
+  let done = 0
+  let skipped = 0
+  for (const { name, count } of classes ?? []) {
+    if (name === 'admitted') admitted += count
+    else if (name === 'already_done') done += count
+    else if (name !== 'parent_has_pages' && name !== 'unclassified') skipped += count
+  }
+  const parts = [
+    admitted > 0 ? t('batch.planAdmitted', { count: admitted }) : null,
+    done === 1
+      ? t('batch.planDone.one')
+      : done > 1
+        ? t('batch.planDone.other', { count: done })
+        : null,
+    skipped === 1
+      ? t('batch.planSkipped.one')
+      : skipped > 1
+        ? t('batch.planSkipped.other', { count: skipped })
+        : null,
+  ].filter((part): part is string => part !== null)
+  return parts.length > 0
+    ? t('batch.planReady', { parts: parts.join(' · ') })
+    : t('batch.planNothing')
 }
 
 export const batchStore = new BatchStore()

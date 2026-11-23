@@ -449,6 +449,19 @@ describe('BatchStatusIndicator', () => {
     expect(screen.queryByText(/Bibliografía/)).not.toBeInTheDocument()
   })
 
+  it('does not count a draft that was analyzed but never started as processing', () => {
+    const draft = { ...ACTIVE_BATCH, id: 'draft', state: 'ready', desiredState: 'pause' }
+    setActiveBatches([draft, { ...draft, id: 'planning', state: 'preparing' }])
+
+    const { unmount } = render(BatchStatusIndicator)
+    expect(screen.queryByText(/Procesando/)).not.toBeInTheDocument()
+    unmount()
+
+    setActiveBatches([draft, ACTIVE_BATCH])
+    render(BatchStatusIndicator)
+    expect(screen.getByText('Procesando 1')).toBeInTheDocument()
+  })
+
   it('resumes the bibliography backlog follower at startup', () => {
     render(BatchStatusIndicator)
 
