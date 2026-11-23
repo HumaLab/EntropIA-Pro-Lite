@@ -117,18 +117,55 @@ export const DocumentCitation = Node.create<{
   renderHTML({ node, HTMLAttributes }) {
     const quoted = typeof node.attrs.quotedText === 'string' ? node.attrs.quotedText : ''
     const page = node.attrs.pageNumber
-    const suffix = typeof page === 'number' ? ` (p. ${page})` : ''
+    // Where the quote comes from, after it: without it an inserted «…» reads
+    // like words the writer typed. It replaces the bare page number, which it
+    // carries; a citation whose snapshot names no document keeps that.
+    const source = citationSource(node.attrs.metadataSnapshot, page)
+    const suffix = source ? '' : typeof page === 'number' ? ` (p. ${page})` : ''
+    const marker = source
+      ? [['span', { 'data-citation-source': '', title: source.full }, source.short] as const]
+      : []
     // A long quote is set off as a block, as academic prose sets off a long
     // quotation; a short one stays inside the sentence it was written into.
     const block = isLongQuote(quoted) ? { 'data-block-quote': '' } : {}
     const attributes = mergeAttributes({ 'data-document-citation': '', ...block }, HTMLAttributes)
 
     const drawn = drawParts(node.attrs.quotedParts, this.options.resolveImage)
-    if (drawn.length > 0) return ['span', attributes, '«', ...drawn, `»${suffix}`]
+    if (drawn.length > 0) return ['span', attributes, '«', ...drawn, `»${suffix}`, ...marker]
 
-    return ['span', attributes, quoted ? `«${quoted}»${suffix}` : `[cita${suffix}]`]
+    return ['span', attributes, quoted ? `«${quoted}»${suffix}` : `[cita${suffix}]`, ...marker]
   },
 })
+
+/**
+ * The cited document as the editor names it: the title and page after the
+ * quote, and on hover the collection too — the same name the export's note
+ * gives it. Null when the snapshot names no document.
+ */
+function citationSource(snapshot: unknown, page: unknown): { short: string; full: string } | null {
+  let value = snapshot
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return null
+    }
+  }
+  if (!value || typeof value !== 'object') return null
+  const field = (name: string) => {
+    const raw = (value as Record<string, unknown>)[name]
+    return typeof raw === 'string' && raw.trim() ? raw.trim().replace(/\s+/g, ' ') : null
+  }
+  const title = field('title')
+  if (!title) return null
+  const collection = field('collection')
+  const where = typeof page === 'number' ? `p. ${page}` : null
+
+  const short = where ? `${title}, ${where}` : title
+  const after = [collection, where].filter(Boolean).join(', ')
+  const full = collection ? `${title.replace(/\.+$/, '')}. ${after}` : short
+  return { short, full }
+}
 
 /** What a quote holds, drawn in reading order; empty when it is only words. */
 function drawParts(
