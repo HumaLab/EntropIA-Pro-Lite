@@ -3201,7 +3201,7 @@ const es = {
     'Se eliminan «{title}», sus {count} capturas y sus archivos guardados en este equipo. Las copias que hayas hecho en colecciones no se tocan. No se puede deshacer.',
   'navegador.sources.deleteCancel': 'Cancelar',
   'navegador.sources.deleteConfirm': 'Eliminar {title}',
-  'navegador.sources.deleting': 'Eliminando…',
+  'navegador.sources.deleteConfirmLabel': 'Eliminar',
   'navegador.sources.deleted': 'Fuente eliminada.',
   'navegador.sources.deletedLeftover':
     'Fuente eliminada. Algunos archivos no se pudieron borrar ahora y se limpian al iniciar la app.',
@@ -6919,7 +6919,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'This deletes “{title}”, its {count} captures and its files saved on this computer. Copies you made into collections are not touched. This cannot be undone.',
   'navegador.sources.deleteCancel': 'Cancel',
   'navegador.sources.deleteConfirm': 'Delete {title}',
-  'navegador.sources.deleting': 'Deleting…',
+  'navegador.sources.deleteConfirmLabel': 'Delete',
   'navegador.sources.deleted': 'Source deleted.',
   'navegador.sources.deletedLeftover':
     'Source deleted. Some files could not be removed now and are cleaned up when the app starts.',
