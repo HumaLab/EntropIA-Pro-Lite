@@ -129,7 +129,8 @@ function makeSnapshot(): HomeSnapshot {
         id: 'item-1',
         title: 'Doc',
         collectionName: 'Col',
-        createdAt: new Date('2026-09-23T12:00:00Z'),
+        process: 'import',
+        activityAt: new Date('2026-09-23T12:00:00Z'),
         view: {
           name: 'item',
           collectionId: 'col-1',

@@ -1287,7 +1287,6 @@
 - «Espacio de trabajo» `home.heading`
 - «Importar» `home.actions.import`
 - «Inicio» `home.title`
-- «Modificado» `home.recent.columnModified`
 - «OCR» `home.activeProcess.kind.ocr`
 - «Para organizar, procesar, explorar, analizar y escribir con trazabilidad.» `home.description`
 - «Recuperar» `home.actions.newChat`
@@ -1295,6 +1294,7 @@
 - «{count} Documento» `home.recent.itemCount.one`
 - «{count} Documentos» `home.recent.itemCount.other`
 - «{done} / {total} páginas · {percent} %» `home.activeProcess.progress`
+- «Última actividad» `home.activity.columnLast`
 
 ## Internet Archive
 

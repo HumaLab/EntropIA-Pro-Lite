@@ -31,13 +31,15 @@ export interface HomeResearchJobSource {
   title: string
 }
 
-/** One row from `ItemRepo.findRecentlyImported` — a document, not a workspace. */
-export interface HomeRecentlyImportedSource {
+/** One row from `ItemRepo.findRecentActivity` — a document, not a workspace. */
+export interface HomeRecentActivitySource {
   id: string
   title: string
   collectionId: string
   collectionName: string
-  createdAt: number
+  /** What happened last: an `asset_process_events.process` name. */
+  process: string
+  activityAt: number
 }
 
 export type HomeRecentEntryKind = 'collection' | 'writing' | 'research'
@@ -194,27 +196,30 @@ export function attachContinuarWordCounts(
 }
 
 /**
- * One entry in "Actividad reciente": a recently imported document. Kept as
- * its own shape (not folded into {@link HomeRecentEntry}) so the two panels
- * can never accidentally show the same kind of thing — Continuar resumes a
- * workspace (collection/writing/research), Actividad reciente reports what
- * changed in the corpus (documents).
+ * One entry in "Actividad reciente": a document recently imported or worked
+ * on (OCR, transcription, a text or image edit). Kept as its own shape (not
+ * folded into {@link HomeRecentEntry}) so the two panels can never
+ * accidentally show the same kind of thing — Continuar resumes a workspace
+ * (collection/writing/research), Actividad reciente reports what changed in
+ * the corpus (documents).
  */
 export interface HomeActivityEntry {
   id: string
   title: string
   collectionName: string
-  createdAt: Date
+  process: string
+  activityAt: Date
   view: View
 }
 
 /** Pure and side-effect free: the repository already returns newest first. */
-export function mapRecentlyImported(sources: HomeRecentlyImportedSource[]): HomeActivityEntry[] {
+export function mapRecentActivity(sources: HomeRecentActivitySource[]): HomeActivityEntry[] {
   return sources.map((source) => ({
     id: source.id,
     title: source.title,
     collectionName: source.collectionName,
-    createdAt: new Date(source.createdAt),
+    process: source.process,
+    activityAt: new Date(source.activityAt),
     view: {
       name: 'item',
       collectionId: source.collectionId,
@@ -244,7 +249,7 @@ export interface HomeSnapshot {
   stats: CorpusStats | null
   /** Up to 3 resumable workspaces — collections, writing documents, research. */
   continuar: HomeRecentEntry[]
-  /** Up to 5 recently imported documents — never the same entities as Continuar. */
+  /** Up to 5 documents recently imported or worked on — never the same entities as Continuar. */
   activity: HomeActivityEntry[]
   isFirstRun: boolean
   errors: HomeSnapshotErrors
@@ -323,11 +328,11 @@ async function loadResearchSources(): Promise<{
 }
 
 /** Never throws: a source that fails to load is treated as empty, error reported (T3l). */
-async function loadRecentlyImportedSources(
+async function loadRecentActivitySources(
   store: ReturnType<typeof getStore>
-): Promise<{ sources: HomeRecentlyImportedSource[]; error: string | null }> {
+): Promise<{ sources: HomeRecentActivitySource[]; error: string | null }> {
   try {
-    return { sources: await store.items.findRecentlyImported(5), error: null }
+    return { sources: await store.items.findRecentActivity(5), error: null }
   } catch (caught) {
     return { sources: [], error: errorMessage(caught) }
   }
@@ -335,7 +340,7 @@ async function loadRecentlyImportedSources(
 
 /**
  * Loads the whole home overview: corpus stats, the merged Continuar list and
- * the recently-imported Actividad reciente list. Never rejects (T3l): stats,
+ * the Actividad reciente list. Never rejects (T3l): stats,
  * Continuar's three inputs and Actividad each load independently, and a
  * failing source is reported in `errors` rather than failing the others or
  * being silently treated as "nothing to show".
@@ -349,7 +354,7 @@ export async function loadHomeSnapshot(): Promise<HomeSnapshot> {
       loadCollectionSources(store),
       loadWritingSources(),
       loadResearchSources(),
-      loadRecentlyImportedSources(store),
+      loadRecentActivitySources(store),
     ])
 
   const continuar = attachContinuarWordCounts(
@@ -361,7 +366,7 @@ export async function loadHomeSnapshot(): Promise<HomeSnapshot> {
     writingResult.sources
   )
 
-  const activity = mapRecentlyImported(activityResult.sources)
+  const activity = mapRecentActivity(activityResult.sources)
 
   const continuarError = collectionsResult.error ?? writingResult.error ?? researchResult.error
 

@@ -434,8 +434,12 @@
     return parts.join(' · ')
   }
 
-  function activityDateLabel(entry: HomeActivityEntry): string {
-    return formatRelativeDate(entry.createdAt.getTime(), $currentLocale)
+  /** "OCR · hace 1 hora": what happened last to the document, and when. */
+  function activityLabel(entry: HomeActivityEntry): string {
+    const when = formatRelativeDate(entry.activityAt.getTime(), $currentLocale)
+    const key = `item.process.${entry.process}` as I18nKey
+    const what = t(key)
+    return what === key ? when : `${what} · ${when}`
   }
 
   function rowKeydown(e: KeyboardEvent, entry: HomeRecentEntry | HomeActivityEntry) {
@@ -827,7 +831,7 @@
             <span role="columnheader">{$currentLocale && t('home.activity.columnDocument')}</span>
             <span role="columnheader">{$currentLocale && t('home.activity.columnCollection')}</span>
             <span role="columnheader" class="home-view__recent-cell--end">
-              {$currentLocale && t('home.recent.columnModified')}
+              {$currentLocale && t('home.activity.columnLast')}
             </span>
           </div>
           {#each activityEntries as entry (entry.id)}
@@ -844,7 +848,7 @@
               </span>
               <span role="cell" class="home-view__recent-cell">{entry.collectionName}</span>
               <span role="cell" class="home-view__recent-cell--end">
-                {activityDateLabel(entry)}
+                {activityLabel(entry)}
               </span>
             </div>
           {/each}
@@ -1398,7 +1402,8 @@
 
   .home-view__recent-row {
     display: grid;
-    grid-template-columns: 1fr 200px 130px;
+    /* The last column holds "OCR de caja corregida · hace 2 días" on one line. */
+    grid-template-columns: minmax(0, 1fr) 200px 240px;
     align-items: center;
     gap: var(--space-3);
     padding: 0 var(--space-4);
@@ -1407,7 +1412,7 @@
     cursor: pointer;
   }
 
-  /* The two fixed columns (200px + 130px) left too little of a narrow split
+  /* The two fixed columns (200px + 240px) left too little of a narrow split
      pane for the document name — the name column would clip or the row
      would overflow past the pane. The collection column (always the row's
      2nd cell, header included) drops first; date stays, since "when" reads
@@ -1477,6 +1482,9 @@
   }
 
   .home-view__recent-cell--end {
+    overflow: hidden;
     text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>
