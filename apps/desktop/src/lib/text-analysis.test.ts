@@ -231,7 +231,10 @@ describe('phrases, associations and word trees', () => {
 
   it('never lists the node word among its own collocates', () => {
     const repeated: CorpusText[] = [
-      { kind: 'extraction', text: 'La huelga siguió. Huelga general y huelga textil. Otra huelga larga.' },
+      {
+        kind: 'extraction',
+        text: 'La huelga siguió. Huelga general y huelga textil. Otra huelga larga.',
+      },
       // A real corpus: the node is rare among everything else it holds.
       { kind: 'extraction', text: 'El puerto cerró temprano. La fábrica abrió tarde. '.repeat(40) },
     ]
