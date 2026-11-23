@@ -3379,6 +3379,7 @@
 
 ### trash
 
+- «Eliminado el {date}»
 - «La papelera está vacía.»
 - «Ocultar la papelera»
 - «Papelera»
