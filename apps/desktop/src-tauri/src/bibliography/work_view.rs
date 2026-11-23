@@ -85,6 +85,12 @@ pub struct WorkListRequest<'a> {
     pub limit: i64,
 }
 
+/// The displayed name without the quotes and punctuation it may open with,
+/// so `"Somos…"`, `¿Quién…?` and `«Bajo…»` sort by their first letter. Byte
+/// order would put ASCII quotes before every letter and `¿`, `“`, `«` after
+/// `z`. The title is still shown as stored.
+const TITLE_SORT_KEY: &str = r#"LTRIM(COALESCE(i.title, i.item_key), ' "''“”‘’«»¿¡([{#*.,:;-–—…')"#;
+
 /// One page of a library's works, in the requested order ([`WorkListSort`])
 /// with the internal id as a stable tiebreak. Tombstoned works are not
 /// listed: Zotero no longer carries them. Works with no title fall back to
@@ -163,11 +169,11 @@ pub fn list_works(
     // `item_version` descending and leaves works without a known version
     // until after every dated one.
     let order_by = match request.sort {
-        WorkListSort::Title => "COALESCE(i.title, i.item_key) COLLATE NOCASE ASC, i.id ASC",
-        WorkListSort::Recent => {
+        WorkListSort::Title => format!("{TITLE_SORT_KEY} COLLATE NOCASE ASC, i.id ASC"),
+        WorkListSort::Recent => format!(
             "(i.item_version IS NULL) ASC, i.item_version DESC, \
-             COALESCE(i.title, i.item_key) COLLATE NOCASE ASC, i.id ASC"
-        }
+             {TITLE_SORT_KEY} COLLATE NOCASE ASC, i.id ASC"
+        ),
     };
     let sql = format!(
         "SELECT i.id, i.item_key, i.library_id, COALESCE(i.title, i.item_key),
@@ -709,6 +715,46 @@ mod tests {
         assert_eq!(scoped.works[0].title, "C work");
         assert_eq!(scoped.works[0].library_row_id, lib_b);
         assert_eq!(scoped.works[0].library_native_id, "b");
+    }
+
+    #[test]
+    fn title_order_ignores_leading_quotes_and_punctuation() {
+        let mut conn = migrated_db();
+        let lib = seed_library(&mut conn, "a");
+        seed_work(&mut conn, &lib, "K1", "¿Quién paga la crisis?", None, "{}");
+        seed_work(&mut conn, &lib, "K2", "\"Somos las sin voz\"", None, "{}");
+        seed_work(&mut conn, &lib, "K3", "Huelga general", None, "{}");
+        seed_work(&mut conn, &lib, "K4", "“Trabajo” del puerto", None, "{}");
+        seed_work(&mut conn, &lib, "K5", "#Wokism en redes", None, "{}");
+        seed_work(&mut conn, &lib, "K6", "(Re)pensar el trabajo", None, "{}");
+        seed_work(&mut conn, &lib, "K7", "«Bajo la lluvia»", None, "{}");
+
+        let page = list_works(
+            &conn,
+            &WorkListRequest {
+                library_type: None,
+                library_native_id: None,
+                query: None,
+                offset: 0,
+                limit: 10,
+                sort: WorkListSort::Title,
+            },
+        )
+        .expect("page");
+        let titles: Vec<_> = page.works.iter().map(|w| w.title.as_str()).collect();
+        // Sorted by the first letter; the title itself is shown as stored.
+        assert_eq!(
+            titles,
+            [
+                "«Bajo la lluvia»",
+                "Huelga general",
+                "¿Quién paga la crisis?",
+                "(Re)pensar el trabajo",
+                "\"Somos las sin voz\"",
+                "“Trabajo” del puerto",
+                "#Wokism en redes",
+            ]
+        );
     }
 
     #[test]
