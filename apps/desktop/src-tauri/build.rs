@@ -149,6 +149,7 @@ const APP_COMMANDS: &[&str] = &[
     "fts_search",
     "fts_get_rejoin_hyphens",
     "fts_set_rejoin_hyphens",
+    "fts_snippets",
     "similar_assets",
     "embedding_local_model_info",
     "embedding_open_models_dir",

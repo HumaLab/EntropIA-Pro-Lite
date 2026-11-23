@@ -76,16 +76,21 @@ pub fn index_item_from_db(conn: &Connection, item_id: &str) -> Result<(), String
         None => return Ok(()), // Item not found — not an error
     };
 
-    // Fetch extracted text from both extractions and transcriptions via text_provider
+    let extracted_text = searchable_text(conn, item_id)?;
+    fts_index_item(conn, item_id, &title, &metadata, &extracted_text)
+}
+
+/// The text the index holds for an item: its extractions and transcriptions,
+/// as plain words. The index holds the words, not GLM's layout markup
+/// (finding 6): the stored text keeps it for display. Search snippets read
+/// this same text, so they show what the search matched.
+pub fn searchable_text(conn: &Connection, item_id: &str) -> Result<String, String> {
     let extracted_text = text_provider::get_item_text(conn, item_id)?;
-    // The index holds the words, not GLM's layout markup (finding 6): the
-    // stored text keeps it for display.
     let mut extracted_text = crate::ocr::markup::ocr_plain_text(&extracted_text);
     if rejoin_hyphens_enabled(conn) {
         extracted_text = crate::ocr::markup::rejoin_hyphenated_breaks(&extracted_text);
     }
-
-    fts_index_item(conn, item_id, &title, &metadata, &extracted_text)
+    Ok(extracted_text)
 }
 
 /// Marks an archive whose index holds plain text (finding 6). Before it, the

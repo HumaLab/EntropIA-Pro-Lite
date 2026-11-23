@@ -2530,6 +2530,45 @@ describe('ItemView full-text search in Analysis panel', () => {
     expect(storeRef.current.fts.searchWithDebug).toHaveBeenCalledTimes(1)
   })
 
+  it('shows each FTS result with its collection and a passage, not the raw rank', async () => {
+    storeRef.current = createStore({
+      itemsById: {
+        'item-1': { id: 'item-1', title: 'Acta histórica', collectionId: 'col-1', metadata: '{}' },
+        'item-2': { id: 'item-2', title: 'DSC02448', collectionId: 'col-1', metadata: '{}' },
+      },
+      ftsSearchImpl: async () => [{ itemId: 'item-2', rank: -6.672 }],
+    })
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'fts_snippets') {
+        expect(args).toEqual({ itemIds: ['item-2'], terms: ['asamblea'] })
+        return [
+          {
+            itemId: 'item-2',
+            segments: [
+              { text: '…la ', isMatch: false },
+              { text: 'asamblea', isMatch: true },
+              { text: ' votó el paro…', isMatch: false },
+            ],
+          },
+        ]
+      }
+      return null
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await fireEvent.click(await screen.findByRole('tab', { name: /Análisis/i }))
+    const input = await screen.findByPlaceholderText('Escribí para buscar...')
+    await fireEvent.input(input, { target: { value: 'asamblea' } })
+
+    const passage = await screen.findByText('votó el paro…', { exact: false })
+    expect(passage.querySelector('.fts-match')).toHaveTextContent('asamblea')
+    const row = passage.closest('.similar-item') as HTMLElement
+    expect(row).toHaveTextContent('DSC02448')
+    expect(row).toHaveTextContent('Colección 1')
+    expect(row).not.toHaveTextContent('rank')
+    expect(row).not.toHaveTextContent('6.672')
+  })
+
   it('keeps cleared FTS state isolated from a stale response before a later query', async () => {
     const oldSearch = deferred<Array<{ itemId: string; rank: number }>>()
     const oldHydration = deferred<{

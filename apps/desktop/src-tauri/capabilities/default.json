@@ -143,6 +143,7 @@
     "allow-embedding-open-models-dir",
     "allow-fts-get-rejoin-hyphens",
     "allow-fts-set-rejoin-hyphens",
+    "allow-fts-snippets",
     "allow-embedding-download-model",
     "allow-transcribe-audio",
     "allow-transcription-is-edited-by-hand",

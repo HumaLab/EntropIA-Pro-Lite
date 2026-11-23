@@ -5,13 +5,7 @@
   import { Disclosure, SearchBar } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { SimilarAsset } from '$lib/nlp'
-
-  export type ItemFtsResult = {
-    itemId: string
-    title: string
-    rank: number
-    collectionId: string
-  }
+  import type { ItemFtsResult } from '$lib/search-snippets'
 
   export type ItemFtsDebug = {
     rawQuery: string
@@ -118,18 +112,36 @@
                   class="similar-item-btn similar-item-btn--search"
                   onclick={() => onNavigateToFtsItem(result)}
                 >
-                  <span class="similar-title">
-                    {#each splitHighlightedSegments(result.title || result.itemId, ftsQuery) as segment, i (`${result.itemId}-seg-${i}-${segment.text}`)}
-                      {#if segment.isMatch}
-                        <mark class="fts-match">{segment.text}</mark>
-                      {:else}
-                        {segment.text}
-                      {/if}
-                    {/each}
+                  <span class="fts-result-head">
+                    <span class="similar-title">
+                      {#each splitHighlightedSegments(result.title || result.itemId, ftsQuery) as segment, i (`${result.itemId}-seg-${i}-${segment.text}`)}
+                        {#if segment.isMatch}
+                          <mark class="fts-match">{segment.text}</mark>
+                        {:else}
+                          {segment.text}
+                        {/if}
+                      {/each}
+                    </span>
+                    {#if result.collectionName}
+                      <span class="fts-result-collection">{result.collectionName}</span>
+                    {/if}
                   </span>
-                  <span class="similar-score similar-score--rank">
-                    {translate('item.rank', { value: result.rank.toFixed(3) })}
-                  </span>
+                  {#if result.snippet}
+                    <span class="fts-result-snippet">
+                      {#each result.snippet as segment, i (`${result.itemId}-snip-${i}`)}
+                        {#if segment.isMatch}
+                          <mark class="fts-match">{segment.text}</mark>
+                        {:else}
+                          {segment.text}
+                        {/if}
+                      {/each}
+                    </span>
+                  {/if}
+                  {#if result.foundAs}
+                    <span class="fts-result-found-as">
+                      {translate('collection.foundAs', { words: result.foundAs.join(', ') })}
+                    </span>
+                  {/if}
                 </button>
               </li>
             {/each}
@@ -403,8 +415,35 @@
   }
 
   .similar-item-btn--search {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+
+  .fts-result-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-1) var(--space-2);
+    min-width: 0;
+  }
+
+  .fts-result-collection {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-2xs);
+  }
+
+  .fts-result-snippet {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    line-height: var(--line-height-base);
+    overflow-wrap: anywhere;
+  }
+
+  .fts-result-found-as {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-2xs);
+    font-style: italic;
   }
 
   .similar-thumbnail {
@@ -489,12 +528,6 @@
     padding: var(--space-0-5) var(--space-2);
     white-space: nowrap;
     font-weight: var(--font-weight-semibold);
-  }
-
-  .similar-score--rank {
-    color: var(--color-text-secondary);
-    font-family: var(--font-mono);
-    font-weight: var(--font-weight-normal);
   }
 
   @container pane (max-width: 720px) {
