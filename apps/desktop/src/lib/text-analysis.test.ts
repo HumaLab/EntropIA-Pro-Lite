@@ -86,6 +86,43 @@ describe('tokenize', () => {
 })
 
 describe('buildFrequencies', () => {
+  // Release 1.8.7 findings: on Voces (interviews) the top words were `qué`,
+  // `cómo`, `viste`, `creo`, `tenés`, `mirá`, `cosas`.
+  it('leaves out accented interrogatives, voseo forms and spoken fillers', () => {
+    const texts: CorpusText[] = [
+      {
+        text:
+          '¿Qué pasó? Y viste, yo creo que mirá, tenés que ver cómo eran las cosas. ' +
+          '¿Cuándo? ¿Dónde? ¿Cuántos? Che, vos sabés, sos de ahí, decís que podés, ' +
+          'querés una cosa, la huelga',
+        kind: 'transcription',
+      },
+    ]
+    const words = buildFrequencies(texts).map((entry) => entry.word)
+    for (const filler of [
+      'qué',
+      'cómo',
+      'cuándo',
+      'dónde',
+      'cuántos',
+      'viste',
+      'creo',
+      'mirá',
+      'tenés',
+      'sabés',
+      'sos',
+      'decís',
+      'podés',
+      'querés',
+      'che',
+      'cosa',
+      'cosas',
+    ]) {
+      expect(words, filler).not.toContain(filler)
+    }
+    expect(words).toContain('huelga')
+  })
+
   it('counts frequencies across texts and sorts desc with alphabetical tiebreak', () => {
     const texts: CorpusText[] = [
       { text: 'fábrica fábrica huelga', kind: 'extraction' },
