@@ -160,7 +160,8 @@ fn run_backup_unguarded(db_path: &Path) -> Result<PathBuf, String> {
     let conn = open_archive_connection(db_path)?;
     let dir = get_setting(&conn, BACKUP_DIR_KEY)
         .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
+        // Folders granted before 1.8.9 were stored with the verbatim prefix.
+        .map(crate::path_utils::normalize_windows_path)
         .ok_or("Todavía no elegiste la carpeta para las copias.")?;
     if !dir.is_dir() {
         return Err(format!(
@@ -259,7 +260,8 @@ fn grant_backup_dir(
     if dir.starts_with(&archive) {
         return Err("La carpeta de copias no puede estar dentro de la carpeta de EntropIA.".into());
     }
-    let value = dir.to_string_lossy().into_owned();
+    // Without Windows' verbatim `\\?\` prefix: the Copias tab shows this path.
+    let value = crate::path_utils::normalize_windows_path_string(&dir);
     persist_setting(conn, BACKUP_DIR_KEY, &value)?;
     Ok(value)
 }
@@ -453,5 +455,38 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         grant_backup_dir(&conn, archive.path(), outside.path()).expect("granted");
         assert!(get_setting(&conn, BACKUP_DIR_KEY).is_some());
+    }
+
+    #[test]
+    fn the_backup_folder_is_stored_as_a_plain_path() {
+        let (archive, db_path) = archive_with_settings(&[]);
+        let conn = open_archive_connection(&db_path).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+
+        let returned = grant_backup_dir(&conn, archive.path(), outside.path()).expect("granted");
+
+        let stored = get_setting(&conn, BACKUP_DIR_KEY).expect("stored");
+        assert_eq!(stored, returned);
+        // Canonicalizing on Windows adds the verbatim `\\?\` prefix, which the
+        // Copias tab would show as is.
+        assert!(!stored.starts_with(r"\\?\"), "stored {stored}");
+        assert!(Path::new(&stored).is_dir());
+    }
+
+    #[test]
+    fn a_folder_stored_with_the_verbatim_prefix_still_takes_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let verbatim = std::fs::canonicalize(dir.path()).unwrap();
+        let verbatim = verbatim.to_string_lossy().into_owned();
+        let (_archive, db_path) = archive_with_settings(&[(BACKUP_DIR_KEY, &verbatim)]);
+
+        let copy = run_backup_unguarded(&db_path).expect("copy");
+
+        assert!(
+            !copy.to_string_lossy().starts_with(r"\\?\"),
+            "copy {}",
+            copy.display()
+        );
+        assert!(copy.is_dir());
     }
 }

@@ -34,6 +34,15 @@ describe('BackupTab', () => {
     expect(trigger).toHaveClass('select-trigger', 'select-trigger--quiet', 'select-trigger--sm')
   })
 
+  // Folders granted before 1.8.9 were stored with Windows' verbatim prefix.
+  it('shows a folder stored with the \\\\?\\ prefix as a plain path', async () => {
+    stored['backend_grant.backup_dir'] = '\\\\?\\E:\\EntropIA-BK'
+    render(BackupTab)
+
+    expect(await screen.findByText('E:\\EntropIA-BK')).toBeInTheDocument()
+    expect(screen.queryByText(/\\\\\?\\/)).not.toBeInTheDocument()
+  })
+
   it('persists the chosen frequency', async () => {
     render(BackupTab)
     const trigger = await screen.findByRole('button', { name: 'Copia automática Nunca' })
