@@ -26,6 +26,9 @@
   let showCreate = $state(false)
   let newName = $state('')
   let newDescription = $state('')
+  // Set when «Crear colección» is pressed with an empty name; typing clears it.
+  let newNameError = $state('')
+  let newNameInput = $state<HTMLInputElement>()
   let loading = $state(true)
   let error = $state<string | null>(null)
   let itemCounts = $state<Record<string, number>>({})
@@ -87,7 +90,11 @@
   }
 
   async function handleCreate() {
-    if (!newName.trim()) return
+    if (!newName.trim()) {
+      newNameError = t('collections.nameRequired')
+      newNameInput?.focus()
+      return
+    }
     try {
       const store = getStore()
       await store.collections.create({
@@ -266,14 +273,21 @@
           <h2>{t('collections.createTitle')}</h2>
           <p>{t('collections.createDescription')}</p>
         </div>
-        <Input type="text" placeholder={t('collections.namePlaceholder')} bind:value={newName} />
+        <Input
+          type="text"
+          placeholder={t('collections.namePlaceholder')}
+          bind:value={newName}
+          bind:element={newNameInput}
+          error={newNameError || undefined}
+          oninput={() => (newNameError = '')}
+        />
         <Input
           type="text"
           placeholder={t('collections.descriptionPlaceholder')}
           bind:value={newDescription}
         />
         <div class="create-form__actions">
-          <Button variant="primary" type="submit" disabled={!newName.trim()}>
+          <Button variant="primary" type="submit">
             {t('collections.createAction')}
           </Button>
           <Button variant="ghost" onclick={() => (showCreate = false)}>

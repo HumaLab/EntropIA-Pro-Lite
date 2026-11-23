@@ -24,7 +24,8 @@
     countLabel ?? `${itemCount} ${itemCount === 1 ? 'document' : 'documents'}`
   )
   const relativeDate = $derived(formatRelativeDate(updatedAt, locale))
-  const visibleDescription = $derived(description?.trim() || name)
+  // No subtitle without a description: repeating the name only adds noise.
+  const visibleDescription = $derived(description?.trim() || '')
 </script>
 
 <div
@@ -41,9 +42,11 @@
 >
   <h3 class="collection-card__name">{name}</h3>
 
-  <p class="collection-card__description" data-testid="collection-description">
-    {visibleDescription}
-  </p>
+  {#if visibleDescription}
+    <p class="collection-card__description" data-testid="collection-description">
+      {visibleDescription}
+    </p>
+  {/if}
 
   <div class="collection-card__footer">
     <span class="collection-card__date" data-testid="collection-date">
