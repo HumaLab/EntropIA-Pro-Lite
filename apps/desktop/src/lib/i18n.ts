@@ -3060,6 +3060,8 @@ const es = {
   'entityAliases.suggestions.accepting': 'Aceptando…',
   'entityAliases.suggestions.discard': 'Descartar',
   'entityAliases.suggestions.discardAria': 'Descartar la sugerencia {canonical}',
+  'entityAliases.suggestions.canonicalLabel': 'Nombre canónico',
+  'entityAliases.suggestions.canonicalAria': 'Nombre canónico: {canonical}. Elegí otro del grupo',
   'item.entityType.person': 'Persona',
   'item.entityType.place': 'Lugar',
   'item.entityType.date': 'Fecha',
@@ -6760,6 +6762,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'entityAliases.suggestions.accepting': 'Accepting…',
   'entityAliases.suggestions.discard': 'Dismiss',
   'entityAliases.suggestions.discardAria': 'Dismiss the suggestion {canonical}',
+  'entityAliases.suggestions.canonicalLabel': 'Canonical name',
+  'entityAliases.suggestions.canonicalAria':
+    'Canonical name: {canonical}. Choose another from the group',
   'item.entityType.person': 'Person',
   'item.entityType.place': 'Place',
   'item.entityType.date': 'Date',

@@ -15,6 +15,17 @@ export function normalizeEntityAliasKey(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
+/**
+ * How well an entity name is written, for choosing which spelling to show:
+ * accents and mixed case each count, so «Néstor Ramírez» outranks
+ * «NESTOR RAMIREZ» and «Cayo Ayala» outranks «CAYO AYALA».
+ */
+export function entityNameWritingScore(value: string): number {
+  const accented = value.normalize('NFD') !== value ? 1 : 0
+  const mixedCase = value !== value.toUpperCase() && value !== value.toLowerCase() ? 1 : 0
+  return accented + mixedCase
+}
+
 /** The only columns the read-time resolver needs. */
 export type AliasResolverRow = Pick<EntityAlias, 'aliasKey' | 'canonical'>
 

@@ -12,6 +12,8 @@
  * the short forms are attached to neither.
  */
 
+import { entityNameWritingScore } from '@entropia/store'
+
 export interface AliasSuggestionValue {
   /** A distinct archive value, e.g. "Mdme. Cuevas". */
   value: string
@@ -33,7 +35,10 @@ export interface AliasSuggestionInput {
 }
 
 export interface EntityAliasSuggestion {
-  /** The fullest form (ties broken by most mentions). */
+  /**
+   * The fullest form; among equally full forms the best written one
+   * (accented, mixed case), then the most mentioned.
+   */
   canonical: string
   mentions: number
   variants: string[]
@@ -61,6 +66,9 @@ const HONORIFICS = new Set([
   'mr',
   'mrs',
   'ms',
+  // Not an honorific but read the same way: «ex Dodero» names a former
+  // holder, not a person whose first name is «ex».
+  'ex',
 ])
 
 function fold(value: string): string {
@@ -167,7 +175,8 @@ export function suggestEntityAliases(input: AliasSuggestionInput): EntityAliasSu
   const dismissed = input.dismissedKeys ?? new Set<string>()
 
   // Merge raw rows that normalize to the same key; the display form is the
-  // one with most mentions (ties: longest, then alphabetical).
+  // best written one («Cayo Ayala» over «CAYO AYALA»), then the one with most
+  // mentions (ties: longest, then alphabetical).
   const merged = new Map<string, { display: string; mentions: number }>()
   const rawCounts = new Map<string, Map<string, number>>()
   for (const { value, mentions } of input.values) {
@@ -186,10 +195,13 @@ export function suggestEntityAliases(input: AliasSuggestionInput): EntityAliasSu
     let total = 0
     for (const [raw, count] of perRaw) {
       total += count
+      const written = display ? entityNameWritingScore(raw) - entityNameWritingScore(display) : 1
       if (
-        count > displayMentions ||
-        (count === displayMentions &&
-          (raw.length > display.length || (raw.length === display.length && raw < display)))
+        written > 0 ||
+        (written === 0 &&
+          (count > displayMentions ||
+            (count === displayMentions &&
+              (raw.length > display.length || (raw.length === display.length && raw < display)))))
       ) {
         display = raw
         displayMentions = count
@@ -224,6 +236,8 @@ export function suggestEntityAliases(input: AliasSuggestionInput): EntityAliasSu
 
     const orderedFullers = fullers.slice().sort((a, b) => {
       if (b.stripped.length !== a.stripped.length) return b.stripped.length - a.stripped.length
+      const written = entityNameWritingScore(b.display) - entityNameWritingScore(a.display)
+      if (written !== 0) return written
       if (b.mentions !== a.mentions) return b.mentions - a.mentions
       return a.key < b.key ? -1 : a.key > b.key ? 1 : 0
     })

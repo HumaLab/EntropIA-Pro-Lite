@@ -766,6 +766,8 @@
 - «Descartar»
 - «Descartar la sugerencia {canonical}»
 - «Grupos que parecen la misma persona (mismo apellido, iniciales, tratamientos). Nada se une solo: cada grupo se acepta o se descarta.»
+- «Nombre canónico»
+- «Nombre canónico: {canonical}. Elegí otro del grupo»
 - «Sin sugerencias por ahora: no hay grupos de menciones parecidas entre las personas del archivo.»
 - «Sugerencias»
 - «{count} menciones»
