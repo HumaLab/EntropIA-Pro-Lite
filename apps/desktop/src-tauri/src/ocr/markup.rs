@@ -392,6 +392,20 @@ pub fn ocr_plain_text(text: &str) -> String {
     out.trim().to_string()
 }
 
+/// A word cut by a hyphen at a line end: a letter, a hyphen (ASCII, soft or
+/// Unicode), the break, and a lowercase letter going on. A capital, a digit, a
+/// space before the hyphen or a blank line in between leave it alone.
+static HYPHEN_BREAK_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(\p{L})[-\u{00AD}\u{2010}][ \t]*\n[ \t]*(\p{Ll})")
+        .expect("valid hyphen break regex")
+});
+
+/// Joins the words a printed page cut at a line end (`trabaja-\ndores` →
+/// `trabajadores`), so search finds the whole word.
+pub fn rejoin_hyphenated_breaks(text: &str) -> String {
+    HYPHEN_BREAK_RE.replace_all(text, "$1$2").into_owned()
+}
+
 #[cfg(test)]
 mod plain_text_tests {
     use super::ocr_plain_text;
@@ -422,6 +436,40 @@ mod plain_text_tests {
     #[test]
     fn code_fences_go_and_their_content_stays() {
         assert_eq!(ocr_plain_text("```\nlinea\n```"), "linea");
+    }
+}
+
+#[cfg(test)]
+mod hyphen_break_tests {
+    use super::rejoin_hyphenated_breaks;
+
+    #[test]
+    fn a_word_cut_at_the_end_of_a_line_is_joined_again() {
+        assert_eq!(
+            rejoin_hyphenated_breaks("los trabaja-\ndores del puerto"),
+            "los trabajadores del puerto"
+        );
+        // A soft hyphen and the Unicode hyphen are line-end cuts too, and the
+        // spaces OCR leaves around the break go with it.
+        assert_eq!(
+            rejoin_hyphenated_breaks("con\u{00AD} \n  flicto"),
+            "conflicto"
+        );
+        assert_eq!(rejoin_hyphenated_breaks("huel\u{2010}\nga"), "huelga");
+    }
+
+    #[test]
+    fn a_hyphen_that_is_not_a_cut_word_stays() {
+        // A capital after the break: a compound, not a cut word.
+        let compound = "Norte-\nAmérica";
+        assert_eq!(rejoin_hyphenated_breaks(compound), compound);
+        // A dash after a space, a range of years, a blank line between.
+        let dash = "una cosa -\notra cosa";
+        assert_eq!(rejoin_hyphenated_breaks(dash), dash);
+        let years = "1926-\n1930";
+        assert_eq!(rejoin_hyphenated_breaks(years), years);
+        let paragraphs = "fin-\n\nnuevo párrafo";
+        assert_eq!(rejoin_hyphenated_breaks(paragraphs), paragraphs);
     }
 }
 

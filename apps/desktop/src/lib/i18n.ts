@@ -376,6 +376,13 @@ const es = {
   'settings.backup.runNow': 'Hacer una copia ahora',
   'settings.backup.done': 'Copia guardada en',
   'settings.maintenanceTab': 'Mantenimiento',
+  'settings.searchIndex.title': 'Índice de búsqueda',
+  'settings.searchIndex.rejoinHyphens.label': 'Unir palabras cortadas con guion al final de línea',
+  'settings.searchIndex.rejoinHyphens.description':
+    'En el texto de OCR, «trabaja-» al final de una línea y «dores» al comienzo de la siguiente se buscan como «trabajadores». El texto guardado no cambia.',
+  'settings.searchIndex.rebuilding': 'El índice de búsqueda se actualiza en segundo plano.',
+  'settings.searchIndex.saveFailed': 'No se pudo guardar: {error}',
+  'settings.searchIndex.loadFailed': 'No se pudo leer el ajuste: {error}',
   'settings.maintenance.versionsTitle': 'Revisar versiones de imágenes',
   'settings.maintenance.versionsHint':
     'Busca imágenes que muestran una versión anterior a aquella sobre la que se calculó su layout. Primero lista lo que encuentra: no cambia nada hasta que lo confirmes.',
@@ -4648,6 +4655,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.backup.runNow': 'Back up now',
   'settings.backup.done': 'Backup saved in',
   'settings.maintenanceTab': 'Maintenance',
+  'settings.searchIndex.title': 'Search index',
+  'settings.searchIndex.rejoinHyphens.label': 'Join words cut by a hyphen at a line end',
+  'settings.searchIndex.rejoinHyphens.description':
+    'In OCR text, “trabaja-” at the end of a line and “dores” at the start of the next are searched as “trabajadores”. The stored text does not change.',
+  'settings.searchIndex.rebuilding': 'The search index is being updated in the background.',
+  'settings.searchIndex.saveFailed': 'Could not save: {error}',
+  'settings.searchIndex.loadFailed': 'Could not read the setting: {error}',
   'settings.maintenance.versionsTitle': 'Review image versions',
   'settings.maintenance.versionsHint':
     'Finds images that show an older version than the one their layout was computed on. It lists what it finds first: nothing changes until you confirm.',

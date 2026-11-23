@@ -80,7 +80,10 @@ pub fn index_item_from_db(conn: &Connection, item_id: &str) -> Result<(), String
     let extracted_text = text_provider::get_item_text(conn, item_id)?;
     // The index holds the words, not GLM's layout markup (finding 6): the
     // stored text keeps it for display.
-    let extracted_text = crate::ocr::markup::ocr_plain_text(&extracted_text);
+    let mut extracted_text = crate::ocr::markup::ocr_plain_text(&extracted_text);
+    if rejoin_hyphens_enabled(conn) {
+        extracted_text = crate::ocr::markup::rejoin_hyphenated_breaks(&extracted_text);
+    }
 
     fts_index_item(conn, item_id, &title, &metadata, &extracted_text)
 }
@@ -90,7 +93,36 @@ pub fn index_item_from_db(conn: &Connection, item_id: &str) -> Result<(), String
 /// local to the device: `app_settings` does not sync, and every device builds
 /// its own index.
 pub const PLAIN_TEXT_INDEX_KEY: &str = "fts_index_text_version";
-pub const PLAIN_TEXT_INDEX_VERSION: &str = "plain-v1";
+pub const PLAIN_TEXT_INDEX_VERSION: &str = "plain-v2";
+/// The version of an index whose cut words were joined again.
+const REJOINED_INDEX_VERSION: &str = "plain-v2+rejoin";
+
+/// Whether the index joins words cut by a hyphen at a line end. On unless the
+/// owner turned it off; local to the device, like the index itself.
+pub const REJOIN_HYPHENS_KEY: &str = "fts_rejoin_hyphens";
+
+pub fn rejoin_hyphens_enabled(conn: &Connection) -> bool {
+    crate::settings::get_raw_setting(conn, REJOIN_HYPHENS_KEY).as_deref() != Some("false")
+}
+
+pub fn set_rejoin_hyphens(conn: &Connection, enabled: bool) -> Result<(), String> {
+    crate::settings::set_setting(
+        conn,
+        REJOIN_HYPHENS_KEY,
+        if enabled { "true" } else { "false" },
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// The version the index has to reach: changing the setting changes it, so the
+/// reindex runs again.
+fn wanted_index_version(conn: &Connection) -> &'static str {
+    if rejoin_hyphens_enabled(conn) {
+        REJOINED_INDEX_VERSION
+    } else {
+        PLAIN_TEXT_INDEX_VERSION
+    }
+}
 
 fn table_exists(conn: &Connection, table: &str) -> bool {
     conn.query_row(
@@ -115,7 +147,8 @@ pub fn reindex_plain_text_once(conn: &Connection) -> String {
             |row| row.get(0),
         )
         .ok();
-    if done.as_deref() == Some(PLAIN_TEXT_INDEX_VERSION) {
+    let wanted = wanted_index_version(conn);
+    if done.as_deref() == Some(wanted) {
         return "plain-text reindex: already done for this archive".to_string();
     }
     let ids: Vec<String> = match conn
@@ -135,7 +168,15 @@ pub fn reindex_plain_text_once(conn: &Connection) -> String {
             );
         }
     }
-    match crate::settings::set_setting(conn, PLAIN_TEXT_INDEX_KEY, PLAIN_TEXT_INDEX_VERSION) {
+    // The setting changed while this pass ran: leave the marker, so the pass
+    // that change started (or the next start) indexes with the new value.
+    if wanted_index_version(conn) != wanted {
+        return format!(
+            "plain-text reindex: {} items, setting changed meanwhile",
+            ids.len()
+        );
+    }
+    match crate::settings::set_setting(conn, PLAIN_TEXT_INDEX_KEY, wanted) {
         Ok(()) => format!("plain-text reindex: {} items", ids.len()),
         Err(error) => format!(
             "plain-text reindex: {} items; could not record completion: {error}",
@@ -1092,7 +1133,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(marker, PLAIN_TEXT_INDEX_VERSION);
+        assert_eq!(marker, REJOINED_INDEX_VERSION);
 
         // Second start: nothing is redone.
         fts_index_item(&conn, "item-g", "Fileteros", "{}", glm).unwrap();
@@ -1101,6 +1142,81 @@ mod tests {
             "plain-text reindex: already done for this archive"
         );
         assert_eq!(fts_search(&conn, "div", None).unwrap().len(), 1);
+    }
+
+    fn archive_with_a_cut_word() -> Connection {
+        let conn = setup_fts_db_with_assets();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO items(id, collection_id, title, metadata) VALUES ('item-h', 'col-1', 'Puerto', '{}');
+             INSERT INTO assets(id, item_id, path, type, sort_index, created_at) VALUES ('asset-h', 'item-h', 'p.png', 'image', 0, 1);
+             INSERT INTO extractions(id, asset_id, text_content, created_at) VALUES ('ext-h', 'asset-h', 'los trabaja-
+dores del puerto', 10);",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn the_index_joins_words_cut_at_a_line_end_by_default() {
+        let conn = archive_with_a_cut_word();
+
+        index_item_from_db(&conn, "item-h").unwrap();
+
+        assert_eq!(fts_search(&conn, "trabajadores", None).unwrap().len(), 1);
+        assert!(fts_search(&conn, "dores", None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_index_keeps_cut_words_apart_when_the_setting_is_off() {
+        let conn = archive_with_a_cut_word();
+        set_rejoin_hyphens(&conn, false).unwrap();
+
+        index_item_from_db(&conn, "item-h").unwrap();
+
+        assert!(!rejoin_hyphens_enabled(&conn));
+        assert!(fts_search(&conn, "trabajadores", None).unwrap().is_empty());
+        assert_eq!(fts_search(&conn, "dores", None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn changing_the_setting_makes_the_reindex_run_again() {
+        let conn = archive_with_a_cut_word();
+        assert_eq!(
+            reindex_plain_text_once(&conn),
+            "plain-text reindex: 1 items"
+        );
+        assert_eq!(fts_search(&conn, "trabajadores", None).unwrap().len(), 1);
+
+        set_rejoin_hyphens(&conn, false).unwrap();
+        assert_eq!(
+            reindex_plain_text_once(&conn),
+            "plain-text reindex: 1 items"
+        );
+        assert!(fts_search(&conn, "trabajadores", None).unwrap().is_empty());
+        assert_eq!(
+            reindex_plain_text_once(&conn),
+            "plain-text reindex: already done for this archive"
+        );
+
+        set_rejoin_hyphens(&conn, true).unwrap();
+        assert_eq!(
+            reindex_plain_text_once(&conn),
+            "plain-text reindex: 1 items"
+        );
+        assert_eq!(fts_search(&conn, "trabajadores", None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_archive_indexed_before_the_rejoin_is_reindexed_once() {
+        let conn = archive_with_a_cut_word();
+        crate::settings::set_setting(&conn, PLAIN_TEXT_INDEX_KEY, "plain-v1").unwrap();
+
+        assert_eq!(
+            reindex_plain_text_once(&conn),
+            "plain-text reindex: 1 items"
+        );
+        assert_eq!(fts_search(&conn, "trabajadores", None).unwrap().len(), 1);
     }
 
     #[test]
