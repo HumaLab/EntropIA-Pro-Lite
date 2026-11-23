@@ -2,6 +2,7 @@ import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { citedWorks, clusterOf } from './citation-clusters'
 import type { ExportContext, Node } from './export-document'
+import { citedSources } from './export-citations'
 import { toDocx } from './export-docx'
 import {
   fidelityWarnings,
@@ -64,6 +65,8 @@ export interface ExportSettings {
   style: StyleSource
   title: string
   bibliographyHeading: string
+  /** What the list of quoted corpus documents is called. */
+  sourcesHeading: string
 }
 
 export interface ExportResult {
@@ -89,6 +92,17 @@ const EXTENSION: Record<ExportFormat, { extension: string; name: string }> = {
   markdown: { extension: 'md', name: 'Markdown' },
   html: { extension: 'html', name: 'HTML' },
   docx: { extension: 'docx', name: 'Word' },
+}
+
+/** The attributes of every corpus citation in the manuscript, in order. */
+function corpusCitationsOf(doc: Node): Record<string, unknown>[] {
+  const found: Record<string, unknown>[] = []
+  const walk = (node: Node) => {
+    if (node.type === 'documentCitation') found.push(node.attrs ?? {})
+    for (const child of node.content ?? []) walk(child)
+  }
+  walk(doc)
+  return found
 }
 
 /**
@@ -170,6 +184,8 @@ export async function exportDocument(
     zotero,
     bibliography,
     bibliographyHeading: settings.bibliographyHeading,
+    sources: settings.bibliography ? citedSources(corpusCitationsOf(doc)) : [],
+    sourcesHeading: settings.sourcesHeading,
     // Read here, once, because the three exporters are pure functions over the
     // document and a file is not something a pure function can open.
     images: await loadExportImages(doc),
@@ -198,6 +214,7 @@ export interface DownloadContext {
   fileName: string
   style: StyleSource
   bibliographyHeading: string
+  sourcesHeading: string
 }
 
 /**
@@ -218,6 +235,7 @@ export function exportSettingsFor(
     style: context.style,
     title: context.title,
     bibliographyHeading: context.bibliographyHeading,
+    sourcesHeading: context.sourcesHeading,
   }
 }
 

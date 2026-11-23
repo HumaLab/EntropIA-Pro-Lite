@@ -60,6 +60,7 @@ const settings: ExportSettings = {
   style: { kind: 'bundled', name: 'apa' },
   title: '',
   bibliographyHeading: 'Bibliografía',
+  sourcesHeading: 'Fuentes citadas',
 }
 
 beforeEach(() => {
@@ -108,6 +109,74 @@ describe('the bibliography of an export', () => {
       ([command]) => command === 'writing_csl_bibliography'
     )!
     expect(args).toMatchObject({ cited: [DARNTON, GINZBURG] })
+  })
+})
+
+const corpusCite = (
+  itemId: string,
+  title: string,
+  pageNumber: number | null,
+  collection?: string
+): Node => ({
+  type: 'documentCitation',
+  attrs: {
+    itemId,
+    assetId: `${itemId}-p${pageNumber ?? 0}`,
+    pageNumber,
+    quotedText: 'una frase',
+    metadataSnapshot: { title, pageNumber, ...(collection ? { collection } : {}) },
+  },
+})
+
+describe('the cited corpus sources of an export', () => {
+  /**
+   * The reported bug: a manuscript that quotes only corpus documents exported
+   * with "Incluir bibliografía" ticked and no list at the end at all.
+   */
+  it('lists each cited document once, by title, with its collection and pages', async () => {
+    const out = await exported(
+      doc(
+        p(text('Uno '), corpusCite('i2', 'Volante del sindicato', 4, 'SOIP')),
+        p(text('Dos '), corpusCite('i1', 'Acta de asamblea', null, 'Navales')),
+        p(text('Tres '), corpusCite('i2', 'Volante del sindicato', 2, 'SOIP')),
+        p(text('Cuatro '), corpusCite('i2', 'Volante del sindicato', 4, 'SOIP'))
+      )
+    )
+
+    expect(out.text).toContain(
+      '## Fuentes citadas\n\nActa de asamblea\\. Navales\\.\n\nVolante del sindicato\\. SOIP, pp\\. 2, 4\\.'
+    )
+    expect(out.text).not.toContain('## Bibliografía')
+  })
+
+  it('names a document without a collection by its title and page', async () => {
+    const out = await exported(doc(p(corpusCite('i1', 'Carta', 7))))
+
+    expect(out.text).toContain('## Fuentes citadas\n\nCarta, p\\. 7\\.')
+  })
+
+  it('does not double the period of a title that already ends in one', async () => {
+    const out = await exported(doc(p(corpusCite('i1', 'Huelga STIA 72hs.', null, 'SOIP'))), {
+      format: 'html',
+    })
+
+    expect(out.text).toContain('<p>Huelga STIA 72hs. SOIP.</p>')
+  })
+
+  it('puts the sources after the Zotero bibliography, in HTML too', async () => {
+    const node = doc(p(cite('z1', GINZBURG), text(' y '), corpusCite('i1', 'Carta', 7, 'SOIP')))
+
+    const md = (await exported(node)).text
+    expect(md.indexOf('## Bibliografía')).toBeLessThan(md.indexOf('## Fuentes citadas'))
+
+    const html = (await exported(node, { format: 'html' })).text
+    expect(html).toContain('<h2>Fuentes citadas</h2>\n<p>Carta. SOIP, p. 7.</p>')
+  })
+
+  it('leaves the list out when the bibliography is off', async () => {
+    const out = await exported(doc(p(corpusCite('i1', 'Carta', 7))), { bibliography: false })
+
+    expect(out.text).not.toContain('Fuentes citadas')
   })
 })
 

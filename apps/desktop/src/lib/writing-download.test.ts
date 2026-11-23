@@ -20,6 +20,7 @@ const context = {
   fileName: 'Capítulo',
   style: { kind: 'bundled', name: 'apa' } as const,
   bibliographyHeading: 'Bibliografía',
+  sourcesHeading: 'Fuentes citadas',
 }
 
 const citing: Node = {

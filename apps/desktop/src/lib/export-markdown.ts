@@ -365,5 +365,13 @@ export function toMarkdown(doc: Node, context: ExportContext): string {
     )
   }
 
+  if (context.sources.length > 0) {
+    parts.push(
+      [`## ${context.sourcesHeading}`, ...context.sources.map((entry) => escape(entry))].join(
+        '\n\n'
+      )
+    )
+  }
+
   return `${parts.join('\n\n')}\n`
 }

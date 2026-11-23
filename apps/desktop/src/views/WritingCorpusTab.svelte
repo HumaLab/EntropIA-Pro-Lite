@@ -190,7 +190,13 @@
       quotedText: chosen.quote,
       ...(quotedParts ? { quotedParts } : {}),
       sourceTextHash,
-      metadataSnapshot: { title: snapshot.openItem.title, pageNumber: page.pageNumber },
+      metadataSnapshot: {
+        title: snapshot.openItem.title,
+        pageNumber: page.pageNumber,
+        ...(snapshot.openItem.collectionName
+          ? { collection: snapshot.openItem.collectionName }
+          : {}),
+      },
     })
 
     inserted = id !== null

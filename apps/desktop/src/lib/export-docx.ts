@@ -737,14 +737,19 @@ export function buildDocx(doc: Node, context: ExportContext, page: DocxPageSetup
   }
   body.push(...children)
 
-  if (context.bibliography.length > 0) {
+  const lists: [string, string[]][] = [
+    [context.bibliographyHeading, context.bibliography],
+    [context.sourcesHeading, context.sources],
+  ]
+  for (const [heading, entries] of lists) {
+    if (entries.length === 0) continue
     body.push(
       new Paragraph({
         heading: HeadingLevel.HEADING_1,
-        children: [new TextRun(context.bibliographyHeading)],
+        children: [new TextRun(heading)],
       })
     )
-    for (const entry of context.bibliography) {
+    for (const entry of entries) {
       body.push(
         new Paragraph({
           children: [new TextRun(entry)],

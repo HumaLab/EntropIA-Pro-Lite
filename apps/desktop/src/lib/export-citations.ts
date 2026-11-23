@@ -70,6 +70,20 @@ function titleOf(snapshot: unknown): string | null {
   return null
 }
 
+function collectionOf(snapshot: unknown): string | null {
+  if (typeof snapshot === 'string') {
+    try {
+      return collectionOf(JSON.parse(snapshot))
+    } catch {
+      return null
+    }
+  }
+  if (snapshot && typeof snapshot === 'object') {
+    return text((snapshot as { collection?: unknown }).collection)
+  }
+  return null
+}
+
 function pageOf(attrs: CorpusCitationAttrs): number | null {
   if (typeof attrs.pageNumber === 'number') return attrs.pageNumber
   const snapshot = attrs.metadataSnapshot
@@ -92,6 +106,49 @@ export function sourceLabel(attrs: CorpusCitationAttrs): string {
   const page = pageOf(attrs)
   const parts = [title, page === null ? null : `p. ${page}`].filter(Boolean)
   return parts.length > 0 ? parts.join(', ') : 'fuente sin identificar'
+}
+
+/**
+ * The corpus documents a manuscript quotes, one entry each, for the list after
+ * the bibliography.
+ *
+ * Read from the snapshots on the citation nodes, like everything else here.
+ * One document cited from several pages is one entry listing those pages; the
+ * entries go by title, the way a list of archive sources is read. A citation
+ * made before the snapshot carried the collection is listed without it.
+ */
+export function citedSources(citations: (CorpusCitationAttrs & { itemId?: unknown })[]): string[] {
+  const sources = new Map<
+    string,
+    { title: string; collection: string | null; pages: Set<number> }
+  >()
+  for (const attrs of citations) {
+    const title = titleOf(attrs.metadataSnapshot)
+    if (!title) continue
+    const key = text(attrs.itemId) ?? title
+    const source = sources.get(key) ?? {
+      title,
+      collection: collectionOf(attrs.metadataSnapshot),
+      pages: new Set<number>(),
+    }
+    const page = pageOf(attrs)
+    if (page !== null) source.pages.add(page)
+    sources.set(key, source)
+  }
+
+  return [...sources.values()]
+    .sort((a, b) => a.title.localeCompare(b.title, 'es'))
+    .map(({ title: full, collection, pages }) => {
+      // The entry adds its own periods: a title that ends in one ("72hs.")
+      // would otherwise read "72hs.." in the list.
+      const title = full.replace(/\.+$/, '')
+      const sorted = [...pages].sort((a, b) => a - b)
+      const where =
+        sorted.length === 0 ? null : `${sorted.length === 1 ? 'p.' : 'pp.'} ${sorted.join(', ')}`
+      const after = [collection, where].filter(Boolean).join(', ')
+      if (!after) return `${title}.`
+      return collection ? `${title}. ${after}.` : `${title}, ${after}.`
+    })
 }
 
 /**

@@ -454,6 +454,8 @@ export async function generateDocxBytes(html: string): Promise<Uint8Array> {
     zotero: {},
     bibliography: [],
     bibliographyHeading: '',
+    sources: [],
+    sourcesHeading: '',
     images,
   }
 

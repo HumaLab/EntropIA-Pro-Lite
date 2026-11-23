@@ -341,6 +341,13 @@ export function toHtml(doc: Node, context: ExportContext): string {
     )
   }
 
+  if (context.sources.length > 0) {
+    const entries = context.sources.map((entry) => `<p>${escape(entry)}</p>`).join('\n')
+    sections.push(
+      `<section class="bibliography sources">\n<h2>${escape(context.sourcesHeading)}</h2>\n${entries}\n</section>`
+    )
+  }
+
   return `<!doctype html>
 <html lang="es">
 <head>
