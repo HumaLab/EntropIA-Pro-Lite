@@ -1445,9 +1445,8 @@
         message={t('collection.deleteItemMessage', { name: pendingDeleteItemLabel ?? '' })}
         error={deleteError}
         cancelLabel={t('collections.cancel')}
-        confirmIcon="delete"
+        confirmLabel={t('collections.deleteConfirm')}
         confirmAriaLabel={t('collection.deleteItemAria')}
-        confirmTitle={deleting ? t('collection.deletingItemTitle') : t('collection.deleteItemAria')}
         variant="destructive"
         confirming={deleting}
         cancelDisabled={deleting}

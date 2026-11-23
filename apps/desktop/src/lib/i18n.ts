@@ -2384,12 +2384,10 @@ const es = {
   'collection.deleteAssetMessage':
     '¿Seguro que querés eliminar {name}? También se borrarán el texto OCR asociado y los jobs de procesamiento. Esta acción no se puede deshacer.',
   'collection.deleteAssetAria': 'Eliminar página',
-  'collection.deletingAssetTitle': 'Eliminando página',
   'collection.deleteItemTitle': 'Eliminar documento',
   'collection.deleteItemMessage':
     '¿Seguro que querés eliminar el documento {name}? Se borrarán todas sus páginas, textos extraídos y datos de procesamiento. Esta acción no se puede deshacer.',
   'collection.deleteItemAria': 'Eliminar documento',
-  'collection.deletingItemTitle': 'Eliminando documento',
   'collection.error.load': 'No se pudieron cargar los documentos',
   'collection.gridAria': 'Documentos de la colección',
   'collection.loadingMore': 'Cargando más documentos...',
@@ -2577,7 +2575,6 @@ const es = {
   'item.deleteNoteTitle': 'Eliminar nota',
   'item.deleteNoteMessage':
     '¿Seguro que querés eliminar esta nota? Esta acción no se puede deshacer.',
-  'item.confirmDeleteNote': 'Confirmar eliminación de nota',
   'item.cancelEdit': 'Cancelar edición',
   'item.metadata': 'Metadatos',
   'item.fileMetadata': 'Metadatos del archivo',
@@ -6105,12 +6102,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.deleteAssetMessage':
     'Are you sure you want to delete {name}? The related OCR text and processing jobs will also be removed. This action cannot be undone.',
   'collection.deleteAssetAria': 'Delete page',
-  'collection.deletingAssetTitle': 'Deleting page',
   'collection.deleteItemTitle': 'Delete document',
   'collection.deleteItemMessage':
     'Are you sure you want to delete the document {name}? All of its pages, extracted text, and processing data will also be removed. This action cannot be undone.',
   'collection.deleteItemAria': 'Delete document',
-  'collection.deletingItemTitle': 'Deleting document',
   'collection.error.load': 'Failed to load documents',
   'collection.gridAria': 'Collection documents',
   'collection.loadingMore': 'Loading more documents...',
@@ -6297,7 +6292,6 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.deleteNoteTitle': 'Delete note',
   'item.deleteNoteMessage':
     'Are you sure you want to delete this note? This action cannot be undone.',
-  'item.confirmDeleteNote': 'Confirm delete note',
   'item.cancelEdit': 'Cancel edit',
   'item.metadata': 'Metadata',
   'item.fileMetadata': 'File metadata',

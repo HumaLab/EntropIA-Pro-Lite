@@ -508,8 +508,6 @@
 - «Colección activa» `collection.active`
 - «Documentos» `collection.documentsFallback`
 - «Documentos de la colección» `collection.gridAria`
-- «Eliminando documento» `collection.deletingItemTitle`
-- «Eliminando página» `collection.deletingAssetTitle`
 - «Eliminar documento» `collection.deleteItemAria, collection.deleteItemTitle`
 - «Eliminar página» `collection.deleteAssetAria, collection.deleteAssetTitle`
 - «Esta página está citada en {count} documento(s) de Escritura: {documents}. Las citas no se borran — conservan el fragmento y los metadatos que registraste — pero dejan de poder abrir la fuente.» `collection.deleteAssetCited`
@@ -1798,7 +1796,7 @@
 - «Rotar 90° a la izquierda»
 - «Éxito»
 
-### Varios (1/7)
+### Varios (1/6)
 
 - « para esta página» `item.noTriplesPageSuffix`
 - «Actual» `item.imageVersionCurrent`
@@ -1834,7 +1832,6 @@
 - «Clave» `item.metadataKeyPlaceholder`
 - «Configurá OpenRouter o instalá el corrector local» `item.ocrCorrectUnavailable`
 - «Confirmar eliminación de entidad {value}» `item.entityConfirmDeleteAria`
-- «Confirmar eliminación de nota» `item.confirmDeleteNote`
 - «Confirmar eliminación de tripleta {subject}» `item.tripleConfirmDeleteAria`
 - «Copiar» `item.copyExtractedText`
 - «Copiar JSON» `item.layoutCopyJson`
@@ -1849,10 +1846,10 @@
 - «Corresponde al texto» `item.imageVersionMatchesText`
 - «Descargar» `item.downloadExtractedText`
 - «Descargar texto extraído» `item.downloadExtractedTextAria`
-
-### Varios (2/7)
-
 - «Descartar la nueva entidad» `item.newEntityCancelAria`
+
+### Varios (2/6)
+
 - «Descartar la nueva tripleta» `item.newTripleCancelAria`
 - «Disponible después de corregir el OCR» `item.restoreOriginalOcrUnavailable`
 - «Documento» `item.documentTab, item.viewerImageAlt`
@@ -1890,11 +1887,11 @@
 - «Este texto se extrajo de otra versión de la imagen. Puede no coincidir con lo que ves.» `item.textOtherVersion`
 - «Exportar JSON» `item.processHistoryExport`
 - «Extracción de texto» `item.textExtraction`
-
-### Varios (3/7)
-
 - «Extracción en progreso…» `item.ocrFastBusyTitle, item.ocrHighBusyTitle`
 - «Extraer texto» `item.ocrFastTitle`
+
+### Varios (3/6)
+
 - «Extraer tripletas» `item.triplesTitle`
 - «Extraé o transcribí primero» `item.summaryNeedsText`
 - «Extraé texto primero» `item.ocrCorrectNeedsText`
@@ -1941,11 +1938,11 @@
 - «Mostrar overlay» `item.layoutToggleShow`
 - «NER» `item.nerAction`
 - «No hay archivos de esta imagen en el disco.» `item.imageVersionsEmpty`
-
-### Varios (4/7)
-
 - «No hay bloques del tipo seleccionado para la página visible.» `item.layoutNoFilterBlocks`
 - «No hay bloques para la página visible.» `item.layoutNoPageBlocks`
+
+### Varios (4/6)
+
 - «No hay metadatos cargados para este documento.» `item.metadataEmpty`
 - «No hay páginas adjuntas a este documento.» `item.noAssets`
 - «No hay resultados para esa búsqueda.» `item.ftsNoResults`
@@ -1994,11 +1991,11 @@
 - «Quitar campo» `item.metadataRemoveField`
 - «Recargar» `item.processHistoryReload`
 - «Reconocer texto de la caja» `item.layoutBoxEditApply`
-
-### Varios (5/7)
-
 - «Reconociendo…» `item.layoutBoxEditApplying`
 - «Reemplazada el {date} · {model} · {count} caracteres» `item.transcriptVersionMeta`
+
+### Varios (5/6)
+
 - «Región a borrar» `item.viewerEraseRegion`
 - «Región de layout {label}» `item.viewerLayoutRegion`
 - «Región de recorte» `item.viewerCropRegion`
@@ -2038,10 +2035,10 @@
 - «Tocá o pasá el mouse sobre un bloque para resaltarlo en el viewer.» `item.layoutHelp`
 - «Todavía no hay entidades extraídas.» `item.entitiesEmpty`
 - «Todavía no hay notas.» `item.noNotes`
-
-### Varios (6/7)
-
 - «Todavía no hay procesos registrados para este documento. Los documentos importados antes de la versión con historial no tienen sus procesos anteriores.» `item.processHistoryEmpty`
+
+### Varios (6/6)
+
 - «Todavía no hay páginas similares. Generá embeddings para esta página y compararla contra el resto.» `item.similarAssetsEmpty`
 - «Todavía no hay texto extraído para este documento.» `item.noExtractedText`
 - «Todavía no hay tripletas extraídas{suffix}.» `item.noTriples`
@@ -2085,9 +2082,6 @@
 - «{count}s» `item.audioDurationSeconds`
 - «· Página {page}» `item.pageInline`
 - «¿Eliminar?» `item.entityDeletePrompt, item.tripleDeletePrompt`
-
-### Varios (7/7)
-
 - «¿Seguro que querés eliminar esta nota? Esta acción no se puede deshacer.» `item.deleteNoteMessage`
 
 ## Navegación

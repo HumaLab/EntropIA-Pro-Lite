@@ -521,11 +521,8 @@
         : '')}
     error={deleteAssetError}
     cancelLabel={t('collections.cancel')}
-    confirmIcon="delete"
+    confirmLabel={t('collections.deleteConfirm')}
     confirmAriaLabel={t('collection.deleteAssetAria')}
-    confirmTitle={deletingAsset
-      ? t('collection.deletingAssetTitle')
-      : t('collection.deleteAssetAria')}
     variant="destructive"
     confirming={deletingAsset}
     cancelDisabled={deletingAsset}

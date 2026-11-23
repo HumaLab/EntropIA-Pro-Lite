@@ -338,9 +338,11 @@ describe('WorkPane', () => {
         )
         // The confirmation floats out of the pane into <body> (see `portal`);
         // only B opened one, so it is the only dialog on screen.
-        await fireEvent.click(
-          within(screen.getByRole('dialog')).getByRole('button', { name: 'Eliminar página' })
-        )
+        const confirm = within(screen.getByRole('dialog')).getByRole('button', {
+          name: 'Eliminar página',
+        })
+        expect(confirm).toHaveTextContent(/^Eliminar$/)
+        await fireEvent.click(confirm)
 
         await waitFor(() => {
           expect(forgetAssetSpy).toHaveBeenCalledWith('asset-b')

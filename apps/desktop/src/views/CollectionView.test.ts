@@ -1585,7 +1585,7 @@ describe('CollectionView asset deletion', () => {
     await fireEvent.click(deleteBtn)
 
     const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
-    expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
+    expect(confirmBtn).toHaveTextContent(/^Eliminar$/)
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
@@ -1702,7 +1702,7 @@ describe('CollectionView asset deletion', () => {
     await fireEvent.click(deleteBtn)
 
     const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
-    expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
+    expect(confirmBtn).toHaveTextContent(/^Eliminar$/)
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
@@ -1738,7 +1738,7 @@ describe('CollectionView asset deletion', () => {
     await fireEvent.click(deleteBtn)
 
     const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
-    expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
+    expect(confirmBtn).toHaveTextContent(/^Eliminar$/)
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
@@ -1865,7 +1865,7 @@ describe('CollectionView PDF thumbnail', () => {
     await fireEvent.click(deleteBtn)
 
     const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
-    expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
+    expect(confirmBtn).toHaveTextContent(/^Eliminar$/)
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
@@ -1997,14 +1997,14 @@ describe('CollectionView PDF thumbnail', () => {
     expect(deleteAssetFile).not.toHaveBeenCalled()
   })
 
-  it('renders the confirm delete action as the shared trash icon button', async () => {
+  it('confirms the delete with a button that says Eliminar', async () => {
     await renderAndWaitForItems()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Delete PDF Document' }))
 
     const confirmBtn = screen.getByRole('button', { name: 'Eliminar documento' })
-    expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
-    expect(confirmBtn).not.toHaveTextContent('Eliminar')
+    expect(confirmBtn).toHaveTextContent(/^Eliminar$/)
+    expect(confirmBtn.querySelector('svg')).not.toBeInTheDocument()
   })
 })
 
