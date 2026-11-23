@@ -510,6 +510,51 @@ pub async fn glm_ocr_download_models(
     Err("No requerido en este build (solo Pro con modelos locales).".to_string())
 }
 
+/// Delete the local GLM-OCR model files, returning the bytes freed. Stops the
+/// server first when it runs them; the files download again from Settings.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn glm_ocr_delete_models(db: State<'_, AppDbState>) -> Result<u64, String> {
+    use super::glm_ocr_local::{models_dir, MMPROJ_FILENAME, MODEL_FILENAME};
+    let dir = models_dir(&db.db_path);
+    tokio::task::spawn_blocking(move || {
+        super::local_server::stop_if_serving_from(&dir);
+        super::local_server::delete_model_files(&dir, &[MODEL_FILENAME, MMPROJ_FILENAME])
+    })
+    .await
+    .map_err(|e| format!("GLM-OCR delete task panicked: {e}"))?
+}
+
+/// Without `local-ml` there are no local models to delete.
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn glm_ocr_delete_models(_db: State<'_, AppDbState>) -> Result<u64, String> {
+    Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
+/// Delete the local Qwen correction model files, returning the bytes freed.
+/// Stops the server first when it runs them; the files download again from
+/// Settings.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn qwen_correction_delete_models(db: State<'_, AppDbState>) -> Result<u64, String> {
+    use super::qwen_local::{models_dir, MMPROJ_FILENAME, MODEL_FILENAME};
+    let dir = models_dir(&db.db_path);
+    tokio::task::spawn_blocking(move || {
+        super::local_server::stop_if_serving_from(&dir);
+        super::local_server::delete_model_files(&dir, &[MODEL_FILENAME, MMPROJ_FILENAME])
+    })
+    .await
+    .map_err(|e| format!("Qwen delete task panicked: {e}"))?
+}
+
+/// Without `local-ml` there are no local models to delete.
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn qwen_correction_delete_models(_db: State<'_, AppDbState>) -> Result<u64, String> {
+    Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
 /// Error payload for the local Qwen correction model downloads
 /// (`qwen-correct:download_error`).
 #[cfg(feature = "local-ml")]

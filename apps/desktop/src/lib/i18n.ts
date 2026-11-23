@@ -250,6 +250,11 @@ const es = {
   'settings.localModels.parakeetTitle': 'Transcripción local (Parakeet)',
   'settings.localModels.parakeetDescription':
     'Modelo que transcribe audio y dictado en este equipo, en 25 idiomas. Se usa cuando el Modo STT está en Local o Automático.',
+  'settings.localModels.deleteModels': 'Borrar modelos',
+  'settings.localModels.deleteTitle': '¿Borrar los modelos de {model}?',
+  'settings.localModels.deleteMessage':
+    'Se borran sus archivos de este equipo y se liberan unos {gb} GB. Para volver a usarlos hay que descargarlos de nuevo.',
+  'settings.localModels.deleteToFree': 'Podés borrarlos para liberar unos {gb} GB.',
   'settings.localModels.glmOcrTitle': 'OCRH local (GLM-OCR)',
   'settings.localModels.needsGpu':
     'Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos {gb} GB de memoria de video: este equipo no tiene, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.',
@@ -3710,6 +3715,10 @@ type ExtraI18nKey =
   | 'settings.llamaServer.requiresGpu'
   | 'settings.llamaServer.notEnoughVram'
   | 'settings.localModels.needsGpu'
+  | 'settings.localModels.deleteModels'
+  | 'settings.localModels.deleteTitle'
+  | 'settings.localModels.deleteMessage'
+  | 'settings.localModels.deleteToFree'
   | 'settings.llamaServer.download'
   | 'settings.llamaServer.downloading'
   | 'settings.llamaServer.retry'
@@ -4487,6 +4496,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.localModels.parakeetTitle': 'Local transcription (Parakeet)',
   'settings.localModels.parakeetDescription':
     'Model that transcribes audio and dictation on this computer, in 25 languages. Used when the STT mode is Local or Automatic.',
+  'settings.localModels.deleteModels': 'Delete models',
+  'settings.localModels.deleteTitle': 'Delete the {model} models?',
+  'settings.localModels.deleteMessage':
+    'Their files are removed from this computer, freeing about {gb} GB. To use them again you have to download them again.',
+  'settings.localModels.deleteToFree': 'You can delete them to free about {gb} GB.',
   'settings.localModels.glmOcrTitle': 'Local OCRH (GLM-OCR)',
   'settings.localModels.glmOcrDescription':
     "High-accuracy OCR model that runs on this computer's GPU (NVIDIA, or AMD, Intel or Apple with 4 GB or more). Used when the OCRH mode is Local.",

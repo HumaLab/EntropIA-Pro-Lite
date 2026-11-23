@@ -49,3 +49,9 @@ export function qwenCorrectionDownloadModels(): Promise<string> {
   if (OFF) return Promise.resolve('')
   return invoke<string>('qwen_correction_download_models')
 }
+
+/** Delete the local Qwen3-VL correction GGUF files; resolves to the bytes freed. */
+export function qwenCorrectionDeleteModels(): Promise<number> {
+  if (OFF) return Promise.resolve(0)
+  return invoke<number>('qwen_correction_delete_models')
+}
