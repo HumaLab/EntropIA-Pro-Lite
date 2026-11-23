@@ -598,7 +598,7 @@
 - «Crear colección» `collections.createAction`
 - «Creá un espacio para agrupar documentos, notas y análisis relacionados.» `collections.createDescription`
 - «Descripción (opcional)» `collections.descriptionPlaceholder`
-- «Eliminando colección» `collections.deletingTitle`
+- «Eliminar» `collections.deleteConfirm`
 - «Eliminar colección» `collections.deleteAria, collections.deleteTitle`
 - «Gestioná tus espacios de trabajo y organizá el archivo por tema.» `collections.subtitle`
 - «Guardar» `collections.save`

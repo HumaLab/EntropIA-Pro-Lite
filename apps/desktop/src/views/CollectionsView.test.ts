@@ -303,14 +303,15 @@ describe('CollectionsView consumer compatibility', () => {
     expect(await screen.findByTestId('collection-description')).toHaveTextContent('Archivo 1930')
   })
 
-  it('renders the confirm delete action as an icon-only trash button', async () => {
+  // A destructive confirm names what it does (release 1.8.7 findings).
+  it('confirms the delete with a button that says Eliminar', async () => {
     render(CollectionsView)
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Delete collection' }))
 
     const confirmBtn = screen.getByRole('button', { name: 'Eliminar colección' })
-    expect(confirmBtn.querySelector('svg')).toBeInTheDocument()
-    expect(confirmBtn).not.toHaveTextContent('Eliminar')
+    expect(confirmBtn).toHaveTextContent(/^Eliminar$/)
+    expect(confirmBtn.querySelector('svg')).not.toBeInTheDocument()
   })
 
   it('updates critical collection copy when locale changes', async () => {
