@@ -645,7 +645,7 @@ EntropIA has several searches. Pick the right one; they do not all look for the 
 
 Lexical search compares terms from the title, data or indexed text and may include close spelling variants. If it does not find all the terms together, it may widen to partial matches. **It is not a synonym search and does not interpret a question.** Quotation marks do not guarantee a literal phrase and there are no advanced Boolean operators. To search content, first get the text and, if it does not appear, click **Analysis → INDEX**.
 
-**Search → Search by Similar Text (FTS)** can show up to 10 documents; this list is different from the top-bar search results.
+**Search → Search by Similar Text (FTS)** can show up to 10 documents; this list is different from the top-bar search results. Each result shows its title, its collection and a passage of its text with the words found highlighted. A document that matches only by its title or data shows no passage. An approximate result says which variant it was found as.
 
 ### 7.2. Find similar material
 

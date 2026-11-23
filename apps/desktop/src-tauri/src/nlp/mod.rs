@@ -3,6 +3,7 @@ pub mod embeddings;
 pub mod fts;
 pub mod fuzzy;
 pub mod ner;
+pub mod snippet;
 pub mod text_provider;
 pub(crate) mod vector;
 // NOTE: `triples` module removed — semantic triples are now Gemma-only via the LLM pipeline

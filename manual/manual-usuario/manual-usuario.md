@@ -645,7 +645,7 @@ EntropIA tiene varias búsquedas. Elegí la que corresponda; no todas buscan lo 
 
 La búsqueda léxica compara términos del título, los datos o el texto indexado y puede incluir variantes ortográficas próximas. Si no encuentra todos los términos juntos, puede ampliar a coincidencias parciales. **No equivale a buscar sinónimos ni a interpretar una pregunta.** Las comillas no garantizan una frase literal y no se ofrecen operadores booleanos avanzados. Para buscar contenido, primero obtené el texto y, si no aparece, pulsá **Análisis → INDEX**.
 
-En **Búsquedas → Buscar por texto similar (FTS)** pueden aparecer hasta 10 documentos; esta lista es distinta de los resultados de la búsqueda superior.
+En **Búsquedas → Buscar por texto similar (FTS)** pueden aparecer hasta 10 documentos; esta lista es distinta de los resultados de la búsqueda superior. Cada resultado muestra su título, su colección y un fragmento del texto con las palabras encontradas resaltadas. Si el documento coincide solo por su título o sus datos, no muestra fragmento. Un resultado aproximado indica con qué variante se encontró.
 
 ### 7.2. Buscar materiales parecidos
 

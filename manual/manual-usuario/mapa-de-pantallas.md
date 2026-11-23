@@ -2077,7 +2077,6 @@
 - «no se pudo leer el archivo de la imagen para comprobar a qué versión corresponde.» `item.layoutVersionUnknown`
 - «nueva» `item.layoutBoxEditNewLabel`
 - «página {assetId} · documento {itemId} · colección {collectionId}» `item.assetMetaLine`
-- «rank {value}» `item.rank`
 - «sin hacer» `item.jobStatus.idle`
 - «subiendo audio» `item.transcriptionStage.uploading`
 - «{count} bloques» `item.layoutBlocksCount`

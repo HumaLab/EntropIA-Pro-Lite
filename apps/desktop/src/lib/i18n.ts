@@ -2913,7 +2913,6 @@ const es = {
   'item.ftsDebug.resultIds': 'IDs resultado',
   'item.analysisNeedAsset':
     'Seleccioná una página antes de generar embeddings y similitud a nivel página.',
-  'item.rank': 'rank {value}',
   'item.assetMetaLine': 'página {assetId} · documento {itemId} · colección {collectionId}',
   'item.triplesAction': 'TRIPLET',
   'item.embedAction': 'EMBED',
@@ -6631,7 +6630,6 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.ftsDebug.hydratedItems': 'Hydrated documents',
   'item.ftsDebug.resultIds': 'Result IDs',
   'item.analysisNeedAsset': 'Select a page before generating page-level embeddings and similarity.',
-  'item.rank': 'rank {value}',
   'item.assetMetaLine': 'page {assetId} · document {itemId} · collection {collectionId}',
   'item.triplesAction': 'TRIPLET',
   'item.embedAction': 'EMBED',

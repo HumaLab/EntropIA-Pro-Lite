@@ -41,7 +41,8 @@
     getNoteStateAfterDelete,
     loadNotesForAssetScope,
   } from '$lib/item-view-notes'
-  import { FtsSearchController } from '$lib/item-view-search'
+  import { FtsSearchController, getFtsTerms } from '$lib/item-view-search'
+  import { fetchSearchSnippets, type ItemFtsResult } from '$lib/search-snippets'
   import { DebouncedAssetTextPersistor } from '$lib/item-view-text-persistence'
   import { LatestRequestGuard } from '$lib/item-view-load-guards'
   import {
@@ -605,9 +606,7 @@
   let similarAssets = $state<SimilarAsset[]>([])
   let previewedSimilarAsset = $state<SimilarAsset | null>(null)
   let ftsQuery = $state('')
-  let ftsResults = $state<
-    Array<{ itemId: string; title: string; rank: number; collectionId: string }>
-  >([])
+  let ftsResults = $state<ItemFtsResult[]>([])
   let ftsSearching = $state(false)
   let ftsSearchError = $state<string | null>(null)
   let ftsIndexedRows = $state<number | null>(null)
@@ -2613,24 +2612,43 @@
       if (!ftsSearchLoadGuard.isCurrent(requestToken)) return
       const rows = response.results
 
+      const collectionNames = new Map<string, Promise<string | null>>()
+      const collectionName = (id: string) => {
+        let name = collectionNames.get(id)
+        if (!name) {
+          name = store.collections.findById(id).then((found) => found?.name ?? null)
+          collectionNames.set(id, name)
+        }
+        return name
+      }
       const hydrated = await Promise.all(
-        rows.map(async (row) => {
+        rows.map(async (row): Promise<ItemFtsResult | null> => {
           const found = await store.items.findById(row.itemId)
           if (!found) return null
 
           return {
             itemId: found.id,
             title: found.title,
-            rank: row.rank,
             collectionId: found.collectionId,
+            collectionName: await collectionName(found.collectionId),
+            snippet: null,
+            foundAs: row.approximate ? (row.variants ?? []) : null,
           }
         })
       )
+      const found = hydrated.filter((row): row is ItemFtsResult => !!row)
+      // Variants count as terms: an approximate result holds the variant, not
+      // the word typed.
+      const terms = [
+        ...new Set([...getFtsTerms(query), ...found.flatMap((row) => row.foundAs ?? [])]),
+      ]
+      const snippets = await fetchSearchSnippets(
+        found.map((row) => row.itemId),
+        terms
+      )
 
       if (!ftsSearchLoadGuard.isCurrent(requestToken)) return
-      ftsResults = hydrated.filter(
-        (row): row is { itemId: string; title: string; rank: number; collectionId: string } => !!row
-      )
+      ftsResults = found.map((row) => ({ ...row, snippet: snippets.get(row.itemId) ?? null }))
 
       if (isDev) {
         if (!ftsSearchLoadGuard.isCurrent(requestToken)) return

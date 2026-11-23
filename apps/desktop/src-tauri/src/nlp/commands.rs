@@ -1431,3 +1431,42 @@ pub async fn fts_set_rejoin_hyphens(
     super::fts::spawn_plain_text_reindex(app_handle, db_path);
     Ok(())
 }
+
+/// One search result's passage around its first match.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemSnippet {
+    pub item_id: String,
+    pub segments: Vec<super::snippet::SnippetSegment>,
+}
+
+/// The most results a single call fills in: a result page, not the corpus.
+const MAX_SNIPPET_ITEMS: usize = 50;
+
+/// A passage around the first match of `terms` for each item, read from the
+/// same text the search index holds. Items whose text does not contain any
+/// term (found by title or metadata) are left out.
+#[tauri::command]
+pub async fn fts_snippets(
+    item_ids: Vec<String>,
+    terms: Vec<String>,
+    db: State<'_, AppDbState>,
+) -> Result<Vec<ItemSnippet>, String> {
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock error: {e}"))?;
+        Ok(item_ids
+            .into_iter()
+            .take(MAX_SNIPPET_ITEMS)
+            .filter_map(|item_id| {
+                let text = super::fts::searchable_text(&conn, &item_id).ok()?;
+                let segments = super::snippet::snippet(&text, &terms)?;
+                Some(ItemSnippet { item_id, segments })
+            })
+            .collect())
+    })
+    .await
+}
