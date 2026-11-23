@@ -273,9 +273,7 @@
     titleId="delete-note-modal-title"
     message={translate('item.deleteNoteMessage')}
     cancelLabel={translate('collections.cancel')}
-    confirmIcon="delete"
-    confirmAriaLabel={translate('item.confirmDeleteNote')}
-    confirmTitle={translate('item.confirmDeleteNote')}
+    confirmLabel={translate('collections.deleteConfirm')}
     variant="destructive"
     confirming={deletingNote}
     cancelDisabled={deletingNote}

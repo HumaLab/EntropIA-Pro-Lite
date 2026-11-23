@@ -2954,7 +2954,9 @@ describe('ItemView note editing', () => {
     await renderItemViewWithNotes([sampleNote])
 
     await fireEvent.click(screen.getByRole('button', { name: 'Eliminar nota' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Confirmar eliminación de nota' }))
+    await fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Eliminar' })
+    )
 
     expect(storeRef.current.notes.delete).toHaveBeenCalledWith('note-1')
   })
