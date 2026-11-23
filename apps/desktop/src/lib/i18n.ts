@@ -2318,6 +2318,7 @@ const es = {
   'collections.aiContextHint':
     'Lo leen el chat, la investigación, la corrección de OCR y el agente de redacción: tema, período, convenciones y grafías de nombres.',
   'collections.createAction': 'Crear colección',
+  'collections.nameRequired': 'Escribí un nombre para la colección.',
   'collections.loading': 'Cargando colecciones...',
   'collections.emptySearch':
     'No encontramos colecciones para esa búsqueda. Probá con otro nombre o limpiá el filtro.',
@@ -6035,6 +6036,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collections.aiContextHint':
     'Read by the chat, the investigation, OCR correction and the writing agent: topic, period, conventions and spellings of names.',
   'collections.createAction': 'Create collection',
+  'collections.nameRequired': 'Write a name for the collection.',
   'collections.loading': 'Loading collections...',
   'collections.emptySearch':
     'We could not find collections for that search. Try another name or clear the filter.',

@@ -239,6 +239,25 @@ describe('CollectionsView consumer compatibility', () => {
     expect(screen.getAllByRole('button', { name: 'Cancelar' })).toHaveLength(2)
   })
 
+  // Release 1.8.7 findings: an empty name gave no message.
+  it('says a name is needed when creating with an empty name, and creates nothing', async () => {
+    render(CollectionsView)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Nueva colección' }))
+    const name = screen.getByPlaceholderText('Nombre de la colección')
+    await fireEvent.input(name, { target: { value: '   ' } })
+
+    const create = screen.getByRole('button', { name: 'Crear colección' })
+    expect(create).toBeEnabled()
+    await fireEvent.click(create)
+
+    expect(screen.getByText('Escribí un nombre para la colección.')).toBeInTheDocument()
+    expect(name).toHaveFocus()
+    expect(storeRef.current.collections.create).not.toHaveBeenCalled()
+
+    await fireEvent.input(name, { target: { value: 'Huelgas' } })
+    expect(screen.queryByText('Escribí un nombre para la colección.')).not.toBeInTheDocument()
+  })
+
   it('passes CollectionCard props and preserves onclick navigation contract', async () => {
     const { container } = render(CollectionsView)
 
@@ -284,7 +303,7 @@ describe('CollectionsView consumer compatibility', () => {
     ).toBeInTheDocument()
   })
 
-  it('uses the collection name as the description when no description is available', async () => {
+  it('shows the name once when the collection has no description', async () => {
     storeRef.current = createStore(
       [
         {
@@ -300,7 +319,8 @@ describe('CollectionsView consumer compatibility', () => {
 
     render(CollectionsView)
 
-    expect(await screen.findByTestId('collection-description')).toHaveTextContent('Archivo 1930')
+    expect(await screen.findByRole('heading', { name: 'Archivo 1930' })).toBeInTheDocument()
+    expect(screen.queryByTestId('collection-description')).not.toBeInTheDocument()
   })
 
   // A destructive confirm names what it does (release 1.8.7 findings).

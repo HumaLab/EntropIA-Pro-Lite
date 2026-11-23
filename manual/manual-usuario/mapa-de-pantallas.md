@@ -598,6 +598,7 @@
 - «Descripción (opcional)» `collections.descriptionPlaceholder`
 - «Eliminar» `collections.deleteConfirm`
 - «Eliminar colección» `collections.deleteAria, collections.deleteTitle`
+- «Escribí un nombre para la colección.» `collections.nameRequired`
 - «Gestioná tus espacios de trabajo y organizá el archivo por tema.» `collections.subtitle`
 - «Guardar» `collections.save`
 - «Limpiar búsqueda» `collections.searchClear`

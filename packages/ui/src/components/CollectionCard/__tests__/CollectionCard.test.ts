@@ -42,9 +42,11 @@ describe('CollectionCard', () => {
     expect(screen.getByText('A test description for the collection')).toBeInTheDocument()
   })
 
-  it('uses the collection name as the description when not provided', () => {
-    render(CollectionCard, { props: baseProps })
-    expect(screen.getByTestId('collection-description')).toHaveTextContent('My Collection')
+  // Release 1.8.7 findings: without a description the card repeated its name.
+  it('shows no subtitle when there is no description', () => {
+    render(CollectionCard, { props: { ...baseProps, description: '  ' } })
+    expect(screen.queryByTestId('collection-description')).not.toBeInTheDocument()
+    expect(screen.getAllByText('My Collection')).toHaveLength(1)
   })
 
   afterEach(() => {
