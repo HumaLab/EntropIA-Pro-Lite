@@ -653,7 +653,7 @@ impl ResearchState {
         }
         if op == "delete" {
             let _lock = self.0.mutation.lock().await;
-            return self.delete_job(&id).await;
+            return self.delete_job(app, &id).await;
         }
         let model = uses_model(op);
         let _lock = self.0.mutation.lock().await;
@@ -704,23 +704,27 @@ impl ResearchState {
     /// se encola una baja para un pedido fallido. Si el borrado tuvo éxito pero
     /// el asentamiento falla, la intención queda registrada y se puede
     /// asentar después — el error se informa en vez de ocultarse.
-    async fn delete_job(&self, id: &str) -> Result<Value, String> {
+    async fn delete_job(&self, app: &AppHandle, id: &str) -> Result<Value, String> {
         self.begin_delete_intent(id).await?;
-        match self
+        let engine = self
             .execute(json!({"op": "delete", "job_id": id}), false)
-            .await
-        {
-            Err(error) => {
-                self.abort_delete_intent(id).await.map_err(|intent| {
-                    format!("{error}; además falló la limpieza de la intención de baja: {intent}")
-                })?;
-                Err(error)
-            }
-            Ok(response) => {
-                self.settle_delete_intent(id).await?;
-                Ok(response)
-            }
+            .await;
+        let corpus = self.0.corpus.clone();
+        let state = self.0.state.clone();
+        let artifacts = self.0.artifacts.clone();
+        let id = id.to_owned();
+        let outcome = tauri::async_runtime::spawn_blocking(move || {
+            let sync = crate::sync::open_sync_connection(&corpus)?;
+            let state = crate::sync::research_envelope::open_research_state_read_only(&state)
+                .map_err(|error| error.message)?;
+            finish_delete(&sync, &state, &artifacts, &id, engine)
+        })
+        .await
+        .map_err(|e| format!("Falló el asentamiento de la baja: {e}"))??;
+        if let Some(warning) = outcome.leftover {
+            crate::app_logs::warn(app, "research", warning);
         }
+        Ok(outcome.response)
     }
     async fn begin_delete_intent(&self, id: &str) -> Result<(), String> {
         let corpus = self.0.corpus.clone();
@@ -736,31 +740,62 @@ impl ResearchState {
         .await
         .map_err(|e| format!("Falló la intención de baja: {e}"))?
     }
-    async fn abort_delete_intent(&self, id: &str) -> Result<(), String> {
-        let corpus = self.0.corpus.clone();
-        let id = id.to_owned();
-        tauri::async_runtime::spawn_blocking(move || {
-            let sync = crate::sync::open_sync_connection(&corpus)?;
-            crate::sync::research_capture::abort_delete_intent(&sync, &id)
-                .map_err(|error| error.message)
-        })
-        .await
-        .map_err(|e| format!("Falló la limpieza de la intención de baja: {e}"))?
+}
+/// What a delete answers, plus a warning when the folder it left could not go.
+#[derive(Debug, PartialEq)]
+struct DeleteOutcome {
+    response: Value,
+    leftover: Option<String>,
+}
+/// Settles a delete from what the engine left behind, not from its reply.
+///
+/// The engine commits the job rows first and removes the artifacts folder
+/// afterwards, so an error can arrive after the job is already gone (Windows
+/// refuses to remove a folder something holds open). Settling always — never
+/// aborting on an error — leaves the `D` tombstone exactly when the job is
+/// gone and only drops the intent when it is still there. A job that is gone
+/// was deleted, so the request succeeds; its leftover folder is removed here,
+/// and when even that fails the caller logs it instead of failing the delete.
+fn finish_delete(
+    sync: &rusqlite::Connection,
+    state: &rusqlite::Connection,
+    artifacts: &Path,
+    id: &str,
+    engine: Result<Value, String>,
+) -> Result<DeleteOutcome, String> {
+    crate::sync::research_capture::settle_delete_intent(sync, state, id)
+        .map_err(|error| error.message)?;
+    let error = match engine {
+        Ok(response) => {
+            return Ok(DeleteOutcome {
+                response,
+                leftover: None,
+            })
+        }
+        Err(error) => error,
+    };
+    let job_present: bool = state
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE id = ?1)",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("{error}; además falló la lectura del estado: {e}"))?;
+    if job_present {
+        return Err(error);
     }
-    async fn settle_delete_intent(&self, id: &str) -> Result<(), String> {
-        let corpus = self.0.corpus.clone();
-        let state = self.0.state.clone();
-        let id = id.to_owned();
-        tauri::async_runtime::spawn_blocking(move || {
-            let sync = crate::sync::open_sync_connection(&corpus)?;
-            let state = crate::sync::research_envelope::open_research_state_read_only(&state)
-                .map_err(|error| error.message)?;
-            crate::sync::research_capture::settle_delete_intent(&sync, &state, &id)
-                .map_err(|error| error.message)
-        })
-        .await
-        .map_err(|e| format!("Falló el asentamiento de la baja: {e}"))?
-    }
+    let folder = artifacts.join(id);
+    let leftover = match std::fs::remove_dir_all(&folder) {
+        Err(e) if folder.exists() => Some(format!(
+            "La investigación {id} se borró, pero quedó su carpeta {}: {e}",
+            folder.display()
+        )),
+        _ => None,
+    };
+    Ok(DeleteOutcome {
+        response: json!({ "deleted": id }),
+        leftover,
+    })
 }
 #[tauri::command]
 pub async fn research_request(
@@ -1395,5 +1430,92 @@ mod tests {
         // A request without the field (an older caller) keeps today's rule.
         let (_, ids) = colecciones_de_contexto(json!({"op":"create","collection_ids":["c1"]}));
         assert_eq!(ids, vec!["c1".to_string()]);
+    }
+
+    // An engine delete can drop the job rows and then fail to remove the
+    // artifacts folder (a Windows handle on it). The job is gone, so the
+    // delete happened: it must leave the `D` tombstone, not the old upsert.
+    fn delete_fixture(job_present_after: bool) -> (rusqlite::Connection, rusqlite::Connection) {
+        use crate::sync::research_capture::OUTBOX_PREFIX;
+        let sync = rusqlite::Connection::open_in_memory().expect("sync");
+        sync.execute_batch(&format!(
+            "CREATE TABLE sync_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO sync_meta VALUES ('capture_enabled', '1');
+             INSERT INTO sync_meta VALUES ('{OUTBOX_PREFIX}job-1',
+               '{{\"op\":\"U\",\"changed_at\":1,\"generation\":\"7979d116-de62-4322-9c63-ccf74d37eb17\"}}');"
+        ))
+        .expect("sync schema");
+        let state = rusqlite::Connection::open_in_memory().expect("state");
+        state
+            .execute_batch(
+                "CREATE TABLE jobs(id TEXT PRIMARY KEY, modo TEXT, status TEXT);
+                 INSERT INTO jobs VALUES ('job-1', 'research', 'done');",
+            )
+            .expect("state schema");
+        crate::sync::research_capture::begin_delete_intent(&sync, &state, "job-1").expect("intent");
+        if !job_present_after {
+            state
+                .execute("DELETE FROM jobs", [])
+                .expect("engine delete");
+        }
+        (sync, state)
+    }
+
+    fn outbox_op(sync: &rusqlite::Connection) -> Option<char> {
+        crate::sync::research_capture::outbox_entries(sync)
+            .expect("outbox")
+            .into_iter()
+            .find(|entry| entry.job_id == "job-1")
+            .map(|entry| entry.op)
+    }
+
+    #[test]
+    fn a_delete_whose_folder_removal_failed_still_leaves_the_tombstone() {
+        let (sync, state) = delete_fixture(false);
+        let root = temp_workspace("delete-leftover");
+        let leftover = root.path().join("job-1");
+        std::fs::create_dir_all(&leftover).expect("leftover folder");
+
+        let result = super::finish_delete(
+            &sync,
+            &state,
+            root.path(),
+            "job-1",
+            Err("Acceso denegado. (os error 5)".into()),
+        );
+
+        assert_eq!(
+            result,
+            Ok(super::DeleteOutcome {
+                response: json!({"deleted": "job-1"}),
+                leftover: None,
+            })
+        );
+        assert_eq!(outbox_op(&sync), Some('D'));
+        assert!(!leftover.exists(), "the leftover folder is removed");
+    }
+
+    #[test]
+    fn a_delete_the_engine_refused_keeps_the_job_and_enqueues_nothing() {
+        let (sync, state) = delete_fixture(true);
+        let root = temp_workspace("delete-refused");
+
+        let result = super::finish_delete(
+            &sync,
+            &state,
+            root.path(),
+            "job-1",
+            Err("Cancelá la investigación antes de borrarla".into()),
+        );
+
+        assert_eq!(
+            result,
+            Err("Cancelá la investigación antes de borrarla".to_string())
+        );
+        assert_eq!(
+            outbox_op(&sync),
+            Some('U'),
+            "the pending upsert is untouched"
+        );
     }
 }
