@@ -1035,9 +1035,11 @@
 - «No se pudo exportar el documento: {message}. No se guardó ningún archivo.»
 - «No se pudo guardar: {message}. Lo que escribiste sigue acá.»
 - «No se pudo leer la ficha. Probá de nuevo.»
+- «No se pudo leer la papelera: {error}»
 - «No se pudo obtener una propuesta: {message}»
 - «No se pudo quitar el autor de esta cita: el estilo no lo renderiza de una forma que permita hacerlo. La cita queda completa.»
 - «No se pudo renderizar: {message}»
+- «No se pudo restaurar: {error}»
 - «No se pudo solicitar la sincronización: {detail}»
 - «Último error: {error}»
 
@@ -3375,6 +3377,15 @@
 - «− Columna»
 - «− Fila»
 
+### trash
+
+- «La papelera está vacía.»
+- «Ocultar la papelera»
+- «Papelera»
+- «Restaurar»
+- «Restaurar «{title}»»
+- ««{title}» volvió a la lista.»
+
 ### Varios (1/8)
 
 - «(sin verificar)» `writing.zoteroLibraryUnverified`
@@ -3677,6 +3688,6 @@
 - «{hours} h {minutes} min» `writing.zoteroEtaHoursMinutes`
 - «{minutes} min» `writing.zoteroEtaMinutes`
 - «{provider} · {model}» `writing.agentModel`
-- ««{title}» sale del espacio de escritura. Su contenido, sus versiones y su historial se conservan.» `writing.discardMessage`
+- ««{title}» pasa a la papelera, al pie de la lista. Su contenido, sus versiones y su historial se conservan, y desde ahí lo podés restaurar.» `writing.discardMessage`
 - «¿Eliminar el documento?» `writing.discardTitle`
 - «¿Eliminar esta sección?» `writing.sectionDeleteTitle`
