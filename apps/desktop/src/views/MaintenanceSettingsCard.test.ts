@@ -9,13 +9,15 @@ import type { PathRepair, RepairScan } from '$lib/image-version-repair'
  * writes only what the person confirms.
  */
 
-const { invokeMock, listenMock } = vi.hoisted(() => ({
+const { invokeMock, listenMock, openTabMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   listenMock: vi.fn(),
+  openTabMock: vi.fn(() => 'tab-2'),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }))
+vi.mock('$lib/workspace', () => ({ workspace: { openTab: openTabMock } }))
 
 function repair(n: number): PathRepair {
   return {
@@ -28,7 +30,7 @@ function repair(n: number): PathRepair {
   }
 }
 
-function scanResult(repairs: PathRepair[], completions = 0): RepairScan {
+function scanResult(repairs: PathRepair[], completions = 0, reruns = 0): RepairScan {
   return {
     counts: {
       scanned: 1324,
@@ -46,6 +48,13 @@ function scanResult(repairs: PathRepair[], completions = 0): RepairScan {
       name: `Vieja ${index}`,
       fileName: `vieja${index}.jpg`,
       token: `complete-${index}`,
+    })),
+    layoutReruns: Array.from({ length: reruns }, (_, index) => ({
+      assetId: `stale-${index}`,
+      itemId: `item-stale-${index}`,
+      collectionId: 'col-1',
+      collectionName: 'Planillas',
+      name: `Planilla ${index}`,
     })),
   }
 }
@@ -250,6 +259,40 @@ describe('MaintenanceSettingsCard', () => {
 
     expect(screen.getByText('Seleccionadas: 2')).toBeInTheDocument()
     expect(applyButton()).toBeEnabled()
+  })
+
+  it('lists the images whose layout must run again and opens each on its Layout tab', async () => {
+    backend(scanResult([], 0, 2))
+    render(MaintenanceSettingsCard)
+    await review()
+
+    expect(screen.getByText('Imágenes con el layout de otra versión: 2')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Abrí cada una y usá «Volver a correr el layout» en su pestaña Layout. Eso vuelve a hacer su OCR y reemplaza el texto extraído.'
+      )
+    ).toBeInTheDocument()
+    const rows = screen.getAllByTestId('maintenance-layout-rerun')
+    expect(rows).toHaveLength(2)
+    await fireEvent.click(within(rows[1]!).getByRole('button', { name: 'Abrir' }))
+
+    expect(openTabMock).toHaveBeenCalledWith({
+      name: 'item',
+      itemId: 'item-stale-1',
+      collectionId: 'col-1',
+      collectionName: 'Planillas',
+      itemTitle: 'Planilla 1',
+      assetId: 'stale-1',
+      panel: 'layout',
+    })
+  })
+
+  it('says nothing about layouts when none must run again', async () => {
+    backend(scanResult([repair(1)]))
+    render(MaintenanceSettingsCard)
+    await review()
+
+    expect(screen.queryByText(/layout de otra versión/)).not.toBeInTheDocument()
   })
 
   it('shows an error of the review', async () => {

@@ -51,6 +51,8 @@ pub(crate) struct LayoutRow {
     asset_id: String,
     item_id: String,
     item_title: Option<String>,
+    collection_id: Option<String>,
+    collection_name: Option<String>,
     path: String,
     source_sha256: Option<String>,
     image_width: i64,
@@ -212,6 +214,19 @@ pub struct SourceCompletion {
     pub token: String,
 }
 
+/// An image whose layout was computed on an older version of it. Nothing
+/// here repairs it: running the layout again (an OCR) does, from the
+/// document's Layout tab, which this entry lets the person open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutRerun {
+    pub asset_id: String,
+    pub item_id: String,
+    pub collection_id: String,
+    pub collection_name: String,
+    pub name: String,
+}
+
 /// How many assets the review left in each state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -233,6 +248,7 @@ pub struct RepairScan {
     pub counts: RepairCounts,
     pub repairs: Vec<PathRepair>,
     pub completions: Vec<SourceCompletion>,
+    pub layout_reruns: Vec<LayoutRerun>,
 }
 
 /// A token names one proposal by everything it rests on: a proposal computed
@@ -307,7 +323,16 @@ pub(crate) fn scan(
                     proposed: RepairFile::of(&proposed),
                 });
             }
-            Finding::NeedsLayoutRerun => result.counts.needs_layout_rerun += 1,
+            Finding::NeedsLayoutRerun => {
+                result.counts.needs_layout_rerun += 1;
+                result.layout_reruns.push(LayoutRerun {
+                    asset_id: row.asset_id.clone(),
+                    item_id: row.item_id.clone(),
+                    collection_id: row.collection_id.clone().unwrap_or_default(),
+                    collection_name: row.collection_name.clone().unwrap_or_default(),
+                    name: display_name(row),
+                });
+            }
             Finding::Ambiguous => result.counts.ambiguous += 1,
             Finding::NoCandidate => result.counts.no_candidate += 1,
             Finding::CandidateAfterLayout => result.counts.candidate_after_layout += 1,
@@ -322,10 +347,12 @@ pub(crate) fn scan(
 }
 
 const LAYOUT_ROWS_SQL: &str = "SELECT a.id, a.item_id, i.title, a.path,
-            l.source_sha256, l.image_width, l.image_height, l.created_at
+            l.source_sha256, l.image_width, l.image_height, l.created_at, i.collection_id,
+            c.name
        FROM assets a
        JOIN layouts l ON l.asset_id = a.id
        LEFT JOIN items i ON i.id = a.item_id
+       LEFT JOIN collections c ON c.id = i.collection_id
       WHERE a.type = 'image' AND a.parent_asset_id IS NULL";
 
 fn layout_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LayoutRow> {
@@ -338,6 +365,8 @@ fn layout_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LayoutRow> {
         image_width: row.get(5)?,
         image_height: row.get(6)?,
         created_at: row.get(7)?,
+        collection_id: row.get(8)?,
+        collection_name: row.get(9)?,
     })
 }
 
@@ -705,7 +734,9 @@ mod tests {
             std::fs::create_dir_all(data.path().join(DIR)).expect("item dir");
             let conn = Connection::open_in_memory().expect("db");
             conn.execute_batch(
-                "CREATE TABLE items (id TEXT PRIMARY KEY, title TEXT NOT NULL);
+                "CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+                 INSERT INTO collections (id, name) VALUES ('col-1', 'Actas');
+                 CREATE TABLE items (id TEXT PRIMARY KEY, title TEXT NOT NULL, collection_id TEXT);
                  CREATE TABLE assets (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, path TEXT NOT NULL,
                     type TEXT NOT NULL, sort_index INTEGER NOT NULL DEFAULT 0, size INTEGER,
                     parent_asset_id TEXT, page_number INTEGER, created_at INTEGER NOT NULL);
@@ -720,7 +751,7 @@ mod tests {
                     page INTEGER NOT NULL, kind TEXT NOT NULL, color TEXT NOT NULL,
                     x REAL NOT NULL, y REAL NOT NULL, width REAL NOT NULL, height REAL NOT NULL,
                     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-                 INSERT INTO items (id, title) VALUES ('item-1', 'Acta 1921');",
+                 INSERT INTO items (id, title, collection_id) VALUES ('item-1', 'Acta 1921', 'col-1');",
             )
             .expect("schema");
             conn.execute_batch(asset_history::TEST_DDL)
@@ -1011,6 +1042,34 @@ mod tests {
 
         assert!(found.repairs.is_empty());
         assert_eq!(found.counts.needs_layout_rerun, 2);
+    }
+
+    #[test]
+    fn a_stale_layout_is_listed_so_the_person_can_open_it() {
+        let archive = Archive::new();
+        archive.file("b.jpg", 96, 128, b"");
+        archive.file("b_v2.jpg", 40, 60, b"");
+        archive.file("b_v5.jpg", 30, 30, b"");
+        archive.image("a2", "b_v5.jpg");
+        archive.layout("a2", 40, 60, None, LATER);
+        // A matching image is not listed.
+        archive.file("c.jpg", 96, 128, b"");
+        archive.image("a3", "c.jpg");
+        archive.layout("a3", 96, 128, None, LATER);
+
+        let found = archive.scan();
+
+        assert_eq!(found.counts.needs_layout_rerun, 1);
+        assert_eq!(
+            found.layout_reruns,
+            vec![LayoutRerun {
+                asset_id: "a2".to_string(),
+                item_id: "item-1".to_string(),
+                collection_id: "col-1".to_string(),
+                collection_name: "Actas".to_string(),
+                name: "Acta 1921".to_string(),
+            }]
+        );
     }
 
     #[test]
