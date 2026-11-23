@@ -367,6 +367,17 @@
     box-shadow: var(--shadow-lg);
     cursor: grab;
     touch-action: none;
+    /* Half transparent at rest, so the content under it stays readable (finding
+       11); fully opaque while it is used. */
+    opacity: 0.5;
+    transition: opacity var(--transition-base);
+  }
+
+  .help-bubble:hover,
+  .help-bubble:focus-visible,
+  .help-bubble[aria-expanded='true'],
+  .help-bubble--dragging {
+    opacity: 1;
   }
 
   .help-bubble--dragging {
