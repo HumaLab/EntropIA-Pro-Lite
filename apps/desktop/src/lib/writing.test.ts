@@ -1103,3 +1103,61 @@ describe('writing store — content that arrives by sync', () => {
     expect(store.snapshot.content).toEqual(typed)
   })
 })
+
+/**
+ * The trash (finding 26): a discarded manuscript keeps every record, so the
+ * workspace lists the trashed ones apart and moves one back to `active`.
+ */
+describe('writing store - the trash', () => {
+  const TRASHED: WritingDocumentRow = { ...ROW, id: 'd9', title: 'Borrado', status: 'trashed' }
+
+  it('lists the trashed documents without touching the workspace list', async () => {
+    mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'writing_list_documents') {
+        const { statuses } = args as { statuses: string[] }
+        return (statuses.includes('trashed') ? [TRASHED] : [ROW]) as never
+      }
+      return undefined as never
+    })
+    const { store } = makeStore()
+    await store.listDocuments()
+
+    const trashed = await store.listTrashedDocuments()
+
+    expect(mockInvoke).toHaveBeenCalledWith('writing_list_documents', { statuses: ['trashed'] })
+    expect(trashed.map((row) => row.id)).toEqual(['d9'])
+    expect(store.snapshot.documents.map((row) => row.id)).toEqual(['d1'])
+  })
+
+  it('restores a document to the workspace list', async () => {
+    let status = 'trashed'
+    mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'writing_set_status') {
+        status = (args as { status: string }).status
+        return undefined as never
+      }
+      if (command === 'writing_list_documents') {
+        return (status === 'active' ? [ROW, { ...TRASHED, status }] : [ROW]) as never
+      }
+      return undefined as never
+    })
+    const { store } = makeStore()
+    await store.listDocuments()
+
+    await store.restoreDocument('d9')
+
+    expect(mockInvoke).toHaveBeenCalledWith('writing_set_status', { id: 'd9', status: 'active' })
+    expect(store.snapshot.documents.map((row) => row.id)).toEqual(['d1', 'd9'])
+  })
+
+  it('reports a restore that failed', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'writing_set_status') throw { code: 'document_not_found', message: 'gone' }
+      if (command === 'writing_list_documents') return [ROW] as never
+      return undefined as never
+    })
+    const { store } = makeStore()
+
+    await expect(store.restoreDocument('d9')).rejects.toMatchObject({ code: 'document_not_found' })
+  })
+})

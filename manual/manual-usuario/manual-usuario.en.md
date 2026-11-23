@@ -909,7 +909,7 @@ The panel called **Research** inside Writing holds these six tabs; it is not the
 
 ### 11.6. Delete a manuscript
 
-To delete a manuscript, go back to the Writing list, use its **Delete** action and confirm. The document leaves the list with its version history; there is no bin view or control to restore it. Download a copy before deleting it.
+To delete a manuscript, go back to the Writing list, use its **Delete** action and confirm. The document moves to the **Trash**, at the foot of the list, with its content, its versions and its history. Open **Trash** to see the deleted manuscripts and use **Restore** to put one back in the list.
 
 ### 11.7. Manuscript sync
 

@@ -28,6 +28,7 @@
   import { importWritingImage } from '$lib/writing-images'
   import { imageSize } from '$lib/image-dimensions'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
+  import WritingTrash from './WritingTrash.svelte'
   import WritingSharePanel from './WritingSharePanel.svelte'
   import WritingHistoryPanel from './WritingHistoryPanel.svelte'
   import { articleHtml, listWritingShares } from '$lib/writing-publish'
@@ -1642,6 +1643,11 @@
         {/each}
       </ul>
     {/if}
+    <WritingTrash
+      listTrashed={() => store.listTrashedDocuments()}
+      onRestore={(id) => store.restoreDocument(id)}
+      listed={documents}
+    />
   {/if}
 </section>
 

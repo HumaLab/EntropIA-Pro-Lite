@@ -493,6 +493,25 @@ export class WritingStore {
     return this.#pendingProvenance
   }
 
+  /** The manuscripts in the trash. Leaves the workspace list untouched. */
+  async listTrashedDocuments(): Promise<WritingDocumentRow[]> {
+    return invoke<WritingDocumentRow[]>('writing_list_documents', { statuses: ['trashed'] })
+  }
+
+  /**
+   * Moves a trashed manuscript back to the workspace list. Trashing kept its
+   * content, versions and journal, so nothing else needs rebuilding. Rejects
+   * with the command error when the move failed.
+   */
+  async restoreDocument(id: string): Promise<void> {
+    try {
+      await invoke('writing_set_status', { id, status: 'active' })
+    } catch (error) {
+      throw asCommandError(error)
+    }
+    await this.listDocuments()
+  }
+
   async trashDocument(id: string): Promise<void> {
     if (this.#state.open?.id === id) this.closeDocument()
     try {

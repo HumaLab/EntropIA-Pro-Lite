@@ -909,7 +909,7 @@ El panel llamado **Investigación** dentro de Escritura contiene estas seis pest
 
 ### 11.6. Eliminar un manuscrito
 
-Para eliminar un manuscrito, volvé a la lista de Escritura, usá su acción **Eliminar** y confirmá. El documento sale de la lista con su historial de versiones; no hay una vista de papelera ni un control para restaurarlo. Descargá una copia antes de eliminarlo.
+Para eliminar un manuscrito, volvé a la lista de Escritura, usá su acción **Eliminar** y confirmá. El documento pasa a la **Papelera**, al pie de la lista, con su contenido, sus versiones y su historial. Abrí **Papelera** para ver los manuscritos eliminados y usá **Restaurar** para devolver uno a la lista.
 
 ### 11.7. Sincronización del manuscrito
 
