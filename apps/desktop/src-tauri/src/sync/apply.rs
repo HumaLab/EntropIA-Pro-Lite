@@ -1048,6 +1048,24 @@ fn try_apply_page(
 ) -> Result<PageOutcome, PageError> {
     conn.execute_batch("BEGIN; PRAGMA defer_foreign_keys=ON;")
         .map_err(|e| PageError::Sql(format!("[sync] failed to begin page tx: {e}")))?;
+    let result = apply_page_in_tx(conn, ctx, ordered, next_since, park);
+    // Every exit of the page, early `?` returns included, ends its transaction.
+    // A page left open keeps the sync connection's write lock: every other
+    // connection waits out its busy_timeout and the next cycle cannot BEGIN.
+    if result.is_err() && !conn.is_autocommit() {
+        let _ = conn.execute_batch("ROLLBACK;");
+    }
+    result
+}
+
+/// The body of [`try_apply_page`], run inside its open transaction.
+fn apply_page_in_tx(
+    conn: &Connection,
+    ctx: &mut ApplyContext,
+    ordered: &[&PullRow],
+    next_since: i64,
+    park: &HashSet<(String, String)>,
+) -> Result<PageOutcome, PageError> {
     if let Err(e) = meta_set(conn, "applying", "1") {
         let _ = conn.execute_batch("ROLLBACK;");
         return Err(PageError::Sql(e));

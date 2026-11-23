@@ -1793,3 +1793,46 @@ fn vec_assets_synthetic_id_dropped_without_drift_through_apply_row() {
         .expect("read embedding");
     assert_eq!(blob, vec![0u8, 1, 2, 3], "embedding decodes byte-identical");
 }
+
+// --------------------------------------------------------------------------
+// A page that fails half-way never leaves its transaction open
+// --------------------------------------------------------------------------
+
+/// A row that fails to apply is parked; when parking it fails too, the page
+/// errors out. The transaction it opened must be rolled back, or the sync
+/// connection keeps the write lock: every other connection then waits out its
+/// busy_timeout and the next cycle cannot begin a transaction at all.
+#[test]
+fn a_page_whose_row_cannot_be_parked_rolls_its_transaction_back() {
+    let conn = capturing_db();
+    conn.execute_batch(
+        "CREATE TRIGGER test_refuse_collection BEFORE INSERT ON collections
+           WHEN NEW.id = 'c-bad' BEGIN SELECT RAISE(ABORT, 'refused row'); END;
+         CREATE TRIGGER test_refuse_park BEFORE INSERT ON sync_pending_rows
+           BEGIN SELECT RAISE(ABORT, 'refused park'); END;",
+    )
+    .expect("install refusing triggers");
+    let dir = tmp_app_dir();
+    let mut ctx = ApplyContext::new(dir.path());
+    let page = vec![upsert_row(
+        "collections",
+        "c-bad",
+        70,
+        json!({"id":"c-bad","name":"Bad","created_at":1,"updated_at":1}),
+    )];
+
+    let error = apply_page(&conn, &mut ctx, &page, 70).expect_err("parking fails");
+
+    assert!(error.contains("refused park"), "unexpected error: {error}");
+    assert!(
+        conn.is_autocommit(),
+        "the failed page left its transaction open"
+    );
+    assert_ne!(
+        meta_get(&conn, "applying")
+            .expect("read applying")
+            .as_deref(),
+        Some("1"),
+        "the page's writes were rolled back"
+    );
+}
