@@ -219,6 +219,54 @@ describe('citationProjection', () => {
  * A long quote is set off as a block, the way academic prose sets off long
  * quotations; a short one stays in the sentence it was written into.
  */
+/**
+ * The reported case: an inserted «…» read like text the writer typed, and
+ * where it came from showed up only in the export's footnote.
+ */
+describe('a citation says where it comes from', () => {
+  async function renderCitation(attrs: Record<string, unknown>) {
+    const { Editor } = await import('@tiptap/core')
+    const { createWritingExtensions } = await import('./extensions')
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const editor = new Editor({
+      element,
+      extensions: createWritingExtensions(),
+      content: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [citation({ citationNodeId: 'c1', ...attrs })] }],
+      } as never,
+    })
+    const source = element.querySelector('[data-document-citation] [data-citation-source]')
+    const out = { text: source?.textContent ?? null, title: source?.getAttribute('title') ?? null }
+    editor.destroy()
+    return out
+  }
+
+  it('names the document after the quote, with its collection and page on hover', async () => {
+    expect(
+      await renderCitation({
+        quotedText: 'los obreros declararon la huelga',
+        pageNumber: 3,
+        metadataSnapshot: { title: 'Acta del gremio', pageNumber: 3, collection: 'SOIP' },
+      })
+    ).toEqual({ text: 'Acta del gremio, p. 3', title: 'Acta del gremio. SOIP, p. 3' })
+  })
+
+  it('reads a snapshot stored as JSON text', async () => {
+    expect(
+      await renderCitation({
+        quotedText: 'la huelga',
+        metadataSnapshot: JSON.stringify({ title: 'Volante' }),
+      })
+    ).toEqual({ text: 'Volante', title: 'Volante' })
+  })
+
+  it('draws no source when the snapshot names none', async () => {
+    expect(await renderCitation({ quotedText: 'la huelga' })).toEqual({ text: null, title: null })
+  })
+})
+
 describe('a long citation is set off as a block', () => {
   async function renderQuote(quotedText: string) {
     const { Editor } = await import('@tiptap/core')

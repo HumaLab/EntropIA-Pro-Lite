@@ -1948,6 +1948,39 @@
     cursor: pointer;
   }
 
+  /* The document a quote comes from, right after it, so a citation does not
+     read like typed text. One line, cut with an ellipsis: a title from an
+     archive can be a whole sentence. The collection is in its tooltip. */
+  :global(.writing-editor__surface [data-document-citation] [data-citation-source]) {
+    display: inline-block;
+    max-width: 28ch;
+    margin-left: var(--space-1);
+    padding: 0 var(--space-1);
+    overflow: hidden;
+    border-radius: var(--radius-xs);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    font-size: var(--font-size-xs);
+    font-style: normal;
+    line-height: var(--line-height-base);
+    text-overflow: ellipsis;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+
+  /* Under a long quote set off as a block, the source closes it on its own
+     line, flush right, as an attribution under a quotation. */
+  :global(
+    .writing-editor__surface.ProseMirror
+      [data-document-citation][data-block-quote]
+      [data-citation-source]
+  ) {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    margin: var(--space-2) 0 0 auto;
+  }
+
   /* The image's own shrink-wrapped frame (defect 3). `figure` stays a block
      spanning the whole column — the toolbar and the caption both need that
      width to lay out in — but the frame around the image itself sizes to
