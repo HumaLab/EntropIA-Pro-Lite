@@ -145,6 +145,7 @@ const APP_COMMANDS: &[&str] = &[
     "extract_entities_for_asset",
     "extract_triples",
     "extract_triples_for_asset",
+    "ocr_plain_texts",
     "enrich_item",
     "fts_search",
     "fts_get_rejoin_hyphens",

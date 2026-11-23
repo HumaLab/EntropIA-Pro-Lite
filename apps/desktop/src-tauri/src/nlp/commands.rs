@@ -1470,3 +1470,49 @@ pub async fn fts_snippets(
     })
     .await
 }
+
+/// The most texts one call converts: a collection's analysis corpus, not more.
+const MAX_PLAIN_TEXTS: usize = 20_000;
+
+/// Each OCR text as plain words, for the collection's text analysis: no GLM
+/// layout markup (`<div align="center">`, `![](page=0,bbox=[…])`), the same
+/// form the search index holds (finding 6). The stored text keeps its markup.
+#[tauri::command]
+pub async fn ocr_plain_texts(texts: Vec<String>) -> Result<Vec<String>, String> {
+    if texts.len() > MAX_PLAIN_TEXTS {
+        return Err(format!(
+            "too many texts: {} (at most {MAX_PLAIN_TEXTS})",
+            texts.len()
+        ));
+    }
+    tokio::task::spawn_blocking(move || {
+        texts
+            .iter()
+            .map(|text| crate::ocr::markup::ocr_plain_text(text))
+            .collect()
+    })
+    .await
+    .map_err(|e| format!("plain text task failed: {e}"))
+}
+
+#[cfg(test)]
+mod plain_texts_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ocr_texts_lose_their_layout_markup_in_order() {
+        let texts = vec![
+            "<div align=\"center\">Huelga general</div>\n\n![](page=0,bbox=[27, 43, 325, 364])"
+                .to_string(),
+            "Paro en el puerto".to_string(),
+        ];
+        let plain = ocr_plain_texts(texts).await.unwrap();
+        assert_eq!(plain, ["Huelga general", "Paro en el puerto"]);
+    }
+
+    #[tokio::test]
+    async fn refuses_more_texts_than_a_collection_holds() {
+        let texts = vec![String::new(); MAX_PLAIN_TEXTS + 1];
+        assert!(ocr_plain_texts(texts).await.is_err());
+    }
+}

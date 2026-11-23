@@ -1769,6 +1769,7 @@ pub fn run() {
             nlp::commands::extract_entities_for_asset,
             nlp::commands::extract_triples,
             nlp::commands::extract_triples_for_asset,
+            nlp::commands::ocr_plain_texts,
             nlp::commands::enrich_item,
             nlp::commands::fts_search,
             nlp::commands::similar_assets,
