@@ -370,7 +370,7 @@
     /* Half transparent at rest, so the content under it stays readable (finding
        11); fully opaque while it is used. */
     opacity: 0.5;
-    transition: opacity 120ms ease;
+    transition: opacity var(--transition-base);
   }
 
   .help-bubble:hover,
