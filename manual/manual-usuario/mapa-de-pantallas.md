@@ -2410,6 +2410,7 @@
 - «Elegí al menos una colección para buscar en el corpus.» `ragChat.collectionsRequired`
 - «Eliminar» `ragChat.confirmDelete`
 - «Eliminar conversación» `ragChat.deleteConversation`
+- «Entendiendo la pregunta…» `ragChat.stage.understanding`
 - «Enviar» `ragChat.send`
 - «Escribí tu pregunta…» `ragChat.placeholder`
 - «Este pasaje no está en la biblioteca de este equipo (la conversación viene de otro dispositivo o la obra ya no está). Se muestra el fragmento guardado.» `ragChat.passageMissing`
@@ -2417,11 +2418,12 @@
 - «Generando PDF…» `ragChat.downloadingConversation`
 - «Hacé una pregunta sobre tus transcripciones y documentos. Las respuestas citan las fuentes.» `ragChat.emptyState`
 - «Hay bibliotecas sincronizadas, pero todavía no tienen vectores para buscar por significado: los pasajes no se pueden consultar hasta que termine el indexado.» `ragChat.libraryStatusNoEmbeddings`
-- «Limpiar búsqueda» `ragChat.searchClear`
-- «Ninguna colección» `ragChat.collectionsNone`
+- «Leyendo las fuentes y escribiendo la respuesta…» `ragChat.stage.writing`
 
 ### Varios (2/2)
 
+- «Limpiar búsqueda» `ragChat.searchClear`
+- «Ninguna colección» `ragChat.collectionsNone`
 - «No encontré contenido relevante en la base de conocimiento para esa pregunta.» `ragChat.noResults`
 - «No se buscó en la Biblioteca: no hay ninguna de las bibliotecas elegidas sincronizada en EntropIA.» `ragChat.biblioNotice.noLibrarySynced`
 - «No se buscó en la Biblioteca: no se pudo calcular el vector de la pregunta (revisá el proveedor de embeddings).» `ragChat.biblioNotice.embeddingUnavailable`

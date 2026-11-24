@@ -1220,6 +1220,8 @@ const es = {
   'ragChat.placeholder': 'Escribí tu pregunta…',
   'ragChat.send': 'Enviar',
   'ragChat.thinking': 'Buscando en la base de conocimiento…',
+  'ragChat.stage.understanding': 'Entendiendo la pregunta…',
+  'ragChat.stage.writing': 'Leyendo las fuentes y escribiendo la respuesta…',
   'ragChat.sources': 'Fuentes',
   'ragChat.noResults':
     'No encontré contenido relevante en la base de conocimiento para esa pregunta.',
@@ -5506,6 +5508,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'ragChat.placeholder': 'Type your question…',
   'ragChat.send': 'Send',
   'ragChat.thinking': 'Searching the knowledge base…',
+  'ragChat.stage.understanding': 'Understanding the question…',
+  'ragChat.stage.writing': 'Reading the sources and writing the answer…',
   'ragChat.sources': 'Sources',
   'ragChat.noResults': 'I did not find relevant content in the knowledge base for that question.',
   'ragChat.emptyState':

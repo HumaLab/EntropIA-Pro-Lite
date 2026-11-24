@@ -21,7 +21,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
-#[cfg(feature = "local-ml")]
 use tauri::Emitter;
 
 use super::intent::{format_history, IntentProvider, IntentRoute};
@@ -86,6 +85,31 @@ struct RetrievalPhase {
 /// usuario que no está diagnosticando.
 ///
 /// Formato de línea estable y grepeable: `[rag][trace] stage=... ms=... n=...`.
+/// Event the chat listens to while `rag_ask` runs: which stage the answer is
+/// in. A local answer can take minutes on CPU, and one static line made the
+/// wait look like a hang (release 1.8.7 findings).
+pub const RAG_PROGRESS_EVENT: &str = "rag://progress";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RagProgressStage {
+    /// Classifying the question (direct answer or corpus search).
+    Understanding,
+    /// Rewriting the query, embedding it and retrieving passages.
+    Searching,
+    /// Generating the answer from the evidence.
+    Writing,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct RagProgress {
+    stage: RagProgressStage,
+}
+
+fn emit_progress(app_handle: &tauri::AppHandle, stage: RagProgressStage) {
+    let _ = app_handle.emit(RAG_PROGRESS_EVENT, RagProgress { stage });
+}
+
 fn trace_stage(enabled: bool, stage: &str, elapsed: std::time::Duration, detail: &str) {
     if !enabled {
         return;
@@ -332,6 +356,7 @@ pub async fn rag_ask(
     .await
     .map_err(|e| format!("RAG settings/history task panicked: {e}"))??;
 
+    emit_progress(&app_handle, RagProgressStage::Understanding);
     let intent_started = std::time::Instant::now();
     let intent_provider = match &phase.mode {
         RagAnswerMode::OpenRouter { api_key, model } => {
@@ -364,6 +389,7 @@ pub async fn rag_ask(
         resolve_retrieval_unit_for_route(intent_route, phase.retrieval_unit_setting.as_deref())?;
 
     if intent_route == IntentRoute::Direct {
+        emit_progress(&app_handle, RagProgressStage::Writing);
         let generation_started = std::time::Instant::now();
         let answer = generate_direct_answer(
             &app_handle,
@@ -411,6 +437,7 @@ pub async fn rag_ask(
 
     let retrieval_unit = retrieval_unit.expect("retrieval route must resolve a retrieval unit");
 
+    emit_progress(&app_handle, RagProgressStage::Searching);
     let rewrite_started = std::time::Instant::now();
     let rewrite_provider = match &phase.mode {
         RagAnswerMode::OpenRouter { api_key, model } => {
@@ -733,6 +760,7 @@ pub async fn rag_ask(
         return Ok(answer);
     }
 
+    emit_progress(&app_handle, RagProgressStage::Writing);
     let generation_started = std::time::Instant::now();
     let answer = generate_answer(
         &phase.project_context,
@@ -1753,6 +1781,24 @@ fn parse_citation_group(inner: &str) -> Option<Vec<u32>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rag_progress_names_the_stages_the_chat_reads() {
+        let json = |stage| serde_json::to_value(super::RagProgress { stage }).unwrap();
+        assert_eq!(super::RAG_PROGRESS_EVENT, "rag://progress");
+        assert_eq!(
+            json(super::RagProgressStage::Understanding),
+            serde_json::json!({ "stage": "understanding" })
+        );
+        assert_eq!(
+            json(super::RagProgressStage::Searching),
+            serde_json::json!({ "stage": "searching" })
+        );
+        assert_eq!(
+            json(super::RagProgressStage::Writing),
+            serde_json::json!({ "stage": "writing" })
+        );
+    }
+
     use super::*;
     use crate::rag::intent::IntentRoute;
     use crate::rag::retrieval::RetrievalUnit;
