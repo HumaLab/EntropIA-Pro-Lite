@@ -374,9 +374,18 @@ export class NavigationStore {
   }
 }
 
-/** The right-panel tab an item view shows when `assetId` becomes the selected asset. */
-export function rightPanelOnArrival(view: View, assetId: string): 'layout' | 'notes' {
-  return view.name === 'item' && view.panel === 'layout' && view.assetId === assetId
-    ? 'layout'
-    : 'notes'
+/**
+ * The right-panel tab an item view shows when `assetId` becomes the selected asset.
+ *
+ * `kept` is the tab open on the previous page of the same document: moving
+ * between pages keeps it, so reading the Texto of page after page does not
+ * fall back to Notas each time. A view that asks for Layout still gets it.
+ */
+export function rightPanelOnArrival<T extends string = never>(
+  view: View,
+  assetId: string,
+  kept: T | null = null
+): T | 'layout' | 'notes' {
+  if (view.name === 'item' && view.panel === 'layout' && view.assetId === assetId) return 'layout'
+  return kept ?? 'notes'
 }

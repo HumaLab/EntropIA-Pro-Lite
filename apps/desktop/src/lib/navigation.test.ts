@@ -1059,4 +1059,15 @@ describe('rightPanelOnArrival', () => {
     expect(rightPanelOnArrival(item({ assetId: 'a1' }), 'a1')).toBe('notes')
     expect(rightPanelOnArrival({ name: 'home' }, 'a1')).toBe('notes')
   })
+
+  it('keeps the open tab when moving to another page of the same document', () => {
+    expect(rightPanelOnArrival(item({ assetId: 'a1' }), 'a2', 'text')).toBe('text')
+    expect(rightPanelOnArrival(item({ assetId: 'a1' }), 'a2', 'metadata')).toBe('metadata')
+  })
+
+  it('still opens Layout when the view asked for it, over the kept tab', () => {
+    expect(rightPanelOnArrival(item({ assetId: 'a2', panel: 'layout' }), 'a2', 'text')).toBe(
+      'layout'
+    )
+  })
 })

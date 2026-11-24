@@ -3425,7 +3425,10 @@
   // Keyed on the asset ID (not the object): editing the same asset swaps the
   // object for one with a new versioned path, which must NOT reset the right
   // panel tab nor reload asset-scoped state. Switching to a DIFFERENT asset
-  // (new ID) still resets the tab and refreshes everything below.
+  // (new ID) refreshes everything below; the tab survives only a move to
+  // another page of the same document, so reading Texto page after page does
+  // not fall back to Notas each time.
+  let panelItemId: string | null = null
   $effect(() => {
     if (!selectedAssetId) return
     const asset = untrack(() => selectedAsset)
@@ -3433,7 +3436,11 @@
     const requestToken = selectedAssetStateLoadGuard.next()
     untrack(() => restoreInflightJobs(asset.id))
 
-    rightPanelTab = untrack(() => rightPanelOnArrival(navigation.current, asset.id))
+    const samePanelItem = panelItemId === asset.itemId
+    panelItemId = asset.itemId
+    rightPanelTab = untrack(() =>
+      rightPanelOnArrival(navigation.current, asset.id, samePanelItem ? rightPanelTab : null)
+    )
 
     // Reload notes for this asset (plus item-level notes)
     void refreshNotesForAsset(asset)

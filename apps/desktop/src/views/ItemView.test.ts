@@ -6883,7 +6883,7 @@ describe('ItemView right panel tab persistence', () => {
     expect(screen.getByRole('tab', { name: 'Notas' })).toHaveAttribute('aria-selected', 'false')
   })
 
-  it('still resets the right panel tab to notes when switching to a different asset', async () => {
+  it('keeps the open right panel tab when moving to another page of the same document', async () => {
     storeRef.current = createStore({
       assetsRows: [
         imageAsset,
@@ -6905,9 +6905,9 @@ describe('ItemView right panel tab persistence', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: /Página siguiente/i }))
 
-    await waitFor(() => {
-      expect(screen.getByRole('tab', { name: 'Notas' })).toHaveAttribute('aria-selected', 'true')
-    })
+    expect(await screen.findByText(/2\s*\/\s*2/)).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /^Texto$/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Notas' })).toHaveAttribute('aria-selected', 'false')
   })
 })
 
