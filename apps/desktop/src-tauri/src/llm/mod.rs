@@ -316,6 +316,17 @@ pub(crate) fn ensure_default_model_downloaded_if_missing(
     )
 }
 
+/// CPU threads for local generation. llama.cpp defaults to 4 whatever the
+/// machine (`GGML_DEFAULT_N_THREADS`), which left most of a 6- to 16-core CPU
+/// idle while a RAG answer read its evidence for minutes. Its own CLI uses the
+/// physical cores; std only reports logical ones, so take half (SMT gives the
+/// math kernels little), never fewer than the old 4, capped where memory
+/// bandwidth stops paying.
+#[cfg(any(feature = "local-ml", test))]
+pub(crate) fn local_llm_threads(logical_cores: usize) -> i32 {
+    (logical_cores / 2).clamp(4, 16) as i32
+}
+
 #[cfg(feature = "local-ml")]
 pub(crate) fn get_or_init_local_gemma_engine(
     conn: &rusqlite::Connection,
@@ -336,7 +347,9 @@ pub(crate) fn get_or_init_local_gemma_engine(
     let engine = LlmEngine::init(LlmConfig {
         model_path,
         n_ctx: 4096,
-        n_threads: None,
+        n_threads: Some(local_llm_threads(
+            std::thread::available_parallelism().map_or(4, |n| n.get()),
+        )),
         seed: 1234,
         // Opt-in CUDA builds offload every layer; CPU-only builds stay at 0.
         #[cfg(feature = "cuda")]
@@ -3186,6 +3199,15 @@ pub(crate) fn prepare_remote_job_request(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn local_llm_threads_uses_the_physical_cores_never_below_the_old_default() {
+        assert_eq!(super::local_llm_threads(12), 6);
+        assert_eq!(super::local_llm_threads(32), 16);
+        assert_eq!(super::local_llm_threads(64), 16);
+        assert_eq!(super::local_llm_threads(4), 4);
+        assert_eq!(super::local_llm_threads(1), 4);
+    }
+
     use super::*;
 
     /// R21: Pro honours `llm_mode` for OCRC; a key no longer silently wins.
