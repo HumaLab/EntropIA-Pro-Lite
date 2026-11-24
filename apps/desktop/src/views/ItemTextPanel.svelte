@@ -4,6 +4,7 @@
     Button,
     ConfirmDialog,
     Disclosure,
+    IconButton,
     Input,
     ProgressBar,
     StatusBadge,
@@ -44,6 +45,9 @@
     currentSummary,
     translate,
     onExtractText,
+    onExtractAllPages,
+    ocrAllPagesNotice = null,
+    onDismissOcrAllPagesNotice,
     onCorrectOcr,
     onSummarize,
     onTranscribeAudio,
@@ -69,6 +73,14 @@
     isSummarizing: boolean
     translate: (key: I18nKey, params?: I18nParams) => string
     onExtractText: (asset: Asset, mode: OcrMode) => void | Promise<void>
+    /**
+     * Sends every page of the document that has no text yet to the queue, with
+     * the engine chosen. Offered only for a document of several pages.
+     */
+    onExtractAllPages?: (mode: OcrMode) => void | Promise<void>
+    /** What the last "every page" request did, until it is closed. */
+    ocrAllPagesNotice?: { queued: number; skipped: number } | null
+    onDismissOcrAllPagesNotice?: () => void
     onCorrectOcr: () => void | Promise<void>
     onSummarize: () => void | Promise<void>
     onTranscribeAudio: (asset: Asset) => void | Promise<void>
@@ -285,6 +297,56 @@
           <p class="ocr-llm-hint">{translate('item.llmUnavailableHint')}</p>
         {/if}
       </div>
+
+      {#if onExtractAllPages && assetsCount > 1}
+        <div class="ocr-all-pages" role="group" aria-label={translate('item.ocrAllPages')}>
+          <span class="ocr-all-pages__label">{translate('item.ocrAllPages')}</span>
+          <div class="ocr-btn-group">
+            {#if localOcrAvailable}
+              <Button
+                variant="secondary"
+                size="sm"
+                class="ocr-btn"
+                onclick={() => onExtractAllPages('light')}
+                title={translate('item.ocrAllPagesFastTitle')}
+              >
+                {translate('item.ocrFastAction')}
+              </Button>
+            {/if}
+            <Button
+              variant="secondary"
+              size="sm"
+              class="ocr-btn"
+              onclick={() => onExtractAllPages('high')}
+              title={translate('item.ocrAllPagesHighTitle')}
+            >
+              {translate('item.ocrHighAction')}
+            </Button>
+          </div>
+        </div>
+        {#if ocrAllPagesNotice}
+          <div class="ocr-all-pages__notice">
+            <p role="status">
+              {ocrAllPagesNotice.queued > 0
+                ? translate('item.ocrAllPagesQueued', {
+                    queued: ocrAllPagesNotice.queued,
+                    skipped: ocrAllPagesNotice.skipped,
+                  })
+                : translate('item.ocrAllPagesNothing')}
+            </p>
+            {#if onDismissOcrAllPagesNotice}
+              <IconButton
+                size="sm"
+                variant="ghost"
+                label={translate('item.ocrAllPagesDismiss')}
+                onclick={onDismissOcrAllPagesNotice}
+              >
+                <ActionIcon name="close" size={14} />
+              </IconButton>
+            {/if}
+          </div>
+        {/if}
+      {/if}
 
       {#if ocrState.status === 'running'}
         {@const ocrStageLabel = getOcrStageLabel(ocrState.stage)}
@@ -640,6 +702,38 @@
       flex: 1 1 auto;
       min-width: 64px;
     }
+  }
+
+  /* The same two engines, for every page of the document at once: a second
+     row under the page's own, so the two cannot be mistaken for each other. */
+  .ocr-all-pages {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .ocr-all-pages__label {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+  }
+
+  .ocr-all-pages__notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-1);
+    margin-top: var(--space-1);
+  }
+
+  .ocr-all-pages__notice p {
+    flex: 1;
+    margin: 0;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    overflow-wrap: break-word;
   }
 
   .ocr-llm-hint {

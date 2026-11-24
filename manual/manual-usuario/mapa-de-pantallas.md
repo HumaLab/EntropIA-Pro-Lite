@@ -1830,7 +1830,7 @@
 - «Cargando layout…» `item.layoutLoading`
 - «Cargando versiones…» `item.imageVersionsLoading`
 - «Cargando...» `item.loading, item.loadingStatus`
-- «Cerrar aviso» `item.exportExtractedTextDismiss`
+- «Cerrar aviso» `item.exportExtractedTextDismiss, item.ocrAllPagesDismiss`
 - «Clave» `item.metadataKeyPlaceholder`
 - «Configurá OpenRouter o instalá el corrector local» `item.ocrCorrectUnavailable`
 - «Confirmar eliminación de entidad {value}» `item.entityConfirmDeleteAria`
@@ -1928,6 +1928,8 @@
 - «Label» `item.layoutLabel`
 - «Layout» `item.layoutTab`
 - «Layout no disponible para audios.» `item.layoutUnavailableForAudio`
+- «Leer con OCRH cada página que todavía no tiene texto» `item.ocrAllPagesHighTitle`
+- «Leer con OCRL cada página que todavía no tiene texto» `item.ocrAllPagesFastTitle`
 - «Limpiar búsqueda» `item.ftsClear`
 - «Los archivos que dejó cada edición de esta imagen. Elegí cuál mostrar: no se borra ninguno.» `item.imageVersionsHelp`
 - «Mapa» `item.mapTab`
@@ -1937,12 +1939,12 @@
 - «Metadatos personalizados» `item.customMetadata`
 - «Miniatura: {label}» `item.imageVersionThumbnailAlt`
 - «Modelo» `item.processHistoryModel`
-- «Mostrando {visible} de {total} bloques.» `item.layoutShowing`
-- «Mostrar overlay» `item.layoutToggleShow`
-- «NER» `item.nerAction`
 
 ### Varios (4/7)
 
+- «Mostrando {visible} de {total} bloques.» `item.layoutShowing`
+- «Mostrar overlay» `item.layoutToggleShow`
+- «NER» `item.nerAction`
 - «No hay archivos de esta imagen en el disco.» `item.imageVersionsEmpty`
 - «No hay bloques del tipo seleccionado para la página visible.» `item.layoutNoFilterBlocks`
 - «No hay bloques para la página visible.» `item.layoutNoPageBlocks`
@@ -1989,12 +1991,13 @@
 - «Página siguiente» `item.nextPage`
 - «Página {page}» `item.page`
 - «Página {page} de {total}» `item.pageOf`
-- «Páginas similares» `item.similarAssets`
-- «Páginas similares (por página {page})» `item.similarAssetsPage`
-- «Quitar campo» `item.metadataRemoveField`
 
 ### Varios (5/7)
 
+- «Páginas en cola: {queued}. Salteadas: {skipped} (ya tenían texto, estaban corregidas a mano o ya estaban en cola).» `item.ocrAllPagesQueued`
+- «Páginas similares» `item.similarAssets`
+- «Páginas similares (por página {page})» `item.similarAssetsPage`
+- «Quitar campo» `item.metadataRemoveField`
 - «Recargar» `item.processHistoryReload`
 - «Reconocer texto de la caja» `item.layoutBoxEditApply`
 - «Reconociendo…» `item.layoutBoxEditApplying`
@@ -2033,13 +2036,15 @@
 - «Texto copiado.» `item.layoutCopiedText`
 - «Texto del bloque #{order} actualizado.» `item.layoutBoxEditDone`
 - «Texto extraído» `item.extractedText, item.extractedTextTab`
-- «Texto extraído copiado» `item.copyExtractedTextSuccess`
-- «Texto reconocido, pero no encontré dónde iba en la extracción: quedó agregado al final.» `item.layoutBoxEditAppended`
-- «Tocá o pasá el mouse sobre un bloque para resaltarlo en el viewer.» `item.layoutHelp`
-- «Todavía no hay entidades extraídas.» `item.entitiesEmpty`
 
 ### Varios (6/7)
 
+- «Texto extraído copiado» `item.copyExtractedTextSuccess`
+- «Texto reconocido, pero no encontré dónde iba en la extracción: quedó agregado al final.» `item.layoutBoxEditAppended`
+- «Tocá o pasá el mouse sobre un bloque para resaltarlo en el viewer.» `item.layoutHelp`
+- «Todas las páginas» `item.ocrAllPages`
+- «Todas las páginas ya tienen texto o están en cola.» `item.ocrAllPagesNothing`
+- «Todavía no hay entidades extraídas.» `item.entitiesEmpty`
 - «Todavía no hay notas.» `item.noNotes`
 - «Todavía no hay procesos registrados para este documento. Los documentos importados antes de la versión con historial no tienen sus procesos anteriores.» `item.processHistoryEmpty`
 - «Todavía no hay páginas similares. Generá embeddings para esta página y compararla contra el resto.» `item.similarAssetsEmpty`
@@ -2076,6 +2081,9 @@
 - «hecho» `item.jobStatus.done, item.jobStatus.stored`
 - «no se pudo leer el archivo de la imagen para comprobar a qué versión corresponde.» `item.layoutVersionUnknown`
 - «nueva» `item.layoutBoxEditNewLabel`
+
+### Varios (7/7)
+
 - «página {assetId} · documento {itemId} · colección {collectionId}» `item.assetMetaLine`
 - «sin hacer» `item.jobStatus.idle`
 - «subiendo audio» `item.transcriptionStage.uploading`
@@ -2085,9 +2093,6 @@
 - «{count}s» `item.audioDurationSeconds`
 - «· Página {page}» `item.pageInline`
 - «¿Eliminar?» `item.entityDeletePrompt, item.tripleDeletePrompt`
-
-### Varios (7/7)
-
 - «¿Seguro que querés eliminar esta nota? Esta acción no se puede deshacer.» `item.deleteNoteMessage`
 
 ## Navegación

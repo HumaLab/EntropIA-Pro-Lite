@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import type { ComponentProps } from 'svelte'
@@ -206,4 +206,88 @@ it('offers the previous versions of a done transcript', async () => {
   vi.mocked(invoke).mockResolvedValue([])
   await fireEvent.click(screen.getByRole('button', { name: 'Versiones anteriores' }))
   expect(invoke).toHaveBeenCalledWith('list_transcription_versions', { assetId: 'audio-1' })
+})
+
+it('offers OCR of every page of a multi-page document, with the chosen engine', async () => {
+  const onExtractAllPages = vi.fn()
+  setup(false, false, {
+    selectedAsset: imageAsset,
+    assetsCount: 3,
+    ocrState: ocrState('done'),
+    localOcrAvailable: true,
+    onExtractAllPages,
+  })
+
+  const all = screen.getByRole('group', { name: 'Todas las páginas' })
+  await fireEvent.click(within(all).getByRole('button', { name: 'OCRH' }))
+  expect(onExtractAllPages).toHaveBeenCalledWith('high')
+  await fireEvent.click(within(all).getByRole('button', { name: 'OCRL' }))
+  expect(onExtractAllPages).toHaveBeenLastCalledWith('light')
+})
+
+it('offers only OCRH for every page when local OCR is not available', () => {
+  setup(false, false, {
+    selectedAsset: imageAsset,
+    assetsCount: 3,
+    ocrState: ocrState('done'),
+    onExtractAllPages: vi.fn(),
+  })
+
+  const all = screen.getByRole('group', { name: 'Todas las páginas' })
+  expect(within(all).queryByRole('button', { name: 'OCRL' })).not.toBeInTheDocument()
+  expect(within(all).getByRole('button', { name: 'OCRH' })).toBeInTheDocument()
+})
+
+it('says how many pages went to the queue', () => {
+  setup(false, false, {
+    selectedAsset: imageAsset,
+    assetsCount: 3,
+    ocrState: ocrState('done'),
+    onExtractAllPages: vi.fn(),
+    ocrAllPagesNotice: { queued: 2, skipped: 1 },
+  })
+
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'Páginas en cola: 2. Salteadas: 1 (ya tenían texto, estaban corregidas a mano o ya estaban en cola).'
+  )
+})
+
+it('says when there was no page left to read', () => {
+  setup(false, false, {
+    selectedAsset: imageAsset,
+    assetsCount: 3,
+    ocrState: ocrState('done'),
+    onExtractAllPages: vi.fn(),
+    ocrAllPagesNotice: { queued: 0, skipped: 3 },
+  })
+
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'Todas las páginas ya tienen texto o están en cola.'
+  )
+})
+
+it('does not offer every page for a single-page document', () => {
+  setup(false, false, {
+    selectedAsset: imageAsset,
+    assetsCount: 1,
+    ocrState: ocrState('done'),
+    onExtractAllPages: vi.fn(),
+  })
+
+  expect(screen.queryByRole('group', { name: 'Todas las páginas' })).not.toBeInTheDocument()
+})
+
+it('closes the every-page notice', async () => {
+  const onDismissOcrAllPagesNotice = vi.fn()
+  setup(false, false, {
+    selectedAsset: imageAsset,
+    assetsCount: 3,
+    ocrState: ocrState('done'),
+    onExtractAllPages: vi.fn(),
+    ocrAllPagesNotice: { queued: 2, skipped: 1 },
+    onDismissOcrAllPagesNotice,
+  })
+
+  await fireEvent.click(screen.getByRole('button', { name: 'Cerrar aviso' }))
+  expect(onDismissOcrAllPagesNotice).toHaveBeenCalledOnce()
 })
