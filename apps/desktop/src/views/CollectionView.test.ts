@@ -356,6 +356,41 @@ describe('CollectionView consumer compatibility', () => {
     ).toBeInTheDocument()
   })
 
+  it('says where the collection text was saved once the export finishes', async () => {
+    vi.mocked(exportCollectionOcrText).mockResolvedValueOnce('C:\\exports\\coleccion.txt')
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Descargar el texto de la colección' })
+    )
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Texto (.txt)' }))
+
+    const notice = await screen.findByRole('status')
+    expect(notice).toHaveTextContent('Texto de la colección guardado en C:\\exports\\coleccion.txt')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Cerrar aviso' }))
+    expect(screen.queryByText(/guardado en/)).toBeNull()
+  })
+
+  it('says nothing when the save dialog is cancelled', async () => {
+    vi.mocked(exportCollectionOcrText).mockResolvedValueOnce(null)
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Descargar el texto de la colección' })
+    )
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Texto (.txt)' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.queryByText(/guardado en/)).toBeNull()
+  })
+
   it('closes the text export menu with Escape', async () => {
     render(CollectionView, { collectionId: 'col-1' })
 

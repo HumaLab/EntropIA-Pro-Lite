@@ -82,6 +82,8 @@
   const importing = $derived(ownImporting || isInflight(importKey))
   const exporting = $derived(ownExporting || isInflight(exportKey))
   let textExportMenuOpen = $state(false)
+  /** Where the last collection text export was written; cleared on dismiss or a new export. */
+  let textExportSavedPath = $state<string | null>(null)
   let textExportContainerEl = $state<HTMLDivElement | null>(null)
   const textExportMenuId = `collection-text-export-${Math.random().toString(36).slice(2)}`
   const TEXT_EXPORT_FORMATS: Array<{ format: CollectionOcrExportFormat; label: I18nKey }> = [
@@ -875,10 +877,12 @@
 
   async function handleExportText(format: CollectionOcrExportFormat) {
     textExportMenuOpen = false
+    textExportSavedPath = null
     try {
       ownExporting = true
       error = null
-      await trackInflight(exportKey, () =>
+      // A cancelled save dialog resolves to null and is not reported.
+      textExportSavedPath = await trackInflight(exportKey, () =>
         exportCollectionOcrText(getStore(), collectionId, format)
       )
     } catch (e) {
@@ -1226,6 +1230,23 @@
       <p class="surface-message surface-message--error">{error}</p>
     {/if}
 
+    {#if textExportSavedPath}
+      <div class="collection-text-export-notice">
+        <p class="surface-message surface-message--success" role="status">
+          {t('collection.ocrExport.saved', { path: textExportSavedPath })}
+        </p>
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={t('collection.ocrExport.dismiss')}
+          title={t('collection.ocrExport.dismiss')}
+          onclick={() => (textExportSavedPath = null)}
+        >
+          <ActionIcon name="close" size={14} />
+        </IconButton>
+      </div>
+    {/if}
+
     {#if importing || importSummary}
       <section class="import-summary" aria-label={t('collection.importSummary.title')}>
         <div class="import-summary__header">
@@ -1500,6 +1521,19 @@
 </div>
 
 <style>
+  .collection-text-export-notice {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .collection-text-export-notice .surface-message {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
   .collection-shell {
     display: grid;
     /* grid-template-columns set via inline style */
