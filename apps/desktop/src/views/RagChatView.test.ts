@@ -1374,7 +1374,7 @@ describe('RagChatView', () => {
     render(RagChatView)
     await sendQuestion('¿Cuándo comenzó la huelga?')
 
-    expect(screen.getByRole('status')).toHaveTextContent('Buscando en la base de conocimiento…')
+    expect(screen.getByRole('status')).toHaveTextContent('Entendiendo la pregunta…')
     expect(getComposer()).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled()
 
@@ -1384,6 +1384,40 @@ describe('RagChatView', () => {
       expect(screen.queryByRole('status')).not.toBeInTheDocument()
     })
     expect(getComposer()).toBeEnabled()
+  })
+
+  // Release 1.8.7 findings: a local answer took minutes behind one static
+  // line. The row now names the stage the backend reports and how long it has
+  // been waiting.
+  it('names the stage the backend reports and shows the wait while loading', async () => {
+    const handlers = new Map<string, (event: { payload: unknown }) => void>()
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      handlers.set(event, handler as unknown as (event: { payload: unknown }) => void)
+      return () => handlers.delete(event)
+    })
+    const pending = deferred<RagAnswer>()
+    setupBackend({ ask: () => pending.promise })
+
+    render(RagChatView)
+    await sendQuestion('¿Cuándo comenzó la huelga?')
+
+    expect(screen.getByRole('status')).toHaveTextContent('Entendiendo la pregunta…')
+    expect(screen.getByRole('status')).toHaveTextContent('0:00')
+
+    await waitFor(() => expect(handlers.has('rag://progress')).toBe(true))
+    handlers.get('rag://progress')?.({ payload: { stage: 'searching' } })
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Buscando en la base de conocimiento…')
+    )
+    handlers.get('rag://progress')?.({ payload: { stage: 'writing' } })
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Leyendo las fuentes y escribiendo la respuesta…'
+      )
+    )
+
+    pending.resolve(answerWithSources)
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
   })
 
   it('rehydrates the persisted active conversation and lists past conversations', async () => {

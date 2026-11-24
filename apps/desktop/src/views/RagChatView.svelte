@@ -36,6 +36,13 @@
   } from '$lib/rag-scope'
   import { downloadRagConversationPdf } from '$lib/rag-chat-export'
   import { ragChat, type UiMessage } from '$lib/rag-chat'
+  import {
+    RAG_PROGRESS_EVENT,
+    formatWaitTime,
+    ragProgressLabelKey,
+    type RagProgressPayload,
+    type RagProgressStage,
+  } from '$lib/rag-progress'
   import { renderMarkdown } from '$lib/markdown'
   import { getStore } from '$lib/db'
   import { resolveRagCitation, type RagCitationTarget } from '$lib/rag-citation'
@@ -207,6 +214,30 @@
       else unlistenProcessing = unlisten
     })
     .catch(() => {})
+
+  // The stage the pending answer is in, as rag_ask reports it, and how long
+  // it has been waiting: a local answer can take minutes on CPU.
+  let progressStage = $state<RagProgressStage>('understanding')
+  let waitSeconds = $state(0)
+  let unlistenProgress: (() => void) | null = null
+  listen<RagProgressPayload>(RAG_PROGRESS_EVENT, (event) => {
+    progressStage = event.payload.stage
+  })
+    .then((unlisten) => {
+      if (viewDestroyed) unlisten()
+      else unlistenProgress = unlisten
+    })
+    .catch(() => {})
+
+  $effect(() => {
+    if (!$ragChat.loading) return
+    progressStage = 'understanding'
+    waitSeconds = 0
+    const timer = setInterval(() => {
+      waitSeconds += 1
+    }, 1000)
+    return () => clearInterval(timer)
+  })
 
   const chunkCoverageMessage = $derived.by(() => {
     if (scope === 'biblioteca' || !chunkCoverage) return null
@@ -724,6 +755,7 @@
   onDestroy(() => {
     viewDestroyed = true
     unlistenProcessing?.()
+    unlistenProgress?.()
     if (queueRefreshTimer) clearTimeout(queueRefreshTimer)
     if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer)
     if (conversationSearchTimer) clearTimeout(conversationSearchTimer)
@@ -907,7 +939,8 @@
         {#if $ragChat.loading}
           <div class="rag-chat__message-row rag-chat__message-row--assistant">
             <p class="rag-chat__state-message rag-chat__thinking" role="status">
-              {$currentLocale && t('ragChat.thinking')}
+              {$currentLocale && t(ragProgressLabelKey(progressStage))}
+              <span class="rag-chat__wait-time">{formatWaitTime(waitSeconds)}</span>
             </p>
           </div>
         {/if}
@@ -1618,6 +1651,12 @@
     background: var(--surface-toolbar);
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
+  }
+
+  .rag-chat__wait-time {
+    margin-inline-start: var(--space-2);
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
   }
 
   /* The scope row and the composer share one hairline: the row sits inside the
