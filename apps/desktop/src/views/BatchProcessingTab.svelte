@@ -1732,11 +1732,17 @@
      `auto-fit` + `minmax` measures the grid's OWN box, so the cards already
      reflow to whatever width the panel has — a container query would only
      restate what the track function is doing. */
+  /* Four and a half cards tall, so a cut row always shows there is more to
+     scroll. A fixed pixel box could end exactly on a row boundary, since the
+     card height follows the font. A card is one line of text (1lh, the card
+     inherits this font) plus the checkbox's vertical padding and border; the
+     box adds four gaps, its own padding and border (border-box). */
   .batch-field__scope-list {
+    --scope-card-height: calc(1lh + 2 * var(--space-2) + 2px);
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: var(--space-2);
-    max-height: 200px;
+    max-height: calc(4.5 * var(--scope-card-height) + 6 * var(--space-2) + 2px);
     overflow-y: auto;
     padding: var(--space-2);
     border: 1px solid var(--border-subtle);
