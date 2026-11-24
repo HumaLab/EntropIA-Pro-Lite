@@ -5,6 +5,7 @@
   import {
     DebouncedMetadataPersistor,
     buildTechnicalMetadata,
+    assetBreadcrumbLabel,
     getAssetPathLabel,
     getAssetTypeLabel,
     normalizeMetadataKey,
@@ -239,7 +240,9 @@
   }
 
   function getSelectedAssetBreadcrumbLabel(asset: Asset) {
-    return getAssetPathLabel(asset.path)
+    return assetBreadcrumbLabel(asset, item?.title ?? '', (page) =>
+      t('item.pageBreadcrumb', { page })
+    )
   }
 
   function onResizeHandlePointerDown(e: PointerEvent) {

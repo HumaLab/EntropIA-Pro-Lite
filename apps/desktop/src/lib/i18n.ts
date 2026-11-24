@@ -2782,6 +2782,7 @@ const es = {
   'item.searchReadiness.openRouterNeeded':
     'La similitud semántica requiere OpenRouter configurado en Configuración.',
   'item.page': 'Página {page}',
+  'item.pageBreadcrumb': 'p. {page}',
   'item.pageShort': 'P{page}',
   'item.pageOf': 'Página {page} de {total}',
   'item.pageInline': '· Página {page}',
@@ -6510,6 +6511,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.searchReadiness.openRouterNeeded':
     'Semantic similarity requires OpenRouter configured in Settings.',
   'item.page': 'Page {page}',
+  'item.pageBreadcrumb': 'p. {page}',
   'item.pageShort': 'P{page}',
   'item.pageOf': 'Page {page} of {total}',
   'item.pageInline': '· Page {page}',

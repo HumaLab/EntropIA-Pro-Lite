@@ -200,6 +200,23 @@ export function getAssetPathLabel(path: string) {
   return fileName.replace(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}_/i, '')
 }
 
+/**
+ * The breadcrumb's name for the open asset. A page of a PDF is stored as its
+ * own internal file (`<doc>_page_2.pdf`), a name nobody gave it: it reads as
+ * the document and its page instead. Anything else keeps its file name.
+ */
+export function assetBreadcrumbLabel(
+  asset: { path: string; parentAssetId?: string | null; pageNumber?: number | null },
+  documentTitle: string,
+  pageLabel: (page: number) => string
+) {
+  const title = documentTitle.trim()
+  if (asset.parentAssetId && asset.pageNumber && title) {
+    return `${title} · ${pageLabel(asset.pageNumber)}`
+  }
+  return getAssetPathLabel(asset.path)
+}
+
 export function buildExportDefaultName(path: string) {
   const fileName = getAssetPathLabel(path)
   const extension = getFileExtension(fileName)

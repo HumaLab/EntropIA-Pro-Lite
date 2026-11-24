@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  assetBreadcrumbLabel,
   DebouncedMetadataPersistor,
   IMPORTED_FILE_METADATA_KEY,
   WEB_CAPTURE_METADATA_KEY,
@@ -387,5 +388,32 @@ describe('DebouncedMetadataPersistor', () => {
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(updateItem).not.toHaveBeenCalled()
+  })
+})
+
+describe('assetBreadcrumbLabel', () => {
+  const pageLabel = (page: number) => `página ${page}`
+
+  it('names a PDF page by its document and page number, not its internal file', () => {
+    const page = {
+      path: 'assets/0b1c2d3e-0000-4000-8000-000000000000_prueba-pdf-2paginas_page_1.pdf',
+      parentAssetId: 'pdf-1',
+      pageNumber: 1,
+    }
+    expect(assetBreadcrumbLabel(page, 'prueba-pdf-2paginas', pageLabel)).toBe(
+      'prueba-pdf-2paginas · página 1'
+    )
+  })
+
+  it('keeps the file name of an asset that is not a page of a PDF', () => {
+    const photo = { path: 'assets/DSC04629.JPG', parentAssetId: null, pageNumber: null }
+    expect(assetBreadcrumbLabel(photo, 'Acta', pageLabel)).toBe('DSC04629.JPG')
+  })
+
+  it('keeps the file name when the page number or the title is missing', () => {
+    const page = { path: 'assets/x_page_3.pdf', parentAssetId: 'pdf-1', pageNumber: null }
+    expect(assetBreadcrumbLabel(page, 'Acta', pageLabel)).toBe('x_page_3.pdf')
+    const titled = { path: 'assets/x_page_3.pdf', parentAssetId: 'pdf-1', pageNumber: 3 }
+    expect(assetBreadcrumbLabel(titled, '  ', pageLabel)).toBe('x_page_3.pdf')
   })
 })

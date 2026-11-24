@@ -2081,6 +2081,7 @@
 - «hecho» `item.jobStatus.done, item.jobStatus.stored`
 - «no se pudo leer el archivo de la imagen para comprobar a qué versión corresponde.» `item.layoutVersionUnknown`
 - «nueva» `item.layoutBoxEditNewLabel`
+- «p. {page}» `item.pageBreadcrumb`
 
 ### Varios (7/7)
 
