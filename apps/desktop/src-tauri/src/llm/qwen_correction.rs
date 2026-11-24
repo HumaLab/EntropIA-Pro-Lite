@@ -112,7 +112,8 @@ pub(crate) fn correct_ocr_via_local_qwen(
     };
     let corrected = if fits_single {
         drop(conn);
-        let url = qwen_local::ensure_server(&assets, db_path)?;
+        let lease = qwen_local::ensure_server(&assets, db_path)?;
+        let url = lease.base_url().to_string();
         single_pass_or_chunks(
             || {
                 correct_one_pass(
@@ -221,7 +222,8 @@ fn correct_in_chunks(
     // plus the largest plausible correction fits the 16K slot; loop and
     // length guards below turn degeneration into a loud failure.
     drop(conn);
-    let url = qwen_local::ensure_server(assets, db_path)?;
+    let lease = qwen_local::ensure_server(assets, db_path)?;
+    let url = lease.base_url().to_string();
     // No image on chunk calls: with the whole page in context the model
     // retranscribes the page per chunk and blows every budget. The text
     // already carries the content; single passes keep the image.

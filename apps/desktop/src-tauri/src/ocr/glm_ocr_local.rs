@@ -145,7 +145,7 @@ fn to_server_assets(assets: &GlmLocalAssets) -> super::local_server::ServerAsset
     super::local_server::ServerAssets {
         server: assets.server.clone(),
         model: assets.model.clone(),
-        mmproj: assets.mmproj.clone(),
+        mmproj: Some(assets.mmproj.clone()),
     }
 }
 
@@ -153,7 +153,10 @@ fn to_server_assets(assets: &GlmLocalAssets) -> super::local_server::ServerAsset
 ///
 /// A server running the correction model is stopped first: VRAM fits one.
 /// Blocking: call it from a blocking context (the OCRH subprocess path).
-pub fn ensure_server(assets: &GlmLocalAssets, db_path: &Path) -> Result<String, String> {
+pub fn ensure_server(
+    assets: &GlmLocalAssets,
+    db_path: &Path,
+) -> Result<super::local_server::Lease, String> {
     super::local_server::ensure_server(&OCRH_SERVER_CONFIG, &to_server_assets(assets), db_path)
 }
 

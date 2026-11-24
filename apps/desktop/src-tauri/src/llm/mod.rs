@@ -3,6 +3,10 @@ pub mod commands;
 pub mod download;
 #[cfg(feature = "local-ml")]
 pub mod engine;
+#[cfg(feature = "local-ml")]
+pub(crate) mod gemma_gpu;
+#[cfg(feature = "local-ml")]
+pub(crate) mod gemma_server;
 pub mod generation;
 pub(crate) mod ocr_correction;
 pub mod openrouter;
@@ -327,6 +331,75 @@ pub(crate) fn local_llm_threads(logical_cores: usize) -> i32 {
     (logical_cores / 2).clamp(4, 16) as i32
 }
 
+/// Sampling seed of every local Gemma generation, CPU and GPU alike.
+#[cfg(feature = "local-ml")]
+const LOCAL_GEMMA_SEED: u32 = 1234;
+
+/// The interactive local flows (RAG answer and direct answer, intent, query
+/// rewrite, help): Gemma on the GPU server when this machine can run it,
+/// otherwise in-process on CPU exactly as before. The app log names the
+/// backend that served each request and why the GPU was not used.
+#[cfg(feature = "local-ml")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn generate_local_chat(
+    conn: &rusqlite::Connection,
+    db_path: &std::path::Path,
+    app_handle: &AppHandle,
+    instruction: &str,
+    max_tokens: i32,
+    n_ctx: u32,
+    temperature: f32,
+    log_prefix: &str,
+) -> Result<String, String> {
+    let started = std::time::Instant::now();
+    let fallback = match gemma_gpu::generate(
+        app_handle,
+        db_path,
+        instruction,
+        max_tokens,
+        n_ctx,
+        temperature,
+        LOCAL_GEMMA_SEED,
+    ) {
+        Ok(text) => {
+            let backend = crate::ocr::llama_gpu::detected()
+                .map(|gpu| format!("{:?}", gpu.backend))
+                .unwrap_or_default();
+            crate::app_logs::info(
+                app_handle,
+                "llm-local",
+                format!(
+                    "{log_prefix} Gemma gpu:{backend}: {:.1} s",
+                    started.elapsed().as_secs_f32()
+                ),
+            );
+            return Ok(text);
+        }
+        Err(fallback) => fallback,
+    };
+    // Logged before the CPU run, so the reason survives a CPU failure too.
+    crate::app_logs::info(
+        app_handle,
+        "llm-local",
+        format!("{log_prefix} Gemma cpu: {fallback}"),
+    );
+    let engine = get_or_init_local_gemma_engine(conn, db_path, app_handle)?;
+    let engine = engine
+        .lock()
+        .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
+    let text =
+        engine.generate_chat_with_ctx(instruction, max_tokens, n_ctx, temperature, log_prefix)?;
+    crate::app_logs::info(
+        app_handle,
+        "llm-local",
+        format!(
+            "{log_prefix} Gemma cpu: {:.1} s",
+            started.elapsed().as_secs_f32()
+        ),
+    );
+    Ok(text)
+}
+
 #[cfg(feature = "local-ml")]
 pub(crate) fn get_or_init_local_gemma_engine(
     conn: &rusqlite::Connection,
@@ -350,7 +423,7 @@ pub(crate) fn get_or_init_local_gemma_engine(
         n_threads: Some(local_llm_threads(
             std::thread::available_parallelism().map_or(4, |n| n.get()),
         )),
-        seed: 1234,
+        seed: LOCAL_GEMMA_SEED,
         // Opt-in CUDA builds offload every layer; CPU-only builds stay at 0.
         #[cfg(feature = "cuda")]
         n_gpu_layers: u32::MAX,

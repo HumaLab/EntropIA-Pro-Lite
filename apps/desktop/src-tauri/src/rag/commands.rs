@@ -872,8 +872,6 @@ async fn generate_answer(
                 let conn = crate::db::open::open_archive_connection(&db_path).map_err(|error| {
                     format!("Failed to open DB for local RAG generation: {error}")
                 })?;
-                let engine =
-                    crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;
                 // Ventana local del chat RAG: 131K tokens por defecto (setting
                 // `local_rag_n_ctx`), con reserva de salida y margen para el
                 // presupuesto de evidencia. Ventanas chicas conservan el
@@ -886,9 +884,6 @@ async fn generate_answer(
                 } else {
                     params.max_tokens
                 };
-                let engine = engine
-                    .lock()
-                    .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
 
                 // Presupuesto de contexto contra el `n_ctx` efectivo: los
                 // fragmentos recuperados pueden ser grandes y desbordar la
@@ -904,7 +899,10 @@ async fn generate_answer(
                     &history,
                     &params,
                 );
-                engine.generate_chat_with_ctx(
+                crate::llm::generate_local_chat(
+                    &conn,
+                    &db_path,
+                    &app_handle,
                     &prompt,
                     max_tokens,
                     n_ctx,
@@ -952,8 +950,6 @@ async fn generate_direct_answer(
                 let conn = crate::db::open::open_archive_connection(&db_path).map_err(|error| {
                     format!("Failed to open DB for local direct generation: {error}")
                 })?;
-                let engine =
-                    crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;
                 let n_ctx = crate::llm::local_rag_n_ctx_from_settings(&conn);
                 let max_tokens = if n_ctx >= crate::llm::LOCAL_RAG_LARGE_CTX_THRESHOLD {
                     params
@@ -964,10 +960,10 @@ async fn generate_direct_answer(
                 };
                 let prompt =
                     build_local_direct_prompt(n_ctx, max_tokens, &question, &history, &params);
-                let engine = engine
-                    .lock()
-                    .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
-                engine.generate_chat_with_ctx(
+                crate::llm::generate_local_chat(
+                    &conn,
+                    &db_path,
+                    &app_handle,
                     &prompt,
                     max_tokens,
                     n_ctx,

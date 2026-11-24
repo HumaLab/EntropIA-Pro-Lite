@@ -74,12 +74,16 @@ pub(crate) async fn rewrite_query(
             match tokio::task::spawn_blocking(move || -> Result<String, String> {
                 let conn = crate::db::open::open_archive_connection(&db_path)
                     .map_err(|error| format!("Failed to open DB for query rewrite: {error}"))?;
-                let engine =
-                    crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app_handle)?;
-                let engine = engine
-                    .lock()
-                    .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
-                engine.generate_chat_with_ctx(&prompt, 128, 4_096, 0.0, "[rag][rewrite]")
+                crate::llm::generate_local_chat(
+                    &conn,
+                    &db_path,
+                    &app_handle,
+                    &prompt,
+                    128,
+                    4_096,
+                    0.0,
+                    "[rag][rewrite]",
+                )
             })
             .await
             {
