@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte'
+  import { onDestroy, onMount, tick } from 'svelte'
   import { Button } from '@entropia/ui'
   import {
     clearLogs,
@@ -20,6 +20,21 @@
   // ignores what Tauri still delivers in between (drop-dup fix).
   let destroyed = false
   const LOG_WINDOW_SIZE = 20
+  // The list follows the newest line, the way a terminal does: a live line
+  // used to land below the fold and look missing until "Refrescar". Someone
+  // who scrolled up to read an older line keeps their place.
+  const FOLLOW_SLACK_PX = 24
+  let body: HTMLElement | undefined = $state()
+
+  function isAtEnd(): boolean {
+    if (!body) return true
+    return body.scrollHeight - body.scrollTop - body.clientHeight <= FOLLOW_SLACK_PX
+  }
+
+  async function scrollToEnd() {
+    await tick()
+    if (body) body.scrollTop = body.scrollHeight
+  }
 
   let renderedLogs = $derived(entries.map(formatLogEntry).join('\n'))
 
@@ -28,7 +43,9 @@
     if (destroyed) return
     const registered = await onLogEntry((entry) => {
       if (destroyed) return
+      const follow = isAtEnd()
       entries = [...entries, entry].slice(-LOG_WINDOW_SIZE)
+      if (follow) void scrollToEnd()
     })
     if (destroyed) registered()
     else unlisten = registered
@@ -44,6 +61,7 @@
     feedback = null
     try {
       entries = (await getLogs()).slice(-LOG_WINDOW_SIZE)
+      void scrollToEnd()
     } catch (error) {
       feedback = { tone: 'error', text: `No se pudieron cargar los logs: ${String(error)}` }
     } finally {
@@ -117,7 +135,7 @@
     </p>
   {/if}
 
-  <div class="logs-tab__body" aria-live="polite">
+  <div class="logs-tab__body" aria-live="polite" bind:this={body}>
     {#if loading && entries.length === 0}
       <p class="logs-tab__empty">Cargando logs…</p>
     {:else if entries.length === 0}
@@ -187,6 +205,10 @@
     max-height: min(62vh, 720px);
     overflow: auto;
     padding: var(--space-3);
+    /* The floating help button (56px, HELP_BUBBLE_SIZE_PX) waits just above
+       the status bar, over the end of this list: the room below the last line
+       lets it scroll clear of the button. */
+    padding-block-end: calc(56px + var(--space-4));
     border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
     border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--color-surface-glass) 64%, transparent);
