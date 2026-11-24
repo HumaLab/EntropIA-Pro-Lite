@@ -2063,7 +2063,7 @@ const es = {
     'Este informe se armó antes de que las citas llevaran su fuente: no se puede abrir el documento.',
   'investigation.clarification.title': 'Preguntas antes de armar el informe',
   'investigation.clarification.intro':
-    'Con el diseño y el plan a la vista, esto es lo que necesito que definas. Podés dejar alguna sin responder: queda declarada en el informe.',
+    'Con el diseño y el plan a la vista, esto es lo que necesito que definas. Podés dejar alguna sin responder, pero no todas: las que queden vacías se declaran en el informe.',
   'investigation.clarification.submit': 'Responder y seguir',
   'investigation.clarification.sending': 'Enviando respuestas…',
   'investigation.clarification.empty':
@@ -5807,7 +5807,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'This report was written before citations carried their source: the document cannot be opened.',
   'investigation.clarification.title': 'Questions before writing the report',
   'investigation.clarification.intro':
-    'With the design and the plan in view, this is what I need you to settle. You can leave one unanswered: it is declared in the report.',
+    'With the design and the plan in view, this is what I need you to settle. You can leave some unanswered, but not all of them: the empty ones are declared in the report.',
   'investigation.clarification.submit': 'Answer and continue',
   'investigation.clarification.sending': 'Sending answers…',
   'investigation.clarification.empty':
