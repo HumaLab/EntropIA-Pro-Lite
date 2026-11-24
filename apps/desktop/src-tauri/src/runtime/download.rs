@@ -1029,7 +1029,8 @@ fn existing_managed_runtime_matches_release(
     };
     if manifest.pack_version != release.pack_version
         || manifest.app_version != release.app_version
-        || manifest.platform != release.platform
+        || manifest.platform
+            != crate::runtime::manifest::runtime_platform_of_release(&release.platform)
     {
         return false;
     }
@@ -1586,6 +1587,52 @@ mod tests {
         assert!(sentinel.is_file());
         assert!(!second_outcome.staging_path.exists());
         assert!(!stage_marker_path(app_data_dir.path(), &release.pack_version).exists());
+    }
+
+    #[test]
+    fn a_cuda_runtime_already_in_place_is_reused_without_replacing_it() {
+        // The CUDA release is published as `{platform}-cuda` while the runtime
+        // inside declares the OS platform; the reuse check must treat them as
+        // the same runtime instead of replacing a healthy one.
+        let app_data_dir = tempfile::tempdir().expect("app data dir");
+        let archive_bytes = runtime_archive_bytes();
+        let (cpu_release, public_key) = build_signed_release(&archive_bytes);
+        let mut release = cpu_release;
+        release.platform = crate::runtime::manifest::cuda_release_platform(
+            &crate::runtime::paths::current_runtime_platform(),
+        );
+        let signing_key = SigningKey::from_bytes(&[11u8; 32]);
+        let signature = signing_key.sign(release.signature_payload().as_bytes());
+        release.signature = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+
+        let first_outcome = download_and_activate_remote_runtime_with_fetch(
+            "https://example.com/runtime/bootstrap.json",
+            &release,
+            app_data_dir.path(),
+            &public_key,
+            |_| Ok(Cursor::new(archive_bytes.clone())),
+            &mut |_| {},
+        )
+        .expect("first cuda bootstrap");
+        let sentinel = first_outcome
+            .managed_root
+            .join("venv")
+            .join("created-by-deps.txt");
+        fs::create_dir_all(sentinel.parent().expect("sentinel parent")).expect("venv dir");
+        fs::write(&sentinel, b"keep me").expect("sentinel write");
+
+        let second_outcome = download_and_activate_remote_runtime_with_fetch(
+            "https://example.com/runtime/bootstrap.json",
+            &release,
+            app_data_dir.path(),
+            &public_key,
+            |_| Ok(Cursor::new(archive_bytes.clone())),
+            &mut |_| {},
+        )
+        .expect("second cuda bootstrap");
+
+        assert_eq!(second_outcome.managed_root, first_outcome.managed_root);
+        assert!(sentinel.is_file(), "the healthy CUDA runtime was replaced");
     }
 
     #[test]

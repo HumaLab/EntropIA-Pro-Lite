@@ -20,6 +20,9 @@ on:
         options:
           - windows-x86_64
           - linux-x86_64
+          # PaddlePaddle built for CUDA 12.9 (NVIDIA driver 575+). Published as
+          # its own bootstrap platform so apps without CUDA support never pick it.
+          - linux-x86_64-cuda
       app_version:
         description: 'App version to stamp into the pack manifest'
         required: true
@@ -189,9 +192,10 @@ jobs:
   # faster-whisper), and Pdfium from the same pinned release as the Lite bundles.
   build-linux:
     name: Build Linux runtime pack
-    if: inputs.platform == 'linux-x86_64'
+    if: startsWith(inputs.platform, 'linux-x86_64')
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    # The CUDA pack installs and repacks several GB of nvidia-* wheels.
+    timeout-minutes: ${{ inputs.platform == 'linux-x86_64-cuda' && 150 || 90 }}
     env:
       ENV_DIR: ${{ github.workspace }}/.runtime-build/managed/venv/entropia-env
       HF_CACHE: ${{ github.workspace }}/.runtime-build/caches/hf
@@ -235,7 +239,17 @@ jobs:
         run: |
           set -euo pipefail
           PY="$ENV_DIR/bin/python"
-          uv pip install --python "$PY" "paddlepaddle>=3.2.1,<3.3.0"
+          if [ "${{ inputs.platform }}" = "linux-x86_64-cuda" ]; then
+            # The GPU build and its nvidia-* CUDA wheels (cuDNN, cuBLAS...) come
+            # from Paddle's cu129 index; the materializer repacks all of them,
+            # so the app installs them offline from the wheelhouse.
+            uv pip install --python "$PY" "paddlepaddle-gpu>=3.2.1,<3.3.0" \
+              --index-url https://www.paddlepaddle.org.cn/packages/stable/cu129/ \
+              --extra-index-url https://pypi.org/simple \
+              --index-strategy unsafe-best-match
+          else
+            uv pip install --python "$PY" "paddlepaddle>=3.2.1,<3.3.0"
+          fi
           uv pip install --python "$PY" "paddleocr[doc-parser]>=2.9.0"
           uv pip install --python "$PY" "faster-whisper>=1.0.0"
           uv pip install --python "$PY" "spacy>=3.8.0,<3.9.0" \
@@ -252,7 +266,12 @@ jobs:
           mkdir -p "$HF_HUB_CACHE" "$PADDLE_PDX_CACHE_HOME"
           PY="$ENV_DIR/bin/python"
           "$PY" -c "import paddle; print('paddle', paddle.__version__)"
-          "$PY" -c "from paddleocr import PaddleOCRVL; PaddleOCRVL(); print('paddleocr-vl warmed')"
+          if [ "${{ inputs.platform }}" = "linux-x86_64-cuda" ]; then
+            # The runner has no GPU; warming only downloads the weights.
+            "$PY" -c "from paddleocr import PaddleOCRVL; PaddleOCRVL(device='cpu'); print('paddleocr-vl warmed')"
+          else
+            "$PY" -c "from paddleocr import PaddleOCRVL; PaddleOCRVL(); print('paddleocr-vl warmed')"
+          fi
           "$PY" -c "from faster_whisper import WhisperModel; WhisperModel('base'); print('faster-whisper warmed')"
           "$PY" -c "import spacy; spacy.load('es_core_news_md'); print('spacy ok')"
 
@@ -308,6 +327,25 @@ jobs:
             --payload-root "$OUTPUT_DIR" \
             --output-dir "$ASSEMBLED_DIR" \
             --require-release-payload
+          # The assembled pack holds its own copy; free the disk for the
+          # install probe and the archive (the CUDA pack is several GB).
+          rm -rf "$OUTPUT_DIR"
+
+      - name: Check the CUDA wheels made it into the pack
+        if: inputs.platform == 'linux-x86_64-cuda'
+        shell: bash
+        run: |
+          set -euo pipefail
+          WHEELS="$ASSEMBLED_DIR/linux-x86_64/wheelhouse"
+          for prefix in paddlepaddle_gpu- nvidia_cudnn_cu12- nvidia_cublas_cu12- nvidia_cuda_runtime_cu12-; do
+            if ! ls "$WHEELS"/${prefix}*.whl >/dev/null 2>&1; then
+              echo "::error::wheelhouse lacks ${prefix}*.whl"; exit 1
+            fi
+          done
+          if ls "$WHEELS"/paddlepaddle-[0-9]*.whl >/dev/null 2>&1; then
+            echo "::error::the CUDA pack also ships the CPU paddlepaddle wheel"; exit 1
+          fi
+          du -sh "$WHEELS"
 
       - name: Smoke test the assembled runtime pack
         shell: bash
@@ -320,7 +358,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ARCHIVE="${{ github.workspace }}/.runtime-build/runtime-pack-linux-x86_64.zip"
+          ARCHIVE="${{ github.workspace }}/.runtime-build/runtime-pack-${{ inputs.platform }}.zip"
           # manifest.json at the archive root; 7z writes zip64 past 4 GiB. Execute
           # bits need not survive the zip: the app restores them from the manifest.
           ( cd "$ASSEMBLED_DIR/linux-x86_64" && 7z a -tzip -mx=3 "$ARCHIVE" "./*" >/dev/null )
@@ -337,7 +375,7 @@ jobs:
       - name: Upload runtime archive (for hosting)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: runtime-archive-linux-x86_64
-          path: ${{ github.workspace }}/.runtime-build/runtime-pack-linux-x86_64.zip
+          name: runtime-archive-${{ inputs.platform }}
+          path: ${{ github.workspace }}/.runtime-build/runtime-pack-${{ inputs.platform }}.zip
           retention-days: 7
           if-no-files-found: error

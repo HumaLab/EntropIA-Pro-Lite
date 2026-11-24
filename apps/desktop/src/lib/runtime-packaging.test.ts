@@ -448,11 +448,34 @@ describe('runtime pack packaging', () => {
     expect(linuxJob).toContain('fetch-pdfium.sh linux-x64')
     expect(linuxJob).toContain('--require-release-payload')
     expect(linuxJob).toContain('--release --install-probe')
-    expect(linuxJob).toContain('runtime-archive-linux-x86_64')
+    // Named after the platform input: `runtime-archive-linux-x86_64` for the
+    // CPU pack, the name publish derives with format('runtime-archive-{0}').
+    expect(linuxJob).toContain('name: runtime-archive-${{ inputs.platform }}')
+    expect(publishWorkflow).toContain("format('runtime-archive-{0}', inputs.platform)")
 
     // Publish signs whichever platform it was given instead of hardcoding Windows.
     expect(publishWorkflow).not.toContain('PLATFORM=windows-x86_64')
     expect(publishWorkflow).toContain('PLATFORM=${{ inputs.platform }}')
+  })
+
+  it('builds the Linux CUDA pack as its own platform without touching the CPU pack', () => {
+    const buildWorkflow = readRepoFile('.github/workflows/build-runtime-pack.yml')
+    const publishWorkflow = readRepoFile('.github/workflows/publish-runtime-bootstrap.yml')
+    const linuxJob = topLevelJobText(buildWorkflow, 'build-linux')
+
+    for (const workflow of [buildWorkflow, publishWorkflow]) {
+      expect(workflow).toContain('- linux-x86_64-cuda')
+    }
+    expect(linuxJob).toContain("if: startsWith(inputs.platform, 'linux-x86_64')")
+    // CUDA gets the GPU build from Paddle's cu129 index; the CPU pack keeps
+    // the PyPI wheel exactly as before.
+    expect(linuxJob).toContain('"paddlepaddle-gpu>=3.2.1,<3.3.0"')
+    expect(linuxJob).toContain('https://www.paddlepaddle.org.cn/packages/stable/cu129/')
+    expect(linuxJob).toContain('uv pip install --python "$PY" "paddlepaddle>=3.2.1,<3.3.0"')
+    // The pack inside still declares the OS platform, and CI proves the CUDA
+    // wheels were repacked.
+    expect(linuxJob).not.toContain('--platform linux-x86_64-cuda')
+    expect(linuxJob).toContain('nvidia_cudnn_cu12-')
   })
 
   it('lints the Pro (local-ml) build on Linux in CI', () => {

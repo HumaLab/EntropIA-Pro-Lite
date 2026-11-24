@@ -129,7 +129,44 @@ impl RuntimeManifest {
     }
 }
 
+/// Bootstrap platform suffix of a CUDA runtime release: the Linux CUDA pack
+/// is published as `linux-x86_64-cuda`. Builds that predate the CUDA pack
+/// look for the exact OS platform and never select it.
+pub const CUDA_RELEASE_PLATFORM_SUFFIX: &str = "-cuda";
+
+/// The bootstrap platform of the CUDA release for an OS platform.
+pub fn cuda_release_platform(platform: &str) -> String {
+    format!("{platform}{CUDA_RELEASE_PLATFORM_SUFFIX}")
+}
+
+/// The OS platform a release runs on: what the runtime manifest inside the
+/// pack declares. `linux-x86_64-cuda` runs on `linux-x86_64`.
+pub fn runtime_platform_of_release(release_platform: &str) -> &str {
+    release_platform
+        .strip_suffix(CUDA_RELEASE_PLATFORM_SUFFIX)
+        .unwrap_or(release_platform)
+}
+
 impl BootstrapManifestIndex {
+    /// The release for this machine: the CUDA release when the accelerator
+    /// asks for it and one is published for this app version and platform,
+    /// otherwise the CPU release, exactly as `select_release` picks it.
+    pub fn select_release_for(
+        &self,
+        app_version: &str,
+        platform: &str,
+        accelerator: crate::runtime::accelerator::RuntimeAccelerator,
+    ) -> Option<&BootstrapReleaseManifest> {
+        if accelerator == crate::runtime::accelerator::RuntimeAccelerator::Cuda {
+            if let Some(release) =
+                self.select_release(app_version, &cuda_release_platform(platform))
+            {
+                return Some(release);
+            }
+        }
+        self.select_release(app_version, platform)
+    }
+
     pub fn select_release(
         &self,
         app_version: &str,
@@ -353,6 +390,94 @@ mod tests {
 
         assert_eq!(selected.pack_version, "2026.05.1");
         assert_eq!(selected.archive_sha256, "linux-sha");
+    }
+
+    fn release(platform: &str, pack_version: &str) -> BootstrapReleaseManifest {
+        BootstrapReleaseManifest {
+            app_version: "0.0.10".to_string(),
+            platform: platform.to_string(),
+            pack_version: pack_version.to_string(),
+            archive_url: format!("https://example.com/{pack_version}.zip"),
+            additional_part_urls: Vec::new(),
+            archive_sha256: "sha".to_string(),
+            archive_size: 42,
+            signature: "sig".to_string(),
+        }
+    }
+
+    fn cpu_and_cuda_index() -> BootstrapManifestIndex {
+        BootstrapManifestIndex {
+            channel: "stable".to_string(),
+            generated_at: "2026-11-24T00:00:00Z".to_string(),
+            // CUDA listed first on purpose: the CPU choice must not depend on
+            // the order of the releases.
+            releases: vec![
+                release("linux-x86_64-cuda", "2026.11.24-cuda129"),
+                release("linux-x86_64", "2026.11.10"),
+            ],
+        }
+    }
+
+    #[test]
+    fn the_cpu_choice_and_old_apps_never_pick_the_cuda_release() {
+        use crate::runtime::accelerator::RuntimeAccelerator;
+        let index = cpu_and_cuda_index();
+
+        assert_eq!(
+            index
+                .select_release_for("0.0.10", "linux-x86_64", RuntimeAccelerator::Cpu)
+                .map(|r| r.pack_version.as_str()),
+            Some("2026.11.10")
+        );
+        // What every published app build calls today.
+        assert_eq!(
+            index
+                .select_release("0.0.10", "linux-x86_64")
+                .map(|r| r.pack_version.as_str()),
+            Some("2026.11.10")
+        );
+    }
+
+    #[test]
+    fn the_cuda_choice_picks_the_cuda_release() {
+        use crate::runtime::accelerator::RuntimeAccelerator;
+        let index = cpu_and_cuda_index();
+
+        let selected = index
+            .select_release_for("0.0.10", "linux-x86_64", RuntimeAccelerator::Cuda)
+            .expect("cuda release");
+        assert_eq!(selected.platform, "linux-x86_64-cuda");
+        assert_eq!(selected.pack_version, "2026.11.24-cuda129");
+    }
+
+    #[test]
+    fn the_cuda_choice_falls_back_to_cpu_when_no_cuda_release_exists() {
+        use crate::runtime::accelerator::RuntimeAccelerator;
+        let index = BootstrapManifestIndex {
+            channel: "stable".to_string(),
+            generated_at: "2026-11-24T00:00:00Z".to_string(),
+            releases: vec![
+                release("windows-x86_64", "2026.11.10"),
+                release("linux-x86_64", "2026.11.10"),
+            ],
+        };
+
+        assert_eq!(
+            index
+                .select_release_for("0.0.10", "windows-x86_64", RuntimeAccelerator::Cuda)
+                .map(|r| r.platform.as_str()),
+            Some("windows-x86_64")
+        );
+    }
+
+    #[test]
+    fn a_cuda_release_runs_on_its_os_platform() {
+        assert_eq!(cuda_release_platform("linux-x86_64"), "linux-x86_64-cuda");
+        assert_eq!(
+            runtime_platform_of_release("linux-x86_64-cuda"),
+            "linux-x86_64"
+        );
+        assert_eq!(runtime_platform_of_release("linux-x86_64"), "linux-x86_64");
     }
 
     #[test]

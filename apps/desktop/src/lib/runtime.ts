@@ -55,6 +55,8 @@ export interface RuntimeBootstrapDownloadPlan {
   archivePath: string
   stagingPath: string
   resumeMetadataPath: string
+  /** Bootstrap platform of the chosen release (`linux-x86_64-cuda` for the CUDA pack). */
+  releasePlatform?: string
 }
 
 export interface RuntimeBootstrapPlan {

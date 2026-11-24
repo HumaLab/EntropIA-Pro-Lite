@@ -40,6 +40,12 @@ pub struct BootstrapDownloadPlan {
     pub archive_sha256: String,
     pub archive_size: u64,
     pub signature: String,
+    /// The bootstrap platform of the chosen release (`linux-x86_64-cuda` for
+    /// the CUDA pack). It is part of the signed payload, so the download
+    /// verifies against it rather than the OS platform. Absent in plans
+    /// serialized before the CUDA pack: the OS platform.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_platform: Option<String>,
     pub archive_path: String,
     pub staging_path: String,
     pub resume_metadata_path: String,

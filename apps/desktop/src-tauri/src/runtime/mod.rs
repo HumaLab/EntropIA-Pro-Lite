@@ -1,4 +1,6 @@
 #[cfg(feature = "local-ml")]
+pub mod accelerator;
+#[cfg(feature = "local-ml")]
 pub mod bootstrap;
 pub mod bootstrap_types;
 #[cfg(feature = "local-ml")]
