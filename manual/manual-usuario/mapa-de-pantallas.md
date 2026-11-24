@@ -467,11 +467,13 @@
 
 - «(texto nativo del PDF)»
 - «CSV (.csv)»
+- «Cerrar aviso»
 - «Descargar el texto de la colección»
 - «Markdown (.md)»
 - «Ningún documento de esta colección tiene texto extraído.»
 - «PDF (.pdf)»
 - «Texto (.txt)»
+- «Texto de la colección guardado en {path}»
 - «Word (.docx)»
 - «[Imagen, página {page}]»
 - «archivo»
