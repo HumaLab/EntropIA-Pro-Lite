@@ -392,6 +392,39 @@ describe('CollectionView consumer compatibility', () => {
     ).toBeInTheDocument()
   })
 
+  it('offers a labeled import button inside the empty state', async () => {
+    storeRef.current = createStore([])
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const message = await screen.findByText(
+      'Todavía no hay documentos en esta colección. Importá archivos para empezar a trabajar.'
+    )
+    const emptyState = message.closest('.empty') as HTMLElement
+    const button = within(emptyState).getByRole('button', { name: 'Importar documento' })
+    expect(button).toHaveTextContent('Importar documento')
+    expect(button).toBeEnabled()
+  })
+
+  it('does not offer the import button when a search finds nothing', async () => {
+    storeRef.current = createStore([])
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+
+    await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'nada' } })
+    vi.advanceTimersByTime(300)
+
+    const message = await screen.findByText(/No encontramos documentos para esa búsqueda/)
+    const emptyState = message.closest('.empty') as HTMLElement
+    expect(within(emptyState).queryByRole('button')).toBeNull()
+  })
+
   it('renders collection-wide stats below the subtitle', async () => {
     const rows: ItemRow[] = ['Acta', 'Mapa', 'Carta'].map((title, index) => ({
       id: `item-${index + 1}`,
