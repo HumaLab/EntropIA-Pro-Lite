@@ -60,6 +60,35 @@ export function frozenResearchModel(artifacts: ResearchArtifact[]): string | nul
   return modelo || null
 }
 
+/**
+ * Names of the collections the job covers, read from its `coverage` artifact:
+ * the engine writes the selected collections there when it creates the job.
+ * Empty when the job has no coverage artifact yet.
+ */
+export function frozenResearchCollections(artifacts: ResearchArtifact[]): string[] {
+  const coverage = artifacts
+    .filter((artifact) => artifact.kind === 'coverage' && !artifact.obsolete)
+    .sort((a, b) => b.version - a.version)[0]
+  const content = coverage?.content as { collections?: unknown } | null | undefined
+  if (!Array.isArray(content?.collections)) return []
+  return content.collections
+    .map((collection) =>
+      typeof (collection as { name?: unknown })?.name === 'string'
+        ? (collection as { name: string }).name.trim()
+        : ''
+    )
+    .filter(Boolean)
+}
+
+/**
+ * Does the writer's section title name the limitations? Same rule as the
+ * engine's markdown export (`es_limitaciones`): case-insensitive, «ó» folded,
+ * so «Limitaciones» and «Limitaciones del informe» both match.
+ */
+export function isLimitationsTitle(title: string | null | undefined): boolean {
+  return (title ?? '').trim().toLowerCase().replaceAll('ó', 'o').startsWith('limitacion')
+}
+
 /** Una pregunta de la ronda de clarificación. */
 export interface ResearchQuestion {
   id: string

@@ -304,11 +304,13 @@ describe('InvestigationView', () => {
     await fireEvent.click(screen.getByText('Responder y seguir'))
 
     // El encuadre del informe depende de esto: sin ninguna respuesta no se
-    // manda nada al motor y se explica por qué.
+    // manda nada al motor y se explica por qué, junto al botón: la ronda es
+    // larga y un aviso arriba de la página queda fuera de la vista.
     expect(invokeMock).not.toHaveBeenCalled()
-    expect(
-      screen.getByText('Respondé al menos una pregunta: el encuadre del informe depende de esto.')
-    ).toBeInTheDocument()
+    const ronda = screen.getByText('Responder y seguir').closest('article')!
+    expect(within(ronda).getByRole('alert')).toHaveTextContent(
+      'Respondé al menos una pregunta: el encuadre del informe depende de esto.'
+    )
   })
 
   it('la ronda muestra el diseño y, editado, lo manda junto con las respuestas', async () => {
@@ -379,9 +381,10 @@ describe('InvestigationView', () => {
     await fireEvent.click(screen.getByText('Responder y seguir'))
 
     expect(invokeMock).not.toHaveBeenCalled()
-    expect(
-      screen.getByText('Completá la hipótesis, el alcance y al menos un criterio de cierre.')
-    ).toBeInTheDocument()
+    const ronda = screen.getByText('Responder y seguir').closest('article')!
+    expect(within(ronda).getByRole('alert')).toHaveTextContent(
+      'Completá la hipótesis, el alcance y al menos un criterio de cierre.'
+    )
   })
 
   it('el gate del plan muestra las búsquedas y «Aprobar y buscar» manda la decisión', async () => {
@@ -1488,6 +1491,49 @@ describe('InvestigationView modelo congelado', () => {
     await waitFor(() => expect(screen.getAllByText('Corpus').length).toBeGreaterThan(0))
     expect(screen.queryByText('meta/llama-3.3-70b')).not.toBeInTheDocument()
   })
+
+  function conCobertura(nombres: string[]) {
+    const base = payloadConModelo()
+    invokeMock.mockImplementation((async (command: string) => {
+      if (command === 'bibliography_library_status') {
+        return { libraries: [], vectorReady: true }
+      }
+      return {
+        ...base,
+        artifacts: [
+          ...base.artifacts,
+          {
+            id: 'art-coverage',
+            kind: 'coverage',
+            version: 1,
+            obsolete: false,
+            content: {
+              collections: nombres.map((name, index) => ({ id: `c-${index}`, name })),
+              alcance: 'corpus',
+            },
+          },
+        ],
+      }
+    }) as typeof invokeMock)
+  }
+
+  it('el encabezado nombra las colecciones que abarca el trabajo', async () => {
+    conCobertura(['Conflicto SOIP 1965-66', 'Voces'])
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    const alcance = await screen.findByRole('group', { name: 'Buscar en' })
+    expect(await within(alcance).findByText('Conflicto SOIP 1965-66 · Voces')).toBeInTheDocument()
+  })
+
+  it('con muchas colecciones el encabezado las cuenta y las nombra en el tooltip', async () => {
+    const nombres = ['Voces', 'FACA', 'CORS', 'Navales', 'SOIP 1961']
+    conCobertura(nombres)
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    const alcance = await screen.findByRole('group', { name: 'Buscar en' })
+    const pastilla = await within(alcance).findByText('5 colecciones')
+    expect(pastilla.closest('[title]')).toHaveAttribute('title', nombres.join(' · '))
+  })
 })
 
 // ==========================================================================
@@ -1720,6 +1766,99 @@ describe('InvestigationView reintentos de lote del archivo', () => {
     // Un lote que se recuperó partiéndolo no perdió evidencia: no es una falla.
     expect(screen.queryByText('Limitaciones')).not.toBeInTheDocument()
     expect(screen.queryByText(/Degradación del pipeline/)).not.toBeInTheDocument()
+  })
+
+  it('una sección que cita dos veces el mismo pasaje igual se muestra', async () => {
+    const base = detailPayload()
+    const cita = {
+      n: 35,
+      start: 237300,
+      end: 237420,
+      text: 'Entrábamos a las cinco de la mañana.',
+      title: 'Entrevista 3',
+      collection: 'Voces',
+      chunk_id: 'ch-1',
+    }
+    invokeMock.mockResolvedValue({
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      events: [],
+      artifacts: [
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            markdown: '# Memorias del frigorífico\n\nTexto.',
+            report: {
+              title: 'Memorias del frigorífico',
+              references: [],
+              sections: [{ id: 's1', title: 'Jornada', text: 'Texto.', quotes: [cita, cita] }],
+            },
+            coverage: { collections: [] },
+            coverage_warning: { sufficient: false, gaps: ['Sin actas', 'Sin actas'] },
+            archive_limitations: [],
+            role_warnings: [],
+          },
+        },
+      ],
+    })
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    // The writer may quote one passage twice (and repeat a gap): a duplicate
+    // key used to throw and leave the whole report blank.
+    expect(await screen.findByRole('heading', { name: 'Jornada' })).toBeInTheDocument()
+    expect(screen.getAllByText('Entrábamos a las cinco de la mañana.')).toHaveLength(2)
+  })
+
+  it('la sección «Limitaciones» del redactor recibe la lista automática', async () => {
+    const base = detailPayload()
+    invokeMock.mockResolvedValue({
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      events: [],
+      artifacts: [
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            markdown: '# Organización del conflicto\n\nTexto.',
+            report: {
+              title: 'Organización del conflicto',
+              references: [],
+              sections: [
+                { id: 's1', title: 'Hechos', text: 'El plenario dispuso un paro.', quotes: [] },
+                {
+                  id: 's2',
+                  title: 'Limitaciones del informe',
+                  text: 'Las entrevistas recuerdan desde el presente.',
+                  quotes: [],
+                },
+              ],
+            },
+            coverage: { collections: [] },
+            coverage_warning: { sufficient: true },
+            archive_limitations: [{ text: 'Sin actas de 1931' }],
+            role_warnings: [],
+          },
+        },
+      ],
+    })
+
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    // The engine asks the writer for a «Limitaciones» section and appends the
+    // automatic list to it, as the exported markdown does: two headings would
+    // be one chapter split in two.
+    const titulo = await screen.findByRole('heading', { name: 'Limitaciones del informe' })
+    expect(screen.queryByRole('heading', { name: 'Limitaciones' })).not.toBeInTheDocument()
+    const seccion = titulo.closest('section')!
+    expect(seccion).toHaveTextContent('Las entrevistas recuerdan desde el presente.')
+    expect(within(seccion).getByRole('listitem')).toHaveTextContent('Sin actas de 1931')
   })
 
   it('explica en palabras claras una respuesta ilegible y pliega el error técnico', async () => {

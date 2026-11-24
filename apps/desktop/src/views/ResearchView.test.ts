@@ -121,6 +121,27 @@ describe('ResearchView', () => {
     expect(casillas().some((c) => c.checked)).toBe(false)
   })
 
+  it('una colección que desaparece sale de la selección', async () => {
+    vi.useFakeTimers()
+    render(ResearchView)
+    await vi.advanceTimersByTimeAsync(0)
+    await fireEvent.click(screen.getByRole('button', { name: 'Alcance de colecciones' }))
+    expect(screen.getByText('2 seleccionadas')).toBeInTheDocument()
+
+    // Another device (or another tab) deletes «Voces»: the periodic refresh
+    // brings the shorter list while every remaining collection is selected.
+    const [conflicto] = listPayload().collections
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'settings_get') return null
+      if (command === 'test_openrouter_connection') return []
+      return { ...listPayload(), collections: [conflicto] }
+    })
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(screen.getByText('1 seleccionada')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Deseleccionar todas' })).toBeInTheDocument()
+  })
+
   it('el botón alterna entre seleccionar y deseleccionar', async () => {
     render(ResearchView)
     await openCollections()

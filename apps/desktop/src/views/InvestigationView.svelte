@@ -7,6 +7,8 @@
   import { getAssetPathLabel } from '$lib/item-metadata'
   import { classifyFileType, getAssetUrl } from '$lib/file-import'
   import {
+    frozenResearchCollections,
+    isLimitationsTitle,
     frozenResearchModel,
     frozenResearchScope,
     researchRequest,
@@ -83,6 +85,9 @@
   let sources = $state<ResearchSourceSummary[]>([])
   let detailError = $state<string | null>(null)
   let actionError = $state<string | null>(null)
+  /** What stopped the clarification round, shown next to its button: the
+   *  round is long, and a message at the top of the page is out of sight. */
+  let roundError = $state<string | null>(null)
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let refreshInFlight = false
   let refreshRequestId = 0
@@ -195,7 +200,7 @@
       text: (clarificationDraft[question.id] ?? '').trim(),
     }))
     if (answers.every((answer) => answer.text.length === 0)) {
-      actionError = translate('investigation.clarification.empty')
+      roundError = translate('investigation.clarification.empty')
       return
     }
 
@@ -209,13 +214,13 @@
         closing_criteria: splitLines(designDraft.criteria),
       }
       if (!design.hypothesis || !design.scope || design.closing_criteria.length === 0) {
-        actionError = translate('investigation.design.incomplete')
+        roundError = translate('investigation.design.incomplete')
         return
       }
     }
 
     answeringRound = true
-    actionError = null
+    roundError = null
     try {
       await researchAnswer(
         design ? { job_id: job.id, answers, design } : { job_id: job.id, answers }
@@ -224,9 +229,7 @@
       designDraft = null
       await refreshDetail()
     } catch (error) {
-      actionError = describeBackendError(error, () =>
-        translate('investigation.clarification.error')
-      )
+      roundError = describeBackendError(error, () => translate('investigation.clarification.error'))
     } finally {
       answeringRound = false
     }
@@ -652,6 +655,12 @@
     })
   })
 
+  /** The writer's own «Limitaciones» section, which receives the automatic
+   *  list as in the exported markdown: two headings would split one chapter. */
+  const limitationsSectionId = $derived(
+    reportSections.find((seccion) => isLimitationsTitle(seccion.title))?.id ?? null
+  )
+
   const totalCoverage = $derived.by(() => {
     const items = reportCoverage.reduce((total, c) => total + (c.items ?? 0), 0)
     const conChunks = reportCoverage.reduce((total, c) => total + (c.items_with_chunks ?? 0), 0)
@@ -714,6 +723,18 @@
   const frozenScope = $derived(frozenResearchScope(artifacts))
   /** El modelo congelado del trabajo: el mismo snapshot que el alcance. */
   const frozenModel = $derived(frozenResearchModel(artifacts))
+  /** The collections the job covers; a bibliography-only job has none to show. */
+  const frozenCollections = $derived(
+    frozenScope?.alcance === 'biblioteca' ? [] : frozenResearchCollections(artifacts)
+  )
+  /** Up to three names fit the header; past that, a count with the names in
+   *  the tooltip. */
+  const frozenCollectionsLabel = $derived.by(() => {
+    void $currentLocale
+    if (frozenCollections.length === 0) return ''
+    if (frozenCollections.length <= 3) return frozenCollections.join(' · ')
+    return translate('research.collectionsMany', { count: frozenCollections.length })
+  })
   const frozenScopeLibraries = $derived(
     (frozenScope?.bibliotecas ?? [])
       .map((ref) => libraryNameOf(ref))
@@ -976,6 +997,26 @@
   })
 </script>
 
+{#snippet limitationsList()}
+  <ul>
+    {#each reportLimitations as limitacion (limitacion.message)}
+      <li>
+        {limitacion.message}
+        {#if limitacion.detail}
+          <div class="report__technical-detail">
+            <Disclosure
+              size="sm"
+              summary={$currentLocale && t('investigation.report.technicalDetail')}
+            >
+              <code class="report__technical-code">{limitacion.detail}</code>
+            </Disclosure>
+          </div>
+        {/if}
+      </li>
+    {/each}
+  </ul>
+{/snippet}
+
 <div
   bind:this={viewEl}
   class="investigation-view page-shell"
@@ -990,7 +1031,7 @@
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('investigation.eyebrow')}</span>
       <h1 id="investigation-title-{paneId}">{visibleJobTitle}</h1>
-      {#if frozenScope || frozenModel}
+      {#if frozenScope || frozenModel || frozenCollectionsLabel}
         <div
           class="investigation-view__scope"
           role="group"
@@ -1003,6 +1044,11 @@
             {#if frozenScopeLibraries}
               <StatusBadge variant="neutral" size="sm">{frozenScopeLibraries}</StatusBadge>
             {/if}
+          {/if}
+          {#if frozenCollectionsLabel}
+            <StatusBadge variant="neutral" size="sm" title={frozenCollections.join(' · ')}>
+              {frozenCollectionsLabel}
+            </StatusBadge>
           {/if}
           {#if frozenModel}
             <!-- El modelo que el trabajo congeló al crearse: se muestra junto
@@ -1278,6 +1324,9 @@
                   )}
               </span>
             </Button>
+            {#if roundError}
+              <p class="surface-message surface-message--error" role="alert">{roundError}</p>
+            {/if}
           </div>
         </article>
       {/if}
@@ -1463,7 +1512,9 @@
                 <p>{coverageWarning.rationale}</p>
                 {#if coverageWarning.gaps?.length}
                   <ul>
-                    {#each coverageWarning.gaps as gap (gap)}<li>{gap}</li>{/each}
+                    {#each coverageWarning.gaps as gap, index (`${index}-${gap}`)}<li>
+                        {gap}
+                      </li>{/each}
                   </ul>
                 {/if}
               </aside>
@@ -1534,7 +1585,7 @@
                 {/if}
                 {#if seccion.quotes?.length}
                   <ul class="report__quotes">
-                    {#each seccion.quotes as cita (`${cita.n}-${cita.start}`)}
+                    {#each seccion.quotes as cita, index (`${index}-${cita.n}-${cita.start}`)}
                       <li>
                         <button
                           type="button"
@@ -1554,6 +1605,9 @@
                       </li>
                     {/each}
                   </ul>
+                {/if}
+                {#if seccion.id === limitationsSectionId && reportLimitations.length > 0}
+                  {@render limitationsList()}
                 {/if}
                 {#if sectionRewrite && sectionRewrite.id === seccion.id}
                   <div class="investigation-round report__section-rewrite">
@@ -1650,26 +1704,10 @@
               </section>
             {/each}
 
-            {#if reportLimitations.length > 0}
+            {#if reportLimitations.length > 0 && !limitationsSectionId}
               <section class="report__section">
                 <h3>{$currentLocale && t('investigation.report.limitations')}</h3>
-                <ul>
-                  {#each reportLimitations as limitacion (limitacion.message)}
-                    <li>
-                      {limitacion.message}
-                      {#if limitacion.detail}
-                        <div class="report__technical-detail">
-                          <Disclosure
-                            size="sm"
-                            summary={$currentLocale && t('investigation.report.technicalDetail')}
-                          >
-                            <code class="report__technical-code">{limitacion.detail}</code>
-                          </Disclosure>
-                        </div>
-                      {/if}
-                    </li>
-                  {/each}
-                </ul>
+                {@render limitationsList()}
               </section>
             {/if}
 

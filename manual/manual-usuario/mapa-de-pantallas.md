@@ -1499,7 +1499,7 @@
 
 ### clarification
 
-- «Con el diseño y el plan a la vista, esto es lo que necesito que definas. Podés dejar alguna sin responder: queda declarada en el informe.»
+- «Con el diseño y el plan a la vista, esto es lo que necesito que definas. Podés dejar alguna sin responder, pero no todas: las que queden vacías se declaran en el informe.»
 - «Enviando respuestas…»
 - «Preguntas antes de armar el informe»
 - «Responder y seguir»

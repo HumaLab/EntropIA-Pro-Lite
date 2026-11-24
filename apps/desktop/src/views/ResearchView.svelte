@@ -309,7 +309,8 @@
   }
 
   const allCollectionsSelected = $derived(
-    collections.length > 0 && selectedCollectionIds.length === collections.length
+    collections.length > 0 &&
+      collections.every((collection) => selectedCollectionIds.includes(collection.id))
   )
 
   /** Un solo control para las dos acciones: el icono dice en qué estado está. */
@@ -342,6 +343,13 @@
       if (!mounted || requestId !== refreshRequestId) return
       jobs = response.jobs
       collections = response.collections
+      // A collection deleted elsewhere (another tab, another device) leaves
+      // the list: its id must leave the selection too, or the count and the
+      // toggle describe a collection that is gone and the engine refuses it.
+      const known = new Set(response.collections.map((collection) => collection.id))
+      if (selectedCollectionIds.some((id) => !known.has(id))) {
+        selectedCollectionIds = selectedCollectionIds.filter((id) => known.has(id))
+      }
       // Solo mientras el investigador no haya elegido: un alcance vacío que él
       // eligió es una decisión, no un estado a corregir.
       if (!scopeTouched && selectedCollectionIds.length === 0) {
