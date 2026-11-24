@@ -85,11 +85,10 @@ async fn local_help_answer(
         if !crate::llm::local_gemma_model_present(&conn, &db_path) {
             return Err(HELP_LOCAL_MODEL_MISSING.to_string());
         }
-        let engine = crate::llm::get_or_init_local_gemma_engine(&conn, &db_path, &app)?;
-        let engine = engine
-            .lock()
-            .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
-        engine.generate_chat_with_ctx(
+        crate::llm::generate_local_chat(
+            &conn,
+            &db_path,
+            &app,
             &prompt,
             max_tokens,
             HELP_LOCAL_N_CTX,

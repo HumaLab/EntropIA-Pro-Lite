@@ -234,10 +234,14 @@ impl PaddleVlEngine {
             image_path, self.config.device
         );
 
+        // Held until this page is done: meanwhile the chat leaves the GPU alone.
+        let mut _server_lease = None;
         let extra_args: Vec<String> = if let Some(glm) = &self.config.glm_local {
             // Layout runs on CPU inside the script; recognition goes to the
             // persistent llama-server, started here on first use.
-            let url = super::glm_ocr_local::ensure_server(&glm.assets, &glm.db_path)?;
+            let lease = super::glm_ocr_local::ensure_server(&glm.assets, &glm.db_path)?;
+            let url = lease.base_url().to_string();
+            _server_lease = Some(lease);
             vec![
                 "--server-url".to_string(),
                 url,

@@ -16,7 +16,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Condvar, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use super::llama_gpu::{self, Backend, Gpu, Platform};
@@ -28,11 +28,13 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(800);
 const PID_FILE: &str = "llama-server.pid";
 
-/// Which local-vision feature owns the running server.
+/// Which local feature owns the running server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ServerKind {
     Ocrh,
     Correction,
+    /// The local Gemma text model (chat, intent, rewrite, help).
+    Text,
 }
 
 /// How to run the server for one feature.
@@ -50,12 +52,13 @@ pub(crate) struct ServerConfig {
     pub log_file: &'static str,
 }
 
-/// Files needed to run one local-vision model.
+/// Files needed to run one local model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ServerAssets {
     pub server: PathBuf,
     pub model: PathBuf,
-    pub mmproj: PathBuf,
+    /// The vision projector; `None` for a text-only model.
+    pub mmproj: Option<PathBuf>,
 }
 
 /// Optional override for the `llama-server` binary (dev and custom builds).
@@ -219,20 +222,185 @@ struct RunningServer {
 
 static SERVER: LazyLock<Mutex<Option<RunningServer>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Return the base URL of a healthy server for `assets`, starting (or
-/// restarting) it if needed. A running server for the other feature is
-/// stopped first: VRAM fits a single model.
+/// The longest a restart waits for a chat request in flight: the chat
+/// client's own request timeout, past which that request has failed anyway.
+const IN_FLIGHT_WAIT: Duration = Duration::from_secs(900);
+
+/// How long the OCR or correction server must sit unused before the chat may
+/// take the GPU from it: a document job asks for the server once per page, so
+/// a gap between two pages is not the end of the job.
+pub(crate) const OCR_IDLE_GRACE: Duration = Duration::from_secs(60);
+
+struct Activity {
+    /// Leases held now.
+    count: usize,
+    /// When the last lease ended (`None`: never used).
+    last_end: Option<Instant>,
+    /// Bumped by [`InFlight::abort_waits`]: a waiter that sees it change stops.
+    aborts: u64,
+}
+
+/// Requests running on the server through a [`Lease`]. Leases are only taken
+/// while the `SERVER` lock is held, and whoever stops the server holds that
+/// lock while it waits for them, so no new lease starts meanwhile; a lease
+/// never takes that lock, so the wait cannot deadlock.
+pub(crate) struct InFlight {
+    state: Mutex<Activity>,
+    idle: Condvar,
+}
+
+impl InFlight {
+    const fn new() -> Self {
+        Self {
+            state: Mutex::new(Activity {
+                count: 0,
+                last_end: None,
+                aborts: 0,
+            }),
+            idle: Condvar::new(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Activity> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn lease(&'static self, base_url: String) -> Lease {
+        self.lock().count += 1;
+        Lease {
+            base_url,
+            in_flight: self,
+        }
+    }
+
+    /// Block until no lease is held, `timeout` passes or
+    /// [`InFlight::abort_waits`] runs. `true` when idle.
+    fn wait_idle(&self, timeout: Duration) -> bool {
+        let state = self.lock();
+        let generation = state.aborts;
+        let (state, _) = self
+            .idle
+            .wait_timeout_while(state, timeout, |state| {
+                state.count > 0 && state.aborts == generation
+            })
+            .unwrap_or_else(|e| e.into_inner());
+        state.count == 0
+    }
+
+    /// Wake every [`InFlight::wait_idle`] now: the app is stopping the server
+    /// regardless.
+    fn abort_waits(&self) {
+        self.lock().aborts += 1;
+        self.idle.notify_all();
+    }
+
+    /// No lease held, and none ended within `grace` before `now`.
+    fn idle_for(&self, grace: Duration, now: Instant) -> bool {
+        let state = self.lock();
+        state.count == 0
+            && state
+                .last_end
+                .is_none_or(|end| now.saturating_duration_since(end) >= grace)
+    }
+}
+
+/// Chat requests on a Gemma server: a restart waits for them.
+static CHAT_IN_FLIGHT: InFlight = InFlight::new();
+/// OCR and correction requests: the chat takes the GPU only once they are
+/// over (see [`OCR_IDLE_GRACE`]). Nothing waits on these, so an OCR caller
+/// that asks for the server again while holding one cannot block itself.
+static OCR_IN_FLIGHT: InFlight = InFlight::new();
+
+/// A server URL plus the promise that the server stays up for this request:
+/// hold it until the request is done.
+pub(crate) struct Lease {
+    base_url: String,
+    in_flight: &'static InFlight,
+}
+
+impl Lease {
+    pub(crate) fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        let mut state = self.in_flight.lock();
+        state.count = state.count.saturating_sub(1);
+        if state.count == 0 {
+            state.last_end = Some(Instant::now());
+            drop(state);
+            self.in_flight.idle.notify_all();
+        }
+    }
+}
+
+/// Stop `running`, first letting a chat request on a Gemma server finish.
+fn stop_when_idle(running: &mut RunningServer, log_target: &str) {
+    if running.kind == ServerKind::Text && !CHAT_IN_FLIGHT.wait_idle(IN_FLIGHT_WAIT) {
+        log::warn!(target: log_target, "llama-server: stopping it with a chat request still in flight");
+    }
+    stop(running);
+}
+
+/// Return a lease on a healthy server for `assets`, starting (or restarting)
+/// it if needed. A running server for another feature is stopped first: VRAM
+/// fits a single model. Hold the lease for the whole job: while it lives the
+/// chat does not take the GPU.
 ///
 /// Blocking: call it from a blocking context (the OCRH subprocess path).
 pub(crate) fn ensure_server(
     config: &ServerConfig,
     assets: &ServerAssets,
     db_path: &Path,
-) -> Result<String, String> {
+) -> Result<Lease, String> {
     let mut slot = SERVER
         .lock()
         .map_err(|_| "Local model server lock poisoned".to_string())?;
+    let url = ensure_in_slot(&mut slot, config, assets, db_path)?;
+    Ok(OCR_IN_FLIGHT.lease(url))
+}
 
+/// Like [`ensure_server`] for the chat: it never stops a server an OCR or
+/// correction job is using, or used within [`OCR_IDLE_GRACE`]. `Ok(None)`
+/// means that job holds the GPU. The lease keeps a later OCR request from
+/// stopping the server under this one.
+pub(crate) fn ensure_server_if_free(
+    config: &ServerConfig,
+    assets: &ServerAssets,
+    db_path: &Path,
+) -> Result<Option<Lease>, String> {
+    let mut slot = SERVER
+        .lock()
+        .map_err(|_| "Local model server lock poisoned".to_string())?;
+    let held_by = slot
+        .as_mut()
+        .and_then(|running| matches!(running.child.try_wait(), Ok(None)).then_some(running.kind));
+    let others_idle = OCR_IN_FLIGHT.idle_for(OCR_IDLE_GRACE, Instant::now());
+    if !may_take_over(held_by, config.kind, others_idle) {
+        return Ok(None);
+    }
+    let url = ensure_in_slot(&mut slot, config, assets, db_path)?;
+    Ok(Some(CHAT_IN_FLIGHT.lease(url)))
+}
+
+/// Whether a request for `wanted` may start or reuse the server while a live
+/// one of `held_by` runs (`None`: no live server); `others_idle` says the
+/// other feature has had no request in flight for a while.
+fn may_take_over(held_by: Option<ServerKind>, wanted: ServerKind, others_idle: bool) -> bool {
+    match held_by {
+        None => true,
+        Some(kind) => kind == wanted || others_idle,
+    }
+}
+
+fn ensure_in_slot(
+    slot: &mut Option<RunningServer>,
+    config: &ServerConfig,
+    assets: &ServerAssets,
+    db_path: &Path,
+) -> Result<String, String> {
     if let Some(running) = slot.as_mut() {
         let alive = matches!(running.child.try_wait(), Ok(None));
         let reusable = alive
@@ -245,7 +413,7 @@ pub(crate) fn ensure_server(
             return Ok(base_url(running.port));
         }
         log::warn!(target: config.log_target, "llama-server not reusable (alive={alive}); restarting");
-        stop(running);
+        stop_when_idle(running, config.log_target);
         *slot = None;
     } else {
         kill_stale_server(db_path);
@@ -257,14 +425,26 @@ pub(crate) fn ensure_server(
     Ok(url)
 }
 
-/// Stop the server, if one is running. Called on app exit.
+/// Stop the server, if one is running, without waiting for a chat request in
+/// flight (it falls back to CPU). Called on app exit, on an OCR engine switch
+/// and when a new llama-server build replaces the installed one.
 pub(crate) fn shutdown() {
-    if let Ok(mut slot) = SERVER.lock() {
-        if let Some(running) = slot.as_mut() {
-            stop(running);
+    // A restart may hold the lock while it waits for a chat request; wake it
+    // until the lock is ours, so exit does not hang behind that wait.
+    let mut slot = loop {
+        CHAT_IN_FLIGHT.abort_waits();
+        match SERVER.try_lock() {
+            Ok(slot) => break slot,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
-        *slot = None;
+    };
+    if let Some(running) = slot.as_mut() {
+        stop(running);
     }
+    *slot = None;
 }
 
 /// Stop the server if it runs a model from `dir`. Windows refuses to delete a
@@ -277,7 +457,7 @@ pub(crate) fn stop_if_serving_from(dir: &Path) {
             .is_some_and(|running| running.assets.model.starts_with(dir));
         if serving {
             if let Some(running) = slot.as_mut() {
-                stop(running);
+                stop_when_idle(running, "ocr");
             }
             *slot = None;
         }
@@ -307,6 +487,31 @@ pub(crate) fn delete_model_files(dir: &Path, filenames: &[&str]) -> Result<u64, 
     Ok(freed)
 }
 
+/// The model and serving flags for one start: every layer on the GPU, the
+/// projector only for a vision model.
+fn server_args(config: &ServerConfig, assets: &ServerAssets, port: u16) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = vec!["-m".into(), assets.model.clone().into()];
+    if let Some(mmproj) = &assets.mmproj {
+        args.push("--mmproj".into());
+        args.push(mmproj.clone().into());
+    }
+    for arg in [
+        "-ngl".to_string(),
+        "99".to_string(),
+        "-np".to_string(),
+        config.slots.to_string(),
+        "-c".to_string(),
+        (config.slots * config.ctx_per_slot).to_string(),
+        "--host".to_string(),
+        "127.0.0.1".to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ] {
+        args.push(arg.into());
+    }
+    args
+}
+
 fn base_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
 }
@@ -328,15 +533,7 @@ fn start(
         .map_err(|e| format!("Cannot clone log handle: {e}"))?;
 
     let mut cmd = Command::new(&assets.server);
-    cmd.arg("-m")
-        .arg(&assets.model)
-        .arg("--mmproj")
-        .arg(&assets.mmproj)
-        .args(["-ngl", "99"])
-        .args(["-np", &config.slots.to_string()])
-        .args(["-c", &(config.slots * config.ctx_per_slot).to_string()])
-        .args(["--host", "127.0.0.1"])
-        .args(["--port", &port.to_string()]);
+    cmd.args(server_args(config, assets, port));
     if let Some(device) = managed_device(&assets.server, db_path) {
         log::info!(target: config.log_target, "llama-server device: {device}");
         cmd.args(["--device", &device]);
@@ -358,7 +555,10 @@ fn start(
         target: config.log_target,
         "Starting llama-server on 127.0.0.1:{port} (model={}, mmproj={})",
         assets.model.display(),
-        assets.mmproj.display()
+        assets
+            .mmproj
+            .as_deref()
+            .map_or_else(|| "none".to_string(), |path| path.display().to_string())
     );
     let child = cmd
         .spawn()
@@ -543,6 +743,93 @@ fn kill_stale_server(db_path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    fn args_of(assets: &super::ServerAssets) -> Vec<String> {
+        let config = super::ServerConfig {
+            kind: super::ServerKind::Text,
+            slots: 1,
+            ctx_per_slot: 16384,
+            log_target: "test",
+            log_file: "test.log",
+        };
+        super::server_args(&config, assets, 8791)
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_chat_never_takes_the_server_from_another_feature() {
+        use super::{may_take_over, ServerKind};
+        assert!(may_take_over(None, ServerKind::Text, false));
+        assert!(may_take_over(
+            Some(ServerKind::Text),
+            ServerKind::Text,
+            false
+        ));
+        assert!(!may_take_over(
+            Some(ServerKind::Ocrh),
+            ServerKind::Text,
+            false
+        ));
+        assert!(!may_take_over(
+            Some(ServerKind::Correction),
+            ServerKind::Text,
+            false
+        ));
+    }
+
+    #[test]
+    fn the_chat_takes_the_gpu_back_once_ocr_is_over() {
+        use super::{may_take_over, ServerKind};
+        assert!(may_take_over(
+            Some(ServerKind::Ocrh),
+            ServerKind::Text,
+            true
+        ));
+        assert!(may_take_over(
+            Some(ServerKind::Correction),
+            ServerKind::Text,
+            true
+        ));
+    }
+
+    #[test]
+    fn a_text_model_starts_without_a_projector() {
+        let args = args_of(&super::ServerAssets {
+            server: "llama-server".into(),
+            model: "gemma.gguf".into(),
+            mmproj: None,
+        });
+        assert!(!args.iter().any(|arg| arg == "--mmproj"), "{args:?}");
+        assert_eq!(
+            args,
+            [
+                "-m",
+                "gemma.gguf",
+                "-ngl",
+                "99",
+                "-np",
+                "1",
+                "-c",
+                "16384",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8791"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_vision_model_still_passes_its_projector() {
+        let args = args_of(&super::ServerAssets {
+            server: "llama-server".into(),
+            model: "glm.gguf".into(),
+            mmproj: Some("mmproj.gguf".into()),
+        });
+        assert_eq!(&args[..4], ["-m", "glm.gguf", "--mmproj", "mmproj.gguf"]);
+    }
+
     #[test]
     fn deleting_models_removes_only_the_named_files_and_their_partial_downloads() {
         let dir = tempfile::tempdir().unwrap();
@@ -598,6 +885,81 @@ mod tests {
     }
 
     use super::*;
+
+    fn leaked() -> &'static InFlight {
+        Box::leak(Box::new(InFlight::new()))
+    }
+
+    #[test]
+    fn a_restart_waits_for_the_request_in_flight() {
+        let in_flight = leaked();
+        let lease = in_flight.lease("http://127.0.0.1:1".into());
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let idle = in_flight.wait_idle(Duration::from_secs(30));
+            done_tx.send(idle).unwrap();
+        });
+        // Still blocked while the request runs.
+        assert!(done_rx.recv_timeout(Duration::from_millis(200)).is_err());
+        drop(lease);
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)), Ok(true));
+        waiter.join().unwrap();
+    }
+
+    #[test]
+    fn every_lease_must_end_before_the_server_is_idle() {
+        let in_flight = leaked();
+        let first = in_flight.lease("u".into());
+        let second = in_flight.lease("u".into());
+        drop(first);
+        assert!(!in_flight.wait_idle(Duration::from_millis(50)));
+        drop(second);
+        assert!(in_flight.wait_idle(Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn an_idle_server_stops_without_waiting() {
+        let started = Instant::now();
+        assert!(leaked().wait_idle(Duration::from_secs(30)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_stuck_request_does_not_block_the_restart_forever() {
+        let in_flight = leaked();
+        let _lease = in_flight.lease("u".into());
+        assert!(!in_flight.wait_idle(Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn closing_the_app_does_not_wait_for_the_chat_request() {
+        let in_flight = leaked();
+        let _lease = in_flight.lease("u".into());
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            done_tx
+                .send(in_flight.wait_idle(Duration::from_secs(30)))
+                .unwrap();
+        });
+        assert!(done_rx.recv_timeout(Duration::from_millis(200)).is_err());
+        in_flight.abort_waits();
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)), Ok(false));
+        waiter.join().unwrap();
+    }
+
+    #[test]
+    fn ocr_counts_as_busy_while_a_job_runs_and_shortly_after() {
+        let in_flight = leaked();
+        let grace = Duration::from_secs(60);
+        assert!(in_flight.idle_for(grace, Instant::now()), "never used");
+        let lease = in_flight.lease("u".into());
+        assert!(!in_flight.idle_for(grace, Instant::now() + grace * 2));
+        drop(lease);
+        // Between two pages of the same job.
+        assert!(!in_flight.idle_for(grace, Instant::now()));
+        // The job is over.
+        assert!(in_flight.idle_for(grace, Instant::now() + grace));
+    }
 
     #[test]
     fn llama_server_never_inherits_its_own_configuration_variables() {

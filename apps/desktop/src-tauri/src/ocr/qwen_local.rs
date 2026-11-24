@@ -128,7 +128,7 @@ fn to_server_assets(assets: &QwenLocalAssets) -> super::local_server::ServerAsse
     super::local_server::ServerAssets {
         server: assets.server.clone(),
         model: assets.model.clone(),
-        mmproj: assets.mmproj.clone(),
+        mmproj: Some(assets.mmproj.clone()),
     }
 }
 
@@ -136,7 +136,10 @@ fn to_server_assets(assets: &QwenLocalAssets) -> super::local_server::ServerAsse
 ///
 /// A server running OCRH is stopped first: VRAM fits a single model.
 /// Blocking: call it from a blocking context.
-pub fn ensure_server(assets: &QwenLocalAssets, db_path: &Path) -> Result<String, String> {
+pub fn ensure_server(
+    assets: &QwenLocalAssets,
+    db_path: &Path,
+) -> Result<super::local_server::Lease, String> {
     super::local_server::ensure_server(
         &CORRECTION_SERVER_CONFIG,
         &to_server_assets(assets),
