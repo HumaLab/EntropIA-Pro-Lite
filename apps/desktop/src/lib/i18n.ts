@@ -309,6 +309,10 @@ const es = {
   'deps.runtime.willBootstrap':
     'EntropIA Pro la prepara sola apenas haya una fuente válida disponible.',
   'deps.runtime.repair': 'Reparar runtime',
+  'deps.gpuRuntime.title': 'Tu equipo tiene una GPU NVIDIA',
+  'deps.gpuRuntime.body':
+    'Con la base de IA para GPU, PaddleOCR-VL lee las páginas en la placa de video, mucho más rápido. Se descargan {size}; la base actual sigue funcionando hasta que la nueva esté lista.',
+  'deps.gpuRuntime.action': 'Usar la GPU',
   'deps.runtime.retryConnection': 'Reintentar conexión',
   'deps.runtime.recheck': 'Volver a verificar',
   'deps.closeError': 'Cerrar error',
@@ -4601,6 +4605,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'deps.runtime.willBootstrap':
     'EntropIA Pro prepares it by itself as soon as a valid source is available.',
   'deps.runtime.repair': 'Repair runtime',
+  'deps.gpuRuntime.title': 'Your computer has an NVIDIA GPU',
+  'deps.gpuRuntime.body':
+    'With the GPU AI base, PaddleOCR-VL reads pages on the graphics card, much faster. The download is {size}; the current base keeps working until the new one is ready.',
+  'deps.gpuRuntime.action': 'Use the GPU',
   'deps.runtime.retryConnection': 'Retry connection',
   'deps.runtime.recheck': 'Check again',
   'deps.closeError': 'Close error',

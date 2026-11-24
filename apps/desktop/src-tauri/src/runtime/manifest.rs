@@ -86,6 +86,17 @@ fn default_app_version() -> String {
 }
 
 impl RuntimeManifest {
+    /// Whether this runtime is the CUDA pack: its wheelhouse ships the GPU
+    /// build of PaddlePaddle, the wheel the dependency install then picks.
+    pub fn ships_cuda_paddle(&self) -> bool {
+        self.wheelhouse.iter().any(|entry| {
+            Path::new(&entry.path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.to_ascii_lowercase().starts_with("paddlepaddle_gpu-"))
+        })
+    }
+
     pub fn load_from_path(path: &Path) -> Result<Self, String> {
         let content = fs::read_to_string(path).map_err(|error| {
             format!(

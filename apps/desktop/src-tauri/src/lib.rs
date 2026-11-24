@@ -1851,6 +1851,8 @@ pub fn run() {
             runtime::runtime_get_bootstrap_plan,
             runtime::runtime_repair,
             runtime::runtime_bootstrap_start,
+            runtime::runtime_get_gpu_offer,
+            runtime::runtime_switch_to_gpu_start,
             runtime::runtime_cancel_download,
             app_logs::logs_get,
             app_logs::logs_clear,

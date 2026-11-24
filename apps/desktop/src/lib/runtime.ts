@@ -119,6 +119,23 @@ export function startRuntimeBootstrap(): Promise<RuntimeStatus> {
   return invoke<RuntimeStatus>('runtime_bootstrap_start')
 }
 
+/** The GPU runtime an NVIDIA machine still on the CPU runtime can switch to. */
+export interface GpuRuntimeOffer {
+  packVersion: string
+  archiveSize: number
+}
+
+export function getGpuRuntimeOffer(): Promise<GpuRuntimeOffer | null> {
+  if (OFF) return Promise.resolve(null)
+  return invoke<GpuRuntimeOffer | null>('runtime_get_gpu_offer')
+}
+
+/** Downloads the GPU runtime; the current one keeps working until it is ready. */
+export function startGpuRuntimeSwitch(): Promise<RuntimeStatus> {
+  if (OFF) return Promise.resolve({ ...HEALTHY_RUNTIME_STATUS })
+  return invoke<RuntimeStatus>('runtime_switch_to_gpu_start')
+}
+
 export function cancelRuntimeDownload(): Promise<boolean> {
   if (OFF) return Promise.resolve(false)
   return invoke<boolean>('runtime_cancel_download')

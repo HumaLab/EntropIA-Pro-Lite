@@ -17,6 +17,8 @@ const depsMocks = vi.hoisted(() => ({
   onRuntimeStatus: vi.fn(),
   onRuntimeProgress: vi.fn(),
   runtimeCanBootstrapAutomatically: vi.fn(),
+  getGpuRuntimeOffer: vi.fn(),
+  startGpuRuntimeSwitch: vi.fn(),
   localSetupStatus: vi.fn(),
   localSetupInstall: vi.fn(),
   listen: vi.fn(),
@@ -66,6 +68,8 @@ vi.mock('$lib/runtime', async (importOriginal) => ({
   onRuntimeStatus: depsMocks.onRuntimeStatus,
   onRuntimeProgress: depsMocks.onRuntimeProgress,
   runtimeCanBootstrapAutomatically: depsMocks.runtimeCanBootstrapAutomatically,
+  getGpuRuntimeOffer: depsMocks.getGpuRuntimeOffer,
+  startGpuRuntimeSwitch: depsMocks.startGpuRuntimeSwitch,
 }))
 
 vi.mock('$lib/local-setup', async (importOriginal) => ({
@@ -139,6 +143,7 @@ describe.runIf(LOCAL_ML)('DependenciasTab', () => {
     depsMocks.onRuntimeProgress.mockResolvedValue(vi.fn())
     depsMocks.listen.mockResolvedValue(vi.fn())
     depsMocks.runtimeCanBootstrapAutomatically.mockReturnValue(false)
+    depsMocks.getGpuRuntimeOffer.mockResolvedValue(null)
     depsMocks.localSetupStatus.mockResolvedValue(READY_SETUP)
     depsMocks.localSetupInstall.mockResolvedValue([])
     depsMocks.resetDeps.mockResolvedValue(undefined)
@@ -167,6 +172,67 @@ describe.runIf(LOCAL_ML)('DependenciasTab', () => {
       bootstrapEligible: false,
       bootstrapRequired: false,
       activeOperation: null,
+    })
+  })
+
+  describe('GPU runtime offer', () => {
+    const HEALTHY_CPU = {
+      state: 'healthy',
+      packVersion: '2026.11.10',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'Runtime listo',
+      blockedCapabilities: [],
+      details: [],
+      guidance: [],
+      bootstrapEligible: false,
+      bootstrapRequired: false,
+      activeOperation: null,
+    }
+    const OFFER = { packVersion: '2026.11.24-cuda129', archiveSize: 4_200_000_000 }
+
+    it('offers the GPU runtime and downloads it only when the user asks', async () => {
+      depsMocks.getRuntimeStatus.mockResolvedValue(HEALTHY_CPU)
+      depsMocks.getGpuRuntimeOffer.mockResolvedValue(OFFER)
+      depsMocks.startGpuRuntimeSwitch.mockResolvedValue(HEALTHY_CPU)
+
+      render(DependenciasTab)
+
+      expect(await screen.findByText('Tu equipo tiene una GPU NVIDIA')).toBeTruthy()
+      expect(screen.getByText(/4,2 GB/)).toBeTruthy()
+      expect(depsMocks.startGpuRuntimeSwitch).not.toHaveBeenCalled()
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Usar la GPU' }))
+
+      expect(depsMocks.startGpuRuntimeSwitch).toHaveBeenCalledTimes(1)
+    })
+
+    it('shows no offer when the machine has nothing to switch to', async () => {
+      depsMocks.getRuntimeStatus.mockResolvedValue(HEALTHY_CPU)
+
+      render(DependenciasTab)
+
+      await waitFor(() => expect(depsMocks.getGpuRuntimeOffer).toHaveBeenCalled())
+      expect(screen.queryByText('Tu equipo tiene una GPU NVIDIA')).toBeNull()
+    })
+
+    it('drops the offer once the GPU runtime is the active one', async () => {
+      let pushStatus: ((status: typeof HEALTHY_CPU) => void) | undefined
+      depsMocks.onRuntimeStatus.mockImplementation((handler) => {
+        pushStatus = handler
+        return Promise.resolve(vi.fn())
+      })
+      depsMocks.getRuntimeStatus.mockResolvedValue(HEALTHY_CPU)
+      depsMocks.getGpuRuntimeOffer.mockResolvedValue(OFFER)
+
+      render(DependenciasTab)
+      await screen.findByText('Tu equipo tiene una GPU NVIDIA')
+      await waitFor(() => expect(pushStatus).toBeDefined())
+
+      depsMocks.getGpuRuntimeOffer.mockResolvedValue(null)
+      pushStatus!({ ...HEALTHY_CPU, packVersion: OFFER.packVersion })
+
+      await waitFor(() => expect(screen.queryByText('Tu equipo tiene una GPU NVIDIA')).toBeNull())
     })
   })
 

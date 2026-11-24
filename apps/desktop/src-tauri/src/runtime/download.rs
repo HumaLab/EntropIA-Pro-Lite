@@ -1360,6 +1360,13 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn runtime_archive_bytes() -> Vec<u8> {
+        runtime_archive_bytes_for("2026.05.1", false)
+    }
+
+    /// A runtime archive of `pack_version`; `cuda` adds the GPU Paddle wheel
+    /// the CUDA pack ships.
+    pub(crate) fn runtime_archive_bytes_for(pack_version: &str, cuda: bool) -> Vec<u8> {
+        const CUDA_WHEEL: &str = "wheelhouse/paddlepaddle_gpu-3.2.2-cp311-cp311-linux_x86_64.whl";
         let mut buffer = Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut buffer);
@@ -1374,8 +1381,12 @@ pub(crate) mod test_support {
             zip.write_all(b"python").expect("python bytes");
             zip.start_file("uv/bin/uv", options).expect("uv entry");
             zip.write_all(b"uv").expect("uv bytes");
+            if cuda {
+                zip.start_file(CUDA_WHEEL, options).expect("wheel entry");
+                zip.write_all(b"wheel").expect("wheel bytes");
+            }
             let manifest = RuntimeManifest {
-                pack_version: "2026.05.1".to_string(),
+                pack_version: pack_version.to_string(),
                 app_version: env!("CARGO_PKG_VERSION").to_string(),
                 platform: crate::runtime::paths::current_runtime_platform(),
                 payload_profile: "release".to_string(),
@@ -1396,7 +1407,16 @@ pub(crate) mod test_support {
                     executable: true,
                 }],
                 script_files: vec![],
-                wheelhouse: vec![],
+                wheelhouse: if cuda {
+                    vec![crate::runtime::manifest::ManifestEntry {
+                        path: CUDA_WHEEL.to_string(),
+                        sha256: hex::encode(Sha256::digest(b"wheel")),
+                        size: 5,
+                        executable: false,
+                    }]
+                } else {
+                    vec![]
+                },
                 caches: vec![],
                 native_assets: vec![],
                 runtime_abi: None,
@@ -2923,6 +2943,7 @@ mod tests {
         {
         }
         assert_async_command(crate::runtime::runtime_bootstrap_start);
+        assert_async_command(crate::runtime::runtime_switch_to_gpu_start);
         assert_async_command_without_args(crate::runtime::runtime_cancel_download);
     }
 
