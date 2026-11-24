@@ -260,7 +260,10 @@ export type SttLocalEngine = 'parakeet' | 'whisper'
 /** Which local backend OCRH uses when `ocrh_mode` is `local`. */
 export type OcrhLocalEngine = 'auto' | 'glm_ocr' | 'paddle_vl'
 
-export const DEFAULT_OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it'
+export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-6-luna'
+/** OCR correction runs on its own install default; every other flow uses
+ *  `DEFAULT_OPENROUTER_MODEL`. Mirrors `generation.rs`. */
+export const DEFAULT_OPENROUTER_OCR_CORRECTION_MODEL = 'google/gemini-2.5-flash-lite'
 export const DEFAULT_OPENROUTER_NER_MODEL = DEFAULT_OPENROUTER_MODEL
 export const DEFAULT_OPENROUTER_EMBEDDING_MODEL = 'baai/bge-m3'
 /** Mirrors `DEFAULT_OPENROUTER_RERANK_MODEL` in `rag/reranker.rs` (Lite-only path). */
@@ -366,7 +369,11 @@ export const DEFAULT_MODEL_PARAMS = {
 } as const
 
 export const DEFAULT_MODEL_PARAMS_BY_FLOW = {
-  ocrCorrection: { ...DEFAULT_MODEL_PARAMS, maxTokens: '8192' },
+  ocrCorrection: {
+    ...DEFAULT_MODEL_PARAMS,
+    model: DEFAULT_OPENROUTER_OCR_CORRECTION_MODEL,
+    maxTokens: '8192',
+  },
   summary: { ...DEFAULT_MODEL_PARAMS, maxTokens: '1024' },
   ner: { ...DEFAULT_MODEL_PARAMS, model: DEFAULT_OPENROUTER_NER_MODEL },
   triplets: { ...DEFAULT_MODEL_PARAMS },

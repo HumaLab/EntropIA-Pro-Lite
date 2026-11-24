@@ -97,7 +97,7 @@ impl GenerationFlow {
                 frequency_penalty: "llm_ocr_correction_frequency_penalty",
                 stop_sequences: "llm_ocr_correction_stop_sequences",
                 default_prompt: prompt::DEFAULT_OCR_CORRECTION_PROMPT,
-                default_model: settings::DEFAULT_OPENROUTER_MODEL,
+                default_model: settings::DEFAULT_OCR_CORRECTION_OPENROUTER_MODEL,
                 default_max_tokens: 8192,
             },
             Self::Summary => FlowSettings {
@@ -325,20 +325,12 @@ mod tests {
         let expected = [
             (
                 GenerationFlow::OcrCorrection,
-                settings::DEFAULT_OPENROUTER_MODEL,
+                "google/gemini-2.5-flash-lite",
                 8192,
             ),
-            (
-                GenerationFlow::Summary,
-                settings::DEFAULT_OPENROUTER_MODEL,
-                1024,
-            ),
-            (GenerationFlow::Ner, DEFAULT_NER_OPENROUTER_MODEL, 4096),
-            (
-                GenerationFlow::Triplets,
-                settings::DEFAULT_OPENROUTER_MODEL,
-                4096,
-            ),
+            (GenerationFlow::Summary, "openai/gpt-6-luna", 1024),
+            (GenerationFlow::Ner, "openai/gpt-6-luna", 4096),
+            (GenerationFlow::Triplets, "openai/gpt-6-luna", 4096),
         ];
 
         for (flow, model, max_tokens) in expected {
@@ -352,6 +344,20 @@ mod tests {
             assert_eq!(config.params.frequency_penalty, Some(0.0));
             assert!(config.params.stop.is_empty());
         }
+    }
+
+    #[test]
+    fn a_fresh_install_corrects_ocr_with_gemini_and_runs_the_rest_on_gpt_6_luna() {
+        // Nothing stored yet: each flow resolves to its own install default.
+        let conn = settings_conn();
+        let model = |flow| generation_config_from_settings(&conn, flow).model;
+        assert_eq!(
+            model(GenerationFlow::OcrCorrection),
+            "google/gemini-2.5-flash-lite"
+        );
+        assert_eq!(model(GenerationFlow::Summary), "openai/gpt-6-luna");
+        assert_eq!(model(GenerationFlow::Ner), "openai/gpt-6-luna");
+        assert_eq!(model(GenerationFlow::Triplets), "openai/gpt-6-luna");
     }
 
     #[test]

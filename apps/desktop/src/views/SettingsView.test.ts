@@ -938,10 +938,10 @@ describe('SettingsView', () => {
     expect(
       screen.getAllByLabelText('model').map((input) => (input as HTMLInputElement).value)
     ).toEqual([
-      'google/gemma-4-26b-a4b-it',
-      'google/gemma-4-26b-a4b-it',
-      'google/gemma-4-26b-a4b-it',
-      'google/gemma-4-26b-a4b-it',
+      'google/gemini-2.5-flash-lite',
+      'openai/gpt-6-luna',
+      'openai/gpt-6-luna',
+      'openai/gpt-6-luna',
     ])
     expect(
       screen

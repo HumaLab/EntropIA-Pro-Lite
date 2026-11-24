@@ -2981,7 +2981,7 @@
 - «Unir palabras cortadas con guion al final de línea» `settings.searchIndex.rejoinHyphens.label`
 - «Usar esta API» `settings.apiSwitch.label`
 - «aai-...» `settings.assemblyAiApiKeyPlaceholder`
-- «google/gemma-4-26b-a4b-it» `settings.modelPlaceholder`
+- «openai/gpt-6-luna» `settings.modelPlaceholder`
 - «sk-or-v1-...» `settings.apiKeyPlaceholder`
 - «zai-... / sk-...» `settings.glmOcrApiKeyPlaceholder`
 - «{count} más: seguí escribiendo para acotar» `settings.modelList.moreMatches`
