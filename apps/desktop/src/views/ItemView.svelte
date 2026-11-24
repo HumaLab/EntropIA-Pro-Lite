@@ -156,6 +156,7 @@
   } from '$lib/llm'
   import { GeoStore, geocodeEntity } from '$lib/geo'
   import { processingAssetActiveTask } from '$lib/batch-processing'
+  import { planOcrAllPages } from '$lib/ocr-all-pages'
   import {
     ActionIcon,
     Button,
@@ -329,6 +330,11 @@
   // A user-requested OCRH that would run on the CPU (~15 min per page),
   // waiting for the person to accept the wait (R17).
   let pendingCpuOcrh = $state<{ assetId: string; editedByHand: boolean } | null>(null)
+  // "Every page" with OCRH on the CPU, waiting for the same acceptance — asked
+  // once for the whole document, not once per page.
+  let pendingCpuOcrhAllPages = $state(false)
+  // What the last "every page" request sent to the queue, until it is closed.
+  let ocrAllPagesNotice = $state<{ queued: number; skipped: number } | null>(null)
   // A version chosen in the versions panel, waiting for the person to accept
   // that the annotations of the image may not match it.
   let pendingVersionSwitch = $state<{ assetId: string; version: ImageVersion } | null>(null)
@@ -2104,6 +2110,37 @@
       return
     }
     return handleExtractText(asset, mode)
+  }
+
+  /**
+   * OCR for every page of the document that has no text yet (ocr-all-pages.ts).
+   * Each page is admitted to the queue as its own button would admit it, so
+   * the queue runs them in turn and each page shows its own progress.
+   */
+  async function requestExtractAllPages(mode: OcrMode) {
+    if (mode === 'high' && (await localOcrhInfo()).high_on_cpu) {
+      pendingCpuOcrhAllPages = true
+      return
+    }
+    await extractAllPages(mode)
+  }
+
+  async function extractAllPages(mode: OcrMode) {
+    ocrAllPagesNotice = null
+    const store = getStore()
+    const plan = await planOcrAllPages(assets, {
+      hasText: async (assetId) =>
+        Boolean((await store.extractions.findByAsset(assetId))?.textContent.trim()),
+      editedByHand: (assetId) => extractionIsEditedByHand(assetId),
+      inQueue: async (assetId) => (await processingAssetActiveTask(assetId, 'ocr')) !== null,
+    })
+    for (const page of plan.queue) await handleExtractText(page, mode)
+    ocrAllPagesNotice = { queued: plan.queue.length, skipped: plan.skipped }
+  }
+
+  async function confirmCpuOcrhAllPages(mode: OcrMode) {
+    pendingCpuOcrhAllPages = false
+    await extractAllPages(mode)
   }
 
   async function confirmCpuOcrh() {
@@ -4103,6 +4140,9 @@
               isSummarizing={textPanelIsSummarizing}
               {translate}
               onExtractText={requestExtractText}
+              onExtractAllPages={requestExtractAllPages}
+              {ocrAllPagesNotice}
+              onDismissOcrAllPagesNotice={() => (ocrAllPagesNotice = null)}
               onCorrectOcr={handleLlmCorrectOcr}
               onSummarize={handleLlmSummarize}
               onTranscribeAudio={handleTranscribeAudio}
@@ -4246,6 +4286,23 @@
       <Button variant="secondary" size="sm" onclick={useOcrlInstead}>
         {translate('item.ocrhCpuUseOcrl')}
       </Button>
+    </ConfirmDialog>
+  {/if}
+
+  {#if pendingCpuOcrhAllPages}
+    <ConfirmDialog
+      title={translate('item.ocrhCpuTitle')}
+      message={translate('item.ocrhCpuWarning')}
+      cancelLabel={translate('collections.cancel')}
+      confirmLabel={translate('item.ocrhCpuContinue')}
+      oncancel={() => (pendingCpuOcrhAllPages = false)}
+      onconfirm={() => confirmCpuOcrhAllPages('high')}
+    >
+      {#if LOCAL_ML}
+        <Button variant="secondary" size="sm" onclick={() => confirmCpuOcrhAllPages('light')}>
+          {translate('item.ocrhCpuUseOcrl')}
+        </Button>
+      {/if}
     </ConfirmDialog>
   {/if}
 
