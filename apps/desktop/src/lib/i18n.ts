@@ -2142,7 +2142,7 @@ const es = {
   'settings.connectionReady': 'Conexión lista · {count} modelos disponibles.',
   'settings.enterApiKey': 'Ingresá una API key antes de probar la conexión.',
   'settings.model': 'Modelo generativo',
-  'settings.modelPlaceholder': 'google/gemma-4-26b-a4b-it',
+  'settings.modelPlaceholder': 'openai/gpt-6-luna',
   'settings.suggestedModels': 'Modelos sugeridos desde OpenRouter',
   'settings.modelList.noKey':
     'Para elegir un modelo de la lista, primero cargá la clave de OpenRouter.',
@@ -5882,7 +5882,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.connectionReady': 'Connection ready · {count} models available.',
   'settings.enterApiKey': 'Enter an API key before testing the connection.',
   'settings.model': 'Generative model',
-  'settings.modelPlaceholder': 'google/gemma-4-26b-a4b-it',
+  'settings.modelPlaceholder': 'openai/gpt-6-luna',
   'settings.suggestedModels': 'Suggested models from OpenRouter',
   'settings.modelList.noKey': 'To pick a model from the list, first save your OpenRouter key.',
   'settings.modelList.openSettings': 'Open Settings',

@@ -14,7 +14,10 @@ use crate::runtime::bootstrap_types::BootstrapRemoteSource;
 
 const OPENROUTER_MODEL_KEY: &str = "openrouter_model";
 const LEGACY_DEFAULT_OPENROUTER_MODEL: &str = "google/gemma-3-4b-it";
-pub(crate) const DEFAULT_OPENROUTER_MODEL: &str = "google/gemma-4-26b-a4b-it";
+pub(crate) const DEFAULT_OPENROUTER_MODEL: &str = "openai/gpt-6-luna";
+/// OCR correction's own install default; every other flow uses
+/// [`DEFAULT_OPENROUTER_MODEL`]. Mirrored in `settings.ts`.
+pub(crate) const DEFAULT_OCR_CORRECTION_OPENROUTER_MODEL: &str = "google/gemini-2.5-flash-lite";
 
 // Runtime-bootstrap setting keys: consumed by the local-ml/paddle runtime
 // manager and the settings redaction/migration paths, none of which compile in

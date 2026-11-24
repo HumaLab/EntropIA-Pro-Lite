@@ -21,6 +21,7 @@ import {
   testGlmOcrConnection,
   SETTINGS_KEYS,
   DEFAULT_OPENROUTER_MODEL,
+  DEFAULT_OPENROUTER_OCR_CORRECTION_MODEL,
   DEFAULT_OPENROUTER_NER_MODEL,
   DEFAULT_LLM_MODE,
   DEFAULT_EMBEDDING_PROVIDER,
@@ -191,7 +192,8 @@ describe('settings', () => {
     })
 
     it('has correct defaults', () => {
-      expect(DEFAULT_OPENROUTER_MODEL).toBe('google/gemma-4-26b-a4b-it')
+      expect(DEFAULT_OPENROUTER_MODEL).toBe('openai/gpt-6-luna')
+      expect(DEFAULT_OPENROUTER_OCR_CORRECTION_MODEL).toBe('google/gemini-2.5-flash-lite')
       expect(DEFAULT_LLM_MODE).toBe(LOCAL_ML ? 'local' : 'openrouter')
       expect(DEFAULT_EMBEDDING_PROVIDER).toBe(LOCAL_ML ? 'local' : 'api')
       expect(DEFAULT_STT_MODE).toBe(LOCAL_ML ? 'local' : 'assemblyai')
@@ -274,7 +276,7 @@ describe('settings', () => {
       expect(DEFAULT_MODEL_PARAMS.topK).toBe('0')
       expect(DEFAULT_MODEL_PARAMS.presencePenalty).toBe('0')
       expect(DEFAULT_MODEL_PARAMS_BY_FLOW.ocrCorrection).toMatchObject({
-        model: DEFAULT_OPENROUTER_MODEL,
+        model: DEFAULT_OPENROUTER_OCR_CORRECTION_MODEL,
         temperature: '0.3',
         maxTokens: '8192',
       })
