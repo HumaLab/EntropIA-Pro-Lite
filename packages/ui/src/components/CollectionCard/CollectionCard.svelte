@@ -137,6 +137,7 @@
      the controls would float mid-card on the stretched siblings. */
   .collection-card__footer {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
@@ -150,6 +151,7 @@
     align-items: center;
     gap: var(--space-2);
     flex: 0 0 auto;
+    margin-left: auto;
   }
 
   .collection-card__description {
@@ -169,14 +171,12 @@
     flex-shrink: 0;
   }
 
-  /* Yields first: a long relative date shrinks instead of pushing the controls
-     out of the card. */
+  /* Never cut: "hace 5 m…" loses the unit. When the date and the controls do
+     not fit on one line, the footer wraps and the controls move below,
+     right-aligned. */
   .collection-card__date {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
+    flex: 0 0 auto;
     white-space: nowrap;
-    text-overflow: ellipsis;
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
   }

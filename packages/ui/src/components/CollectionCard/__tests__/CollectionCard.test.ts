@@ -127,6 +127,16 @@ describe('CollectionCard', () => {
     )
   })
 
+  it('never cuts the relative date: the footer wraps the controls below instead', () => {
+    const source = readCollectionCardSource()
+    const rule = (name: string) =>
+      source.match(new RegExp(`\\.collection-card__${name}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+    expect(rule('date')).not.toMatch(/text-overflow|overflow:\s*hidden|flex:\s*0 1/)
+    expect(rule('date')).toMatch(/white-space:\s*nowrap/)
+    expect(rule('footer')).toMatch(/flex-wrap:\s*wrap/)
+    expect(rule('controls')).toMatch(/margin-left:\s*auto/)
+  })
+
   it('draws the count with StatusBadge and the actions with IconButton', () => {
     render(CollectionCard, { props: { ...baseProps, onedit: vi.fn(), ondelete: vi.fn() } })
     expect(screen.getByText('5 documents')).toHaveClass('status-badge')
