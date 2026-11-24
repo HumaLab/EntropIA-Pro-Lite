@@ -1361,6 +1361,14 @@
         <p>
           {searchQuery ? t('collection.emptySearch') : t('collection.empty')}
         </p>
+        {#if !searchQuery}
+          <!-- The header's import is an unlabeled icon; an empty collection
+               names the action where its message asks for it. -->
+          <Button variant="primary" onclick={handleImport} disabled={importing}>
+            <ActionIcon name="import" size={16} />
+            {t('collection.import')}
+          </Button>
+        {/if}
       </div>
     {:else}
       <VirtualGrid
@@ -1625,6 +1633,8 @@
 
   .empty {
     min-height: 220px;
+    align-content: center;
+    gap: var(--space-4);
   }
 
   /* The continuation row sits under the grid and never displaces it: a failed
