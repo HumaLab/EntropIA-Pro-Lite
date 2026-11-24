@@ -12,8 +12,11 @@ use crate::runtime::{
     managed_hf_cache_dir, managed_paddlex_cache_dir, managed_script_path, managed_venv_python_path,
     RuntimeManager,
 };
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -150,7 +153,111 @@ fn build_ocrh_command(
             .env("MODELSCOPE_HOME", &modelscope_cache_dir);
     }
 
+    if device == "gpu" {
+        // Paddle 3.2 hangs at random mid-page on both an RTX 4060 Laptop and an
+        // RTX 5090 (driver 580): GPU at 0 %, one CPU core spinning, forever.
+        // Launching CUDA kernels one at a time stopped it (0 hangs in 23 runs)
+        // at a cost: a dense newspaper page took 166 s instead of 110 s on the
+        // 4060, 35 s instead of 20 s on the 5090.
+        cmd.env("CUDA_LAUNCH_BLOCKING", "1");
+    }
+
     Ok((cmd, cpu_threads, use_mkldnn))
+}
+
+/// The line `paddle_vl.py` writes once the pipeline is loaded and the page
+/// itself starts. Before it the GPU is legitimately idle (imports, model load).
+const PAGE_STARTED_MARKER: &str = "[paddle_vl] Processing:";
+
+/// How long the GPU may sit idle in the middle of a page before the run
+/// counts as stuck. A healthy page keeps the GPU busy between short CPU steps.
+const GPU_STALL_WINDOW: Duration = Duration::from_secs(120);
+
+/// How often the GPU's utilization is sampled while a page runs.
+const GPU_UTIL_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Runs per page on the GPU: the first, plus one retry when it got stuck.
+const GPU_PAGE_ATTEMPTS: usize = 2;
+
+/// Why one run of a page did not produce text.
+#[derive(Debug, PartialEq)]
+enum PageRunError {
+    /// The GPU sat idle mid-page and the run was killed; a new run usually works.
+    GpuStalled(String),
+    /// Any other failure; running the page again would fail the same way.
+    Failed(String),
+}
+
+/// Run a page up to `attempts` times, starting again only after a stuck GPU.
+fn run_with_stall_retry<T>(
+    attempts: usize,
+    mut run: impl FnMut(usize) -> Result<T, PageRunError>,
+) -> Result<T, String> {
+    let mut attempt = 1;
+    loop {
+        match run(attempt) {
+            Ok(value) => return Ok(value),
+            Err(PageRunError::Failed(message)) => return Err(message),
+            Err(PageRunError::GpuStalled(message)) if attempt >= attempts => return Err(message),
+            Err(PageRunError::GpuStalled(message)) => {
+                log::warn!(
+                    target: "paddle_vl",
+                    "Page stuck on the GPU (attempt {attempt} of {attempts}), starting it again: {message}"
+                );
+                attempt += 1;
+            }
+        }
+    }
+}
+
+/// Tracks how long the GPU has been idle during a page.
+struct GpuStallWatch {
+    window: Duration,
+    last_busy: Instant,
+}
+
+impl GpuStallWatch {
+    fn new(now: Instant, window: Duration) -> Self {
+        Self {
+            window,
+            last_busy: now,
+        }
+    }
+
+    /// Record one utilization sample and say whether the page is stuck.
+    /// An unreadable sample counts as busy: missing data never kills a page.
+    fn observe(&mut self, utilization: Option<u32>, now: Instant) -> bool {
+        if utilization != Some(0) {
+            self.last_busy = now;
+        }
+        self.idle_for(now) >= self.window
+    }
+
+    fn idle_for(&self, now: Instant) -> Duration {
+        now.duration_since(self.last_busy)
+    }
+}
+
+/// The busiest GPU's utilization, from `nvidia-smi` output with one percentage per line.
+fn parse_gpu_utilization(stdout: &str) -> Option<u32> {
+    stdout
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .max()
+}
+
+fn read_gpu_utilization() -> Option<u32> {
+    let mut cmd = Command::new("nvidia-smi");
+    cmd.args([
+        "--query-gpu=utilization.gpu",
+        "--format=csv,noheader,nounits",
+    ]);
+    let output =
+        command_output_with_timeout(cmd, GPU_PROBE_TIMEOUT, "nvidia-smi utilization").ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_gpu_utilization(&String::from_utf8_lossy(&output.stdout))
 }
 
 impl PaddleVlEngine {
@@ -228,6 +335,22 @@ impl PaddleVlEngine {
     ///   - FLAGS_use_mkldnn=1: enable Paddle's oneDNN acceleration
     ///   - HF_HUB_DISABLE_PROGRESS_BARS=1: silence noisy HF download progress
     pub fn detect(&self, image_path: &str) -> Result<PaddleVlOutput, String> {
+        run_with_stall_retry(GPU_PAGE_ATTEMPTS, |_attempt| {
+            let mut stalled = false;
+            self.detect_once(image_path, &mut stalled)
+                .map_err(|message| {
+                    if stalled {
+                        PageRunError::GpuStalled(message)
+                    } else {
+                        PageRunError::Failed(message)
+                    }
+                })
+        })
+    }
+
+    /// One run of a page. Sets `stalled` when it was killed because the GPU
+    /// sat idle mid-page, the one failure worth running again.
+    fn detect_once(&self, image_path: &str, stalled: &mut bool) -> Result<PaddleVlOutput, String> {
         log::info!(
             target: "paddle_vl",
             "Spawning PaddleOCR-VL for: {} (device={})",
@@ -277,10 +400,18 @@ impl PaddleVlEngine {
             .stdout
             .take()
             .map(|stdout| std::thread::spawn(move || drain_child_pipe(stdout)));
-        let stderr_reader = child
-            .stderr
-            .take()
-            .map(|stderr| std::thread::spawn(move || drain_child_pipe(stderr)));
+        // Only PaddleOCR-VL on the GPU is watched: the local GLM backend runs
+        // recognition in llama-server, whose GPU use says nothing about this page.
+        let watch_gpu = self.config.glm_local.is_none() && self.config.device == "gpu";
+        let page_started = Arc::new(AtomicBool::new(false));
+        let stderr_reader = child.stderr.take().map(|stderr| {
+            let page_started = page_started.clone();
+            std::thread::spawn(move || {
+                drain_child_pipe_flagging(stderr, PAGE_STARTED_MARKER, page_started)
+            })
+        });
+        let mut stall_watch: Option<GpuStallWatch> = None;
+        let mut last_gpu_sample = Instant::now();
 
         log::info!(
             target: "paddle_vl",
@@ -378,6 +509,35 @@ impl PaddleVlEngine {
                     return Ok(result);
                 }
                 Ok(None) => {
+                    if watch_gpu
+                        && page_started.load(Ordering::SeqCst)
+                        && last_gpu_sample.elapsed() >= GPU_UTIL_SAMPLE_INTERVAL
+                    {
+                        let now = Instant::now();
+                        last_gpu_sample = now;
+                        let watch = stall_watch
+                            .get_or_insert_with(|| GpuStallWatch::new(now, GPU_STALL_WINDOW));
+                        if watch.observe(read_gpu_utilization(), now) {
+                            let idle = watch.idle_for(now).as_secs();
+                            log::warn!(
+                                target: "paddle_vl",
+                                "GPU idle for {idle}s in the middle of the page, killing PaddleVL process"
+                            );
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            let stdout_buf = join_child_reader(stdout_reader);
+                            let stderr_buf = join_child_reader(stderr_reader);
+                            let tail = format_child_output_tail(
+                                &String::from_utf8_lossy(&stdout_buf),
+                                &String::from_utf8_lossy(&stderr_buf),
+                            );
+                            *stalled = true;
+                            return Err(format!(
+                                "PaddleOCR-VL stopped making progress on the GPU ({idle}s with the GPU idle).{tail}"
+                            ));
+                        }
+                    }
+
                     // Process still running — check timeout
                     if start.elapsed() > timeout {
                         log::warn!(
@@ -827,6 +987,30 @@ pub(crate) fn command_output_with_timeout(
 fn drain_child_pipe(mut pipe: impl std::io::Read + Send + 'static) -> Vec<u8> {
     let mut buffer = Vec::new();
     let _ = pipe.read_to_end(&mut buffer);
+    buffer
+}
+
+/// Like `drain_child_pipe`, but raises `flag` once a line containing `marker` arrives.
+fn drain_child_pipe_flagging(
+    pipe: impl std::io::Read + Send + 'static,
+    marker: &'static str,
+    flag: Arc<AtomicBool>,
+) -> Vec<u8> {
+    let mut reader = std::io::BufReader::new(pipe);
+    let mut buffer = Vec::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                if String::from_utf8_lossy(&line).contains(marker) {
+                    flag.store(true, Ordering::SeqCst);
+                }
+                buffer.extend_from_slice(&line);
+            }
+        }
+    }
     buffer
 }
 
@@ -1603,5 +1787,118 @@ mod tests {
         assert!(select_glm_local_assets("paddle_vl", true, Ok(glm_assets()))
             .unwrap()
             .is_none());
+    }
+
+    fn config_on(device: &str) -> PaddleVlConfig {
+        PaddleVlConfig {
+            python_path: PathBuf::from("/usr/bin/python"),
+            script_path: PathBuf::from("/tmp/paddle_vl.py"),
+            layout_script_path: PathBuf::from("/tmp/layout_v3.py"),
+            hf_cache_dir: None,
+            paddlex_cache_dir: None,
+            offline_mode: false,
+            device: device.to_string(),
+            glm_local: None,
+        }
+    }
+
+    fn env_of(cmd: &Command, key: &str) -> Option<String> {
+        cmd.get_envs()
+            .find(|(name, _)| *name == key)
+            .and_then(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+    }
+
+    #[test]
+    fn a_gpu_page_runs_cuda_kernels_one_at_a_time() {
+        let script = PathBuf::from("/tmp/paddle_vl.py");
+        let (gpu, _, _) =
+            build_ocrh_command(&config_on("gpu"), &script, "page.png", "gpu", &[]).unwrap();
+        assert_eq!(env_of(&gpu, "CUDA_LAUNCH_BLOCKING").as_deref(), Some("1"));
+
+        let (cpu, _, _) =
+            build_ocrh_command(&config_on("cpu"), &script, "page.png", "cpu", &[]).unwrap();
+        assert_eq!(env_of(&cpu, "CUDA_LAUNCH_BLOCKING"), None);
+        assert_eq!(env_of(&cpu, "FLAGS_use_mkldnn").as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn gpu_utilization_is_read_from_the_busiest_gpu() {
+        assert_eq!(parse_gpu_utilization("0\n"), Some(0));
+        assert_eq!(parse_gpu_utilization("0\n 37 \n"), Some(37));
+        assert_eq!(parse_gpu_utilization(""), None);
+        assert_eq!(parse_gpu_utilization("[N/A]\n"), None);
+    }
+
+    #[test]
+    fn a_page_counts_as_stuck_only_after_the_gpu_sat_idle_for_the_whole_window() {
+        let window = Duration::from_secs(120);
+        let start = Instant::now();
+        let mut watch = GpuStallWatch::new(start, window);
+
+        assert!(!watch.observe(Some(0), start + Duration::from_secs(60)));
+        // Any work resets the window.
+        assert!(!watch.observe(Some(12), start + Duration::from_secs(90)));
+        assert!(!watch.observe(Some(0), start + Duration::from_secs(200)));
+        assert!(watch.observe(Some(0), start + Duration::from_secs(210)));
+    }
+
+    #[test]
+    fn an_unreadable_gpu_never_marks_a_page_as_stuck() {
+        let window = Duration::from_secs(120);
+        let start = Instant::now();
+        let mut watch = GpuStallWatch::new(start, window);
+        assert!(!watch.observe(None, start + Duration::from_secs(500)));
+        assert!(!watch.observe(Some(0), start + Duration::from_secs(600)));
+    }
+
+    #[test]
+    fn a_stuck_gpu_page_is_retried_once_and_then_reported() {
+        let mut calls = 0;
+        let ok = run_with_stall_retry(2, |_| {
+            calls += 1;
+            if calls == 1 {
+                Err(PageRunError::GpuStalled("stuck".into()))
+            } else {
+                Ok("text")
+            }
+        });
+        assert_eq!(ok, Ok("text"));
+        assert_eq!(calls, 2);
+
+        let mut calls = 0;
+        let err = run_with_stall_retry::<()>(2, |_| {
+            calls += 1;
+            Err(PageRunError::GpuStalled("stuck again".into()))
+        });
+        assert_eq!(calls, 2);
+        assert!(err.unwrap_err().contains("stuck again"));
+    }
+
+    #[test]
+    fn an_ordinary_page_failure_is_not_retried() {
+        let mut calls = 0;
+        let err = run_with_stall_retry::<()>(2, |_| {
+            calls += 1;
+            Err(PageRunError::Failed("bad image".into()))
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(err, Err("bad image".to_string()));
+    }
+
+    #[test]
+    fn the_stderr_reader_flags_when_the_page_itself_starts() {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let input: &[u8] = b"[paddle_vl] Import done\n[paddle_vl] Processing: page.png\nmore\n";
+        let out = drain_child_pipe_flagging(input, PAGE_STARTED_MARKER, flag.clone());
+        assert_eq!(out, input);
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
+
+        let quiet = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        drain_child_pipe_flagging(
+            &b"[paddle_vl] Import done\n"[..],
+            PAGE_STARTED_MARKER,
+            quiet.clone(),
+        );
+        assert!(!quiet.load(std::sync::atomic::Ordering::SeqCst));
     }
 }
