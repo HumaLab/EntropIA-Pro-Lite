@@ -47,6 +47,8 @@ INSTALL_PROBE_SPECS = (
     'spacy>=3.8.0,<3.9.0',
     'https://github.com/explosion/spacy-models/releases/download/es_core_news_md-3.8.0/es_core_news_md-3.8.0-py3-none-any.whl',
 )
+# The CUDA pack ships paddlepaddle-gpu instead of the CPU wheel.
+CUDA_PADDLE_PROBE_SPEC = 'paddlepaddle-gpu>=3.2.1,<3.3.0'
 INSTALL_PROBE_IMPORTS = (
     'import paddle; from paddleocr import PaddleOCRVL; print("paddleocr ok")',
     'import faster_whisper, ctranslate2; print("faster_whisper ok")',
@@ -156,6 +158,14 @@ def run_command(args: list[str], env: dict[str, str]) -> dict:
     }
 
 
+def install_probe_specs(manifest: dict) -> tuple[str, ...]:
+    """The specs to install offline: the Paddle build the wheelhouse ships."""
+    wheel_names = [normalized_wheel_name(entry['path']) for entry in manifest.get('wheelhouse', [])]
+    if any(name.startswith('paddlepaddle_gpu') for name in wheel_names):
+        return (CUDA_PADDLE_PROBE_SPEC, *INSTALL_PROBE_SPECS[1:])
+    return INSTALL_PROBE_SPECS
+
+
 def run_install_probe(pack_root: Path, manifest: dict, expected_platform: str) -> dict:
     probe = {
         'host_compatible': current_host_pack_platform() == expected_platform,
@@ -194,7 +204,7 @@ def run_install_probe(pack_root: Path, manifest: dict, expected_platform: str) -
                 '--find-links',
                 str(wheelhouse),
             ]
-            for spec in INSTALL_PROBE_SPECS
+            for spec in install_probe_specs(manifest)
         )
         commands.extend([str(venv_python), '-c', code] for code in INSTALL_PROBE_IMPORTS)
 

@@ -255,6 +255,25 @@ jobs:
           uv pip install --python "$PY" "spacy>=3.8.0,<3.9.0" \
             "https://github.com/explosion/spacy-models/releases/download/es_core_news_md-3.8.0/es_core_news_md-3.8.0-py3-none-any.whl"
 
+      # paddlepaddle-gpu loads libcuda.so.1 (the NVIDIA driver) on import; the
+      # runner has no GPU, so the CUDA toolkit's stub stands in for the
+      # import and install checks. It is never packed.
+      - name: Provide the CUDA driver stub (the runner has no GPU)
+        if: inputs.platform == 'linux-x86_64-cuda'
+        shell: bash
+        run: |
+          set -euo pipefail
+          STUB_ROOT="$RUNNER_TEMP/cuda-driver-stub"
+          mkdir -p "$STUB_ROOT"
+          curl -fsSL --retry 3 -o "$STUB_ROOT/stub.deb" \
+            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-driver-dev-12-9_12.9.79-1_amd64.deb
+          echo "5fece9ec181860350dbda0e6368cee79797c6f00f9a44f376d241a1889e5608b  $STUB_ROOT/stub.deb" | sha256sum -c -
+          dpkg-deb -x "$STUB_ROOT/stub.deb" "$STUB_ROOT/x"
+          STUB="$(find "$STUB_ROOT/x" -name libcuda.so -type f | head -1)"
+          if [ -z "$STUB" ]; then echo "::error::libcuda.so stub not found"; exit 1; fi
+          ln -s "$STUB" "$(dirname "$STUB")/libcuda.so.1"
+          echo "CUDA_STUB_DIR=$(dirname "$STUB")" >> "$GITHUB_ENV"
+
       - name: Warm up models (download weights into caches)
         shell: bash
         env:
@@ -265,11 +284,19 @@ jobs:
           set -euo pipefail
           mkdir -p "$HF_HUB_CACHE" "$PADDLE_PDX_CACHE_HOME"
           PY="$ENV_DIR/bin/python"
-          "$PY" -c "import paddle; print('paddle', paddle.__version__)"
           if [ "${{ inputs.platform }}" = "linux-x86_64-cuda" ]; then
-            # The runner has no GPU; warming only downloads the weights.
-            "$PY" -c "from paddleocr import PaddleOCRVL; PaddleOCRVL(device='cpu'); print('paddleocr-vl warmed')"
+            # The GPU build imports against the driver stub, but building the
+            # pipeline queries the GPU even on device='cpu'. The weights do not
+            # depend on the device, so a throwaway CPU venv downloads them into
+            # the same caches the CPU pack uses.
+            LD_LIBRARY_PATH="$CUDA_STUB_DIR" "$PY" -c "import paddle; print('paddle', paddle.__version__, 'cuda', paddle.version.cuda())"
+            WARM_ENV="$RUNNER_TEMP/paddle-cpu-warmup"
+            uv venv --python 3.11 --python-preference only-managed "$WARM_ENV"
+            uv pip install --python "$WARM_ENV/bin/python" "paddlepaddle>=3.2.1,<3.3.0" "paddleocr[doc-parser]>=2.9.0"
+            "$WARM_ENV/bin/python" -c "from paddleocr import PaddleOCRVL; PaddleOCRVL(); print('paddleocr-vl warmed')"
+            rm -rf "$WARM_ENV"
           else
+            "$PY" -c "import paddle; print('paddle', paddle.__version__)"
             "$PY" -c "from paddleocr import PaddleOCRVL; PaddleOCRVL(); print('paddleocr-vl warmed')"
           fi
           "$PY" -c "from faster_whisper import WhisperModel; WhisperModel('base'); print('faster-whisper warmed')"
@@ -351,6 +378,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Only the CUDA build sets it: its install probe imports paddle.
+          if [ -n "${CUDA_STUB_DIR:-}" ]; then export LD_LIBRARY_PATH="$CUDA_STUB_DIR"; fi
           python3 apps/desktop/src-tauri/scripts/runtime-pack-smoke.py \
             --platform linux-x86_64 --root "$ASSEMBLED_DIR" --release --install-probe
 

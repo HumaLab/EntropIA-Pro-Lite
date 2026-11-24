@@ -476,6 +476,12 @@ describe('runtime pack packaging', () => {
     // wheels were repacked.
     expect(linuxJob).not.toContain('--platform linux-x86_64-cuda')
     expect(linuxJob).toContain('nvidia_cudnn_cu12-')
+    // The runner has no GPU: a pinned driver stub serves only the CUDA
+    // build's import and install checks, and never lands in the pack.
+    const stubStep = linuxJob.slice(linuxJob.indexOf('- name: Provide the CUDA driver stub'))
+    expect(stubStep).toContain("if: inputs.platform == 'linux-x86_64-cuda'")
+    expect(stubStep).toContain('sha256sum -c -')
+    expect(linuxJob).toContain('export LD_LIBRARY_PATH="$CUDA_STUB_DIR"')
   })
 
   it('lints the Pro (local-ml) build on Linux in CI', () => {
