@@ -153,16 +153,27 @@ fn build_ocrh_command(
             .env("MODELSCOPE_HOME", &modelscope_cache_dir);
     }
 
-    if device == "gpu" {
-        // Paddle 3.2 hangs at random mid-page on both an RTX 4060 Laptop and an
-        // RTX 5090 (driver 580): GPU at 0 %, one CPU core spinning, forever.
-        // Launching CUDA kernels one at a time stopped it (0 hangs in 23 runs)
-        // at a cost: a dense newspaper page took 166 s instead of 110 s on the
-        // 4060, 35 s instead of 20 s on the 5090.
+    if device == "gpu" && serializes_cuda_launches_on(std::env::consts::OS) {
         cmd.env("CUDA_LAUNCH_BLOCKING", "1");
     }
 
     Ok((cmd, cpu_threads, use_mkldnn))
+}
+
+/// Whether GPU pages run CUDA kernels one at a time on this OS.
+///
+/// Linux: Paddle 3.2 hangs at random mid-page on both an RTX 4060 Laptop and
+/// an RTX 5090 (driver 580): GPU at 0 %, one CPU core spinning, forever.
+/// Launching kernels one at a time stopped it (0 hangs in 23 runs) at a cost:
+/// a dense newspaper page took 166 s instead of 110 s on the 4060, 35 s
+/// instead of 20 s on the 5090.
+///
+/// Windows: under WDDM the same setting kept that page on an A10G (driver
+/// 621.14) past the 900 s page timeout twice, while without it 4/4 runs
+/// finished in 189-199 s with all 51 blocks. A page that does stall there is
+/// still caught by the GPU stall watchdog and run once more.
+fn serializes_cuda_launches_on(os: &str) -> bool {
+    os == "linux"
 }
 
 /// The line `paddle_vl.py` writes once the pipeline is loaded and the page
@@ -1809,11 +1820,21 @@ mod tests {
     }
 
     #[test]
-    fn a_gpu_page_runs_cuda_kernels_one_at_a_time() {
+    fn only_linux_runs_cuda_kernels_one_at_a_time() {
+        assert!(serializes_cuda_launches_on("linux"));
+        // Under WDDM the same setting kept a dense page on an A10G past the
+        // 900 s page timeout, while without it 4/4 runs finished in ~190 s.
+        assert!(!serializes_cuda_launches_on("windows"));
+        assert!(!serializes_cuda_launches_on("macos"));
+    }
+
+    #[test]
+    fn a_gpu_page_runs_cuda_kernels_one_at_a_time_where_the_host_needs_it() {
         let script = PathBuf::from("/tmp/paddle_vl.py");
         let (gpu, _, _) =
             build_ocrh_command(&config_on("gpu"), &script, "page.png", "gpu", &[]).unwrap();
-        assert_eq!(env_of(&gpu, "CUDA_LAUNCH_BLOCKING").as_deref(), Some("1"));
+        let expected = serializes_cuda_launches_on(std::env::consts::OS).then_some("1");
+        assert_eq!(env_of(&gpu, "CUDA_LAUNCH_BLOCKING").as_deref(), expected);
 
         let (cpu, _, _) =
             build_ocrh_command(&config_on("cpu"), &script, "page.png", "cpu", &[]).unwrap();
