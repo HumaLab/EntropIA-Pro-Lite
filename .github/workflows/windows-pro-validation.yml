@@ -8,6 +8,12 @@ name: Windows Pro validation
 # Never creates a GitHub release: artifacts only.
 on:
   workflow_dispatch:
+    inputs:
+      bootstrap_manifest_url:
+        description: 'Runtime bootstrap manifest to bake in (empty = production)'
+        required: false
+        default: ''
+        type: string
   push:
     branches:
       - feat/internet-archive
@@ -22,7 +28,9 @@ env:
   PNPM_VERSION: 9.15.4
   # Same signed bootstrap source as the release pipeline. build.rs requires a baked
   # download source for release builds that ship the fixture runtime-pack.
-  ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: https://github.com/HumaLab/EntropIA-Pro/releases/download/runtime-bootstrap/manifest.json
+  # A dispatch may bake in another signed manifest (for example the staging
+  # release) to test a runtime pack before production; pushes keep production.
+  ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: ${{ inputs.bootstrap_manifest_url || 'https://github.com/HumaLab/EntropIA-Pro/releases/download/runtime-bootstrap/manifest.json' }}
   ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: entropia-runtime-2026
   ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: fSt35Xo0XtpdZUH/Q2gsPm1drMZczLMQNcU6fqAEbi0=
 
