@@ -35,30 +35,42 @@ fn min_cuda_driver_major(os: &str) -> u32 {
     }
 }
 
+/// Smallest GPU memory (MiB, as `nvidia-smi` reports it) that gets the CUDA
+/// pack. PaddleOCR-VL peaked at 5.9 GB on both test cards, and an 8 GB card
+/// reports a little under 8192 MiB (the RTX 4060 Laptop: 8188), so the floor
+/// sits at 7.5 GiB: 8 GB cards pass, 6 GB cards keep the CPU pack.
+pub const MIN_CUDA_VRAM_MIB: u32 = 7_680;
+
 /// Forces the choice for testing and support: `cpu` or `cuda`. Anything else
 /// (or unset) leaves the decision to the GPU probe.
 pub const ACCELERATOR_OVERRIDE_ENV: &str = "ENTROPIA_RUNTIME_ACCELERATOR";
 
-/// The accelerator for one `nvidia-smi --query-gpu=driver_version` output on
-/// this OS: CUDA when the first GPU's driver is new enough, CPU otherwise (no
-/// NVIDIA GPU, no driver, or output that does not parse).
-pub fn accelerator_for_driver_output(output: Option<&str>) -> RuntimeAccelerator {
-    accelerator_for_driver_output_on(std::env::consts::OS, output)
+/// The accelerator for one `nvidia-smi --query-gpu=driver_version,memory.total
+/// --format=csv,noheader,nounits` output on this OS: CUDA when the first GPU's
+/// driver is new enough and it has at least `MIN_CUDA_VRAM_MIB`, CPU otherwise
+/// (no NVIDIA GPU, no driver, a small card, or output that does not parse).
+pub fn accelerator_for_gpu_output(output: Option<&str>) -> RuntimeAccelerator {
+    accelerator_for_gpu_output_on(std::env::consts::OS, output)
 }
 
-/// `accelerator_for_driver_output` for a named OS.
-fn accelerator_for_driver_output_on(os: &str, output: Option<&str>) -> RuntimeAccelerator {
+/// `accelerator_for_gpu_output` for a named OS.
+fn accelerator_for_gpu_output_on(os: &str, output: Option<&str>) -> RuntimeAccelerator {
     let Some(first_line) = output.and_then(|text| text.lines().find(|l| !l.trim().is_empty()))
     else {
         return RuntimeAccelerator::Cpu;
     };
-    let major = first_line
-        .trim()
-        .split('.')
+    let mut fields = first_line.split(',').map(str::trim);
+    let major = fields
         .next()
-        .and_then(|part| part.trim().parse::<u32>().ok());
-    match major {
-        Some(major) if major >= min_cuda_driver_major(os) => RuntimeAccelerator::Cuda,
+        .and_then(|driver| driver.split('.').next())
+        .and_then(|part| part.parse::<u32>().ok());
+    let vram_mib = fields.next().and_then(|mib| mib.parse::<u32>().ok());
+    match (major, vram_mib) {
+        (Some(major), Some(vram_mib))
+            if major >= min_cuda_driver_major(os) && vram_mib >= MIN_CUDA_VRAM_MIB =>
+        {
+            RuntimeAccelerator::Cuda
+        }
         _ => RuntimeAccelerator::Cpu,
     }
 }
@@ -72,9 +84,12 @@ pub fn accelerator_override(value: Option<&str>) -> Option<RuntimeAccelerator> {
     }
 }
 
-fn nvidia_driver_output() -> Option<String> {
+fn nvidia_gpu_output() -> Option<String> {
     let mut command = Command::new("nvidia-smi");
-    command.args(["--query-gpu=driver_version", "--format=csv,noheader"]);
+    command.args([
+        "--query-gpu=driver_version,memory.total",
+        "--format=csv,noheader,nounits",
+    ]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -98,11 +113,11 @@ pub fn detect_runtime_accelerator() -> RuntimeAccelerator {
             log::info!(target: "runtime", "runtime accelerator forced to {forced:?}");
             return forced;
         }
-        let output = nvidia_driver_output();
-        let accelerator = accelerator_for_driver_output(output.as_deref());
+        let output = nvidia_gpu_output();
+        let accelerator = accelerator_for_gpu_output(output.as_deref());
         log::info!(
             target: "runtime",
-            "runtime accelerator: {accelerator:?} (nvidia driver: {})",
+            "runtime accelerator: {accelerator:?} (nvidia driver, MiB: {})",
             output.as_deref().map(str::trim).unwrap_or("none")
         );
         accelerator
@@ -116,11 +131,11 @@ mod tests {
     #[test]
     fn a_recent_nvidia_driver_selects_cuda() {
         assert_eq!(
-            accelerator_for_driver_output(Some("580.173.02\n")),
+            accelerator_for_gpu_output(Some("580.173.02, 32607\n")),
             RuntimeAccelerator::Cuda
         );
         assert_eq!(
-            accelerator_for_driver_output_on("linux", Some("575.51.03")),
+            accelerator_for_gpu_output_on("linux", Some("575.51.03, 24564")),
             RuntimeAccelerator::Cuda
         );
     }
@@ -128,20 +143,20 @@ mod tests {
     #[test]
     fn an_old_driver_keeps_the_cpu_pack() {
         assert_eq!(
-            accelerator_for_driver_output(Some("560.35.03\n")),
+            accelerator_for_gpu_output(Some("560.35.03, 24564\n")),
             RuntimeAccelerator::Cpu
         );
     }
 
     #[test]
     fn no_nvidia_gpu_or_unreadable_output_keeps_the_cpu_pack() {
-        assert_eq!(accelerator_for_driver_output(None), RuntimeAccelerator::Cpu);
+        assert_eq!(accelerator_for_gpu_output(None), RuntimeAccelerator::Cpu);
         assert_eq!(
-            accelerator_for_driver_output(Some("")),
+            accelerator_for_gpu_output(Some("")),
             RuntimeAccelerator::Cpu
         );
         assert_eq!(
-            accelerator_for_driver_output(Some("NVIDIA-SMI has failed")),
+            accelerator_for_gpu_output(Some("NVIDIA-SMI has failed")),
             RuntimeAccelerator::Cpu
         );
     }
@@ -150,28 +165,64 @@ mod tests {
     fn windows_needs_the_windows_driver_that_ships_cuda_12_9() {
         // CUDA 12.9 needs driver 575.51.03 on Linux but 576.02 on Windows.
         assert_eq!(
-            accelerator_for_driver_output_on("windows", Some("576.02")),
+            accelerator_for_gpu_output_on("windows", Some("576.02, 24564")),
             RuntimeAccelerator::Cuda
         );
         assert_eq!(
-            accelerator_for_driver_output_on("windows", Some("575.64")),
+            accelerator_for_gpu_output_on("windows", Some("575.64, 24564")),
             RuntimeAccelerator::Cpu
         );
         // A Kepler card stuck on the last driver it gets keeps the CPU pack.
         assert_eq!(
-            accelerator_for_driver_output_on("windows", Some("475.14")),
+            accelerator_for_gpu_output_on("windows", Some("475.14, 24564")),
             RuntimeAccelerator::Cpu
         );
         assert_eq!(
-            accelerator_for_driver_output_on("linux", Some("575.51.03")),
+            accelerator_for_gpu_output_on("linux", Some("575.51.03, 24564")),
             RuntimeAccelerator::Cuda
         );
     }
 
     #[test]
+    fn a_card_under_8_gb_keeps_the_cpu_pack_whatever_its_driver() {
+        // PaddleOCR-VL peaked at 5.9 GB on both test cards; an 8 GB card
+        // reports a little under 8192 MiB (the RTX 4060 Laptop: 8188).
+        for small in ["4096", "6144", "7679"] {
+            assert_eq!(
+                accelerator_for_gpu_output_on("linux", Some(&format!("580.173.02, {small}\n"))),
+                RuntimeAccelerator::Cpu,
+                "{small} MiB"
+            );
+        }
+        assert_eq!(
+            accelerator_for_gpu_output_on("linux", Some("580.173.02, 8188\n")),
+            RuntimeAccelerator::Cuda
+        );
+        assert_eq!(
+            accelerator_for_gpu_output_on("windows", Some("576.02, 24564")),
+            RuntimeAccelerator::Cuda
+        );
+        assert_eq!(
+            accelerator_for_gpu_output_on("windows", Some("575.64, 24564")),
+            RuntimeAccelerator::Cpu
+        );
+    }
+
+    #[test]
+    fn an_unreadable_memory_size_keeps_the_cpu_pack() {
+        for output in ["580.173.02", "580.173.02, [N/A]", "580.173.02, "] {
+            assert_eq!(
+                accelerator_for_gpu_output_on("linux", Some(output)),
+                RuntimeAccelerator::Cpu,
+                "{output:?}"
+            );
+        }
+    }
+
+    #[test]
     fn several_gpus_are_judged_by_the_first_one() {
         assert_eq!(
-            accelerator_for_driver_output(Some("\n580.173.02\n580.173.02\n")),
+            accelerator_for_gpu_output(Some("\n580.173.02, 24564\n580.173.02, 4096\n")),
             RuntimeAccelerator::Cuda
         );
     }
