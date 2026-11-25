@@ -1029,7 +1029,8 @@ fn existing_managed_runtime_matches_release(
     };
     if manifest.pack_version != release.pack_version
         || manifest.app_version != release.app_version
-        || manifest.platform != release.platform
+        || manifest.platform
+            != crate::runtime::manifest::runtime_platform_of_release(&release.platform)
     {
         return false;
     }
@@ -1359,6 +1360,13 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn runtime_archive_bytes() -> Vec<u8> {
+        runtime_archive_bytes_for("2026.05.1", false)
+    }
+
+    /// A runtime archive of `pack_version`; `cuda` adds the GPU Paddle wheel
+    /// the CUDA pack ships.
+    pub(crate) fn runtime_archive_bytes_for(pack_version: &str, cuda: bool) -> Vec<u8> {
+        const CUDA_WHEEL: &str = "wheelhouse/paddlepaddle_gpu-3.2.2-cp311-cp311-linux_x86_64.whl";
         let mut buffer = Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut buffer);
@@ -1373,8 +1381,12 @@ pub(crate) mod test_support {
             zip.write_all(b"python").expect("python bytes");
             zip.start_file("uv/bin/uv", options).expect("uv entry");
             zip.write_all(b"uv").expect("uv bytes");
+            if cuda {
+                zip.start_file(CUDA_WHEEL, options).expect("wheel entry");
+                zip.write_all(b"wheel").expect("wheel bytes");
+            }
             let manifest = RuntimeManifest {
-                pack_version: "2026.05.1".to_string(),
+                pack_version: pack_version.to_string(),
                 app_version: env!("CARGO_PKG_VERSION").to_string(),
                 platform: crate::runtime::paths::current_runtime_platform(),
                 payload_profile: "release".to_string(),
@@ -1395,7 +1407,16 @@ pub(crate) mod test_support {
                     executable: true,
                 }],
                 script_files: vec![],
-                wheelhouse: vec![],
+                wheelhouse: if cuda {
+                    vec![crate::runtime::manifest::ManifestEntry {
+                        path: CUDA_WHEEL.to_string(),
+                        sha256: hex::encode(Sha256::digest(b"wheel")),
+                        size: 5,
+                        executable: false,
+                    }]
+                } else {
+                    vec![]
+                },
                 caches: vec![],
                 native_assets: vec![],
                 runtime_abi: None,
@@ -1586,6 +1607,52 @@ mod tests {
         assert!(sentinel.is_file());
         assert!(!second_outcome.staging_path.exists());
         assert!(!stage_marker_path(app_data_dir.path(), &release.pack_version).exists());
+    }
+
+    #[test]
+    fn a_cuda_runtime_already_in_place_is_reused_without_replacing_it() {
+        // The CUDA release is published as `{platform}-cuda` while the runtime
+        // inside declares the OS platform; the reuse check must treat them as
+        // the same runtime instead of replacing a healthy one.
+        let app_data_dir = tempfile::tempdir().expect("app data dir");
+        let archive_bytes = runtime_archive_bytes();
+        let (cpu_release, public_key) = build_signed_release(&archive_bytes);
+        let mut release = cpu_release;
+        release.platform = crate::runtime::manifest::cuda_release_platform(
+            &crate::runtime::paths::current_runtime_platform(),
+        );
+        let signing_key = SigningKey::from_bytes(&[11u8; 32]);
+        let signature = signing_key.sign(release.signature_payload().as_bytes());
+        release.signature = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+
+        let first_outcome = download_and_activate_remote_runtime_with_fetch(
+            "https://example.com/runtime/bootstrap.json",
+            &release,
+            app_data_dir.path(),
+            &public_key,
+            |_| Ok(Cursor::new(archive_bytes.clone())),
+            &mut |_| {},
+        )
+        .expect("first cuda bootstrap");
+        let sentinel = first_outcome
+            .managed_root
+            .join("venv")
+            .join("created-by-deps.txt");
+        fs::create_dir_all(sentinel.parent().expect("sentinel parent")).expect("venv dir");
+        fs::write(&sentinel, b"keep me").expect("sentinel write");
+
+        let second_outcome = download_and_activate_remote_runtime_with_fetch(
+            "https://example.com/runtime/bootstrap.json",
+            &release,
+            app_data_dir.path(),
+            &public_key,
+            |_| Ok(Cursor::new(archive_bytes.clone())),
+            &mut |_| {},
+        )
+        .expect("second cuda bootstrap");
+
+        assert_eq!(second_outcome.managed_root, first_outcome.managed_root);
+        assert!(sentinel.is_file(), "the healthy CUDA runtime was replaced");
     }
 
     #[test]
@@ -2876,6 +2943,7 @@ mod tests {
         {
         }
         assert_async_command(crate::runtime::runtime_bootstrap_start);
+        assert_async_command(crate::runtime::runtime_switch_to_gpu_start);
         assert_async_command_without_args(crate::runtime::runtime_cancel_download);
     }
 

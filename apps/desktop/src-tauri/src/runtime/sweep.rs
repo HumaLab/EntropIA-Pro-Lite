@@ -104,6 +104,55 @@ pub(crate) fn retire_unused_runtimes(
     )
 }
 
+/// Retires the one runtime folder the user replaced (the CPU runtime once
+/// the GPU one is healthy). The regular sweep keeps it: it still serves the
+/// running app. A folder a running program uses stays, as in the sweep.
+pub(crate) fn retire_replaced_runtime(app_data_dir: &Path, folder: &Path) -> RetireReport {
+    let Some(images) = images_in_use() else {
+        return RetireReport {
+            retired: Vec::new(),
+            kept: vec![PROCESS_LIST_UNAVAILABLE.to_string()],
+        };
+    };
+    retire_replaced_runtime_with(app_data_dir, folder, &images, |from, to| {
+        std::fs::rename(from, to)
+    })
+}
+
+fn retire_replaced_runtime_with<R>(
+    app_data_dir: &Path,
+    folder: &Path,
+    images: &[PathBuf],
+    mut rename: R,
+) -> RetireReport
+where
+    R: FnMut(&Path, &Path) -> io::Result<()>,
+{
+    let mut report = RetireReport::default();
+    let root = runtime_root(app_data_dir);
+    let Some(name) = folder.file_name().and_then(|name| name.to_str()) else {
+        return report;
+    };
+    if folder.parent() != Some(root.as_path()) || name.starts_with('.') || !folder.is_dir() {
+        return report;
+    }
+    if holds_image(folder, images) {
+        report.kept.push(format!(
+            "Runtime folder {} is used by a running program and stays for a later cleanup",
+            folder.display()
+        ));
+        return report;
+    }
+    match rename(folder, &retired_path(&root, name)) {
+        Ok(()) => report.retired.push(folder.to_path_buf()),
+        Err(error) => report.kept.push(format!(
+            "Runtime folder {} is in use and stays for a later cleanup: {error}",
+            folder.display()
+        )),
+    }
+    report
+}
+
 /// What decides whether a runtime folder is still of use.
 struct RunningApp<'a> {
     platform: &'a str,
@@ -921,5 +970,28 @@ mod tests {
         let purge = purge_retired_runtimes(dir.path());
         assert!(purge.failed.is_empty(), "{:?}", purge.failed);
         assert!(names_under_runtime(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn a_replaced_runtime_is_retired_unless_a_running_program_uses_it() {
+        let dir = tempdir().unwrap();
+        let replaced = write_runtime(dir.path(), "2026.11.10", PLATFORM, RUNNING);
+        let in_use = vec![replaced.join("venv").join("Scripts").join("python.exe")];
+
+        let kept = retire_replaced_runtime_with(dir.path(), &replaced, &in_use, |from, to| {
+            fs::rename(from, to)
+        });
+        assert!(kept.retired.is_empty());
+        assert_eq!(kept.kept.len(), 1, "{:?}", kept.kept);
+        assert!(replaced.join("manifest.json").is_file());
+
+        let retired = retire_replaced_runtime_with(dir.path(), &replaced, &[], |from, to| {
+            fs::rename(from, to)
+        });
+        assert_eq!(retired.retired, vec![replaced.clone()]);
+        assert!(!replaced.exists());
+        assert!(names_under_runtime(dir.path())
+            .iter()
+            .any(|name| name.starts_with(RETIRED_PREFIX)));
     }
 }

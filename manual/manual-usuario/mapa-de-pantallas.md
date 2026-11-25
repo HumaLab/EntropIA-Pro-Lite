@@ -730,6 +730,7 @@
 
 ### Varios
 
+- «Con la base de IA para GPU, PaddleOCR-VL lee las páginas en la placa de video, mucho más rápido. Se descargan {size}; la base actual sigue funcionando hasta que la nueva esté lista.» `deps.gpuRuntime.body`
 - «Instalando {name}» `deps.installing`
 - «Instalar» `deps.install`
 - «Instalar todo» `deps.installAll`
@@ -741,6 +742,8 @@
 - «Requerido» `deps.required`
 - «Revisando dependencias…» `deps.checking`
 - «Todas las dependencias están instaladas y listas para usar.» `deps.allInstalled`
+- «Tu equipo tiene una GPU NVIDIA» `deps.gpuRuntime.title`
+- «Usar la GPU» `deps.gpuRuntime.action`
 - «Ver detalle del error» `deps.showDetail`
 - «{pct}% instalado» `deps.installedPct`
 

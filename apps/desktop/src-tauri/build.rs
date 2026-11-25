@@ -228,6 +228,8 @@ const APP_COMMANDS: &[&str] = &[
     "runtime_get_bootstrap_plan",
     "runtime_repair",
     "runtime_bootstrap_start",
+    "runtime_get_gpu_offer",
+    "runtime_switch_to_gpu_start",
     "runtime_cancel_download",
     "logs_get",
     "logs_clear",

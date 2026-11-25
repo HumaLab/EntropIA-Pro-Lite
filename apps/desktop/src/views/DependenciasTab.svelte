@@ -30,6 +30,8 @@
     type UvStatusResult,
   } from '$lib/deps'
   import {
+    formatBootstrapSize,
+    getGpuRuntimeOffer,
     getRuntimeStatus,
     onRuntimeProgress,
     onRuntimeStatus,
@@ -38,6 +40,8 @@
     runtimeCanBootstrapAutomatically,
     runtimeNeedsAttention,
     shouldShowRuntimeRepairAction,
+    startGpuRuntimeSwitch,
+    type GpuRuntimeOffer,
     type RuntimeStatus,
     type RuntimeOperation,
   } from '$lib/runtime'
@@ -81,6 +85,10 @@
   let runtimeStatus = $state<RuntimeStatus | null>(null)
   let runtimeOperation = $state<RuntimeOperation | null>(null)
   let runtimeRechecking = $state(false)
+  // The GPU runtime an NVIDIA machine still on the CPU runtime can download;
+  // nothing switches until the user asks.
+  let gpuOffer = $state<GpuRuntimeOffer | null>(null)
+  let gpuSwitching = $state(false)
   // Models and servers (Gemma, BGE-M3, reranker, Parakeet, llama-server,
   // GLM-OCR, Qwen3-VL), as the backend inventory reports them.
   let setup = $state<LocalSetupStatus | null>(null)
@@ -203,9 +211,12 @@
                   })
                   .catch(() => undefined)
               }
+              const packChanged = status.packVersion !== runtimeStatus?.packVersion
               runtimeStatus = status
               runtimeOperation = status.activeOperation
               runtimeOperationInFlight = status.activeOperation != null
+              if (status.activeOperation == null) gpuSwitching = false
+              if (packChanged) void refreshGpuOffer()
             }),
           () =>
             onRuntimeProgress((operation) => {
@@ -308,6 +319,27 @@
     runtimeOperation = runtime.activeOperation
     runtimeOperationInFlight = runtime.activeOperation != null
     setup = localSetup
+    await refreshGpuOffer()
+  }
+
+  async function refreshGpuOffer() {
+    const offer = await getGpuRuntimeOffer().catch(() => null)
+    if (!destroyed) gpuOffer = offer
+  }
+
+  async function handleGpuSwitch() {
+    if (gpuSwitching) return
+    gpuSwitching = true
+    errorBanner = null
+    // The download reports its progress like any runtime operation.
+    runtimeOperationInFlight = true
+    try {
+      await startGpuRuntimeSwitch()
+    } catch (e) {
+      gpuSwitching = false
+      runtimeOperationInFlight = false
+      errorBanner = String(e)
+    }
   }
 
   async function refreshSetupState() {
@@ -648,6 +680,28 @@
           {runtimeBlockedOffline ? t('deps.runtime.retryConnection') : t('deps.runtime.recheck')}
         </Button>
       {/if}
+    </div>
+  {/if}
+
+  {#if gpuOffer && runtimeStatus?.state === 'healthy'}
+    <div class="deps-runtime-panel" role="status">
+      <div class="deps-runtime-panel__copy">
+        <strong>{t('deps.gpuRuntime.title')}</strong>
+        <span>
+          {t('deps.gpuRuntime.body', { size: formatBootstrapSize(gpuOffer.archiveSize) ?? '' })}
+        </span>
+        {#if gpuSwitching && runtimeOperation}
+          <p class="deps-runtime-panel__progress">{bootstrapProgressLabel()}</p>
+        {/if}
+      </div>
+      <Button
+        variant="secondary"
+        onclick={handleGpuSwitch}
+        loading={gpuSwitching}
+        disabled={gpuSwitching}
+      >
+        {t('deps.gpuRuntime.action')}
+      </Button>
     </div>
   {/if}
 

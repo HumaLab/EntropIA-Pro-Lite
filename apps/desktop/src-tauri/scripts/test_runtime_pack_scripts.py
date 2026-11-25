@@ -39,6 +39,12 @@ prepare_runtime_payload = importlib.util.module_from_spec(_prepare_spec)
 assert _prepare_spec.loader is not None
 _prepare_spec.loader.exec_module(prepare_runtime_payload)
 
+_smoke_spec = importlib.util.spec_from_file_location('runtime_pack_smoke', SMOKE_SCRIPT)
+assert _smoke_spec is not None
+runtime_pack_smoke = importlib.util.module_from_spec(_smoke_spec)
+assert _smoke_spec.loader is not None
+_smoke_spec.loader.exec_module(runtime_pack_smoke)
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -509,6 +515,17 @@ class RuntimePackScriptTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload['contract_errors'], [])
             self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_install_probe_installs_the_paddle_build_the_pack_ships(self) -> None:
+        cpu_manifest = {'wheelhouse': [{'path': 'wheelhouse/paddlepaddle-3.2.2-cp311-cp311-manylinux1_x86_64.whl'}]}
+        cuda_manifest = {'wheelhouse': [{'path': 'wheelhouse/paddlepaddle_gpu-3.2.2-cp311-cp311-linux_x86_64.whl'}]}
+
+        cpu_specs = runtime_pack_smoke.install_probe_specs(cpu_manifest)
+        cuda_specs = runtime_pack_smoke.install_probe_specs(cuda_manifest)
+
+        self.assertEqual(cpu_specs, runtime_pack_smoke.INSTALL_PROBE_SPECS)
+        self.assertEqual(cuda_specs[0], 'paddlepaddle-gpu>=3.2.1,<3.3.0')
+        self.assertEqual(cuda_specs[1:], runtime_pack_smoke.INSTALL_PROBE_SPECS[1:])
 
     def test_fixture_smoke_passes_but_release_smoke_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

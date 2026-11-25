@@ -221,6 +221,8 @@
     "allow-runtime-get-bootstrap-plan",
     "allow-runtime-repair",
     "allow-runtime-bootstrap-start",
+    "allow-runtime-get-gpu-offer",
+    "allow-runtime-switch-to-gpu-start",
     "allow-runtime-cancel-download",
     "allow-logs-get",
     "allow-logs-clear",

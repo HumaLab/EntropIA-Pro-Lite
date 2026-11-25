@@ -19,7 +19,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Clone, Debug, Default)]
-pub struct RuntimeManager;
+pub struct RuntimeManager {
+    /// Forces the CPU/CUDA choice in tests; `None` probes the machine.
+    accelerator: Option<crate::runtime::accelerator::RuntimeAccelerator>,
+    /// Replace a healthy CPU runtime with the CUDA one (the user's switch).
+    gpu_switch: bool,
+}
 
 const RUNTIME_PACK_ROOT_ENV: &str = "ENTROPIA_RUNTIME_PACK_ROOT";
 
@@ -69,9 +74,53 @@ fn log_if_changed(last: &std::sync::Mutex<Option<String>>, line: &str, details: 
     true
 }
 
+/// The GPU runtime a CUDA machine still on the CPU runtime can switch to.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GpuRuntimeOffer {
+    pub pack_version: String,
+    pub archive_size: u64,
+}
+
 impl RuntimeManager {
     pub fn new() -> Self {
-        Self
+        Self {
+            accelerator: None,
+            gpu_switch: false,
+        }
+    }
+
+    /// A manager that replaces a healthy CPU runtime with the CUDA one when
+    /// this machine runs CUDA and a CUDA pack is published. Only the user's
+    /// own request builds one: the switch downloads several GB.
+    pub fn for_gpu_switch() -> Self {
+        Self {
+            accelerator: None,
+            gpu_switch: true,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_accelerator(accelerator: crate::runtime::accelerator::RuntimeAccelerator) -> Self {
+        Self {
+            accelerator: Some(accelerator),
+            gpu_switch: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn gpu_switch_with_accelerator(
+        accelerator: crate::runtime::accelerator::RuntimeAccelerator,
+    ) -> Self {
+        Self {
+            accelerator: Some(accelerator),
+            gpu_switch: true,
+        }
+    }
+
+    fn accelerator(&self) -> crate::runtime::accelerator::RuntimeAccelerator {
+        self.accelerator
+            .unwrap_or_else(crate::runtime::accelerator::detect_runtime_accelerator)
     }
 
     #[cfg(test)]
@@ -168,6 +217,40 @@ impl RuntimeManager {
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
         let remote_catalog = configured_bootstrap_catalog(app_handle)?;
         self.status_for_tests_with_catalog(&bundle_root, &app_data_dir, remote_catalog)
+    }
+
+    /// The GPU runtime this machine can switch to, if any; see
+    /// [`gpu_switch_release`].
+    pub fn gpu_runtime_offer(
+        &self,
+        app_handle: &AppHandle,
+    ) -> Result<Option<GpuRuntimeOffer>, String> {
+        let bundle_root = resolve_bundle_root(app_handle)?;
+        let app_data_dir = crate::path_utils::cache_dir(app_handle)
+            .map_err(|error| format!("Failed to get app data dir: {error}"))?;
+        let remote_catalog = configured_bootstrap_catalog(app_handle)?;
+        self.gpu_runtime_offer_for_tests(&bundle_root, &app_data_dir, remote_catalog)
+    }
+
+    pub fn gpu_runtime_offer_for_tests(
+        &self,
+        bundle_root: &Path,
+        app_data_dir: &Path,
+        remote_catalog: BootstrapRemoteCatalog,
+    ) -> Result<Option<GpuRuntimeOffer>, String> {
+        let Ok(manifest) = self.load_manifest(bundle_root) else {
+            return Ok(None);
+        };
+        let installed =
+            self.status_for_tests_with_catalog(bundle_root, app_data_dir, remote_catalog.clone())?;
+        Ok(
+            gpu_switch_release(self.accelerator(), &installed, &manifest, &remote_catalog).map(
+                |release| GpuRuntimeOffer {
+                    pack_version: release.pack_version.clone(),
+                    archive_size: release.archive_size,
+                },
+            ),
+        )
     }
 
     pub fn bootstrap_plan(&self, app_handle: &AppHandle) -> Result<BootstrapPlan, String> {
@@ -436,9 +519,17 @@ impl RuntimeManager {
         app_data_dir: &Path,
     ) -> Option<(std::path::PathBuf, RuntimeStatus)> {
         let runtime_dir = runtime_root(app_data_dir);
-        let entries = fs::read_dir(&runtime_dir).ok()?;
+        let mut entries: Vec<_> = fs::read_dir(&runtime_dir).ok()?.flatten().collect();
+        // A stable order, whatever the file system lists first.
+        entries.sort_by_key(|entry| entry.file_name());
+        let wants_cuda =
+            self.accelerator() == crate::runtime::accelerator::RuntimeAccelerator::Cuda;
+        // A CPU and a CUDA runtime can both be present for a while (switching
+        // to the GPU, or a folder that could not be retired): the one for
+        // this machine's hardware wins, any other healthy one is the fallback.
+        let mut fallback = None;
 
-        for entry in entries.flatten() {
+        for entry in entries {
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -460,11 +551,14 @@ impl RuntimeManager {
                 continue;
             };
             if status.state == RuntimeState::Healthy {
-                return Some((path, status));
+                if manifest.ships_cuda_paddle() == wants_cuda {
+                    return Some((path, status));
+                }
+                fallback.get_or_insert((path, status));
             }
         }
 
-        None
+        fallback
     }
 
     pub fn hydrated_runtime_root_for_tests(
@@ -644,6 +738,13 @@ impl RuntimeManager {
             &mut dyn FnMut(RuntimeOperation),
         ) -> Result<crate::runtime::download::BootstrapDownloadOutcome, String>,
     {
+        // The runtime a GPU switch may replace, noted before it happens.
+        let before_switch = if self.gpu_switch {
+            self.discover_hydrated_runtime_for_tests(app_data_dir)
+                .map(|(path, _)| path)
+        } else {
+            None
+        };
         let status = self.ensure_ready_or_bootstrap_checked(
             bundle_root,
             app_data_dir,
@@ -653,6 +754,13 @@ impl RuntimeManager {
             on_progress,
         )?;
         if status.state == RuntimeState::Healthy {
+            let active = status
+                .pack_version
+                .as_deref()
+                .map(|pack_version| managed_pack_dir(app_data_dir, pack_version));
+            if let Some(replaced) = before_switch.filter(|path| Some(path) != active.as_ref()) {
+                retire_replaced_runtime_after_switch(app_data_dir, &replaced);
+            }
             retire_unused_runtimes_after_ready(app_data_dir, &status);
         }
         Ok(status)
@@ -700,17 +808,26 @@ impl RuntimeManager {
         // healthy (see `retire_unused_runtimes_after_ready`): before that the
         // previous runtime may still be in use, and it is all there is.
 
-        let current_status =
+        let mut current_status =
             inspect_runtime(bundle_root, app_data_dir, &manifest, remote_catalog.clone())?;
-        if current_status.state == RuntimeState::Healthy {
-            return Ok(current_status);
-        }
-        if let Some(existing_status) = self.discover_hydrated_runtime_status_for_tests(app_data_dir)
-        {
-            return Ok(existing_status);
+        let installed = if current_status.state == RuntimeState::Healthy {
+            Some(current_status.clone())
+        } else {
+            self.discover_hydrated_runtime_status_for_tests(app_data_dir)
+        };
+        if let Some(installed) = installed {
+            // A healthy runtime stays, except on the user's GPU switch with a
+            // CUDA pack to switch to; that one plans as if none were there.
+            if !self.gpu_switch
+                || gpu_switch_release(self.accelerator(), &installed, &manifest, &remote_catalog)
+                    .is_none()
+            {
+                return Ok(installed);
+            }
+            current_status.state = RuntimeState::Fixture;
         }
 
-        let plan = BootstrapController::new().plan(
+        let plan = BootstrapController::for_accelerator(self.accelerator()).plan(
             &current_status,
             &manifest,
             app_data_dir,
@@ -750,7 +867,12 @@ impl RuntimeManager {
                 };
                 let release = crate::runtime::manifest::BootstrapReleaseManifest {
                     app_version: manifest.app_version.clone(),
-                    platform: manifest.platform.clone(),
+                    // The signed platform: `linux-x86_64-cuda` for the CUDA pack.
+                    platform: plan
+                        .download
+                        .as_ref()
+                        .and_then(|download| download.release_platform.clone())
+                        .unwrap_or_else(|| manifest.platform.clone()),
                     pack_version: plan.pack_version.clone().ok_or_else(|| {
                         "Trusted remote bootstrap plan is missing pack version".to_string()
                     })?,
@@ -1391,6 +1513,18 @@ fn retire_unused_runtimes_after_ready(app_data_dir: &Path, status: &RuntimeStatu
     }
 }
 
+/// Retires the runtime a GPU switch replaced; housekeeping like
+/// [`retire_unused_runtimes_after_ready`], never an error.
+fn retire_replaced_runtime_after_switch(app_data_dir: &Path, replaced: &Path) {
+    let report = crate::runtime::sweep::retire_replaced_runtime(app_data_dir, replaced);
+    for path in &report.retired {
+        log::info!(target: "runtime", "Runtime replaced by the GPU runtime retired for deletion: {}", path.display());
+    }
+    for message in &report.kept {
+        log::warn!(target: "runtime", "{message}");
+    }
+}
+
 /// Deletes the retired runtime folders on a thread of its own: a runtime is
 /// several GB, and its deletion must neither hold the operations lock nor
 /// delay the bootstrap's completion. Purges never overlap.
@@ -1960,6 +2094,37 @@ fn incompatible_missing_manifest_status(error: String) -> RuntimeStatus {
     }
 }
 
+/// The CUDA release that would replace the `installed` runtime: only on a
+/// machine that runs CUDA, for a bundle that downloads its runtime, when a
+/// CUDA pack is published for this app version and `installed` is not it.
+fn gpu_switch_release<'a>(
+    accelerator: crate::runtime::accelerator::RuntimeAccelerator,
+    installed: &RuntimeStatus,
+    manifest: &RuntimeManifest,
+    remote_catalog: &'a BootstrapRemoteCatalog,
+) -> Option<&'a crate::runtime::manifest::BootstrapReleaseManifest> {
+    if accelerator != crate::runtime::accelerator::RuntimeAccelerator::Cuda
+        || installed.state != RuntimeState::Healthy
+    {
+        return None;
+    }
+    // A bundle that carries its own runtime never downloads one.
+    if manifest.payload_profile == "release"
+        && !manifest.release_injection_required
+        && manifest.external_artifacts_required.is_empty()
+    {
+        return None;
+    }
+    let BootstrapRemoteCatalog::Available { index, .. } = remote_catalog else {
+        return None;
+    };
+    let release = index.select_release(
+        &manifest.app_version,
+        &crate::runtime::manifest::cuda_release_platform(&manifest.platform),
+    )?;
+    (installed.pack_version.as_deref() != Some(release.pack_version.as_str())).then_some(release)
+}
+
 fn compatibility_status(
     manifest: &RuntimeManifest,
     remote_catalog: BootstrapRemoteCatalog,
@@ -2000,7 +2165,10 @@ fn compatibility_status_with_disk_free(
         return None;
     }
 
-    let bootstrap_plan = BootstrapController::new().plan(
+    let bootstrap_plan = BootstrapController::for_accelerator(
+        crate::runtime::accelerator::detect_runtime_accelerator(),
+    )
+    .plan(
         &RuntimeStatus {
             state: RuntimeState::Fixture,
             pack_version: Some(manifest.pack_version.clone()),
@@ -2827,6 +2995,408 @@ mod tests {
             Some(BootstrapUnavailableReason::NoMatchingRelease)
         );
         assert!(status.bootstrap_required);
+    }
+
+    /// A fixture bundle that must bootstrap remotely, plus a signed CPU
+    /// release and a signed CUDA release of the same archive. Returns the
+    /// bundle dir, the catalog and the public key.
+    fn cpu_and_cuda_catalog(
+        archive_bytes: &[u8],
+    ) -> (tempfile::TempDir, BootstrapRemoteCatalog, String) {
+        use ed25519_dalek::{Signer, SigningKey};
+        let bundle_dir = tempdir().expect("bundle dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
+        let mut manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        manifest.payload_profile = "fixture".to_string();
+        manifest.release_injection_required = true;
+        manifest.external_artifacts_required = vec!["relocatable-python".to_string()];
+        write_manifest(bundle_dir.path(), &manifest);
+
+        let (cpu_release, public_key) = build_signed_release(archive_bytes);
+        let signing_key = SigningKey::from_bytes(&[11u8; 32]);
+        let mut cuda_release = cpu_release.clone();
+        cuda_release.platform = crate::runtime::manifest::cuda_release_platform(
+            &crate::runtime::paths::current_runtime_platform(),
+        );
+        cuda_release.archive_url = "https://example.com/runtime-pack-cuda.zip".to_string();
+        let signature = signing_key.sign(cuda_release.signature_payload().as_bytes());
+        cuda_release.signature =
+            base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+
+        let catalog = BootstrapRemoteCatalog::Available {
+            source: BootstrapRemoteSource {
+                manifest_url: "https://example.com/bootstrap.json".to_string(),
+                public_key_id: "entropia-root".to_string(),
+            },
+            index: crate::runtime::manifest::BootstrapManifestIndex {
+                channel: "stable".to_string(),
+                generated_at: "2026-11-24T00:00:00Z".to_string(),
+                releases: vec![cuda_release, cpu_release],
+            },
+        };
+        (bundle_dir, catalog, public_key)
+    }
+
+    /// Bootstraps against `cpu_and_cuda_catalog` and returns the final status
+    /// plus the archive URL the downloader was asked for.
+    fn bootstrap_with_accelerator(
+        accelerator: crate::runtime::accelerator::RuntimeAccelerator,
+    ) -> (RuntimeStatus, String) {
+        let app_data_dir = tempdir().expect("app data dir");
+        let archive_bytes = runtime_archive_bytes();
+        let (bundle_dir, catalog, public_key) = cpu_and_cuda_catalog(&archive_bytes);
+        let requested_url = std::cell::RefCell::new(String::new());
+
+        let status = RuntimeManager::with_accelerator(accelerator)
+            .ensure_ready_or_bootstrap_for_tests_with_remote_support(
+                bundle_dir.path(),
+                app_data_dir.path(),
+                catalog,
+                |_| Ok(public_key.clone()),
+                |source_manifest_url, release, app_data_dir, public_key_base64, on_progress| {
+                    *requested_url.borrow_mut() = release.archive_url.clone();
+                    crate::runtime::download::download_and_activate_remote_runtime_with_fetch(
+                        source_manifest_url,
+                        release,
+                        app_data_dir,
+                        public_key_base64,
+                        |_| Ok(std::io::Cursor::new(archive_bytes.clone())),
+                        on_progress,
+                    )
+                },
+                |_| {},
+            )
+            .expect("bootstrap");
+        assert!(app_data_dir
+            .path()
+            .join("runtime")
+            .join("2026.05.1")
+            .join("manifest.json")
+            .is_file());
+        (status, requested_url.into_inner())
+    }
+
+    #[test]
+    fn a_machine_without_a_cuda_gpu_still_downloads_the_cpu_pack() {
+        let (status, url) =
+            bootstrap_with_accelerator(crate::runtime::accelerator::RuntimeAccelerator::Cpu);
+        assert_eq!(status.state, RuntimeState::Healthy);
+        assert_eq!(url, "https://example.com/runtime-pack.zip");
+    }
+
+    #[test]
+    fn a_cuda_gpu_downloads_verifies_and_activates_the_signed_cuda_pack() {
+        // The CUDA release is signed over `{platform}-cuda` while the pack
+        // inside declares the OS platform: the download must verify against
+        // the former and activate the latter.
+        let (status, url) =
+            bootstrap_with_accelerator(crate::runtime::accelerator::RuntimeAccelerator::Cuda);
+        assert_eq!(status.state, RuntimeState::Healthy);
+        assert_eq!(url, "https://example.com/runtime-pack-cuda.zip");
+    }
+
+    const CPU_PACK: &str = "2026.05.1";
+    const CUDA_PACK: &str = "2026.05.1-cuda";
+
+    /// A signed release of `archive` for `platform` and `pack_version`.
+    fn signed_release_of(
+        archive: &[u8],
+        platform: String,
+        pack_version: &str,
+        archive_url: &str,
+    ) -> BootstrapReleaseManifest {
+        use ed25519_dalek::{Signer, SigningKey};
+        let (mut release, _) = build_signed_release(archive);
+        release.platform = platform;
+        release.pack_version = pack_version.to_string();
+        release.archive_url = archive_url.to_string();
+        let signature =
+            SigningKey::from_bytes(&[11u8; 32]).sign(release.signature_payload().as_bytes());
+        release.signature = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+        release
+    }
+
+    /// A machine whose CPU runtime is installed, with a catalog that also
+    /// publishes a CUDA pack (unless `with_cuda_release` is false).
+    struct InstalledCpuRuntime {
+        bundle_dir: tempfile::TempDir,
+        app_data_dir: tempfile::TempDir,
+        catalog: BootstrapRemoteCatalog,
+        public_key: String,
+        cuda_archive: Vec<u8>,
+    }
+
+    fn installed_cpu_runtime(with_cuda_release: bool) -> InstalledCpuRuntime {
+        let cpu_archive =
+            crate::runtime::download::test_support::runtime_archive_bytes_for(CPU_PACK, false);
+        let cuda_archive =
+            crate::runtime::download::test_support::runtime_archive_bytes_for(CUDA_PACK, true);
+        let (bundle_dir, _, public_key) = cpu_and_cuda_catalog(&cpu_archive);
+        let platform = crate::runtime::paths::current_runtime_platform();
+        let mut releases = vec![signed_release_of(
+            &cpu_archive,
+            platform.clone(),
+            CPU_PACK,
+            "https://example.com/runtime-pack.zip",
+        )];
+        if with_cuda_release {
+            releases.insert(
+                0,
+                signed_release_of(
+                    &cuda_archive,
+                    crate::runtime::manifest::cuda_release_platform(&platform),
+                    CUDA_PACK,
+                    "https://example.com/runtime-pack-cuda.zip",
+                ),
+            );
+        }
+        let catalog = BootstrapRemoteCatalog::Available {
+            source: BootstrapRemoteSource {
+                manifest_url: "https://example.com/bootstrap.json".to_string(),
+                public_key_id: "entropia-root".to_string(),
+            },
+            index: crate::runtime::manifest::BootstrapManifestIndex {
+                channel: "stable".to_string(),
+                generated_at: "2026-11-24T00:00:00Z".to_string(),
+                releases,
+            },
+        };
+        let app_data_dir = tempdir().expect("app data dir");
+        let installed = InstalledCpuRuntime {
+            bundle_dir,
+            app_data_dir,
+            catalog,
+            public_key,
+            cuda_archive,
+        };
+        let (status, url) = installed.ensure_ready(
+            RuntimeManager::with_accelerator(crate::runtime::accelerator::RuntimeAccelerator::Cpu),
+            cpu_archive,
+        );
+        assert_eq!(status.pack_version.as_deref(), Some(CPU_PACK));
+        assert_eq!(url.as_deref(), Some("https://example.com/runtime-pack.zip"));
+        installed
+    }
+
+    impl InstalledCpuRuntime {
+        /// Runs `manager` over this machine, serving `archive` to any
+        /// download; returns the status and the URL downloaded, if any.
+        fn ensure_ready(
+            &self,
+            manager: RuntimeManager,
+            archive: Vec<u8>,
+        ) -> (RuntimeStatus, Option<String>) {
+            let requested = std::cell::RefCell::new(None);
+            let status = manager
+                .ensure_ready_or_bootstrap_for_tests_with_remote_support(
+                    self.bundle_dir.path(),
+                    self.app_data_dir.path(),
+                    self.catalog.clone(),
+                    |_| Ok(self.public_key.clone()),
+                    |source_manifest_url, release, app_data_dir, public_key_base64, on_progress| {
+                        *requested.borrow_mut() = Some(release.archive_url.clone());
+                        crate::runtime::download::download_and_activate_remote_runtime_with_fetch(
+                            source_manifest_url,
+                            release,
+                            app_data_dir,
+                            public_key_base64,
+                            |_| Ok(std::io::Cursor::new(archive.clone())),
+                            on_progress,
+                        )
+                    },
+                    |_| {},
+                )
+                .expect("ensure ready");
+            (status, requested.into_inner())
+        }
+
+        fn offer(
+            &self,
+            accelerator: crate::runtime::accelerator::RuntimeAccelerator,
+        ) -> Option<GpuRuntimeOffer> {
+            RuntimeManager::with_accelerator(accelerator)
+                .gpu_runtime_offer_for_tests(
+                    self.bundle_dir.path(),
+                    self.app_data_dir.path(),
+                    self.catalog.clone(),
+                )
+                .expect("offer")
+        }
+
+        fn active_pack(
+            &self,
+            accelerator: crate::runtime::accelerator::RuntimeAccelerator,
+        ) -> Option<String> {
+            RuntimeManager::with_accelerator(accelerator)
+                .status_for_tests_with_catalog(
+                    self.bundle_dir.path(),
+                    self.app_data_dir.path(),
+                    self.catalog.clone(),
+                )
+                .expect("status")
+                .pack_version
+        }
+
+        fn runtime_dir(&self, pack_version: &str) -> PathBuf {
+            self.app_data_dir.path().join("runtime").join(pack_version)
+        }
+    }
+
+    #[test]
+    fn a_cpu_runtime_stays_on_a_cuda_machine_until_the_user_switches() {
+        let machine = installed_cpu_runtime(true);
+
+        let (status, downloaded) = machine.ensure_ready(
+            RuntimeManager::with_accelerator(crate::runtime::accelerator::RuntimeAccelerator::Cuda),
+            machine.cuda_archive.clone(),
+        );
+
+        assert_eq!(status.state, RuntimeState::Healthy);
+        assert_eq!(status.pack_version.as_deref(), Some(CPU_PACK));
+        assert_eq!(
+            downloaded, None,
+            "no multi-GB download behind the user's back"
+        );
+        assert!(machine
+            .runtime_dir(CPU_PACK)
+            .join("manifest.json")
+            .is_file());
+    }
+
+    #[test]
+    fn a_cuda_machine_on_the_cpu_runtime_is_offered_the_gpu_runtime() {
+        let machine = installed_cpu_runtime(true);
+
+        let offer = machine
+            .offer(crate::runtime::accelerator::RuntimeAccelerator::Cuda)
+            .expect("offer");
+
+        assert_eq!(offer.pack_version, CUDA_PACK);
+        assert_eq!(offer.archive_size, machine.cuda_archive.len() as u64);
+    }
+
+    #[test]
+    fn no_gpu_offer_without_a_cuda_gpu_or_a_published_cuda_pack() {
+        let machine = installed_cpu_runtime(true);
+        assert_eq!(
+            machine.offer(crate::runtime::accelerator::RuntimeAccelerator::Cpu),
+            None
+        );
+
+        let without_cuda_release = installed_cpu_runtime(false);
+        assert_eq!(
+            without_cuda_release.offer(crate::runtime::accelerator::RuntimeAccelerator::Cuda),
+            None
+        );
+    }
+
+    #[test]
+    fn the_gpu_switch_downloads_the_cuda_pack_and_retires_the_cpu_runtime() {
+        let machine = installed_cpu_runtime(true);
+
+        let (status, downloaded) = machine.ensure_ready(
+            RuntimeManager::gpu_switch_with_accelerator(
+                crate::runtime::accelerator::RuntimeAccelerator::Cuda,
+            ),
+            machine.cuda_archive.clone(),
+        );
+
+        assert_eq!(status.state, RuntimeState::Healthy);
+        assert_eq!(status.pack_version.as_deref(), Some(CUDA_PACK));
+        assert_eq!(
+            downloaded.as_deref(),
+            Some("https://example.com/runtime-pack-cuda.zip")
+        );
+        assert!(machine
+            .runtime_dir(CUDA_PACK)
+            .join("manifest.json")
+            .is_file());
+        assert!(
+            !machine.runtime_dir(CPU_PACK).exists(),
+            "the CPU runtime is retired once the GPU one is ready"
+        );
+        assert_eq!(
+            machine
+                .active_pack(crate::runtime::accelerator::RuntimeAccelerator::Cuda)
+                .as_deref(),
+            Some(CUDA_PACK)
+        );
+        assert_eq!(
+            machine.offer(crate::runtime::accelerator::RuntimeAccelerator::Cuda),
+            None,
+            "nothing left to offer"
+        );
+    }
+
+    #[test]
+    fn the_gpu_switch_without_a_cuda_gpu_keeps_the_cpu_runtime() {
+        let machine = installed_cpu_runtime(true);
+
+        let (status, downloaded) = machine.ensure_ready(
+            RuntimeManager::gpu_switch_with_accelerator(
+                crate::runtime::accelerator::RuntimeAccelerator::Cpu,
+            ),
+            machine.cuda_archive.clone(),
+        );
+
+        assert_eq!(status.pack_version.as_deref(), Some(CPU_PACK));
+        assert_eq!(downloaded, None);
+    }
+
+    #[test]
+    fn with_both_runtimes_present_the_machine_uses_the_one_for_its_hardware() {
+        let machine = installed_cpu_runtime(true);
+        // The CUDA runtime lands next to the CPU one (as when retiring the
+        // CPU folder failed).
+        let (cuda_release, _) = match &machine.catalog {
+            BootstrapRemoteCatalog::Available { index, .. } => (index.releases[0].clone(), ()),
+            _ => unreachable!(),
+        };
+        crate::runtime::download::download_and_activate_remote_runtime_with_fetch(
+            "https://example.com/bootstrap.json",
+            &cuda_release,
+            machine.app_data_dir.path(),
+            &machine.public_key,
+            |_| Ok(std::io::Cursor::new(machine.cuda_archive.clone())),
+            &mut |_: RuntimeOperation| {},
+        )
+        .expect("activate cuda runtime");
+        assert!(machine
+            .runtime_dir(CPU_PACK)
+            .join("manifest.json")
+            .is_file());
+        assert!(machine
+            .runtime_dir(CUDA_PACK)
+            .join("manifest.json")
+            .is_file());
+
+        assert_eq!(
+            machine
+                .active_pack(crate::runtime::accelerator::RuntimeAccelerator::Cuda)
+                .as_deref(),
+            Some(CUDA_PACK)
+        );
+        assert_eq!(
+            machine
+                .active_pack(crate::runtime::accelerator::RuntimeAccelerator::Cpu)
+                .as_deref(),
+            Some(CPU_PACK)
+        );
     }
 
     #[test]

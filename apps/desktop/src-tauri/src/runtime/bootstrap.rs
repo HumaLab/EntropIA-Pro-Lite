@@ -29,11 +29,20 @@ pub enum BootstrapRemoteCatalog {
     },
 }
 
-pub struct BootstrapController;
+pub struct BootstrapController {
+    accelerator: crate::runtime::accelerator::RuntimeAccelerator,
+}
 
 impl BootstrapController {
+    /// Plans the CPU runtime, as every build before the CUDA pack did.
     pub fn new() -> Self {
-        Self
+        Self::for_accelerator(crate::runtime::accelerator::RuntimeAccelerator::Cpu)
+    }
+
+    /// Plans the runtime for this accelerator: the CUDA release when it is
+    /// `Cuda` and one is published, otherwise the CPU release.
+    pub fn for_accelerator(accelerator: crate::runtime::accelerator::RuntimeAccelerator) -> Self {
+        Self { accelerator }
     }
 
     pub fn plan(
@@ -105,9 +114,11 @@ impl BootstrapController {
                 }
             }
             BootstrapRemoteCatalog::Available { source, index } => {
-                let Some(release) =
-                    index.select_release(&bundle_manifest.app_version, &bundle_manifest.platform)
-                else {
+                let Some(release) = index.select_release_for(
+                    &bundle_manifest.app_version,
+                    &bundle_manifest.platform,
+                    self.accelerator,
+                ) else {
                     return BootstrapPlan {
                         eligible: false,
                         required: true,
@@ -242,6 +253,7 @@ fn download_plan_from_release(
         archive_sha256: release.archive_sha256.clone(),
         archive_size: release.archive_size,
         signature: release.signature.clone(),
+        release_platform: Some(release.platform.clone()),
         archive_path: paths.archive_path.display().to_string(),
         staging_path: paths.staging_path.display().to_string(),
         resume_metadata_path: paths.resume_metadata_path.display().to_string(),

@@ -1,4 +1,6 @@
 #[cfg(feature = "local-ml")]
+pub mod accelerator;
+#[cfg(feature = "local-ml")]
 pub mod bootstrap;
 pub mod bootstrap_types;
 #[cfg(feature = "local-ml")]
@@ -98,16 +100,64 @@ pub fn runtime_repair(_app_handle: tauri::AppHandle) -> Result<status::RuntimeSt
 pub async fn runtime_bootstrap_start(
     app_handle: tauri::AppHandle,
 ) -> Result<status::RuntimeStatus, String> {
+    start_bootstrap_worker(app_handle, "runtime_bootstrap_start", RuntimeManager::new)
+}
+
+/// The GPU runtime this machine can switch to (an NVIDIA GPU still on the
+/// CPU runtime, with a CUDA pack published), or none.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub fn runtime_get_gpu_offer(
+    app_handle: tauri::AppHandle,
+) -> Result<Option<manager::GpuRuntimeOffer>, String> {
+    RuntimeManager::new().gpu_runtime_offer(&app_handle)
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub fn runtime_get_gpu_offer(_app_handle: tauri::AppHandle) -> Result<Option<()>, String> {
+    Ok(None)
+}
+
+/// The user's switch to the GPU runtime: downloads the CUDA pack on the same
+/// background worker as the bootstrap; the CPU runtime keeps serving until
+/// the new one is healthy, and is retired after.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn runtime_switch_to_gpu_start(
+    app_handle: tauri::AppHandle,
+) -> Result<status::RuntimeStatus, String> {
+    start_bootstrap_worker(
+        app_handle,
+        "runtime_switch_to_gpu_start",
+        RuntimeManager::for_gpu_switch,
+    )
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn runtime_switch_to_gpu_start(
+    _app_handle: tauri::AppHandle,
+) -> Result<status::RuntimeStatus, String> {
+    Ok(lite_runtime_status())
+}
+
+#[cfg(feature = "local-ml")]
+fn start_bootstrap_worker(
+    app_handle: tauri::AppHandle,
+    label: &'static str,
+    new_manager: fn() -> RuntimeManager,
+) -> Result<status::RuntimeStatus, String> {
     use crate::runtime::download::BootstrapSpawn;
 
     let worker_app = app_handle.clone();
-    match crate::runtime::download::spawn_bootstrap_download("runtime_bootstrap_start", move || {
+    match crate::runtime::download::spawn_bootstrap_download(label, move || {
         // Cleared on launch and only here: an idempotent busy-start must
         // never disarm another download's cancel. A cancel arriving in
         // the microseconds between spawn and this line is swallowed —
         // negligible against disarming a live transfer instead.
         crate::runtime::download::clear_bootstrap_cancel();
-        let manager = RuntimeManager::new();
+        let manager = new_manager();
         // A panicking worker stays observable: the ops-lock guard and
         // the running flag still release via `Drop` during unwinding,
         // and the panic is caught here so the transfer dies logged.
