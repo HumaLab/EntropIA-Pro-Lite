@@ -17,20 +17,37 @@ pub enum RuntimeAccelerator {
     Cuda,
 }
 
-/// Oldest NVIDIA driver (major version) that runs the CUDA pack. The pack
-/// ships PaddlePaddle built for CUDA 12.9, which needs driver 575 or newer
-/// on Linux; an older driver would download several GB only to fall back to
-/// the CPU at run time, so it gets the CPU pack instead.
+/// Oldest NVIDIA driver (major version) that runs the CUDA pack on Linux. The
+/// pack ships PaddlePaddle built for CUDA 12.9, which needs driver 575.51.03
+/// or newer there; an older driver would download several GB only to fall
+/// back to the CPU at run time, so it gets the CPU pack instead.
 pub const MIN_CUDA_DRIVER_MAJOR: u32 = 575;
+
+/// The same floor on Windows, where CUDA 12.9 needs driver 576.02 or newer.
+pub const MIN_CUDA_DRIVER_MAJOR_WINDOWS: u32 = 576;
+
+/// The driver floor for one OS, named as `std::env::consts::OS` names it.
+fn min_cuda_driver_major(os: &str) -> u32 {
+    if os == "windows" {
+        MIN_CUDA_DRIVER_MAJOR_WINDOWS
+    } else {
+        MIN_CUDA_DRIVER_MAJOR
+    }
+}
 
 /// Forces the choice for testing and support: `cpu` or `cuda`. Anything else
 /// (or unset) leaves the decision to the GPU probe.
 pub const ACCELERATOR_OVERRIDE_ENV: &str = "ENTROPIA_RUNTIME_ACCELERATOR";
 
-/// The accelerator for one `nvidia-smi --query-gpu=driver_version` output:
-/// CUDA when the first GPU's driver is new enough, CPU otherwise (no NVIDIA
-/// GPU, no driver, or output that does not parse).
+/// The accelerator for one `nvidia-smi --query-gpu=driver_version` output on
+/// this OS: CUDA when the first GPU's driver is new enough, CPU otherwise (no
+/// NVIDIA GPU, no driver, or output that does not parse).
 pub fn accelerator_for_driver_output(output: Option<&str>) -> RuntimeAccelerator {
+    accelerator_for_driver_output_on(std::env::consts::OS, output)
+}
+
+/// `accelerator_for_driver_output` for a named OS.
+fn accelerator_for_driver_output_on(os: &str, output: Option<&str>) -> RuntimeAccelerator {
     let Some(first_line) = output.and_then(|text| text.lines().find(|l| !l.trim().is_empty()))
     else {
         return RuntimeAccelerator::Cpu;
@@ -41,7 +58,7 @@ pub fn accelerator_for_driver_output(output: Option<&str>) -> RuntimeAccelerator
         .next()
         .and_then(|part| part.trim().parse::<u32>().ok());
     match major {
-        Some(major) if major >= MIN_CUDA_DRIVER_MAJOR => RuntimeAccelerator::Cuda,
+        Some(major) if major >= min_cuda_driver_major(os) => RuntimeAccelerator::Cuda,
         _ => RuntimeAccelerator::Cpu,
     }
 }
@@ -103,7 +120,7 @@ mod tests {
             RuntimeAccelerator::Cuda
         );
         assert_eq!(
-            accelerator_for_driver_output(Some("575.51.03")),
+            accelerator_for_driver_output_on("linux", Some("575.51.03")),
             RuntimeAccelerator::Cuda
         );
     }
@@ -126,6 +143,28 @@ mod tests {
         assert_eq!(
             accelerator_for_driver_output(Some("NVIDIA-SMI has failed")),
             RuntimeAccelerator::Cpu
+        );
+    }
+
+    #[test]
+    fn windows_needs_the_windows_driver_that_ships_cuda_12_9() {
+        // CUDA 12.9 needs driver 575.51.03 on Linux but 576.02 on Windows.
+        assert_eq!(
+            accelerator_for_driver_output_on("windows", Some("576.02")),
+            RuntimeAccelerator::Cuda
+        );
+        assert_eq!(
+            accelerator_for_driver_output_on("windows", Some("575.64")),
+            RuntimeAccelerator::Cpu
+        );
+        // A Kepler card stuck on the last driver it gets keeps the CPU pack.
+        assert_eq!(
+            accelerator_for_driver_output_on("windows", Some("475.14")),
+            RuntimeAccelerator::Cpu
+        );
+        assert_eq!(
+            accelerator_for_driver_output_on("linux", Some("575.51.03")),
+            RuntimeAccelerator::Cuda
         );
     }
 
