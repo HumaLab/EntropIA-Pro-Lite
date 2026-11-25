@@ -484,6 +484,31 @@ describe('runtime pack packaging', () => {
     expect(linuxJob).toContain('export LD_LIBRARY_PATH="$CUDA_STUB_DIR"')
   })
 
+  it('builds the Windows CUDA pack as its own platform without touching the CPU pack', () => {
+    const buildWorkflow = readRepoFile('.github/workflows/build-runtime-pack.yml')
+    const publishWorkflow = readRepoFile('.github/workflows/publish-runtime-bootstrap.yml')
+    const windowsJob = topLevelJobText(buildWorkflow, 'build')
+
+    for (const workflow of [buildWorkflow, publishWorkflow]) {
+      expect(workflow).toContain('- windows-x86_64-cuda')
+    }
+    expect(windowsJob).toContain("if: startsWith(inputs.platform, 'windows-x86_64')")
+    // The GPU build comes from Paddle's cu129 index; the CPU pack keeps the
+    // PyPI wheel exactly as before.
+    expect(windowsJob).toContain('"paddlepaddle-gpu>=3.2.1,<3.3.0"')
+    expect(windowsJob).toContain('https://www.paddlepaddle.org.cn/packages/stable/cu129/')
+    expect(windowsJob).toContain('uv pip install --python "$PY" "paddlepaddle>=3.2.1,<3.3.0"')
+    // The pack inside still declares the OS platform, and CI proves the CUDA
+    // wheels were repacked.
+    expect(windowsJob).toContain('--platform windows-x86_64')
+    expect(windowsJob).not.toContain('--platform windows-x86_64-cuda')
+    expect(windowsJob).toContain('nvidia_cudnn_cu12-')
+    // The CPU pack keeps the artifact name publish already expects.
+    expect(windowsJob).toContain(
+      "name: ${{ inputs.platform == 'windows-x86_64' && 'runtime-archive' || format('runtime-archive-{0}', inputs.platform) }}"
+    )
+  })
+
   it('lints the Pro (local-ml) build on Linux in CI', () => {
     const ciWorkflow = readRepoFile('.github/workflows/ci.yml')
     const job = topLevelJobText(ciWorkflow, 'rust-pro-linux')

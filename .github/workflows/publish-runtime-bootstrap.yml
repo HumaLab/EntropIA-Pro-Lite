@@ -22,6 +22,7 @@ on:
           - windows-x86_64
           - linux-x86_64
           - linux-x86_64-cuda
+          - windows-x86_64-cuda
       app_version:
         description: 'App version this manifest release targets (must match the installed app)'
         required: true
