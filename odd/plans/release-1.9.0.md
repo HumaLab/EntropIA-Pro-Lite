@@ -68,7 +68,8 @@ This release brings **PaddleOCR-VL to NVIDIA GPUs** on Windows and Linux, speeds
 
   `check-runtime-bootstrap.mjs --app-version 1.9.0` passes on both platforms.
 - [x] Windows CUDA checked end to end on an A10G: the installer picked the CUDA pack, installed it, and OCRH ran on the GPU (L30). Linux CUDA checked on an RTX 5090 (L24).
-- [ ] PR to main, CI green, merge.
-- [ ] Push tag `v1.9.0` on main (Pro installers + Lite MSIX + draft release).
-- [ ] Release draft: title «EntropIA Pro & Lite v1.9.0», paste Part 1 as the body, publish.
-- [ ] Build the Pro Store MSIX 1.9.0.0 (`build-pro-store-msix.ps1`) and upload Pro and Lite MSIX 1.9.0.0 to Partner Center; the Store number does not move with the app version on its own.
+- [x] PR to main, CI green, merge (#441, c3aa217a).
+- [x] Push tag `v1.9.0` on main (Pro installers + Lite MSIX + draft release). Release run 45644843021: the first Windows Pro attempt built but failed silently while creating the draft release; the Linux job then created it, and a rerun of the Windows job uploaded its installers. The draft holds the same 7 assets as 1.8.8.
+- [x] Release draft: title «EntropIA Pro & Lite v1.9.0», paste Part 1 as the body, publish (Latest, 2026-11-25).
+- [x] Build the Pro Store MSIX 1.9.0.0 (`build-pro-store-msix.ps1`, identity `CONICET.EntropIAPro`): `G:\EntropIA-Stack\pro-msix-1.9.0\EntropIAPro-Store-1.9.0.0.msix` (70,543,556 B). Lite MSIX 1.9.0.0 from the release run: `G:\EntropIA-Stack\lite-msix-1.9.0\EntropIALite-Store-HLab-1.9.0.0.msix`.
+- [ ] Upload Pro and Lite MSIX 1.9.0.0 to Partner Center with their release notes; the Store number does not move with the app version on its own.
