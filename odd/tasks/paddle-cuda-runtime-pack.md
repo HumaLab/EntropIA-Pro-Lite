@@ -15,17 +15,17 @@ Branch: `feat/paddle-cuda-runtime-pack` · Delivery: `ask-on-risk` · Tests: `ca
 
 ## Tasks
 
-| ID  | Specs  | Route                       | Status  | Evidence                                                                                         |
-| --- | ------ | --------------------------- | ------- | ------------------------------------------------------------------------------------------------ |
-| T1  | S3     | inline (spike on GPU boxes) | done    | 5090: 1.1 s predict, 5.9 GB peak; 4060 (8 GB): 1.7 s predict, 5.9 GB peak, 3/3 lines read        |
-| T2  | S2, S4 | inline                      | done    | 142 runtime tests; CUDA activation/reuse tests mutation-checked                                  |
-| T3  | S1, S5 | inline                      | done    | run 45469847198 green: 7,399,271,027 B, smoke + offline install OK; staging publish 45473940682  |
-| T4  | S3     | inline (remote)             | done    | both GPUs read real pages with the pack; random hang fixed by safe mode + stall retry (L17-L23)  |
-| T5  | S3, S5 | inline (remote)             | done    | Pro debug build on the 5090, fresh dev profile: staging CUDA pack picked, OCRH on GPU, 52 blocks |
-| T6  | S6     | inline                      | done    | 487c0f0b + 62661775 (ACL entries); PR #434 CI green, merged 2026-11-25                           |
-| T7  | S2, S5 | inline                      | pending | Linux CUDA publish to production waits for the user's OK                                         |
-| T8  | S7, S4 | inline                      | done    | 7b8ef717: Windows driver floor 576; run 45526407341 green (5,343,396,691 B); staging 45532344719 |
-| T9  | S7, S3 | inline (remote)             | blocked | AWS G/VT quota case 179557366300339; Pro installer vs staging: run 45528446537                   |
+| ID  | Specs  | Route                       | Status  | Evidence                                                                                           |
+| --- | ------ | --------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
+| T1  | S3     | inline (spike on GPU boxes) | done    | 5090: 1.1 s predict, 5.9 GB peak; 4060 (8 GB): 1.7 s predict, 5.9 GB peak, 3/3 lines read          |
+| T2  | S2, S4 | inline                      | done    | 142 runtime tests; CUDA activation/reuse tests mutation-checked                                    |
+| T3  | S1, S5 | inline                      | done    | run 45469847198 green: 7,399,271,027 B, smoke + offline install OK; staging publish 45473940682    |
+| T4  | S3     | inline (remote)             | done    | both GPUs read real pages with the pack; random hang fixed by safe mode + stall retry (L17-L23)    |
+| T5  | S3, S5 | inline (remote)             | done    | Pro debug build on the 5090, fresh dev profile: staging CUDA pack picked, OCRH on GPU, 52 blocks   |
+| T6  | S6     | inline                      | done    | 487c0f0b + 62661775 (ACL entries); PR #434 CI green, merged 2026-11-25                             |
+| T7  | S2, S5 | inline                      | done    | Linux CUDA in production for app 1.9.0: publish run 45549397283, manifest 43 entries, 1.8.8 intact |
+| T8  | S7, S4 | inline                      | done    | 7b8ef717: Windows driver floor 576; run 45526407341 green (5,343,396,691 B); staging 45532344719   |
+| T9  | S7, S3 | inline (remote)             | blocked | AWS G/VT quota case 179557366300339; Pro installer vs staging: run 45528446537                     |
 
 T1 spike: paddlepaddle-gpu (cu129) + paddleocr-vl install and run on both GPUs. T2 manifest/bootstrap variant selection with tests pinning the CPU path. T3 CI builds the Linux CUDA pack and publishes to a staging manifest. T4 pack-level GPU run on both machines. T5 Pro Linux build against staging. T6 Dependencias switch. T7 PR, merge, publish to production. T8 Windows CUDA pack in CI and staging. T9 Windows GPU run with a Pro installer built against staging, then Windows production publish.
 
@@ -57,3 +57,4 @@ T1 spike: paddlepaddle-gpu (cu129) + paddleocr-vl install and run on both GPUs. 
 - L24 T5 on the 5090: Pro debug build of cbfebbcd with the staging manifest baked in, `ENTROPIA_DEV_PROFILE=t5-cuda` (sync disabled). Startup logged `runtime accelerator: Cuda (nvidia driver: 580.173.02)`. Debug builds skip the startup bootstrap by design, so "Reintentar descarga" started it: it downloaded `runtime-pack-linux-x86_64-cuda-2026.11.24-cuda129`, verified, extracted, activated (Healthy). The dependency install used the pack's `paddlepaddle_gpu-3.2.2` wheel offline. OCRH on a 1965 La Capital page: `device=gpu`, 52 blocks, 6,553 characters, 31.2 s in PaddleOCR-VL (42.6 s total); `nvidia-smi` listed the runtime's python at 8,496 MiB, GPU 23-32 %.
 - L25 2026-11-24 user: "ARRANCÁ AHORA CON EL ARMADO DEL PACK CUDA". Windows pack on `feat/paddle-cuda-windows-pack` (PR #435): `windows-x86_64-cuda` in Build Runtime Pack and Publish, cu129 `paddlepaddle-gpu` with its pip CUDA libraries, models warmed in a throwaway CPU venv, a wheelhouse check, and a Windows driver floor of 576 (NVIDIA: CUDA 12.9 needs 576.02 on Windows, 575.51.03 on Linux). On the GPU-less runner `paddle 3.2.2 cuda 12.9` imported, the offline install probe resolved 22 packages, archive 4.98 GB (3 parts). Published to `runtime-bootstrap-staging` next to the Linux entry; production untouched.
 - L26 2026-11-25 PR #434 merged after CI went green (the Rust Lite failure was the missing ACL entries for the two GPU commands, fixed in 62661775). For the Windows GPU run, `windows-pro-validation.yml` takes an optional `bootstrap_manifest_url` (a release build ignores the manifest setting); run 45528446537 builds it against staging (attempt 1 failed on an HTTP 503 while bundling, rerun). The input itself was reverted in a76d7312: `windows-pro-validation.test.ts` pins that the workflow takes no inputs, so no dispatch parameter reaches an installer build; the one staging installer comes from f767df76. TensorDock listed no GPUs for the account; moved to AWS: EC2 On-Demand G/VT quota requested 0 -> 8 vCPU, now case 179557366300339.
+- L27 2026-11-25 user: "si, publicalo", then "1.9.0" for the next release. The production manifest is keyed by `(app_version, platform)` and v1.8.8 predates the GPU code, so the Linux CUDA pack (run 45469847198, 7,399,271,027 B) was published for app 1.9.0 to `runtime-bootstrap` (run 45549397283). Manifest now 43 entries; the 1.8.8 CPU entries are unchanged. The 1.9.0 CPU entries still have to be published before that release, as for every version.
