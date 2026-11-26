@@ -67,6 +67,45 @@ async fn run() -> Result<(), String> {
         collection.items.len()
     );
 
+    // A filtered collection is a search scoped to it, in the listing's stable
+    // order: it must narrow the listing and keep every date inside the range.
+    let filtered_query = SearchQuery {
+        collection: Some("opensource".to_string()),
+        year_from: Some(1920),
+        year_to: Some(1930),
+        ..SearchQuery::default()
+    };
+    let filtered = client
+        .search_in_stable_order(&endpoints, &filtered_query, 1, 50)
+        .await
+        .map_err(|e| format!("filtered collection: {e}"))?;
+    expect(
+        filtered.num_found > 0,
+        "filtered collection returned no results",
+    )?;
+    expect(
+        filtered.num_found < collection.num_found,
+        "the year filter did not narrow the collection",
+    )?;
+    let out_of_range: Vec<&str> = filtered
+        .items
+        .iter()
+        .filter_map(|item| item.date.as_deref())
+        .filter(|date| {
+            let year = date.get(..4).and_then(|y| y.parse::<u32>().ok());
+            !matches!(year, Some(1920..=1930))
+        })
+        .collect();
+    expect(
+        out_of_range.is_empty(),
+        &format!("filtered collection has dates out of range: {out_of_range:?}"),
+    )?;
+    println!(
+        "collection opensource 1920-1930: {} found, {} on page 1",
+        filtered.num_found,
+        filtered.items.len()
+    );
+
     let open = client
         .get_item(&endpoints, OPEN_ITEM)
         .await
