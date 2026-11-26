@@ -481,6 +481,7 @@ fn normalize_image_as_bounded_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
 // ---------------------------------------------------------------------------
 
 const OPENROUTER_CHAT_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_API_BASE: &str = "https://openrouter.ai/api/v1";
 
 pub struct OpenRouterClient {
     client: reqwest::Client,
@@ -767,9 +768,33 @@ impl OpenRouterClient {
     /// Test the connection by listing available models.
     /// Returns Ok with a list of model IDs on success, Err on failure.
     pub async fn test_connection(&self) -> Result<Vec<ModelInfo>, String> {
+        self.test_connection_at(OPENROUTER_API_BASE).await
+    }
+
+    async fn test_connection_at(&self, base: &str) -> Result<Vec<ModelInfo>, String> {
+        // `/models` is public and answers 200 to any key, so it cannot tell
+        // a wrong key; `/key` describes the key and rejects unknown ones.
         let response = self
             .client
-            .get("https://openrouter.ai/api/v1/models")
+            .get(format!("{base}/key"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .map_err(|e| {
+                format!(
+                    "OpenRouter connection test failed: {}",
+                    crate::nlp::embeddings::error_chain(&e)
+                )
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("OpenRouter API error ({status}): {body}"));
+        }
+
+        let response = self
+            .client
+            .get(format!("{base}/models"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await
@@ -1377,5 +1402,94 @@ mod tests {
             assert!((value["frequency_penalty"].as_f64().unwrap() + 0.2).abs() < 1e-6);
             assert_eq!(value["stop"], serde_json::json!(["END", "STOP"]));
         }
+    }
+
+    /// Fake OpenRouter: `/key` answers `key_status`; `/models` is public, as
+    /// it is on openrouter.ai, and answers 200 to any key. Returns the base
+    /// URL and the paths it was asked for.
+    fn fake_openrouter(
+        key_status: u16,
+        connections: usize,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("http://{}/api/v1", listener.local_addr().unwrap());
+        // A request that never comes must not hang the test: stop waiting
+        // after a few seconds and report the paths seen so far.
+        listener.set_nonblocking(true).expect("nonblocking");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let handle = std::thread::spawn(move || {
+            let mut paths = Vec::new();
+            while paths.len() < connections && std::time::Instant::now() < deadline {
+                let mut stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(_) => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        continue;
+                    }
+                };
+                stream.set_nonblocking(false).expect("blocking");
+                let mut raw = Vec::new();
+                let mut chunk = [0u8; 4096];
+                while !String::from_utf8_lossy(&raw).contains("\r\n\r\n") {
+                    let read = stream.read(&mut chunk).expect("read");
+                    if read == 0 {
+                        break;
+                    }
+                    raw.extend_from_slice(&chunk[..read]);
+                }
+                let request = String::from_utf8_lossy(&raw).to_string();
+                let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
+                let (status, body) = if path.ends_with("/key") {
+                    if key_status == 200 {
+                        (200, r#"{"data":{"label":"sk-or-v1-abc"}}"#)
+                    } else {
+                        (
+                            key_status,
+                            r#"{"error":{"message":"User not found.","code":401}}"#,
+                        )
+                    }
+                } else {
+                    (
+                        200,
+                        r#"{"data":[{"id":"a/b","name":"A B","context_length":8192}]}"#,
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).expect("write");
+                paths.push(path);
+            }
+            paths
+        });
+        (base, handle)
+    }
+
+    #[tokio::test]
+    async fn a_key_openrouter_does_not_know_fails_the_connection_test() {
+        let (base, server) = fake_openrouter(401, 1);
+        let client = OpenRouterClient::new("zai-key".to_string(), String::new());
+        let Err(error) = client.test_connection_at(&base).await else {
+            panic!("a key OpenRouter rejects must not pass the connection test");
+        };
+        assert!(error.contains("401"), "{error}");
+        assert!(error.contains("User not found."), "{error}");
+        assert_eq!(server.join().unwrap(), vec!["/api/v1/key".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_valid_key_still_lists_the_models() {
+        let (base, server) = fake_openrouter(200, 2);
+        let client = OpenRouterClient::new("sk-or-v1-abc".to_string(), String::new());
+        let models = client.test_connection_at(&base).await.unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "a/b");
+        assert_eq!(models[0].context_length, 8192);
+        assert_eq!(
+            server.join().unwrap(),
+            vec!["/api/v1/key".to_string(), "/api/v1/models".to_string()]
+        );
     }
 }
