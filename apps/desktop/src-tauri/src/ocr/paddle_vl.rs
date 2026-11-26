@@ -1193,12 +1193,14 @@ pub fn create_paddle_vl_engine_result(
         }
         let config = PaddleVlConfig {
             python_path,
-            // The bundled script, never the runtime pack's copy: a pack
-            // installed before this backend existed has no --vl-server-url.
-            script_path: resolve_paddle_vl_script_path_from_roots(
+            // The installer's wrapper, which runs the installer's
+            // `paddle_vl.py` next to it. The runtime pack's scripts are
+            // pinned by hash and stay as they are.
+            script_path: resolve_ocrh_script_path_from_roots(
                 None,
                 resource_dir.as_deref(),
                 Path::new(env!("CARGO_MANIFEST_DIR")),
+                "paddle_vl_server.py",
             ),
             layout_script_path: resolve_ocrh_script_path_from_roots(
                 runtime_root.as_deref(),

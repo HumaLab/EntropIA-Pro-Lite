@@ -9,11 +9,6 @@ Returns both text content (per block, in reading order) and layout regions.
 
 Usage:
     python paddle_vl.py <image_path> [--device cpu|gpu]
-    python paddle_vl.py <image_path> --vl-server-url http://127.0.0.1:PORT [--vl-max-concurrency N]
-
-With --vl-server-url, recognition runs on a llama-server that serves the
-PaddleOCR-VL GGUF model (PaddleOCR's `llama-cpp-server` backend); layout
-detection stays in Paddle on --device.
 
 Output (stdout): Sentinelled JSON — starts with SENTINEL_BEGIN\n and ends with \nSENTINEL_END
                   This allows the Rust side to extract clean JSON even if other
@@ -31,7 +26,6 @@ import io
 import tempfile
 import time
 import traceback
-from types import SimpleNamespace
 
 # Suppress warnings that could corrupt JSON output on stdout
 warnings.filterwarnings("ignore")
@@ -74,11 +68,9 @@ os.environ.setdefault("FLAGS_use_avx", "1")
 # Falling back to the legacy executor avoids this.
 os.environ.setdefault("FLAGS_enable_pir_api", "0")
 
-# Force stdout to be unbuffered so the Rust side sees output promptly. Only
-# when run as the subprocess: the tests import this module.
-if __name__ == "__main__":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", line_buffering=True)
+# Force stdout to be unbuffered so the Rust side sees output promptly
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", line_buffering=True)
 
 SENTINEL_BEGIN = "===VL_JSON_BEGIN==="
 SENTINEL_END = "===VL_JSON_END==="
@@ -175,60 +167,11 @@ def _describe_exception(exc: Exception, tb: str) -> str:
     return f"{exc_name}: {_tail_lines(tb, 8)}"
 
 
-def _streamed_create(original):
-    """Wrap an async `chat.completions.create` so every request streams.
-
-    llama-server's chat parser can fail the final parse of a finished answer
-    with HTTP 500 "Failed to parse input at pos 0" (llama.cpp #20814). A
-    streamed request returns the same tokens as deltas; they are joined back
-    into the single message PaddleX reads (`choices[0].message.content`).
-    """
-
-    async def create(self, *args, **kwargs):
-        if kwargs.get("stream"):
-            return await original(self, *args, **kwargs)
-        kwargs["stream"] = True
-        stream = await original(self, *args, **kwargs)
-        parts = []
-        finish_reason = None
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            choice = chunk.choices[0]
-            if choice.delta is not None and choice.delta.content:
-                parts.append(choice.delta.content)
-            if choice.finish_reason:
-                finish_reason = choice.finish_reason
-        message = SimpleNamespace(role="assistant", content="".join(parts))
-        return SimpleNamespace(
-            choices=[SimpleNamespace(index=0, message=message, finish_reason=finish_reason)]
-        )
-
-    return create
-
-
-def _install_streaming_requests():
-    """Make every OpenAI-client chat request in this process stream."""
-    from openai.resources.chat.completions import AsyncCompletions
-
-    AsyncCompletions.create = _streamed_create(AsyncCompletions.create)
-
-
-def _llama_backend_kwargs(server_url: str, max_concurrency: int) -> dict:
-    """PaddleOCRVL kwargs that send recognition to a llama-server."""
-    return {
-        "vl_rec_backend": "llama-cpp-server",
-        "vl_rec_server_url": server_url.rstrip("/") + "/v1",
-        "vl_rec_max_concurrency": max_concurrency,
-    }
-
-
-def _init_pipeline(requested_device: str, backend_kwargs: dict | None = None):
+def _init_pipeline(requested_device: str):
     """Initialize PaddleOCRVL pipeline with the requested device.
 
     If GPU is requested but fails (e.g. paddlepaddle-gpu not installed),
-    falls back to CPU and returns the actual device used. `backend_kwargs`
-    sends recognition to a llama-server ([`_llama_backend_kwargs`]).
+    falls back to CPU and returns the actual device used.
     """
     from paddleocr import PaddleOCRVL
     import inspect
@@ -246,13 +189,6 @@ def _init_pipeline(requested_device: str, backend_kwargs: dict | None = None):
         kwargs["use_queues"] = False
     if "vl_rec_max_concurrency" in supported_params:
         kwargs["vl_rec_max_concurrency"] = 1
-    if backend_kwargs:
-        if "vl_rec_backend" not in supported_params:
-            raise RuntimeError(
-                "The installed PaddleOCR has no vl_rec_backend option; "
-                "PaddleOCR-VL cannot run on llama-server."
-            )
-        kwargs.update(backend_kwargs)
 
     # Try requested device first
     try:
@@ -307,26 +243,10 @@ def main():
         choices=["cpu", "gpu"],
         help="Compute device: cpu or gpu (default: cpu). GPU falls back to CPU if unavailable.",
     )
-    parser.add_argument(
-        "--vl-server-url",
-        default=None,
-        help="Base URL of a llama-server serving the PaddleOCR-VL GGUF model.",
-    )
-    parser.add_argument(
-        "--vl-max-concurrency",
-        type=int,
-        default=1,
-        help="Blocks sent to the llama-server at once (its parallel slots).",
-    )
     args = parser.parse_args()
 
     image_path = args.image_path
     requested_device = args.device
-    backend_kwargs = None
-    if args.vl_server_url:
-        _install_streaming_requests()
-        backend_kwargs = _llama_backend_kwargs(args.vl_server_url, args.vl_max_concurrency)
-        sys.stderr.write(f"[paddle_vl] Recognition on llama-server {args.vl_server_url}\n")
 
     try:
         t_start = time.time()
@@ -343,7 +263,7 @@ def main():
             f"[paddle_vl] Initializing PaddleOCRVL pipeline (requested_device={requested_device})... "
             f"(t+{t_import - t_start:.1f}s)\n"
         )
-        pipeline, actual_device = _init_pipeline(requested_device, backend_kwargs)
+        pipeline, actual_device = _init_pipeline(requested_device)
         t_pipeline = time.time()
         sys.stderr.write(
             f"[paddle_vl] Pipeline ready (took {t_pipeline - t_import:.1f}s, total {t_pipeline - t_start:.1f}s)\n"
