@@ -2672,11 +2672,13 @@
 - «Corre PaddleOCR-VL en la GPU de este equipo con llama-server, también en AMD, Intel o Apple con 4 GB o más, no solo en NVIDIA. Se usa cuando el Modo OCRH es Local y el motor local es PaddleOCR-VL, o Automático sin GLM-OCR.»
 - «Embeddings locales (BGE-M3)»
 - «Modelo de OCR de alta precisión que corre en la GPU de este equipo (NVIDIA, o AMD, Intel o Apple con 4 GB o más). Se usa cuando el Modo OCRH es Local.»
+- «Modelo opcional de OCRL, unas tres veces más rápido en CPU que el incluido. Se usa cuando el Perfil de OCRL (en Motores) es Rápido.»
 - «Modelo que transcribe audio y dictado en este equipo, en 25 idiomas. Se usa cuando el Modo STT está en Local o Automático.»
 - «Modelo que vectoriza el texto en este equipo para la búsqueda semántica y el Chat. Se usa cuando Embeddings está en Local ONNX.»
 - «Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos {gb} GB de memoria de video: este equipo no tiene, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.»
 - «OCRH local (GLM-OCR)»
 - «OCRH local (PaddleOCR-VL en la GPU)»
+- «OCRL rápido (PP-OCRv6 Tiny)»
 - «Podés borrarlos para liberar unos {gb} GB.»
 - «Se borran sus archivos de este equipo y se liberan unos {gb} GB. Para volver a usarlos hay que descargarlos de nuevo.»
 - «Transcripción local (Parakeet)»
@@ -2760,6 +2762,16 @@
 - «Prioriza GLM-OCR cloud y usa OCRH local como fallback controlado.»
 - «Usa GLM-OCR como proveedor cloud para el botón OCRH.»
 - «Usa el pipeline local actual de OCR de alta precisión.»
+
+### ocrlProfile
+
+- «PP-OCRv6 Tiny no está descargado: OCRL usa PP-OCRv5 Latin hasta que lo descargues en Modelos locales.»
+- «Perfil de OCRL»
+- «Preciso (PP-OCRv5 Latin)»
+- «Reconocimiento local liviano, sin API ni GPU. El perfil rápido lee unas tres veces más rápido y se equivoca un poco más en palabras con tilde.»
+- «Rápido (PP-OCRv6 Tiny)»
+- «Unas tres veces más rápido en CPU. Se descarga en Modelos locales (3 MB).»
+- «Viene con la app. Recomendado para textos en español.»
 
 ### parakeetModel
 
@@ -2899,6 +2911,7 @@
 - «Asistentes» `settings.assistantsTab`
 - «AssemblyAI» `settings.assemblyai.title`
 - «Ayuda» `settings.helpTab`
+- «Borrar PP-OCRv6 Tiny» `settings.ppocrV6Local.delete`
 - «Cambios sin guardar» `settings.unsavedChanges`
 - «Cargando la configuración…» `settings.loading`
 - «Clave cargada: {key}» `settings.loadedKey`
@@ -2919,16 +2932,17 @@
 - «Desactivada: EntropIA no envía nada a {service}. La clave queda guardada; marcá la casilla y guardá para volver a usarla.» `settings.apiSwitch.off`
 - «Desactivado» `settings.optionDisabled`
 - «Descargable» `settings.badge.downloadable`
+- «Descargar modelos (3 MB)» `settings.ppocrV6Local.download`
 - «Descargar modelos (~1,8 GB)» `settings.paddleVlLocal.download`
 - «Descartar» `settings.discardConfirm`
 - «Descartar cambios» `settings.discardTitle`
 - «Detectar hablantes» `settings.sttLocalDiarize.label`
 - «Disponible» `settings.badge.available`
 - «El índice de búsqueda se actualiza en segundo plano.» `settings.searchIndex.rebuilding`
-- «Elegí el idioma de la UI. El contenido del usuario no se traduce.» `settings.languageDescription`
 
 ### Varios (2/3)
 
+- «Elegí el idioma de la UI. El contenido del usuario no se traduce.» `settings.languageDescription`
 - «En el texto de OCR, «trabaja-» al final de una línea y «dores» al comienzo de la siguiente se buscan como «trabajadores». El texto guardado no cambia.» `settings.searchIndex.rejoinHyphens.description`
 - «English» `settings.languageOptionEn`
 - «EntropIA usa {service} cuando una función lo necesita.» `settings.apiSwitch.on`
@@ -2949,6 +2963,7 @@
 - «Model Params» `settings.modelParamsTab`
 - «Modelo generativo» `settings.model`
 - «Modelo no encontrado» `settings.badge.notFound`
+- «Modelos PP-OCRv6 Tiny instalados.» `settings.ppocrV6Local.modelsReady`
 - «Modelos PaddleOCR-VL instalados.» `settings.paddleVlLocal.modelsReady`
 - «Modelos locales» `settings.localModelsTab`
 - «Modelos sugeridos desde OpenRouter» `settings.suggestedModels`
@@ -2965,10 +2980,10 @@
 - «OpenRouter» `settings.openrouter.title`
 - «Para elegir un modelo de la lista, primero cargá la clave de OpenRouter.» `settings.modelList.noKey`
 - «Preferencias» `settings.preferences`
-- «Privacidad: si usás AssemblyAI o modo automático con fallback cloud, el audio se envía a un proveedor externo para transcribirlo.» `settings.sttPrivacyNotice`
 
 ### Varios (3/3)
 
+- «Privacidad: si usás AssemblyAI o modo automático con fallback cloud, el audio se envía a un proveedor externo para transcribirlo.» `settings.sttPrivacyNotice`
 - «Privacidad: si usás GLM-OCR o modo automático con fallback cloud, la imagen o PDF se envía a un proveedor externo para OCR.» `settings.ocrhPrivacyNotice`
 - «Probando...» `settings.testingConnection`
 - «Probar conexión» `settings.testConnection`

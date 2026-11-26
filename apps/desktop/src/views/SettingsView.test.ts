@@ -654,6 +654,71 @@ describe('SettingsView', () => {
       }
     })
 
+    it('downloads and deletes the PP-OCRv6 Tiny files from their own card', async () => {
+      let installed = false
+      settingsGetMock.mockImplementation(async () => null)
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'ppocr_v6_local_info')
+          return {
+            installed,
+            download_bytes: 3_180_668,
+            models_dir: 'C:/cache/models/ppocr-v6-tiny',
+            repo_url: 'https://github.com/zibo-chen/rust-paddle-ocr',
+          }
+        if (command === 'ppocr_v6_download_models') return 'started'
+        if (command === 'ppocr_v6_delete_models') {
+          installed = false
+          return 3_180_668
+        }
+        return undefined
+      })
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(
+          await screen.findByRole('heading', { name: 'OCRL rápido (PP-OCRv6 Tiny)' })
+        ).toBeInTheDocument()
+        await fireEvent.click(screen.getByRole('button', { name: 'Descargar modelos (3 MB)' }))
+        expect(invokeMock).toHaveBeenCalledWith('ppocr_v6_download_models')
+        expect(await screen.findByText(/Descargando modelos…/)).toBeInTheDocument()
+      } finally {
+        unmount()
+      }
+
+      installed = true
+      const ready = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(await screen.findByText('Modelos PP-OCRv6 Tiny instalados.')).toBeInTheDocument()
+        await fireEvent.click(screen.getByRole('button', { name: 'Borrar PP-OCRv6 Tiny' }))
+        expect(invokeMock).toHaveBeenCalledWith('ppocr_v6_delete_models')
+        expect(
+          await screen.findByRole('button', { name: 'Descargar modelos (3 MB)' })
+        ).toBeInTheDocument()
+      } finally {
+        ready.unmount()
+      }
+    })
+
+    it('saves the chosen OCRL profile and warns while its files are missing', async () => {
+      settingsGetMock.mockImplementation(async (key: string) =>
+        key === 'ocrl_profile' ? 'v5_latin' : null
+      )
+      invokeMock.mockImplementation(async (command: string) =>
+        command === 'ppocr_v6_local_info'
+          ? { installed: false, download_bytes: 3_180_668, models_dir: '', repo_url: '' }
+          : undefined
+      )
+      await renderLoadedSettingsView()
+      await openTab('Motores')
+      const fast = await screen.findByRole('radio', { name: /Rápido \(PP-OCRv6 Tiny\)/ })
+      expect(screen.getByRole('radio', { name: /Preciso \(PP-OCRv5 Latin\)/ })).toBeChecked()
+      await fireEvent.click(fast)
+      expect(await screen.findByText(/PP-OCRv6 Tiny no está descargado/)).toBeInTheDocument()
+      await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+      await waitFor(() => expect(settingsSetMock).toHaveBeenCalledWith('ocrl_profile', 'v6_tiny'))
+    })
+
     it('downloads and deletes the PaddleOCR-VL models from their own card', async () => {
       let installed = false
       settingsGetMock.mockImplementation(async () => null)
@@ -781,9 +846,9 @@ describe('SettingsView', () => {
       render(SettingsView)
       await openTab('Motores')
 
-      // LLM mode (3) + embedding provider (2) + STT (3) + OCR-H (3) = 11 radios.
+      // LLM mode (3) + embedding provider (2) + STT (3) + OCR-H (3) + OCRL profile (2) = 13 radios.
       await waitFor(() => {
-        expect(screen.getAllByRole('radio')).toHaveLength(11)
+        expect(screen.getAllByRole('radio')).toHaveLength(13)
       })
       // The embedding provider exposes the unambiguous local ONNX option.
       expect(screen.getByRole('radio', { name: /Local ONNX/i })).toBeInTheDocument()
@@ -2473,7 +2538,7 @@ describe('SettingsView', () => {
       render(SettingsView)
       await openTab('Motores')
 
-      await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(11))
+      await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(13))
       for (const radio of screen.getAllByRole('radio')) {
         expect(radio.closest('.radio-card')).not.toBeNull()
         expect(radio.closest('[role="radiogroup"]')).not.toBeNull()
@@ -2530,6 +2595,7 @@ describe('settings dirty detection helpers', () => {
     sttLocalDiarize: false,
     ocrhMode: 'local',
     ocrhLocalEngine: 'auto',
+    ocrlProfile: 'v5_latin',
     localModelSourceUrl: '',
     localModelFilename: '',
     assemblyAiApiKey: '',

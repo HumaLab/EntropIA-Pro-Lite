@@ -19,7 +19,7 @@ Branch: `feat/ocrl-fast-profile` (from main after #453). Delivery: backend PR (T
 | T1 | S1 | inline | done (3 unit tests + ignored v6 integration, passed locally) | see git log |
 | T2 | S2 | inline | done (4 unit tests) | see git log |
 | T3 | S3, S4 | inline | done (3 unit tests; Pro lib 4144 + bibliography_processing 205 passed) | see git log |
-| T4 | S5 | inline | pending | |
+| T4 | S5 | inline | done | feat/ocrl-fast-profile-ui |
 
 - T1: `ocr/paddle.rs` profile type with per-profile filenames; constructor takes the recognition dir and the orientation dir; `Cargo.toml` `ocr-rs` spec `"2.4"` (the lock already resolves 2.4.1).
 - T2: `ocr/ppocr_v6_local.rs` (pinned files, missing/verify/info), Tauri commands in `ocr/commands.rs` with non-`local-ml` stubs, registration in `lib.rs`.
@@ -33,3 +33,4 @@ Branch: `feat/ocrl-fast-profile` (from main after #453). Delivery: backend PR (T
 - L3 (2026-11-26, user): "Optional fast profile" (answer to: adopt v6 Tiny as an optional fast profile or as the default).
 - L4 (2026-11-26): mapping: model filenames hardcoded in `PaddleOcrProvider::new` (`paddle.rs:92-94`); providers cached in `OcrExecutor.local` (`processing/ocr.rs:238`) and `ProductionSelectiveOcr.paddle` (`bibliography/processing.rs:4180`), neither rebuilt on settings change; `Cargo.lock` already resolves `ocr-rs` 2.4.1. Lite enablement (plan phase 2) is out of scope here.
 - L5 (2026-11-26): T1-T3 done. `OcrComputeOutput` gains `rec_profile` (`serde(default)`): checkpoints written before it resume with an empty profile, and an older build ignores the field (no `deny_unknown_fields`). `PaddleOcrProvider::new` is now test-only; production builds through `ocr::build_light_provider`. The batch executor swaps only the light provider on a profile change and keeps the cached OCRH engine. Checks: clippy Pro and Lite clean, fmt clean.
+- L6 (2026-11-26): PR #455 CI failed on `acl_manifest_guard`: the three `ppocr_v6_*` commands lacked their `allow-*` grants in `capabilities/default.json`; fixed in 3c4e882b. T4 done: OCRL profile RadioGroup in Motores (Pro), PP-OCRv6 Tiny card in Modelos locales, screen map regenerated. Checks: desktop Vitest Pro 4782 passed, Lite 4687 passed, lint and prettier clean. Pending: user visual check of both cards.
