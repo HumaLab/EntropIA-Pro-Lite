@@ -3039,6 +3039,7 @@ async fn models_setup_status_is_readable_without_write_scope() {
             "runtime",
             "llm",
             "glm_ocr",
+            "paddle_vl",
             "qwen_correct",
             "embeddings",
             "reranker",

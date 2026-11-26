@@ -563,11 +563,21 @@ pub async fn paddle_vl_download_models(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
+    start_paddle_vl_download(&db.db_path, app_handle)
+}
+
+/// Shared starter behind the Settings button and the assistant `models_setup`
+/// tool: queue the missing PaddleOCR-VL GGUF downloads in the background.
+#[cfg(feature = "local-ml")]
+pub(crate) fn start_paddle_vl_download(
+    db_path: &std::path::Path,
+    app_handle: AppHandle,
+) -> Result<String, String> {
     use super::paddle_vl_local::{missing_bytes, missing_files, models_dir, verify_download};
     use crate::llm::download::{download_model_file, ensure_room_in, open_managed_models_dir};
     use tauri::Emitter;
 
-    let dir = models_dir(&db.db_path);
+    let dir = models_dir(db_path);
     std::fs::create_dir_all(&dir).map_err(|e| {
         format!(
             "Failed to create PaddleOCR-VL models dir {}: {e}",

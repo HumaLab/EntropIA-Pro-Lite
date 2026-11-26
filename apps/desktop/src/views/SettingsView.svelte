@@ -140,6 +140,12 @@
     type GlmOcrDownloadErrorPayload,
   } from '$lib/glm-ocr-local'
   import {
+    paddleVlLocalInfo,
+    paddleVlDownloadModels,
+    paddleVlDeleteModels,
+    type PaddleVlLocalInfo,
+  } from '$lib/paddle-vl-local'
+  import {
     qwenCorrectionLocalInfo,
     qwenCorrectionDownloadModels,
     qwenCorrectionDeleteModels,
@@ -255,6 +261,7 @@
   let ocrhMode = $state<OcrhMode>(DEFAULT_OCRH_MODE)
   let ocrhLocalEngine = $state<OcrhLocalEngine>(DEFAULT_OCRH_LOCAL_ENGINE)
   let glmOcrLocal = $state<GlmOcrLocalInfo | null>(null)
+  let paddleVlLocal = $state<PaddleVlLocalInfo | null>(null)
   let qwenLocal = $state<QwenLocalInfo | null>(null)
   let localAvailable = $state(false)
   let localModel = $state<LocalModelInfo | null>(null)
@@ -434,6 +441,7 @@
   // Local vision models the card can delete; sizes are the two GGUF files together.
   const LOCAL_VISION_MODELS = {
     glmOcr: { name: 'GLM-OCR', gb: 1.4 },
+    paddleVl: { name: 'PaddleOCR-VL', gb: 1.8 },
     qwen: { name: 'Qwen3-VL', gb: 2.9 },
   } as const
   type LocalVisionModel = keyof typeof LOCAL_VISION_MODELS
@@ -582,6 +590,9 @@
   let glmOcrDownloading = $state(isInflight(downloadKey('glm-ocr')))
   let glmOcrDownloadPct = $state(0)
   let glmOcrDownloadError = $state<string | null>(null)
+  let paddleVlDownloading = $state(isInflight(downloadKey('paddle-vl')))
+  let paddleVlDownloadPct = $state(0)
+  let paddleVlDownloadError = $state<string | null>(null)
   let qwenDownloading = $state(isInflight(downloadKey('qwen-correct')))
   let qwenDownloadPct = $state(0)
   let qwenDownloadError = $state<string | null>(null)
@@ -599,6 +610,7 @@
   mirrorInflight(downloadKey('embedding'), () => embeddingDownloading)
   mirrorInflight(downloadKey('reranker'), () => rerankerDownloading)
   mirrorInflight(downloadKey('glm-ocr'), () => glmOcrDownloading)
+  mirrorInflight(downloadKey('paddle-vl'), () => paddleVlDownloading)
   mirrorInflight(downloadKey('qwen-correct'), () => qwenDownloading)
   mirrorInflight(downloadKey('llama-server'), () => llamaServerDownloading)
   mirrorInflight(downloadKey('parakeet'), () => parakeetDownloading)
@@ -790,6 +802,7 @@
         embeddingModelInfo,
         rerankerModelInfo,
         glmOcrModelInfo,
+        paddleVlModelInfo,
         qwenModelInfo,
         parakeetInfo,
       ] = await Promise.all([
@@ -817,6 +830,7 @@
         embeddingLocalModelInfo().catch(() => null),
         rerankerLocalModelInfo().catch(() => null),
         glmOcrLocalInfo().catch(() => null),
+        paddleVlLocalInfo().catch(() => null),
         qwenCorrectionLocalInfo().catch(() => null),
         parakeetModelInfo().catch(() => null),
       ])
@@ -896,9 +910,11 @@
       localEmbeddingModel = embeddingModelInfo
       localRerankerModel = rerankerModelInfo
       glmOcrLocal = glmOcrModelInfo
+      paddleVlLocal = paddleVlModelInfo
       qwenLocal = qwenModelInfo
       // A two-file download that finished while the user was elsewhere.
       if (glmOcrLocal?.model_present && glmOcrLocal?.mmproj_present) glmOcrDownloading = false
+      if (paddleVlLocal?.model_present && paddleVlLocal?.mmproj_present) paddleVlDownloading = false
       if (qwenLocal?.model_present && qwenLocal?.mmproj_present) qwenDownloading = false
       parakeetModel = parakeetInfo
       parakeetDownloading = parakeetInfo?.downloading ?? false
@@ -1036,6 +1052,34 @@
               glmOcrDownloadError = event.payload.error
             }),
           () =>
+            listen<GlmOcrDownloadProgressPayload>('paddle-vl:download_progress', (event) => {
+              if (destroyed) return
+              paddleVlDownloading = true
+              paddleVlDownloadPct = event.payload.pct
+              paddleVlDownloadError = null
+            }),
+          () =>
+            listen<GlmOcrDownloadCompletePayload>('paddle-vl:download_complete', async () => {
+              if (destroyed) return
+              paddleVlLocal = await paddleVlLocalInfo().catch(() => null)
+              // Two files download in sequence with one `complete` each; stop
+              // the spinner only when both are on disk.
+              if (paddleVlLocal?.model_present && paddleVlLocal?.mmproj_present) {
+                paddleVlDownloading = false
+                paddleVlDownloadPct = 100
+              }
+              paddleVlDownloadError = null
+            }),
+          () =>
+            listen<GlmOcrDownloadErrorPayload>('paddle-vl:download_error', async (event) => {
+              if (destroyed) return
+              paddleVlDownloading = false
+              paddleVlDownloadPct = 0
+              paddleVlDownloadError = event.payload.error
+              // A file that failed its checksum was removed: show it missing.
+              paddleVlLocal = await paddleVlLocalInfo().catch(() => null)
+            }),
+          () =>
             listen<QwenCorrectionDownloadProgressPayload>(
               'qwen-correct:download_progress',
               (event) => {
@@ -1077,9 +1121,10 @@
           () =>
             listen<GlmOcrDownloadCompletePayload>('llama-server:download_complete', async () => {
               if (destroyed) return
-              // One server serves both cards.
-              ;[glmOcrLocal, qwenLocal] = await Promise.all([
+              // One server serves every local model card.
+              ;[glmOcrLocal, paddleVlLocal, qwenLocal] = await Promise.all([
                 glmOcrLocalInfo().catch(() => null),
+                paddleVlLocalInfo().catch(() => null),
                 qwenCorrectionLocalInfo().catch(() => null),
               ])
               llamaServerDownloading = false
@@ -1734,6 +1779,9 @@
       if (target === 'glmOcr') {
         await glmOcrDeleteModels()
         glmOcrLocal = await glmOcrLocalInfo().catch(() => null)
+      } else if (target === 'paddleVl') {
+        await paddleVlDeleteModels()
+        paddleVlLocal = await paddleVlLocalInfo().catch(() => null)
       } else {
         await qwenCorrectionDeleteModels()
         qwenLocal = await qwenCorrectionLocalInfo().catch(() => null)
@@ -2120,6 +2168,24 @@
     }
   }
 
+  async function handleDownloadPaddleVlModels() {
+    if (paddleVlDownloading) return
+    paddleVlDownloading = true
+    paddleVlDownloadPct = 0
+    paddleVlDownloadError = null
+    try {
+      const state = await paddleVlDownloadModels()
+      // 'already complete' means nothing was queued; refresh and stop.
+      if (state !== 'started') {
+        paddleVlLocal = await paddleVlLocalInfo().catch(() => null)
+        paddleVlDownloading = false
+      }
+    } catch (e) {
+      paddleVlDownloading = false
+      paddleVlDownloadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
   async function handleDownloadQwenModels() {
     if (qwenDownloading) return
     qwenDownloading = true
@@ -2147,8 +2213,9 @@
       const state = await llamaServerDownload()
       // 'already running' keeps the progress coming from the running download.
       if (state !== 'started' && state !== 'already running') {
-        ;[glmOcrLocal, qwenLocal] = await Promise.all([
+        ;[glmOcrLocal, paddleVlLocal, qwenLocal] = await Promise.all([
           glmOcrLocalInfo().catch(() => null),
+          paddleVlLocalInfo().catch(() => null),
           qwenCorrectionLocalInfo().catch(() => null),
         ])
         llamaServerDownloading = false
@@ -3033,6 +3100,89 @@
                     <p class="surface-message surface-message--error">
                       {glmOcrDownloadError}
                       <Button variant="secondary" size="sm" onclick={handleDownloadGlmOcrModels}>
+                        {t('settings.glmOcrLocal.retry')}
+                      </Button>
+                    </p>
+                  {/if}
+                </div>
+              {/if}
+            </section>
+          </Card>
+          <Card>
+            <section class="settings-card-section">
+              <div class="settings-card-section__copy">
+                <h2>{t('settings.localModels.paddleVlTitle')}</h2>
+                <p>{t('settings.localModels.paddleVlDescription')}</p>
+              </div>
+              {#if paddleVlLocal}
+                <div class="settings__local-model">
+                  <div class="settings__local-model-row">
+                    {#if paddleVlLocal.model_present && paddleVlLocal.mmproj_present}
+                      <StatusBadge variant="success" size="xs">
+                        {t('settings.paddleVlLocal.modelsReady')}
+                      </StatusBadge>
+                    {:else}
+                      <!-- The badge holds the state; the file names, long enough to
+                             overflow a one-line pill, sit beside it. -->
+                      <StatusBadge variant="warning" size="xs">
+                        {t('settings.glmOcrLocal.modelsMissing')}
+                      </StatusBadge>
+                      <code class="settings__local-model-path">
+                        {[
+                          !paddleVlLocal.model_present && 'PaddleOCR-VL-1.6-GGUF.gguf',
+                          !paddleVlLocal.mmproj_present && 'PaddleOCR-VL-1.6-GGUF-mmproj.gguf',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                      </code>
+                    {/if}
+                  </div>
+
+                  {#if !paddleVlLocal.gpu_fits && (!paddleVlLocal.model_present || !paddleVlLocal.mmproj_present)}
+                    <p class="settings__hint">
+                      {t('settings.localModels.needsGpu', { gb: paddleVlLocal.min_vram_gb })}
+                    </p>
+                  {:else}
+                    {@render llamaServerStatus(paddleVlLocal)}
+                  {/if}
+
+                  {#if paddleVlDownloading}
+                    <div class="settings__download-progress">
+                      <ProgressBar
+                        value={paddleVlDownloadPct}
+                        label={t('settings.glmOcrLocal.downloading')}
+                      />
+                      <span class="settings__download-progress-text">
+                        {paddleVlDownloadPct}% — {t('settings.glmOcrLocal.downloading')}
+                      </span>
+                    </div>
+                  {:else if paddleVlLocal.gpu_fits && (!paddleVlLocal.model_present || !paddleVlLocal.mmproj_present)}
+                    <Button variant="primary" size="sm" onclick={handleDownloadPaddleVlModels}>
+                      {t('settings.paddleVlLocal.download')}
+                    </Button>
+                  {/if}
+
+                  {#if !paddleVlDownloading && (paddleVlLocal.model_present || paddleVlLocal.mmproj_present)}
+                    {#if !paddleVlLocal.gpu_fits}
+                      <p class="settings__hint">
+                        {t('settings.localModels.deleteToFree', {
+                          gb: formatGb(LOCAL_VISION_MODELS.paddleVl.gb),
+                        })}
+                      </p>
+                    {/if}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onclick={() => openDeleteModels('paddleVl')}
+                    >
+                      {t('settings.localModels.deleteModels')}
+                    </Button>
+                  {/if}
+
+                  {#if paddleVlDownloadError}
+                    <p class="surface-message surface-message--error">
+                      {paddleVlDownloadError}
+                      <Button variant="secondary" size="sm" onclick={handleDownloadPaddleVlModels}>
                         {t('settings.glmOcrLocal.retry')}
                       </Button>
                     </p>

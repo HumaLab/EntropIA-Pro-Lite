@@ -2669,12 +2669,14 @@
 ### Modelos locales
 
 - «Borrar modelos»
+- «Corre PaddleOCR-VL en la GPU de este equipo con llama-server, también en AMD, Intel o Apple con 4 GB o más, no solo en NVIDIA. Se usa cuando el Modo OCRH es Local y el motor local es PaddleOCR-VL, o Automático sin GLM-OCR.»
 - «Embeddings locales (BGE-M3)»
 - «Modelo de OCR de alta precisión que corre en la GPU de este equipo (NVIDIA, o AMD, Intel o Apple con 4 GB o más). Se usa cuando el Modo OCRH es Local.»
 - «Modelo que transcribe audio y dictado en este equipo, en 25 idiomas. Se usa cuando el Modo STT está en Local o Automático.»
 - «Modelo que vectoriza el texto en este equipo para la búsqueda semántica y el Chat. Se usa cuando Embeddings está en Local ONNX.»
 - «Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos {gb} GB de memoria de video: este equipo no tiene, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.»
 - «OCRH local (GLM-OCR)»
+- «OCRH local (PaddleOCR-VL en la GPU)»
 - «Podés borrarlos para liberar unos {gb} GB.»
 - «Se borran sus archivos de este equipo y se liberan unos {gb} GB. Para volver a usarlos hay que descargarlos de nuevo.»
 - «Transcripción local (Parakeet)»
@@ -2917,6 +2919,7 @@
 - «Desactivada: EntropIA no envía nada a {service}. La clave queda guardada; marcá la casilla y guardá para volver a usarla.» `settings.apiSwitch.off`
 - «Desactivado» `settings.optionDisabled`
 - «Descargable» `settings.badge.downloadable`
+- «Descargar modelos (~1,8 GB)» `settings.paddleVlLocal.download`
 - «Descartar» `settings.discardConfirm`
 - «Descartar cambios» `settings.discardTitle`
 - «Detectar hablantes» `settings.sttLocalDiarize.label`
@@ -2946,6 +2949,7 @@
 - «Model Params» `settings.modelParamsTab`
 - «Modelo generativo» `settings.model`
 - «Modelo no encontrado» `settings.badge.notFound`
+- «Modelos PaddleOCR-VL instalados.» `settings.paddleVlLocal.modelsReady`
 - «Modelos locales» `settings.localModelsTab`
 - «Modelos sugeridos desde OpenRouter» `settings.suggestedModels`
 - «Modo LLM» `settings.llmModeTitle`
@@ -2962,10 +2966,10 @@
 - «Para elegir un modelo de la lista, primero cargá la clave de OpenRouter.» `settings.modelList.noKey`
 - «Preferencias» `settings.preferences`
 - «Privacidad: si usás AssemblyAI o modo automático con fallback cloud, el audio se envía a un proveedor externo para transcribirlo.» `settings.sttPrivacyNotice`
-- «Privacidad: si usás GLM-OCR o modo automático con fallback cloud, la imagen o PDF se envía a un proveedor externo para OCR.» `settings.ocrhPrivacyNotice`
 
 ### Varios (3/3)
 
+- «Privacidad: si usás GLM-OCR o modo automático con fallback cloud, la imagen o PDF se envía a un proveedor externo para OCR.» `settings.ocrhPrivacyNotice`
 - «Probando...» `settings.testingConnection`
 - «Probar conexión» `settings.testConnection`
 - «Prompts» `settings.promptsTab`

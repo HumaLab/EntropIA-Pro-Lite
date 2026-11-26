@@ -100,6 +100,7 @@ pub fn only_or_started_ids(only: &[String], started: &[String]) -> Vec<String> {
 pub const COMPONENT_RUNTIME: &str = "runtime";
 pub const COMPONENT_LLM: &str = "llm";
 pub const COMPONENT_GLM_OCR: &str = "glm_ocr";
+pub const COMPONENT_PADDLE_VL: &str = "paddle_vl";
 pub const COMPONENT_QWEN_CORRECT: &str = "qwen_correct";
 pub const COMPONENT_EMBEDDINGS: &str = "embeddings";
 pub const COMPONENT_RERANKER: &str = "reranker";
@@ -115,6 +116,7 @@ pub const COMPONENT_IDS: &[&str] = &[
     COMPONENT_PARAKEET,
     COMPONENT_LLAMA_SERVER,
     COMPONENT_GLM_OCR,
+    COMPONENT_PADDLE_VL,
     COMPONENT_QWEN_CORRECT,
 ];
 
@@ -332,7 +334,7 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
             } else {
                 server_download_summary()
             },
-            "Ejecuta GLM-OCR y Qwen3-VL en la GPU",
+            "Ejecuta GLM-OCR, PaddleOCR-VL y Qwen3-VL en la GPU",
         );
         if !present && source == ServerSource::RequiresGpu {
             entry.unavailable_reason = Some(needs_gpu(Engine::GlmOcr));
@@ -357,6 +359,27 @@ fn status_local_ml(db_path: &Path, app_handle: Option<&tauri::AppHandle>) -> Mod
         );
         if !ready && !engine_runs(Engine::GlmOcr) {
             entry.unavailable_reason = Some(needs_gpu(Engine::GlmOcr));
+        }
+        components.push(entry);
+    }
+
+    // PaddleOCR-VL en llama-server: OCRH local en cualquier GPU que llama.cpp soporte.
+    {
+        let info = crate::ocr::paddle_vl_local::local_info(db_path, resource_dir.as_deref());
+        let ready = info.model_present && info.mmproj_present;
+        let mut entry = component(
+            COMPONENT_PADDLE_VL,
+            "OCRH local (PaddleOCR-VL en la GPU)",
+            ready,
+            if ready {
+                format!("Instalado en {}.", info.models_dir)
+            } else {
+                "Faltan los modelos (unos 1,8 GB).".to_string()
+            },
+            "OCRH con PaddleOCR-VL en la GPU, también AMD e Intel",
+        );
+        if !ready && !engine_runs(Engine::PaddleVl) {
+            entry.unavailable_reason = Some(needs_gpu(Engine::PaddleVl));
         }
         components.push(entry);
     }
@@ -487,6 +510,9 @@ async fn start_missing_local_ml(
             }
             COMPONENT_GLM_OCR => {
                 crate::ocr::commands::start_glm_ocr_download(db_path, app_handle.clone())
+            }
+            COMPONENT_PADDLE_VL => {
+                crate::ocr::commands::start_paddle_vl_download(db_path, app_handle.clone())
             }
             COMPONENT_QWEN_CORRECT => {
                 crate::ocr::commands::start_qwen_correction_download(db_path, app_handle.clone())
