@@ -256,6 +256,9 @@ const es = {
     'Se borran sus archivos de este equipo y se liberan unos {gb} GB. Para volver a usarlos hay que descargarlos de nuevo.',
   'settings.localModels.deleteToFree': 'Podés borrarlos para liberar unos {gb} GB.',
   'settings.localModels.glmOcrTitle': 'OCRH local (GLM-OCR)',
+  'settings.localModels.paddleVlTitle': 'OCRH local (PaddleOCR-VL en la GPU)',
+  'settings.localModels.paddleVlDescription':
+    'Corre PaddleOCR-VL en la GPU de este equipo con llama-server, también en AMD, Intel o Apple con 4 GB o más, no solo en NVIDIA. Se usa cuando el Modo OCRH es Local y el motor local es PaddleOCR-VL, o Automático sin GLM-OCR.',
   'settings.localModels.needsGpu':
     'Necesita una GPU NVIDIA, o AMD, Intel o Apple con al menos {gb} GB de memoria de video: este equipo no tiene, así que no se descarga. Esta función usa el motor remoto o PaddleOCR-VL.',
   'settings.localModels.glmOcrDescription':
@@ -934,6 +937,8 @@ const es = {
   'settings.glmOcrLocal.download': 'Descargar modelos (~1,4 GB)',
   'settings.glmOcrLocal.downloading': 'Descargando modelos…',
   'settings.glmOcrLocal.retry': 'Reintentar descarga',
+  'settings.paddleVlLocal.modelsReady': 'Modelos PaddleOCR-VL instalados.',
+  'settings.paddleVlLocal.download': 'Descargar modelos (~1,8 GB)',
   'settings.qwenCorrectLocal.title': 'Corrector local (Qwen3-VL)',
   'settings.qwenCorrectLocal.description':
     'Corrige OCR en este equipo con un modelo de 4B cuando el modo LLM no es OpenRouter. Requiere GPU NVIDIA, o AMD, Intel o Apple con 6 GB; sin ella, la corrección usa el modelo remoto.',
@@ -4557,6 +4562,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Their files are removed from this computer, freeing about {gb} GB. To use them again you have to download them again.',
   'settings.localModels.deleteToFree': 'You can delete them to free about {gb} GB.',
   'settings.localModels.glmOcrTitle': 'Local OCRH (GLM-OCR)',
+  'settings.localModels.paddleVlTitle': 'Local OCRH (PaddleOCR-VL on the GPU)',
+  'settings.localModels.paddleVlDescription':
+    "Runs PaddleOCR-VL on this computer's GPU through llama-server, on AMD, Intel or Apple with 4 GB or more too, not only on NVIDIA. Used when the OCRH mode is Local and the local engine is PaddleOCR-VL, or Automatic without GLM-OCR.",
   'settings.localModels.glmOcrDescription':
     "High-accuracy OCR model that runs on this computer's GPU (NVIDIA, or AMD, Intel or Apple with 4 GB or more). Used when the OCRH mode is Local.",
   'settings.apiSwitch.label': 'Use this API',
@@ -5231,6 +5239,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.glmOcrLocal.download': 'Download models (~1.4 GB)',
   'settings.glmOcrLocal.downloading': 'Downloading models…',
   'settings.glmOcrLocal.retry': 'Retry download',
+  'settings.paddleVlLocal.modelsReady': 'PaddleOCR-VL models installed.',
+  'settings.paddleVlLocal.download': 'Download models (~1.8 GB)',
   'settings.qwenCorrectLocal.title': 'Local corrector (Qwen3-VL)',
   'settings.qwenCorrectLocal.description':
     'Corrects OCR on this computer with a 4B model unless the LLM mode is OpenRouter. Needs an NVIDIA GPU, or an AMD, Intel or Apple one with 6 GB; without one, correction uses the remote model.',

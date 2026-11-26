@@ -18,12 +18,12 @@ Branch: `feat/paddle-vl-llama-server` (from main after #443). Delivery: two PRs 
 | T1 | S1, S3 | inline | done (test_paddle_vl_server.py, 6 tests) | backend PR |
 | T2 | S2, S4 | inline | done (7 unit tests) | backend PR |
 | T3 | S1 | inline | done (4 selection tests) | backend PR |
-| T4 | S5 | inline | pending | |
+| T4 | S5 | inline | done (SettingsView card test; models_setup inventory test) | branch feat/paddle-vl-settings |
 
 - T1: `scripts/paddle_vl_server.py` (installer only, bundled like `glm_ocr_local.py`): `--vl-server-url`, `--vl-max-concurrency`; streaming shim; runs the unchanged `paddle_vl.py` with `PaddleOCRVL` given the llama-cpp-server backend.
 - T2: `ocr/paddle_vl_local.rs`: constants, assets, info, server config; download with size + sha256 check; delete; Tauri commands.
 - T3: `paddle_vl.rs` engine selection and the run path that starts the server and passes the URL.
-- T4: Settings cards, `lib` wrapper, i18n, tests.
+- T4: Settings card in "Modelos locales" (download, progress, delete, size) via `lib/paddle-vl-local.ts`; `paddle_vl` component in the backend inventory (`automation/models_setup.rs`) so "Dependencias de IA" and the assistant `models_setup` tool list and install it; shared `start_paddle_vl_download`; i18n es/en; tests.
 
 ## Log
 
@@ -36,3 +36,4 @@ Branch: `feat/paddle-vl-llama-server` (from main after #443). Delivery: two PRs 
 - L7 (2026-11-26): T3 design: `DesiredBackend` {PaddleVlNative, PaddleVlServer, GlmOcr}; GLM-OCR keeps priority under `auto`; PaddleOCR-VL on llama-server runs under `auto`/`paddle_vl` when its GGUF and server are installed and `engine_runs(Engine::PaddleVl)`. The llama path always uses the bundled `paddle_vl.py` (managed root skipped), layout on CPU. The cached engine is rebuilt on any backend change and a server-backed engine stops its llama-server when switched away. `test_paddle_vl.py` added to the CI `runtime-pack-smoke` step.
 - L8 (2026-11-26): the runtime-pack copies of `paddle_vl.py` stay unchanged: their manifest pins the script hash, and changing it would make every installed runtime non-reusable and require republishing the pack (4 `runtime::manager` tests failed with the copies changed). The llama path already runs the installer's script. The download now refuses up front when the disk cannot hold both missing files (`ensure_room_in`, from #444). Checks: clippy Pro and Lite clean, `ocr::` + `runtime::manager` 433 passed, full Pro suite otherwise green (4101 passed before the revert), Python 19 tests OK.
 - L9 (2026-11-26): CI on #445 failed `runtime-packaging.test.ts` "keeps runtime-pack scripts byte-for-byte aligned with their canonical sources": the installer's `paddle_vl.py` must equal the pack copies, whose hash the manifest pins. Changing all three would make installed runtimes non-reusable on the next update. Fix: `paddle_vl.py` is back to main's bytes; a new installer-only wrapper `paddle_vl_server.py` loads it (its env setup runs before paddleocr is imported), swaps `paddleocr.PaddleOCRVL` for a `functools.wraps` stand-in that adds the backend kwargs (signature kept for paddle_vl.py's option filter; refuses a PaddleOCR without `vl_rec_backend`), installs the streaming shim and calls `paddle_vl.main()`. Real run on page 8 against llama-server: exit 0, 64 s cold, 16 blocks, text identical (ratio 1.0) to the earlier run. Checks: Python 6 + pack tests OK, packaging test 16/16, `ocr::`+`runtime::` 522 passed, Pro clippy clean, fmt clean.
+- L10 (2026-11-26): T4 scope found while mapping: "Dependencias de IA" renders the backend inventory (`automation/models_setup.rs`), shared with the assistant `models_setup` tool, so the component goes there (id `paddle_vl`, scope `paddle-vl`) instead of a second hand-written card. The Settings card reuses the GLM-OCR shared strings (`settings.glmOcrLocal.modelsMissing/downloading/retry`). Visual check of the card is pending on the user (Tauri window).

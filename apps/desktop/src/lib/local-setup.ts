@@ -17,6 +17,7 @@ export type LocalComponentId =
   | 'parakeet'
   | 'llama_server'
   | 'glm_ocr'
+  | 'paddle_vl'
   | 'qwen_correct'
 
 export interface LocalComponent {
@@ -44,6 +45,7 @@ export const DOWNLOAD_SCOPES: Record<string, LocalComponentId> = {
   parakeet: 'parakeet',
   'llama-server': 'llama_server',
   'glm-ocr': 'glm_ocr',
+  'paddle-vl': 'paddle_vl',
   'qwen-correct': 'qwen_correct',
 }
 

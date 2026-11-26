@@ -654,6 +654,64 @@ describe('SettingsView', () => {
       }
     })
 
+    it('downloads and deletes the PaddleOCR-VL models from their own card', async () => {
+      let installed = false
+      settingsGetMock.mockImplementation(async () => null)
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'paddle_vl_local_info')
+          return installed
+            ? visionInfo({ download_bytes: 1_817_539_616 })
+            : {
+                ...missingModels(command, true),
+                download_bytes: 1_817_539_616,
+                models_dir: 'C:/cache/models/paddleocr-vl',
+              }
+        if (command === 'paddle_vl_download_models') return 'started'
+        if (command === 'paddle_vl_delete_models') {
+          installed = false
+          return 1_817_539_616
+        }
+        return undefined
+      })
+      const { unmount } = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(
+          await screen.findByRole('heading', { name: 'OCRH local (PaddleOCR-VL en la GPU)' })
+        ).toBeInTheDocument()
+        expect(
+          screen.getByText('PaddleOCR-VL-1.6-GGUF.gguf PaddleOCR-VL-1.6-GGUF-mmproj.gguf')
+        ).toBeInTheDocument()
+
+        await fireEvent.click(screen.getByRole('button', { name: 'Descargar modelos (~1,8 GB)' }))
+        expect(invokeMock).toHaveBeenCalledWith('paddle_vl_download_models')
+        expect(invokeMock).not.toHaveBeenCalledWith('glm_ocr_download_models')
+        expect(await screen.findByText(/Descargando modelos…/)).toBeInTheDocument()
+      } finally {
+        unmount()
+      }
+
+      installed = true
+      const ready = render(SettingsView)
+      try {
+        await openTab('Modelos locales')
+        expect(await screen.findByText('Modelos PaddleOCR-VL instalados.')).toBeInTheDocument()
+        await fireEvent.click(screen.getByRole('button', { name: 'Borrar modelos' }))
+        const dialog = await screen.findByRole('dialog')
+        expect(within(dialog).getByText('¿Borrar los modelos de PaddleOCR-VL?')).toBeInTheDocument()
+        expect(within(dialog).getByText(/se liberan unos 1,8 GB/)).toBeInTheDocument()
+        await fireEvent.click(within(dialog).getByRole('button', { name: 'Borrar modelos' }))
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+        expect(invokeMock).toHaveBeenCalledWith('paddle_vl_delete_models')
+        expect(invokeMock).not.toHaveBeenCalledWith('glm_ocr_delete_models')
+        expect(
+          await screen.findByRole('button', { name: 'Descargar modelos (~1,8 GB)' })
+        ).toBeInTheDocument()
+      } finally {
+        ready.unmount()
+      }
+    })
+
     it('keeps the dialog open with the reason when the files cannot be deleted', async () => {
       answerInstalledModels(true, true)
       const { unmount } = render(SettingsView)

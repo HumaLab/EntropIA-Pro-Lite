@@ -399,7 +399,7 @@ pub struct ModelsSetupParams {
     /// `status` inspects without changing anything; `install` queues the
     /// missing downloads in the background (same as the Settings buttons).
     pub action: String,
-    /// Component ids to install (`runtime`, `llm`, `glm_ocr`,
+    /// Component ids to install (`runtime`, `llm`, `glm_ocr`, `paddle_vl`,
     /// `qwen_correct`, `embeddings`, `reranker`); omit for all missing.
     pub components: Option<Vec<String>>,
 }
