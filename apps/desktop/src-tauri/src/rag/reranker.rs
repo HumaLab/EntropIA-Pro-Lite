@@ -710,6 +710,19 @@ fn inspect_artifact(directory: &Path, artifact: ArtifactSpec) -> LocalRerankerMo
     }
 }
 
+/// Bytes the reranker download still has to write into `model_dir`: every
+/// artifact that is not already there and valid.
+#[cfg(feature = "local-ml")]
+fn missing_artifact_bytes(model_dir: &Path) -> u64 {
+    LOCAL_RERANKER_ARTIFACTS
+        .iter()
+        .filter(|artifact| {
+            validate_artifact(&model_dir.join(artifact.filename), **artifact).is_err()
+        })
+        .map(|artifact| artifact.expected_size)
+        .sum()
+}
+
 #[cfg(feature = "local-ml")]
 fn validate_artifact(path: &Path, artifact: ArtifactSpec) -> Result<(), String> {
     let metadata = std::fs::metadata(path)
@@ -755,6 +768,7 @@ pub fn download_local_reranker_model_files(
 ) -> Result<(), String> {
     std::fs::create_dir_all(model_dir)
         .map_err(|_| "Failed to create local reranker model directory".to_string())?;
+    crate::llm::download::ensure_room_in(model_dir, missing_artifact_bytes(model_dir))?;
 
     for artifact in LOCAL_RERANKER_ARTIFACTS {
         let destination = model_dir.join(artifact.filename);
@@ -911,6 +925,14 @@ pub fn download_local_reranker_model_files(
 mod tests {
     use super::*;
     use crate::rag::retrieval::SourceRecord;
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn an_empty_model_folder_needs_room_for_every_artifact() {
+        let dir = tempfile::tempdir().expect("temp dir");
+
+        assert_eq!(missing_artifact_bytes(dir.path()), 570_727_094 + 17_082_900);
+    }
 
     fn candidate(asset_id: &str, text: String, score: f64) -> RrfCandidate {
         RrfCandidate {

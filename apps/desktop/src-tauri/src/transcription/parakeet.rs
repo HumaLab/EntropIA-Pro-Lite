@@ -930,6 +930,7 @@ fn download_model_files(
         .unwrap_or_default();
     let client = crate::llm::download::build_model_download_client()?;
     let total: u64 = missing.iter().map(|(_, size, _)| size).sum();
+    crate::llm::download::ensure_room_in(model_dir, remaining_bytes(model_dir, &missing))?;
     let mut done_before = 0_u64;
     for (name, size, sha) in missing {
         let url = format!(
@@ -946,6 +947,21 @@ fn download_model_files(
         done_before += size;
     }
     Ok(())
+}
+
+/// Bytes still to download for `missing`: a `.part` left by an interrupted run
+/// resumes, so what it already holds needs no new room.
+#[cfg(feature = "local-ml")]
+fn remaining_bytes(model_dir: &std::path::Path, missing: &[(&str, u64, &str)]) -> u64 {
+    missing
+        .iter()
+        .map(|(name, size, _)| {
+            let have = std::fs::metadata(partial_path(&model_dir.join(name)))
+                .map(|meta| meta.len())
+                .unwrap_or(0);
+            size.saturating_sub(have)
+        })
+        .sum()
 }
 
 /// `name.part` beside the destination. `with_extension("part")` turned
@@ -1109,6 +1125,15 @@ mod tests {
             para que la fábrica siguiera abierta durante todo el conflicto.";
         assert!(!drifted_from_spanish(loanwords));
         assert!(!drifted_from_spanish(""));
+    }
+
+    #[test]
+    fn a_resumed_file_needs_room_only_for_what_is_left() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("encoder.onnx.part"), [0_u8; 30]).expect("part");
+        let missing = [("encoder.onnx", 100, "sha"), ("decoder.onnx", 50, "sha")];
+
+        assert_eq!(remaining_bytes(dir.path(), &missing), 70 + 50);
     }
 
     #[test]

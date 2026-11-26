@@ -332,6 +332,7 @@ fn download_and_stage(
         .map_err(|e| format!("Cannot create {}: {e}", staging.display()))?;
     let client = build_model_download_client()?;
     let total: u64 = assets.iter().map(|asset| asset.size).sum();
+    crate::llm::download::ensure_room_in(work, required_room(assets))?;
     let mut done = 0_u64;
     let mut last_pct = 0_u8;
 
@@ -388,6 +389,17 @@ fn download_and_stage(
         return Err(format!("The release has no {}", server_binary_name()));
     }
     Ok(staging)
+}
+
+/// Disk a release install needs: each archive plus what it extracts to, which
+/// sit side by side until the archive is removed. Twice the archives covers
+/// the extracted files, which are never smaller than their archive.
+fn required_room(assets: &[ReleaseAsset]) -> u64 {
+    assets
+        .iter()
+        .map(|asset| asset.size)
+        .sum::<u64>()
+        .saturating_mul(2)
 }
 
 /// The file one release archive downloads into. It is written, then read back
@@ -596,6 +608,17 @@ mod tests {
         // SHA-256 of "hello".
         sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
     };
+
+    #[test]
+    fn an_install_needs_room_for_the_archives_and_what_they_extract_to() {
+        let other = ReleaseAsset {
+            name: "other.zip",
+            size: 7,
+            sha256: ASSET.sha256,
+        };
+
+        assert_eq!(required_room(&[ASSET, other]), 24);
+    }
 
     fn copy(bytes: &[u8]) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();

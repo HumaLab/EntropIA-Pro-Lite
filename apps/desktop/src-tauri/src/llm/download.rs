@@ -208,6 +208,15 @@ fn ensure_room_for_download(
     ))
 }
 
+/// Refuses a download of `needed_bytes` into `dir` when the disk that holds
+/// `dir` cannot take it. For downloaders outside [`download_model_file`] that
+/// know the size up front: checking before the first byte avoids a download
+/// that dies at 90% with a full disk.
+#[cfg(feature = "local-ml")]
+pub(crate) fn ensure_room_in(dir: &Path, needed_bytes: u64) -> Result<(), String> {
+    ensure_room_for_download(fs2::available_space(dir).ok(), Some(needed_bytes))
+}
+
 /// Refuses a download that ended before the size the server announced.
 fn ensure_download_complete(
     received_bytes: u64,
@@ -502,6 +511,19 @@ mod tests {
         assert!(ensure_room_for_download(Some(size), Some(size)).is_err());
         assert!(
             ensure_room_for_download(Some(size + DOWNLOAD_FREE_SPACE_MARGIN), Some(size)).is_ok()
+        );
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn a_folder_is_checked_against_the_free_space_of_its_disk() {
+        let dir = tempfile::tempdir().expect("temp dir");
+
+        assert!(ensure_room_in(dir.path(), 1).is_ok());
+        let error = ensure_room_in(dir.path(), u64::MAX / 2).unwrap_err();
+        assert!(
+            error.starts_with("Espacio en disco insuficiente"),
+            "{error}"
         );
     }
 

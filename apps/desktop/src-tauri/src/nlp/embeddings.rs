@@ -1769,6 +1769,11 @@ fn download_local_embedding_file(
     }
 
     let total_bytes = response.content_length();
+    // The manifest has no sizes, so each file is checked once the server
+    // announces its length (the 2 GB weights file is the one that matters).
+    if let (Some(size), Some(dir)) = (total_bytes, dest.parent()) {
+        crate::llm::download::ensure_room_in(dir, size)?;
+    }
     let mut reader = response;
     // Batched writes (R8): one read is about one TLS record.
     let mut file = std::io::BufWriter::with_capacity(
