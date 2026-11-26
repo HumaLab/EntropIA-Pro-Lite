@@ -630,19 +630,19 @@ impl OcrExecutor {
         // backend no longer matches it; when the desired backend cannot
         // even be resolved (e.g. forced GLM-OCR with missing assets),
         // keep the running engine instead of thrashing the cache.
-        let desired_glm = ocr::paddle_vl::resolve_desired_backend(&self.app, &self.db_path)
+        let desired = ocr::paddle_vl::resolve_desired_backend(&self.app, &self.db_path)
             .ok()
-            .map(|assets| assets.is_some());
-        let current_glm = vl.as_ref().map(|engine| engine.uses_glm_local());
-        let stale = match (current_glm, desired_glm) {
+            .map(|backend| backend.kind());
+        let current = vl.as_ref().map(|engine| engine.backend_kind());
+        let stale = match (current, desired) {
             (Some(current), Some(desired)) => current != desired,
             (None, _) => true,
             (Some(_), None) => false,
         };
         if stale {
-            if current_glm == Some(true) {
-                // The GLM-OCR server pins ~3 GB of VRAM; it must not
-                // survive the switch back to PaddleOCR-VL.
+            if current.is_some_and(|kind| kind.uses_server()) {
+                // The local llama-server pins gigabytes of VRAM; it must not
+                // survive the switch to another backend.
                 ocr::glm_ocr_local::shutdown();
             }
             *vl = None;
