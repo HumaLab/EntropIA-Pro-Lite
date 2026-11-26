@@ -20,6 +20,8 @@ pub(crate) mod llama_server_download;
 pub(crate) mod local_server;
 #[cfg(feature = "paddle-ocr")]
 pub mod paddle_vl;
+#[cfg(feature = "paddle-ocr")]
+pub mod paddle_vl_local;
 pub mod paddle_vl_types;
 pub(crate) mod pdf;
 pub mod pdf_probe;

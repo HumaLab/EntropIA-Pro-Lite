@@ -73,13 +73,16 @@ impl Backend {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Engine {
     GlmOcr,
+    /// PaddleOCR-VL's GGUF build on llama-server: ~2.8 GB (BF16 model and
+    /// projector, 4 slots of 10k), the same "4 GB" card as GLM-OCR.
+    PaddleVl,
     Qwen,
 }
 
 impl Engine {
     pub(crate) fn min_vram(self) -> u64 {
         match self {
-            Engine::GlmOcr => GLM_OCR_MIN_VRAM,
+            Engine::GlmOcr | Engine::PaddleVl => GLM_OCR_MIN_VRAM,
             Engine::Qwen => QWEN_MIN_VRAM,
         }
     }
@@ -87,7 +90,7 @@ impl Engine {
     /// The floor as the nominal card size users read on the box.
     pub(crate) fn min_vram_gb(self) -> u32 {
         match self {
-            Engine::GlmOcr => 4,
+            Engine::GlmOcr | Engine::PaddleVl => 4,
             Engine::Qwen => 6,
         }
     }

@@ -55,6 +55,9 @@ pub struct PaddleVlConfig {
     /// When set, the engine runs `glm_ocr_local.py` (layout on CPU, GLM-OCR on
     /// a local llama-server) instead of PaddleOCR-VL. Same output contract.
     pub glm_local: Option<GlmLocalBackend>,
+    /// When set, `paddle_vl.py` keeps layout on CPU and sends recognition to
+    /// PaddleOCR-VL served by a local llama-server.
+    pub vl_server: Option<GlmLocalBackend>,
 }
 
 /// What the local GLM-OCR backend needs to start its server.
@@ -313,6 +316,17 @@ impl PaddleVlEngine {
         self.config.glm_local.is_some()
     }
 
+    /// Which local backend this engine was built for.
+    pub fn backend_kind(&self) -> BackendKind {
+        if self.config.glm_local.is_some() {
+            BackendKind::GlmOcr
+        } else if self.config.vl_server.is_some() {
+            BackendKind::PaddleVlServer
+        } else {
+            BackendKind::PaddleVlNative
+        }
+    }
+
     /// Maximum time (in seconds) to wait for PaddleVL subprocess to complete.
     ///
     /// PaddleOCR-VL on CPU has very different timing depending on state:
@@ -382,6 +396,20 @@ impl PaddleVlEngine {
                 "--parallel".to_string(),
                 super::glm_ocr_local::PARALLEL_SLOTS.to_string(),
             ]
+        } else if let Some(vl) = &self.config.vl_server {
+            // Layout runs on CPU inside the script; PaddleOCR-VL recognition
+            // goes to the persistent llama-server, started here on first use.
+            let lease = super::paddle_vl_local::ensure_server(&vl.assets, &vl.db_path)?;
+            let url = lease.base_url().to_string();
+            _server_lease = Some(lease);
+            vec![
+                "--device".to_string(),
+                self.config.device.clone(),
+                "--vl-server-url".to_string(),
+                url,
+                "--vl-max-concurrency".to_string(),
+                super::paddle_vl_local::PARALLEL_SLOTS.to_string(),
+            ]
         } else {
             vec!["--device".to_string(), self.config.device.clone()]
         };
@@ -413,7 +441,9 @@ impl PaddleVlEngine {
             .map(|stdout| std::thread::spawn(move || drain_child_pipe(stdout)));
         // Only PaddleOCR-VL on the GPU is watched: the local GLM backend runs
         // recognition in llama-server, whose GPU use says nothing about this page.
-        let watch_gpu = self.config.glm_local.is_none() && self.config.device == "gpu";
+        let watch_gpu = self.config.glm_local.is_none()
+            && self.config.vl_server.is_none()
+            && self.config.device == "gpu";
         let page_started = Arc::new(AtomicBool::new(false));
         let stderr_reader = child.stderr.take().map(|stderr| {
             let page_started = page_started.clone();
@@ -1149,12 +1179,51 @@ pub fn create_paddle_vl_engine_result(
     // PaddleOCR-VL's own GPU path is Paddle's CUDA build: NVIDIA only. GLM-OCR
     // runs on any GPU llama-server has a build for.
     let has_gpu = detect_nvidia_gpu();
-    let glm_assets = resolve_desired_backend_with_gpu(
-        settings_db_path,
-        resource_dir.as_deref(),
-        super::llama_gpu::engine_runs(super::llama_gpu::Engine::GlmOcr),
-    )?;
-    if let Some(assets) = glm_assets {
+    let desired = resolve_desired_backend_with_gpu(settings_db_path, resource_dir.as_deref())?;
+    if let DesiredBackend::PaddleVlServer(assets) = desired {
+        if requested_by == super::OcrMode::High {
+            crate::app_logs::info(
+                app_handle,
+                log_source,
+                format!(
+                    "OCRH local usará PaddleOCR-VL en llama-server ({})",
+                    assets.server.display()
+                ),
+            );
+        }
+        let config = PaddleVlConfig {
+            python_path,
+            // The installer's wrapper, which runs the installer's
+            // `paddle_vl.py` next to it. The runtime pack's scripts are
+            // pinned by hash and stay as they are.
+            script_path: resolve_ocrh_script_path_from_roots(
+                None,
+                resource_dir.as_deref(),
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                "paddle_vl_server.py",
+            ),
+            layout_script_path: resolve_ocrh_script_path_from_roots(
+                runtime_root.as_deref(),
+                resource_dir.as_deref(),
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                "layout_v3.py",
+            ),
+            hf_cache_dir,
+            paddlex_cache_dir,
+            offline_mode,
+            // Layout stays on CPU so Paddle does not preallocate the VRAM
+            // llama-server needs.
+            device: "cpu".to_string(),
+            glm_local: None,
+            vl_server: Some(GlmLocalBackend {
+                assets,
+                db_path: settings_db_path.to_path_buf(),
+            }),
+        };
+        return PaddleVlEngine::init(config)
+            .map_err(|e| format!("No se pudo iniciar PaddleOCR-VL en llama-server: {e}"));
+    }
+    if let DesiredBackend::GlmOcr(assets) = desired {
         // OCRL only runs the layout script; GLM-OCR is not part of its run.
         if requested_by == super::OcrMode::High {
             crate::app_logs::info(
@@ -1189,6 +1258,7 @@ pub fn create_paddle_vl_engine_result(
                 assets,
                 db_path: settings_db_path.to_path_buf(),
             }),
+            vl_server: None,
         };
         return PaddleVlEngine::init(config)
             .map_err(|e| format!("No se pudo iniciar GLM-OCR local: {e}"));
@@ -1216,6 +1286,7 @@ pub fn create_paddle_vl_engine_result(
         offline_mode,
         device,
         glm_local: None,
+        vl_server: None,
     }) {
         Ok(engine) => Ok(engine),
         Err(e) => Err(format!("❌ Failed to create PaddleVLEngine: {e}")),
@@ -1257,42 +1328,129 @@ fn select_glm_local_assets(
     }
 }
 
+/// The `ocrh_local_engine` value that asks for PaddleOCR-VL.
+const ENGINE_PADDLE_VL: &str = "paddle_vl";
+
+/// Decide whether OCRH local runs PaddleOCR-VL on llama-server.
+///
+/// Consulted only once GLM-OCR was not chosen. `auto` and `paddle_vl` use it
+/// when the GGUF models and the server are installed and the GPU can hold
+/// them; otherwise PaddleOCR-VL runs natively.
+fn select_vl_server_assets(
+    setting: &str,
+    gpu_fits: bool,
+    assets: Result<super::glm_ocr_local::GlmLocalAssets, String>,
+) -> Option<super::glm_ocr_local::GlmLocalAssets> {
+    let setting = setting.trim().to_lowercase();
+    if setting != super::glm_ocr_local::ENGINE_AUTO && setting != ENGINE_PADDLE_VL {
+        return None;
+    }
+    match assets {
+        Ok(assets) if gpu_fits => Some(assets),
+        Ok(_) => {
+            log::info!(target: "paddle_vl", "PaddleOCR-VL GGUF installed but the GPU cannot hold it; running PaddleOCR-VL natively");
+            None
+        }
+        Err(reason) => {
+            log::info!(target: "paddle_vl", "PaddleOCR-VL on llama-server unavailable ({reason}); running PaddleOCR-VL natively");
+            None
+        }
+    }
+}
+
+/// The local backend OCRH should run.
+#[derive(Clone)]
+pub enum DesiredBackend {
+    /// PaddleOCR-VL inside the Python subprocess (Paddle, CPU or CUDA).
+    PaddleVlNative,
+    /// PaddleOCR-VL recognition on a local llama-server.
+    PaddleVlServer(super::glm_ocr_local::GlmLocalAssets),
+    /// GLM-OCR recognition on a local llama-server.
+    GlmOcr(super::glm_ocr_local::GlmLocalAssets),
+}
+
+/// Which backend an engine runs, without its assets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackendKind {
+    PaddleVlNative,
+    PaddleVlServer,
+    GlmOcr,
+}
+
+impl BackendKind {
+    /// Whether the backend keeps a llama-server running.
+    pub fn uses_server(self) -> bool {
+        self != BackendKind::PaddleVlNative
+    }
+}
+
+impl DesiredBackend {
+    pub fn kind(&self) -> BackendKind {
+        match self {
+            DesiredBackend::PaddleVlNative => BackendKind::PaddleVlNative,
+            DesiredBackend::PaddleVlServer(_) => BackendKind::PaddleVlServer,
+            DesiredBackend::GlmOcr(_) => BackendKind::GlmOcr,
+        }
+    }
+}
+
+/// Pick the backend from the setting and what is installed. The PaddleOCR-VL
+/// checks are lazy: they run only when GLM-OCR was not chosen.
+fn select_backend(
+    setting: &str,
+    glm_gpu: bool,
+    glm_assets: Result<super::glm_ocr_local::GlmLocalAssets, String>,
+    vl_gpu: impl FnOnce() -> bool,
+    vl_assets: impl FnOnce() -> Result<super::glm_ocr_local::GlmLocalAssets, String>,
+) -> Result<DesiredBackend, String> {
+    if let Some(assets) = select_glm_local_assets(setting, glm_gpu, glm_assets)? {
+        return Ok(DesiredBackend::GlmOcr(assets));
+    }
+    let assets = vl_assets();
+    let gpu_fits = assets.is_ok() && vl_gpu();
+    Ok(select_vl_server_assets(setting, gpu_fits, assets).map_or(
+        DesiredBackend::PaddleVlNative,
+        DesiredBackend::PaddleVlServer,
+    ))
+}
+
 /// Resolve which local backend OCRH should use right now, without building it.
 ///
 /// Reads the `ocrh_local_engine` setting plus a filesystem check for the
-/// GLM-OCR assets. `Ok(None)` means PaddleOCR-VL, `Ok(Some(assets))` means
-/// local GLM-OCR. An `Err` (the `glm_ocr` setting demanding GLM-OCR whose
-/// assets are missing) tells the caller to keep whatever engine is already
-/// running instead of thrashing the cache on every task.
+/// GLM-OCR and PaddleOCR-VL GGUF assets. An `Err` (the `glm_ocr` setting
+/// demanding GLM-OCR whose assets are missing) tells the caller to keep
+/// whatever engine is already running instead of thrashing the cache on
+/// every task.
 ///
 /// The server binary may ship inside the installer resources, so the Tauri
 /// resource directory is consulted alongside the managed install.
 pub fn resolve_desired_backend(
     app_handle: &tauri::AppHandle,
     settings_db_path: &Path,
-) -> Result<Option<super::glm_ocr_local::GlmLocalAssets>, String> {
+) -> Result<DesiredBackend, String> {
     resolve_desired_backend_with_gpu(
         settings_db_path,
         bundled_resource_dir(app_handle).as_deref(),
-        super::llama_gpu::engine_runs(super::llama_gpu::Engine::GlmOcr),
     )
 }
 
 fn resolve_desired_backend_with_gpu(
     settings_db_path: &Path,
     resource_dir: Option<&Path>,
-    has_gpu: bool,
-) -> Result<Option<super::glm_ocr_local::GlmLocalAssets>, String> {
+) -> Result<DesiredBackend, String> {
+    use super::llama_gpu::{engine_runs, Engine};
     let engine_setting = crate::db::open::open_archive_connection(settings_db_path)
         .ok()
         .and_then(|conn| {
             crate::settings::get_setting(&conn, super::glm_ocr_local::OCRH_LOCAL_ENGINE_SETTING)
         })
         .unwrap_or_else(|| super::glm_ocr_local::ENGINE_AUTO.to_string());
-    select_glm_local_assets(
+    select_backend(
         &engine_setting,
-        has_gpu,
+        engine_runs(Engine::GlmOcr),
         super::glm_ocr_local::resolve_assets_with_resource_dir(settings_db_path, resource_dir),
+        || engine_runs(Engine::PaddleVl),
+        || super::paddle_vl_local::resolve_assets_with_resource_dir(settings_db_path, resource_dir),
     )
 }
 
@@ -1757,6 +1915,7 @@ mod tests {
             offline_mode: false,
             device: "gpu".to_string(),
             glm_local: None,
+            vl_server: None,
         };
         assert_eq!(config.device, "gpu");
     }
@@ -1800,6 +1959,72 @@ mod tests {
             .is_none());
     }
 
+    fn missing() -> Result<crate::ocr::glm_ocr_local::GlmLocalAssets, String> {
+        Err("missing".into())
+    }
+
+    fn kind_for(
+        setting: &str,
+        glm: Result<crate::ocr::glm_ocr_local::GlmLocalAssets, String>,
+        vl: Result<crate::ocr::glm_ocr_local::GlmLocalAssets, String>,
+        vl_gpu: bool,
+    ) -> BackendKind {
+        select_backend(setting, true, glm, || vl_gpu, || vl)
+            .unwrap()
+            .kind()
+    }
+
+    #[test]
+    fn installed_paddle_vl_gguf_runs_on_llama_server() {
+        assert_eq!(
+            kind_for("auto", missing(), Ok(glm_assets()), true),
+            BackendKind::PaddleVlServer
+        );
+        assert_eq!(
+            kind_for("paddle_vl", Ok(glm_assets()), Ok(glm_assets()), true),
+            BackendKind::PaddleVlServer
+        );
+    }
+
+    #[test]
+    fn paddle_vl_runs_natively_without_its_gguf_or_a_fitting_gpu() {
+        assert_eq!(
+            kind_for("auto", missing(), missing(), true),
+            BackendKind::PaddleVlNative
+        );
+        assert_eq!(
+            kind_for("paddle_vl", missing(), Ok(glm_assets()), false),
+            BackendKind::PaddleVlNative
+        );
+    }
+
+    #[test]
+    fn glm_ocr_still_wins_when_chosen() {
+        assert_eq!(
+            kind_for("auto", Ok(glm_assets()), Ok(glm_assets()), true),
+            BackendKind::GlmOcr
+        );
+        assert_eq!(
+            kind_for("glm_ocr", Ok(glm_assets()), Ok(glm_assets()), true),
+            BackendKind::GlmOcr
+        );
+        assert!(select_backend("glm_ocr", true, missing(), || true, || Ok(glm_assets())).is_err());
+    }
+
+    #[test]
+    fn an_engine_built_for_the_server_reports_its_backend() {
+        let mut config = config_on("cpu");
+        config.vl_server = Some(GlmLocalBackend {
+            assets: glm_assets(),
+            db_path: PathBuf::from("/x/archive.db"),
+        });
+        let engine = PaddleVlEngine { config };
+        assert_eq!(engine.backend_kind(), BackendKind::PaddleVlServer);
+        assert!(!engine.uses_glm_local());
+        assert!(BackendKind::PaddleVlServer.uses_server());
+        assert!(!BackendKind::PaddleVlNative.uses_server());
+    }
+
     fn config_on(device: &str) -> PaddleVlConfig {
         PaddleVlConfig {
             python_path: PathBuf::from("/usr/bin/python"),
@@ -1810,6 +2035,7 @@ mod tests {
             offline_mode: false,
             device: device.to_string(),
             glm_local: None,
+            vl_server: None,
         }
     }
 

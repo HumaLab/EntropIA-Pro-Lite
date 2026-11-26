@@ -37,6 +37,7 @@
       "target/release/vc-runtime/*",
       "scripts/paddle_vl.py",
       "scripts/glm_ocr_local.py",
+      "scripts/paddle_vl_server.py",
       "scripts/layout_v3.py",
       "scripts/spacy_ner.py",
       "scripts/transcribe.py"
