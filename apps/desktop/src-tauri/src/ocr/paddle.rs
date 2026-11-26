@@ -135,6 +135,7 @@ impl PaddleOcrProvider {
     /// Returns `Err` if any **required** model file is missing.
     /// Returns `Err` if the MNN engine fails to initialize (unlikely with valid models).
     /// Returns `Ok` even if the orientation model is missing (logged as warning).
+    #[cfg(test)]
     pub fn new(model_dir: PathBuf) -> Result<Self, String> {
         Self::with_profile(RecProfile::V5Latin, &model_dir.clone(), model_dir)
     }

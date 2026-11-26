@@ -973,6 +973,7 @@ mod tests {
             page_count: 1,
             page_methods: Vec::new(),
             source: None,
+            rec_profile: String::new(),
         })
     }
 

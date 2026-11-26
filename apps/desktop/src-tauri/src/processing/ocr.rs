@@ -43,6 +43,10 @@ pub struct OcrComputeOutput {
     /// (a checkpoint written before the stamp existed).
     #[serde(default)]
     pub source: Option<SourceStamp>,
+    /// OCRL recognition profile (`v5_latin`, `v6_tiny`) of a page the light
+    /// engine read; empty when no light engine ran.
+    #[serde(default)]
+    pub rec_profile: String,
 }
 
 impl OcrComputeOutput {
@@ -70,6 +74,7 @@ pub(crate) fn native_page_output(text: String, source: SourceStamp) -> OcrComput
         page_count: 1,
         page_methods: Vec::new(),
         source: Some(source),
+        rec_profile: String::new(),
     }
 }
 
@@ -163,6 +168,9 @@ pub(crate) fn ocr_history_event(
     if !output.page_methods.is_empty() {
         params["pageMethods"] = serde_json::json!(output.page_methods);
     }
+    if !output.rec_profile.is_empty() {
+        params["recProfile"] = serde_json::json!(output.rec_profile);
+    }
     event.params(params).output_text(&output.text)
 }
 
@@ -224,6 +232,8 @@ pub(crate) fn map_ocr_error(error: &str) -> ExecOutput {
 #[cfg(feature = "paddle-ocr")]
 struct LocalEngines {
     provider: std::sync::Arc<dyn ocr::provider::OcrProvider>,
+    /// Recognition profile `provider` was built with.
+    profile: ocr::paddle::RecProfile,
     paddle_vl: Mutex<Option<ocr::paddle_vl::PaddleVlEngine>>,
 }
 
@@ -458,6 +468,7 @@ fn merge_pages(pages: Vec<OcrComputeOutput>) -> Result<OcrComputeOutput, String>
         page_count: count,
         page_methods: Vec::new(),
         source: common_source(&pages),
+        rec_profile: String::new(),
     };
     let mut regions = Vec::<serde_json::Value>::new();
     let mut blocks = Vec::<serde_json::Value>::new();
@@ -471,6 +482,9 @@ fn merge_pages(pages: Vec<OcrComputeOutput>) -> Result<OcrComputeOutput, String>
         merged.image_height = merged.image_height.max(page.image_height);
         merged.layout_model = page.layout_model;
         merged.provider = page.provider;
+        if merged.rec_profile.is_empty() {
+            merged.rec_profile = page.rec_profile;
+        }
         for (json, target) in [
             (page.regions_json, &mut regions),
             (page.blocks_json, &mut blocks),
@@ -527,6 +541,7 @@ impl OcrExecutor {
             bytes,
             asset_type,
             self.page_count(asset_type, bytes),
+            None,
         )
     }
 }
@@ -538,14 +553,32 @@ impl OcrExecutor {
             .local
             .lock()
             .map_err(|e| format!("OCR engine lock poisoned: {e}"))?;
-        if guard.is_some() {
+        // The OCRL profile can change in Settings without a restart: rebuild
+        // the light engine alone, keeping the cached OCRH engine.
+        let profile = ocr::desired_light_profile(&self.db_path);
+        if let Some(engines) = guard.as_mut() {
+            if engines.profile == profile {
+                return Ok(());
+            }
+            match ocr::build_light_provider(&self.app, &self.db_path, profile) {
+                Ok(provider) => {
+                    engines.provider = std::sync::Arc::new(provider);
+                    engines.profile = profile;
+                }
+                Err(error) => log::warn!(
+                    target: "processing",
+                    "OCRL profile {} unavailable, keeping {}: {error}",
+                    profile.id(),
+                    engines.profile.id()
+                ),
+            }
             return Ok(());
         }
-        let model_dir = ocr::resolve_paddle_model_dir(&self.app);
-        match ocr::paddle::PaddleOcrProvider::new(model_dir) {
+        match ocr::build_light_provider(&self.app, &self.db_path, profile) {
             Ok(provider) => {
                 *guard = Some(LocalEngines {
                     provider: std::sync::Arc::new(provider),
+                    profile,
                     paddle_vl: Mutex::new(None),
                 });
                 Ok(())
@@ -593,6 +626,7 @@ impl OcrExecutor {
                         bytes,
                         asset_type,
                         self.page_count(asset_type, bytes),
+                        None,
                     )
                 }
                 Err(error) => {
@@ -687,6 +721,7 @@ impl OcrExecutor {
                 bytes,
                 asset_type,
                 self.page_count(asset_type, bytes),
+                Some(engines.profile.id()),
             );
         }
         // `vl` is still locked from the creation check above (std Mutex is
@@ -711,6 +746,7 @@ impl OcrExecutor {
             bytes,
             asset_type,
             self.page_count(asset_type, bytes),
+            Some(engines.profile.id()),
         )
     }
 }
@@ -724,7 +760,10 @@ fn to_compute_output(
     _bytes: &[u8],
     asset_type: &str,
     page_count: i64,
+    light_profile: Option<&str>,
 ) -> Result<OcrComputeOutput, String> {
+    // Only a page the light engine read carries its recognition profile.
+    let rec_profile = light_profile.filter(|_| output.ocr.method == "paddle");
     if output.degradation_reason.is_some() {
         return Err(
             "provider_error: the OCR pipeline returned a degraded output the batch path cannot publish"
@@ -763,6 +802,7 @@ fn to_compute_output(
         page_count,
         page_methods: Vec::new(),
         source: None,
+        rec_profile: rec_profile.unwrap_or_default().to_string(),
     })
 }
 
@@ -906,6 +946,7 @@ mod tests {
             page_count: 1,
             page_methods: Vec::new(),
             source: None,
+            rec_profile: String::new(),
         };
         publish_ocr_output(&conn, "a1", &output).expect("publish");
         let (text, method): (String, String) = conn
@@ -948,6 +989,7 @@ mod tests {
             page_count: 1,
             page_methods: Vec::new(),
             source: None,
+            rec_profile: String::new(),
         }
     }
 
@@ -1155,5 +1197,21 @@ mod tests {
         let paddle = ocr_history_event("a1", &page_output("paddle"));
         assert_eq!(paddle.tool, "PaddleOCR (local)");
         assert_eq!(paddle.model.as_deref(), Some("paddle"));
+    }
+
+    #[test]
+    fn history_records_the_ocrl_profile_of_a_light_run() {
+        let mut light = page_output("paddle");
+        light.rec_profile = "v6_tiny".to_string();
+        let params = ocr_history_event("a1", &light).params.expect("params");
+        assert_eq!(params["recProfile"], "v6_tiny");
+
+        let remote = ocr_history_event("a1", &page_output("glm_ocr"));
+        assert!(remote.params.expect("params").get("recProfile").is_none());
+
+        let mut pdf_page = page_output("paddle");
+        pdf_page.rec_profile = "v5_latin".to_string();
+        let merged = merge_pages(vec![page_output("native"), pdf_page]).expect("merge");
+        assert_eq!(merged.rec_profile, "v5_latin");
     }
 }

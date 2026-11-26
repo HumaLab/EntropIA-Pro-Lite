@@ -4172,9 +4172,8 @@ enum PageOcrOutcome {
 /// the renderer converts to pdfium's 0-based index.
 pub struct ProductionSelectiveOcr {
     app: tauri::AppHandle,
-    // Only the remote GLM path reads it (for the API key); the Paddle build
-    // recognises locally.
-    #[cfg_attr(feature = "paddle-ocr", allow(dead_code))]
+    // The remote GLM path reads its API key from this archive; the Paddle
+    // build reads the OCRL profile setting.
     db_path: std::path::PathBuf,
     #[cfg(feature = "paddle-ocr")]
     paddle: std::sync::Mutex<Option<crate::ocr::paddle::PaddleOcrProvider>>,
@@ -4197,9 +4196,17 @@ impl ProductionSelectiveOcr {
             .paddle
             .lock()
             .map_err(|e| format!("Paddle engine lock poisoned: {e}"))?;
-        if guard.is_none() {
-            let model_dir = crate::ocr::resolve_paddle_model_dir(&self.app);
-            *guard = Some(crate::ocr::paddle::PaddleOcrProvider::new(model_dir)?);
+        // Rebuilt when the OCRL profile changed in Settings since the last page.
+        let profile = crate::ocr::desired_light_profile(&self.db_path);
+        if guard
+            .as_ref()
+            .is_none_or(|engine| engine.profile() != profile)
+        {
+            *guard = Some(crate::ocr::build_light_provider(
+                &self.app,
+                &self.db_path,
+                profile,
+            )?);
         }
         // The guard lives across the call: the queue supervisor runs one
         // unit at a time, so no other page contends for the engine.

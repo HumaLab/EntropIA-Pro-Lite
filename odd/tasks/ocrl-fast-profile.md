@@ -18,7 +18,7 @@ Branch: `feat/ocrl-fast-profile` (from main after #453). Delivery: backend PR (T
 |---|---|---|---|---|
 | T1 | S1 | inline | done (3 unit tests + ignored v6 integration, passed locally) | see git log |
 | T2 | S2 | inline | done (4 unit tests) | see git log |
-| T3 | S3, S4 | inline | pending | |
+| T3 | S3, S4 | inline | done (3 unit tests; Pro lib 4144 + bibliography_processing 205 passed) | see git log |
 | T4 | S5 | inline | pending | |
 
 - T1: `ocr/paddle.rs` profile type with per-profile filenames; constructor takes the recognition dir and the orientation dir; `Cargo.toml` `ocr-rs` spec `"2.4"` (the lock already resolves 2.4.1).
@@ -32,3 +32,4 @@ Branch: `feat/ocrl-fast-profile` (from main after #453). Delivery: backend PR (T
 - L2 (2026-11-26): F0 measured (Engram `ocr/ppocrv6-tiny-f0-results`): v6 Tiny ~2.8x faster than v5 Latin on two Kerbo book pages (1.1 vs 3.0-3.5 s, 4 threads), word F1 about 1 point lower, accented-word recall about 3 points lower.
 - L3 (2026-11-26, user): "Optional fast profile" (answer to: adopt v6 Tiny as an optional fast profile or as the default).
 - L4 (2026-11-26): mapping: model filenames hardcoded in `PaddleOcrProvider::new` (`paddle.rs:92-94`); providers cached in `OcrExecutor.local` (`processing/ocr.rs:238`) and `ProductionSelectiveOcr.paddle` (`bibliography/processing.rs:4180`), neither rebuilt on settings change; `Cargo.lock` already resolves `ocr-rs` 2.4.1. Lite enablement (plan phase 2) is out of scope here.
+- L5 (2026-11-26): T1-T3 done. `OcrComputeOutput` gains `rec_profile` (`serde(default)`): checkpoints written before it resume with an empty profile, and an older build ignores the field (no `deny_unknown_fields`). `PaddleOcrProvider::new` is now test-only; production builds through `ocr::build_light_provider`. The batch executor swaps only the light provider on a profile change and keeps the cached OCRH engine. Checks: clippy Pro and Lite clean, fmt clean.
