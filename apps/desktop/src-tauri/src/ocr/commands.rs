@@ -703,7 +703,7 @@ pub async fn ppocr_v6_download_models(
 ) -> Result<String, String> {
     use super::paddle_vl_local::verify_download;
     use super::ppocr_v6_local::{missing_bytes, missing_files, models_dir, url};
-    use crate::llm::download::{download_model_file, ensure_room_in, open_managed_models_dir};
+    use crate::llm::download::{download_pinned_file, ensure_room_in, open_managed_models_dir};
     use tauri::Emitter;
 
     let dir = models_dir(&db.db_path);
@@ -735,7 +735,7 @@ pub async fn ppocr_v6_download_models(
             for file in &missing {
                 let destination = dir.join(file.filename);
                 let managed_dir = open_managed_models_dir(&dir)?;
-                download_model_file(
+                download_pinned_file(
                     "ppocr-v6",
                     &url(file),
                     managed_dir,
