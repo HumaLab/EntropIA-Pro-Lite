@@ -632,6 +632,66 @@ describe('InternetArchiveDialog discovery', () => {
     expect(await screen.findByText('Some Title')).toBeInTheDocument()
   })
 
+  it('sends the year range typed in the search tab', async () => {
+    iaRef.iaSearch.mockResolvedValue({ numFound: 1, items: [searchItem()] })
+    open()
+    await fireEvent.input(screen.getByLabelText('Desde el año'), { target: { value: '1920' } })
+    await fireEvent.input(screen.getByLabelText('Hasta el año'), { target: { value: '1930' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+
+    expect(await screen.findByText('Some Title')).toBeInTheDocument()
+    expect(iaRef.iaSearch).toHaveBeenCalledWith(
+      expect.objectContaining({ yearFrom: 1920, yearTo: 1930 }),
+      1,
+      50
+    )
+  })
+
+  it('filters a collection by text and years through a search scoped to it', async () => {
+    iaRef.iaSearch.mockResolvedValue({ numFound: 1, items: [searchItem()] })
+    open()
+    await fireEvent.click(within(discoveryTabs()).getByRole('tab', { name: 'Colección' }))
+    await fireEvent.input(screen.getByLabelText('Identificador de la colección'), {
+      target: { value: 'opensource' },
+    })
+    await fireEvent.input(screen.getByLabelText('Texto libre'), {
+      target: { value: 'boletín' },
+    })
+    await fireEvent.input(screen.getByLabelText('Desde el año'), { target: { value: '1920' } })
+    await fireEvent.input(screen.getByLabelText('Hasta el año'), { target: { value: '1930' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Explorar' }))
+
+    expect(await screen.findByText('Some Title')).toBeInTheDocument()
+    expect(iaRef.iaSearch).toHaveBeenCalledWith(
+      {
+        collection: 'opensource',
+        text: 'boletín',
+        yearFrom: 1920,
+        yearTo: 1930,
+        textsOnly: true,
+        kinds: ['pdf'],
+      },
+      1,
+      50,
+      { stableOrder: true }
+    )
+    expect(iaRef.iaListCollection).not.toHaveBeenCalled()
+  })
+
+  it('refuses a malformed year in the collection filter without a request', async () => {
+    open()
+    await fireEvent.click(within(discoveryTabs()).getByRole('tab', { name: 'Colección' }))
+    await fireEvent.input(screen.getByLabelText('Identificador de la colección'), {
+      target: { value: 'opensource' },
+    })
+    // A number input drops text it cannot parse, so a fraction is what stays malformed.
+    await fireEvent.input(screen.getByLabelText('Desde el año'), { target: { value: '1920.5' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Explorar' }))
+
+    expect(iaRef.iaSearch).not.toHaveBeenCalled()
+    expect(iaRef.iaListCollection).not.toHaveBeenCalled()
+  })
+
   it('resolves a link and opens the item through the Enlace tab', async () => {
     iaRef.iaResolveIdentifier.mockResolvedValue('some-id')
     iaRef.iaGetItem.mockResolvedValue(itemDetails())

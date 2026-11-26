@@ -155,14 +155,20 @@
   let searchText = $state('')
   let searchTitle = $state('')
   let searchCreator = $state('')
-  let searchFrom = $state('')
-  let searchTo = $state('')
+  // NumberField binds a number, or null once cleared, never a string.
+  let searchFrom = $state<YearInput>('')
+  let searchTo = $state<YearInput>('')
   let searchPage = $state(1)
   let searchResult = $state<IaSearchPage | null>(null)
   let searching = $state(false)
 
   // Discovery: collection tab.
   let collectionInput = $state('')
+  // Optional filters: any of them turns the listing into a search scoped to
+  // the collection, so a large collection is reachable past its first pages.
+  let collectionText = $state('')
+  let collectionFrom = $state<YearInput>('')
+  let collectionTo = $state<YearInput>('')
   let collectionPage = $state(1)
   let collectionResult = $state<IaSearchPage | null>(null)
   let listing = $state(false)
@@ -705,8 +711,14 @@
     else if (discoverTab === 'collection' && collectionResult) void submitCollection(1)
   }
 
-  function parseYear(raw: string): number | undefined {
-    const trimmed = raw.trim()
+  type YearInput = string | number | null | undefined
+
+  function yearText(raw: YearInput): string {
+    return raw === null || raw === undefined ? '' : String(raw).trim()
+  }
+
+  function parseYear(raw: YearInput): number | undefined {
+    const trimmed = yearText(raw)
     if (trimmed === '') return undefined
     if (!/^\d{1,4}$/.test(trimmed)) return undefined
     return Number(trimmed)
@@ -737,8 +749,8 @@
     const yearFrom = parseYear(searchFrom)
     const yearTo = parseYear(searchTo)
     if (
-      (searchFrom.trim() !== '' && yearFrom === undefined) ||
-      (searchTo.trim() !== '' && yearTo === undefined)
+      (yearText(searchFrom) !== '' && yearFrom === undefined) ||
+      (yearText(searchTo) !== '' && yearTo === undefined)
     ) {
       problem = t('internetArchive.error.invalid_query')
       return
@@ -775,15 +787,43 @@
       problem = t('internetArchive.error.invalid_query')
       return
     }
+    const yearFrom = parseYear(collectionFrom)
+    const yearTo = parseYear(collectionTo)
+    if (
+      (yearText(collectionFrom) !== '' && yearFrom === undefined) ||
+      (yearText(collectionTo) !== '' && yearTo === undefined)
+    ) {
+      problem = t('internetArchive.error.invalid_query')
+      return
+    }
+    const text = collectionText.trim() === '' ? undefined : collectionText.trim()
+    const filtered = text !== undefined || yearFrom !== undefined || yearTo !== undefined
     listing = true
     problem = null
     try {
       collectionPage = page
       const listKinds = [...kinds]
-      collectionResult = await iaListCollection(identifier, page, rows, listKinds)
-      collectionLabel = identifier
-      collectionFetcher = (fetchPage, fetchRows) =>
-        iaListCollection(identifier, fetchPage, fetchRows, listKinds)
+      let fetcher: PageFetcher
+      if (filtered) {
+        // Same clauses as the plain listing (collection, kinds) plus the
+        // filters, in the listing's identifier order so pages stay coherent.
+        const query = {
+          collection: identifier,
+          text,
+          yearFrom,
+          yearTo,
+          textsOnly: true,
+          kinds: listKinds,
+        }
+        fetcher = (fetchPage, fetchRows) =>
+          iaSearch(query, fetchPage, fetchRows, { stableOrder: true })
+      } else {
+        fetcher = (fetchPage, fetchRows) =>
+          iaListCollection(identifier, fetchPage, fetchRows, listKinds)
+      }
+      collectionResult = await fetcher(page, rows)
+      collectionLabel = text ? `${identifier} · ${text}` : identifier
+      collectionFetcher = fetcher
     } catch (reason) {
       problem = describeError(reason)
     } finally {
@@ -831,6 +871,9 @@
   function browseItemAsCollection(identifier: string): void {
     discoverTab = 'collection'
     collectionInput = identifier
+    collectionText = ''
+    collectionFrom = ''
+    collectionTo = ''
     collectionPage = 1
     collectionResult = null
     itemIdentifier = ''
@@ -1387,6 +1430,7 @@
               {t('internetArchive.search.yearFrom')}
             </span>
             <NumberField
+              size="sm"
               min="0"
               max="9999"
               bind:value={searchFrom}
@@ -1399,6 +1443,7 @@
               {t('internetArchive.search.yearTo')}
             </span>
             <NumberField
+              size="sm"
               min="0"
               max="9999"
               bind:value={searchTo}
@@ -1429,6 +1474,38 @@
               bind:value={collectionInput}
             />
           </div>
+          <div class="ia-field">
+            <label class="ia-field__label" for="{uid}-collection-text">
+              {t('internetArchive.search.text')}
+            </label>
+            <Input id="{uid}-collection-text" size="sm" bind:value={collectionText} />
+          </div>
+          <label class="ia-field ia-field--year">
+            <span class="ia-field__label number-field-label">
+              {t('internetArchive.search.yearFrom')}
+            </span>
+            <NumberField
+              size="sm"
+              min="0"
+              max="9999"
+              bind:value={collectionFrom}
+              decrementLabel={t('numberField.decrease')}
+              incrementLabel={t('numberField.increase')}
+            />
+          </label>
+          <label class="ia-field ia-field--year">
+            <span class="ia-field__label number-field-label">
+              {t('internetArchive.search.yearTo')}
+            </span>
+            <NumberField
+              size="sm"
+              min="0"
+              max="9999"
+              bind:value={collectionTo}
+              decrementLabel={t('numberField.decrease')}
+              incrementLabel={t('numberField.increase')}
+            />
+          </label>
           <Button type="submit" variant="primary" size="sm" disabled={listing || noKinds}>
             {listing
               ? t('internetArchive.collection.loading')
@@ -2141,14 +2218,33 @@
     flex: 0 1 120px;
   }
 
+  /* The year labels keep the shared two-line slot of every numeric field
+     (app.css). The text labels in the same row reserve the same slot, so all
+     labels start on one line and the controls below them line up too. */
+  .ia-form--inline .ia-field__label {
+    line-height: calc(1em * var(--line-height-tight));
+    min-height: calc(2em * var(--line-height-tight));
+  }
+
+  /* The discover phase stacks its blocks in a column, so the browser below
+     can give up height when the dialog has less room than it asks for. */
+  :global(.confirm-dialog__body:has(> .ia-browser)) {
+    display: flex;
+    flex-direction: column;
+  }
+
   /* Master-detail: results on the left, the open item's files on the right.
-     Fixed height so each pane scrolls on its own instead of the dialog. */
+     A steady height so each pane scrolls on its own instead of the dialog; it
+     shrinks (down to min-height) when the window is too short to fit it, so
+     the dialog body never scrolls over the controls above it. */
   .ia-browser {
     display: grid;
     grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr);
     gap: var(--space-3);
+    flex: 0 1 auto;
     height: min(56vh, 560px);
-    min-height: 260px;
+    /* Fits the 600px minimum window height (tauri.conf.json). */
+    min-height: 220px;
   }
 
   .ia-browser__list,
@@ -2180,6 +2276,7 @@
   @media (max-width: 860px) {
     .ia-browser {
       grid-template-columns: minmax(0, 1fr);
+      flex-shrink: 0;
       height: auto;
     }
 
