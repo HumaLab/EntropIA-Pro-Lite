@@ -2222,8 +2222,8 @@
      (app.css). The text labels in the same row reserve the same slot, so all
      labels start on one line and the controls below them line up too. */
   .ia-form--inline .ia-field__label {
-    line-height: calc(1em * var(--line-height-tight, 1.22));
-    min-height: calc(2em * var(--line-height-tight, 1.22));
+    line-height: calc(1em * var(--line-height-tight));
+    min-height: calc(2em * var(--line-height-tight));
   }
 
   /* The discover phase stacks its blocks in a column, so the browser below
