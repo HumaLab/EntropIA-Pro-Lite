@@ -38,6 +38,52 @@ const ORI_MODEL_FILENAME: &str = "PP-LCNet_x1_0_doc_ori.mnn";
 /// than to incorrectly rotate one that's already correct.
 const ORI_CONFIDENCE_THRESHOLD: f32 = 0.7;
 
+/// The recognition profile OCRL runs: which detection, recognition and keys
+/// files the engine loads. v5 Latin is bundled and the default; v6 Tiny is an
+/// optional, downloaded profile that is about 3x faster on CPU and slightly
+/// less accurate on accented Spanish words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RecProfile {
+    #[default]
+    V5Latin,
+    V6Tiny,
+}
+
+impl RecProfile {
+    /// Detection, recognition and keys filenames, in that order. A keys file
+    /// belongs to its recognition model and is never mixed across profiles.
+    pub const fn files(self) -> [&'static str; 3] {
+        match self {
+            Self::V5Latin => [
+                "PP-OCRv5_mobile_det.mnn",
+                "latin_PP-OCRv5_mobile_rec_infer.mnn",
+                "ppocr_keys_latin.txt",
+            ],
+            Self::V6Tiny => [
+                "PP-OCRv6_tiny_det.mnn",
+                "PP-OCRv6_tiny_rec.mnn",
+                "ppocr_keys_v6_tiny.txt",
+            ],
+        }
+    }
+
+    /// The value stored in the `ocrl_profile` setting and in OCR history.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::V5Latin => "v5_latin",
+            Self::V6Tiny => "v6_tiny",
+        }
+    }
+
+    /// An unknown or empty setting value means the default profile.
+    pub fn from_setting(value: &str) -> Self {
+        match value.trim() {
+            "v6_tiny" => Self::V6Tiny,
+            _ => Self::V5Latin,
+        }
+    }
+}
+
 /// PaddleOCR-based OCR provider with optional orientation correction.
 ///
 /// Uses the `ocr-rs` crate (MNN backend) for inference. Requires detection and
@@ -57,6 +103,7 @@ pub struct PaddleOcrProvider {
     ori_model: Option<ocr_rs::OriModel>,
     #[allow(dead_code)]
     model_dir: PathBuf,
+    profile: RecProfile,
 }
 
 impl fmt::Debug for PaddleOcrProvider {
@@ -89,9 +136,21 @@ impl PaddleOcrProvider {
     /// Returns `Err` if the MNN engine fails to initialize (unlikely with valid models).
     /// Returns `Ok` even if the orientation model is missing (logged as warning).
     pub fn new(model_dir: PathBuf) -> Result<Self, String> {
-        let det_path = model_dir.join("PP-OCRv5_mobile_det.mnn");
-        let rec_path = model_dir.join("latin_PP-OCRv5_mobile_rec_infer.mnn");
-        let dict_path = model_dir.join("ppocr_keys_latin.txt");
+        Self::with_profile(RecProfile::V5Latin, &model_dir.clone(), model_dir)
+    }
+
+    /// Like [`Self::new`], for any profile: its three files come from
+    /// `rec_dir`; the orientation model and diagnostics use `model_dir`, the
+    /// bundled OCR model directory.
+    pub fn with_profile(
+        profile: RecProfile,
+        rec_dir: &std::path::Path,
+        model_dir: PathBuf,
+    ) -> Result<Self, String> {
+        let [det, rec, dict] = profile.files();
+        let det_path = rec_dir.join(det);
+        let rec_path = rec_dir.join(rec);
+        let dict_path = rec_dir.join(dict);
 
         // Validate required model files exist before attempting to load them.
         // This gives clear error messages ("model not found: /path/to/file")
@@ -149,7 +208,13 @@ impl PaddleOcrProvider {
             engine,
             ori_model,
             model_dir,
+            profile,
         })
+    }
+
+    /// The recognition profile this engine was built with.
+    pub fn profile(&self) -> RecProfile {
+        self.profile
     }
 
     /// Returns the model directory path for diagnostics.
@@ -305,6 +370,73 @@ mod tests {
             err.contains("PaddleOCR model not found"),
             "Error should mention missing model, got: {err}"
         );
+    }
+
+    #[test]
+    fn each_profile_names_its_own_three_files() {
+        assert_eq!(
+            RecProfile::V5Latin.files(),
+            [
+                "PP-OCRv5_mobile_det.mnn",
+                "latin_PP-OCRv5_mobile_rec_infer.mnn",
+                "ppocr_keys_latin.txt"
+            ]
+        );
+        assert_eq!(
+            RecProfile::V6Tiny.files(),
+            [
+                "PP-OCRv6_tiny_det.mnn",
+                "PP-OCRv6_tiny_rec.mnn",
+                "ppocr_keys_v6_tiny.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_setting_value_maps_to_a_profile_and_back() {
+        assert_eq!(RecProfile::from_setting("v6_tiny"), RecProfile::V6Tiny);
+        assert_eq!(RecProfile::from_setting("v5_latin"), RecProfile::V5Latin);
+        assert_eq!(RecProfile::from_setting(""), RecProfile::V5Latin);
+        assert_eq!(RecProfile::from_setting("v7_huge"), RecProfile::V5Latin);
+        assert_eq!(RecProfile::default(), RecProfile::V5Latin);
+        assert_eq!(RecProfile::V6Tiny.id(), "v6_tiny");
+        assert_eq!(RecProfile::V5Latin.id(), "v5_latin");
+    }
+
+    #[test]
+    fn a_missing_v6_file_is_named_in_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = PaddleOcrProvider::with_profile(
+            RecProfile::V6Tiny,
+            dir.path(),
+            dir.path().to_path_buf(),
+        )
+        .unwrap_err();
+        assert!(err.contains("PP-OCRv6_tiny_det.mnn"), "{err}");
+    }
+
+    /// Runs both profiles on a real page. Needs the v6 Tiny files in
+    /// `ENTROPIA_V6_TINY_DIR`: `cargo test --features paddle-ocr -- --ignored v6_tiny_reads`.
+    #[test]
+    #[ignore]
+    fn v6_tiny_reads_a_page_like_v5() {
+        let bundled = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("models")
+            .join("ocr");
+        let v6_dir = std::path::PathBuf::from(
+            std::env::var("ENTROPIA_V6_TINY_DIR").expect("ENTROPIA_V6_TINY_DIR"),
+        );
+        let v6 = PaddleOcrProvider::with_profile(RecProfile::V6Tiny, &v6_dir, bundled.clone())
+            .expect("v6 Tiny init");
+        let v5 = PaddleOcrProvider::new(bundled).expect("v5 init");
+        assert_eq!(v6.profile(), RecProfile::V6Tiny);
+        assert_eq!(v5.profile(), RecProfile::V5Latin);
+        let image = image::open(std::env::var("ENTROPIA_OCR_PAGE").expect("ENTROPIA_OCR_PAGE"))
+            .expect("page");
+        let v6_text = v6.recognize_image(&image).expect("v6 ocr").text;
+        let v5_text = v5.recognize_image(&image).expect("v5 ocr").text;
+        assert!(v6_text.len() > v5_text.len() / 2, "{v6_text}");
     }
 
     /// Integration test: load real PP-OCRv5 models and recognize text from an image.
