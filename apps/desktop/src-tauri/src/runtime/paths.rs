@@ -18,15 +18,25 @@ pub fn runtime_root(app_data_dir: &Path) -> PathBuf {
 
 /// The short runtime root to use when the cache directory is redirected
 /// (`real` differs from `nominal`), or `None` to keep `<cache>/runtime`.
+/// An isolated dev profile keeps its own folder under the short root, so it
+/// never shares a runtime with the real app.
 pub fn short_runtime_root_for(
     nominal_cache: &Path,
     real_cache: &Path,
     home: Option<&Path>,
+    dev_profile: Option<&str>,
 ) -> Option<PathBuf> {
     if nominal_cache == real_cache {
         return None;
     }
-    home.map(|home| home.join(".entropia").join("runtime"))
+    let root = home?.join(".entropia");
+    Some(match dev_profile {
+        Some(name) => root
+            .join(crate::dev_profile::PROFILES_DIR)
+            .join(name)
+            .join("runtime"),
+        None => root.join("runtime"),
+    })
 }
 
 static REMEMBERED_RUNTIME_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -180,9 +190,30 @@ mod tests {
             .join("com.entropia.shared");
 
         assert_eq!(
-            short_runtime_root_for(&nominal, &real, Some(&home)),
+            short_runtime_root_for(&nominal, &real, Some(&home), None),
             Some(home.join(".entropia").join("runtime"))
         );
+    }
+
+    #[test]
+    fn a_dev_profile_gets_its_own_short_runtime_root() {
+        let home = PathBuf::from(r"C:\Users\someone");
+        let nominal = PathBuf::from(r"C:\nominal\com.entropia.shared\dev-profiles\navegador");
+        let real = PathBuf::from(r"C:\real\com.entropia.shared\dev-profiles\navegador");
+
+        let profile = short_runtime_root_for(&nominal, &real, Some(&home), Some("navegador"));
+        let shared = short_runtime_root_for(&nominal, &real, Some(&home), None);
+
+        assert_eq!(
+            profile,
+            Some(
+                home.join(".entropia")
+                    .join("dev-profiles")
+                    .join("navegador")
+                    .join("runtime")
+            )
+        );
+        assert_ne!(profile, shared);
     }
 
     #[test]
@@ -193,7 +224,10 @@ mod tests {
             .join("Local")
             .join("com.entropia.shared");
 
-        assert_eq!(short_runtime_root_for(&cache, &cache, Some(&home)), None);
+        assert_eq!(
+            short_runtime_root_for(&cache, &cache, Some(&home), None),
+            None
+        );
     }
 
     #[test]
@@ -201,7 +235,7 @@ mod tests {
         let nominal = PathBuf::from(r"C:\nominal\com.entropia.shared");
         let real = PathBuf::from(r"C:\real\com.entropia.shared");
 
-        assert_eq!(short_runtime_root_for(&nominal, &real, None), None);
+        assert_eq!(short_runtime_root_for(&nominal, &real, None, None), None);
     }
 
     #[test]
