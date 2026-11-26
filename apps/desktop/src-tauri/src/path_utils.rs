@@ -368,6 +368,24 @@ pub fn resolve_and_remember_dirs(
         );
     }
 
+    #[cfg(feature = "local-ml")]
+    {
+        let home = app_handle.path().home_dir().ok();
+        if let Some(root) = crate::runtime::paths::short_runtime_root_for(
+            &nominal_cache,
+            &cache,
+            home.as_deref(),
+            crate::dev_profile::active(),
+        ) {
+            log::info!(
+                target: "setup",
+                "runtime directory moved out of the redirected cache: {}",
+                root.display()
+            );
+            crate::runtime::paths::remember_runtime_root(root);
+        }
+    }
+
     let _ = REMEMBERED_DATA_DIR.set(data.clone());
     let _ = REMEMBERED_NOMINAL_DATA_DIR.set(nominal_data);
     remember_cache_dir(cache.clone());

@@ -171,7 +171,7 @@ fn reset_candidate_paths(app_data_dir: &std::path::Path) -> Vec<PathBuf> {
     {
         reset_paths.push(install::venv_path(&managed_root));
     }
-    let runtime_dir = app_data_dir.join("runtime");
+    let runtime_dir = crate::runtime::paths::runtime_root(app_data_dir);
     if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
         for entry in entries.flatten() {
             let path = entry.path();

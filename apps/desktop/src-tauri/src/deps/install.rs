@@ -285,8 +285,31 @@ fn find_wheel_in_dir(dir: &Path, prefix: &str) -> Option<PathBuf> {
 /// creates the managed venv without it, so the import check right after the
 /// install failed ("No module named 'setuptools'") and PaddleOCR was skipped.
 /// Install both together; the wheelhouse ships a setuptools wheel.
-fn paddlepaddle_install_spec(target: &str) -> String {
-    format!("{target} setuptools")
+/// What `uv pip install` receives for PaddlePaddle: the wheel (a path when the
+/// wheelhouse bundles it) and setuptools.
+fn paddlepaddle_install_spec(target: &str) -> Vec<String> {
+    vec![target.to_string(), "setuptools".to_string()]
+}
+
+/// The packages to install for `dep`, one argument each, plus the extra index
+/// URL PaddlePaddle may need.
+///
+/// A bundled wheel is a path, and a path may hold spaces (`C:\Users\Diego
+/// Solimeno\...`), so it is never split. A registry spec may carry several
+/// space-separated packages: spaCy ships the engine plus the language model, and
+/// the es_core_news_md 3.8 wheel no longer declares spaCy as a dependency, so
+/// both must be installed together.
+fn install_packages(
+    dep: &DependencySpec,
+    wheelhouse_dir: Option<&Path>,
+) -> Result<(Vec<String>, Option<String>), String> {
+    if dep.id == DependencyId::PaddlePaddle {
+        let (target, index) = resolve_paddlepaddle_install_target(wheelhouse_dir);
+        return Ok((paddlepaddle_install_spec(&target), index));
+    }
+    let spec = managed_install_spec(dep, wheelhouse_dir)
+        .ok_or_else(|| format!("Sin spec de instalación para {}", dep.display_name))?;
+    Ok((spec.split_whitespace().map(str::to_owned).collect(), None))
 }
 
 fn resolve_paddlepaddle_install_target(wheelhouse_dir: Option<&Path>) -> (String, Option<String>) {
@@ -943,14 +966,7 @@ pub async fn install_package(
     }
     let _ = std::fs::remove_file(&write_probe);
 
-    let (spec, extra_index_url) = if dep.id == DependencyId::PaddlePaddle {
-        let (target, index) = resolve_paddlepaddle_install_target(wheelhouse_dir);
-        (paddlepaddle_install_spec(&target), index)
-    } else {
-        let spec = managed_install_spec(dep, wheelhouse_dir)
-            .ok_or_else(|| format!("Sin spec de instalación para {}", dep.display_name))?;
-        (spec, None)
-    };
+    let (packages, extra_index_url) = install_packages(dep, wheelhouse_dir)?;
 
     let python_str = venv_python.to_string_lossy().into_owned();
     let mut cmd = uv.command();
@@ -961,12 +977,7 @@ pub async fn install_package(
         // package instead of reusing it (a plain install would keep the corruption).
         cmd.arg("--reinstall");
     }
-    // A spec may carry several space-separated packages: e.g. spaCy ships the
-    // engine plus the language model, and the es_core_news_md 3.8 wheel no longer
-    // declares spaCy as a dependency, so both must be installed together.
-    for pkg in spec.split_whitespace() {
-        cmd.arg(pkg);
-    }
+    cmd.args(&packages);
     cmd.args(["--python", &python_str]);
     let uses_online_indexes = extra_index_url.is_some() || wheelhouse_dir.is_none();
 
@@ -2454,11 +2465,50 @@ print(json.dumps(registered))
         std::fs::write(&cpu_wheel, b"cpu wheel").expect("write cpu wheel");
 
         let (target, _) = resolve_paddlepaddle_install_target(Some(wheelhouse.path()));
-        let spec = paddlepaddle_install_spec(&target);
-        let packages: Vec<&str> = spec.split_whitespace().collect();
+        let paddle = find_dep(&DependencyId::PaddlePaddle).expect("paddlepaddle dep present");
+        let (packages, _) =
+            install_packages(paddle, Some(wheelhouse.path())).expect("install packages");
 
-        assert_eq!(packages.first().copied(), Some(target.as_str()));
-        assert!(packages.contains(&"setuptools"), "{packages:?}");
+        assert_eq!(packages.first(), Some(&target));
+        assert!(packages.iter().any(|p| p == "setuptools"), "{packages:?}");
+    }
+
+    #[test]
+    fn test_paddlepaddle_wheel_under_a_folder_with_a_space_stays_one_argument() {
+        let home = tempdir().expect("home");
+        let wheelhouse = home.path().join("Diego Solimeno").join("wheelhouse");
+        std::fs::create_dir_all(&wheelhouse).expect("wheelhouse");
+        let cpu_wheel = wheelhouse.join("paddlepaddle-3.2.2-cp311-cp311-win_amd64.whl");
+        std::fs::write(&cpu_wheel, b"cpu wheel").expect("write cpu wheel");
+
+        let paddle = find_dep(&DependencyId::PaddlePaddle).expect("paddlepaddle dep present");
+        let (packages, index) = install_packages(paddle, Some(&wheelhouse)).expect("packages");
+
+        assert_eq!(
+            packages,
+            vec![
+                cpu_wheel.to_string_lossy().into_owned(),
+                "setuptools".to_string()
+            ]
+        );
+        assert_eq!(index, None);
+    }
+
+    #[test]
+    fn test_a_spec_with_several_packages_still_installs_each_one() {
+        let spacy = find_dep(&DependencyId::Spacy).expect("spacy dep present");
+        let wheelhouse = tempdir().expect("wheelhouse");
+
+        let (packages, index) = install_packages(spacy, Some(wheelhouse.path())).expect("packages");
+
+        assert_eq!(
+            packages,
+            vec![
+                "spacy>=3.8.0,<3.9.0".to_string(),
+                "es-core-news-md==3.8.0".to_string()
+            ]
+        );
+        assert_eq!(index, None);
     }
 
     #[test]
