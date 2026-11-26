@@ -7,6 +7,8 @@ mod asset_sweep;
 mod audio_codecs;
 mod audio_preview;
 mod exit_watchdog;
+#[cfg(windows)]
+mod webview2_check;
 // `pub` so the assistant endpoint's surface is real crate API between tasks
 // instead of dead code: T3 adds tools to it and T4's commands drive its state
 // (the same reason `sync` and `writing` are `pub`).
@@ -795,6 +797,10 @@ pub fn run() {
     // reach stderr.
     logging::init();
     crash_trace::install_panic_hook();
+    // Without the WebView2 Runtime (an MSIX cannot install it) the app would
+    // end with no window and no message.
+    #[cfg(windows)]
+    webview2_check::ensure_runtime();
 
     // Suppress Windows error dialogs and CRT debug assertions that block the
     // process when native libraries crash.
