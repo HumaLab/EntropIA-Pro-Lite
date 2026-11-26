@@ -24,7 +24,10 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const PYTHON_FINDER_TIMEOUT: Duration = Duration::from_secs(2);
-const PYTHON_MODULE_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Heavy imports are slow on a cold disk: `from paddleocr import PaddleOCRVL`
+/// took 30 s cold on a desktop PC. A shorter limit reported an installed
+/// module as missing.
+const PYTHON_MODULE_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Apply the Windows `CREATE_NO_WINDOW` flag to prevent console popups.
 pub fn apply_windows_no_window(_cmd: &mut Command) {
@@ -34,33 +37,43 @@ pub fn apply_windows_no_window(_cmd: &mut Command) {
     }
 }
 
+enum CommandError {
+    TimedOut(String),
+    Failed(String),
+}
+
 fn command_output_with_timeout(
     mut cmd: Command,
     timeout: Duration,
     label: &str,
-) -> Result<std::process::Output, String> {
+) -> Result<std::process::Output, CommandError> {
     let mut child = cmd
         .spawn()
-        .map_err(|error| format!("{label} failed to start: {error}"))?;
+        .map_err(|error| CommandError::Failed(format!("{label} failed to start: {error}")))?;
     let started_at = Instant::now();
 
     loop {
         match child.try_wait() {
             Ok(Some(_status)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|error| format!("{label} failed to collect output: {error}"));
+                return child.wait_with_output().map_err(|error| {
+                    CommandError::Failed(format!("{label} failed to collect output: {error}"))
+                });
             }
             Ok(None) if started_at.elapsed() >= timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("{label} timed out after {}s", timeout.as_secs()));
+                return Err(CommandError::TimedOut(format!(
+                    "{label} timed out after {}s",
+                    timeout.as_secs()
+                )));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(25)),
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("{label} failed while waiting: {error}"));
+                return Err(CommandError::Failed(format!(
+                    "{label} failed while waiting: {error}"
+                )));
             }
         }
     }
@@ -315,11 +328,30 @@ fn persist_python_hit(cache_key: &str, path: &Path, settings_db_path: Option<&Pa
 
 // ── Module probing ────────────────────────────────────────────────────────────
 
+/// Result of probing one interpreter for an import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProbeOutcome {
+    Importable,
+    Missing,
+    /// The probe ran out of time: the module may be installed, so this is not
+    /// a reason to remember it as missing.
+    TimedOut,
+}
+
 /// Probe a single Python interpreter for a specific import check.
 ///
 /// Spawns `python -c "<probe_code>"` and checks if stdout contains "ok".
 /// Used by subsystem-specific `which_python_for_module` functions.
 pub fn probe_python_module(python_path: &Path, probe_code: &str) -> bool {
+    probe_python_module_outcome(python_path, probe_code, PYTHON_MODULE_PROBE_TIMEOUT)
+        == ProbeOutcome::Importable
+}
+
+pub(crate) fn probe_python_module_outcome(
+    python_path: &Path,
+    probe_code: &str,
+    timeout: Duration,
+) -> ProbeOutcome {
     let mut cmd = Command::new(python_path);
     apply_windows_no_window(&mut cmd);
     cmd.args(["-c", probe_code])
@@ -327,13 +359,35 @@ pub fn probe_python_module(python_path: &Path, probe_code: &str) -> bool {
         .stderr(std::process::Stdio::piped());
     match command_output_with_timeout(
         cmd,
-        PYTHON_MODULE_PROBE_TIMEOUT,
+        timeout,
         &format!("{} -c <probe>", python_path.display()),
     ) {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim() == "ok"
+        Ok(output)
+            if output.status.success()
+                && String::from_utf8_lossy(&output.stdout).trim() == "ok" =>
+        {
+            ProbeOutcome::Importable
         }
-        _ => false,
+        Ok(_) => ProbeOutcome::Missing,
+        Err(CommandError::TimedOut(message)) => {
+            log::warn!(target: "python_discovery", "{message}");
+            ProbeOutcome::TimedOut
+        }
+        Err(CommandError::Failed(message)) => {
+            log::debug!(target: "python_discovery", "{message}");
+            ProbeOutcome::Missing
+        }
+    }
+}
+
+/// Remember that no interpreter has this module, unless a probe timed out:
+/// a slow import is not a missing one, and a cached miss lasts the session.
+fn record_probe_miss(cache_key: &str, any_timed_out: bool) {
+    if any_timed_out {
+        return;
+    }
+    if let Ok(mut cache) = get_probe_cache().lock() {
+        cache.insert(cache_key.to_string(), None);
     }
 }
 
@@ -436,11 +490,14 @@ pub fn which_python_for_module(
 
     let candidate_count = candidates.len();
     log::info!(target: tag, "Probing {candidate_count} candidate(s) for {module_name}");
+    let mut any_timed_out = false;
     for (failed_probes, candidate) in candidates.into_iter().enumerate() {
         let probe_start = std::time::Instant::now();
-        let import_ok = probe_python_module(&candidate, probe_code);
+        let outcome =
+            probe_python_module_outcome(&candidate, probe_code, PYTHON_MODULE_PROBE_TIMEOUT);
+        any_timed_out |= outcome == ProbeOutcome::TimedOut;
 
-        if import_ok {
+        if outcome == ProbeOutcome::Importable {
             log::info!(
                 target: tag,
                 "✅ Found Python with {module_name} after {} failed probe(s) (source=full_scan, {}ms): {}",
@@ -470,10 +527,7 @@ pub fn which_python_for_module(
         target: tag,
         "WARNING: No Python with {module_name} found among {candidate_count} candidate(s)"
     );
-    // Cache the miss
-    if let Ok(mut cache) = get_probe_cache().lock() {
-        cache.insert(cache_key.to_string(), None);
-    }
+    record_probe_miss(cache_key, any_timed_out);
     None
 }
 
@@ -640,11 +694,14 @@ pub fn which_python_for_module_scored(
         "Probing {} candidate(s) for {module_name} (scored, dedicated envs first)",
         candidates.len()
     );
+    let mut any_timed_out = false;
     for (failed_probes, candidate) in candidates.iter().enumerate() {
         let probe_start = std::time::Instant::now();
-        let import_ok = probe_python_module(candidate, probe_code);
+        let outcome =
+            probe_python_module_outcome(candidate, probe_code, PYTHON_MODULE_PROBE_TIMEOUT);
+        any_timed_out |= outcome == ProbeOutcome::TimedOut;
 
-        if import_ok {
+        if outcome == ProbeOutcome::Importable {
             log::info!(
                 target: tag,
                 "✅ Found Python with {module_name} after {} failed probe(s) (source=full_scan, {}ms): {}",
@@ -675,10 +732,7 @@ pub fn which_python_for_module_scored(
         "WARNING: No Python with {module_name} found among {} candidate(s)",
         candidates.len()
     );
-    // Cache the miss
-    if let Ok(mut cache) = get_probe_cache().lock() {
-        cache.insert(cache_key.to_string(), None);
-    }
+    record_probe_miss(cache_key, any_timed_out);
     None
 }
 
@@ -838,5 +892,49 @@ mod tests {
         let candidate_names = ["python", "python3", "python3.12", "python3.11"];
         assert!(candidate_names.contains(&"python3.11"));
         assert!(candidate_names.contains(&"python3.12"));
+    }
+
+    /// A shell that runs `-c <code>` like Python does, so the probe can be
+    /// timed without a real interpreter.
+    fn slow_shell() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+        } else {
+            PathBuf::from("sh")
+        }
+    }
+
+    #[test]
+    fn probe_outcome_reports_a_timeout_apart_from_a_missing_module() {
+        let sleep = if cfg!(windows) {
+            "Start-Sleep -Seconds 3"
+        } else {
+            "sleep 3"
+        };
+        assert_eq!(
+            probe_python_module_outcome(&slow_shell(), sleep, Duration::from_millis(200)),
+            ProbeOutcome::TimedOut
+        );
+        assert_eq!(
+            probe_python_module_outcome(&slow_shell(), "exit 1", Duration::from_secs(30)),
+            ProbeOutcome::Missing
+        );
+    }
+
+    #[test]
+    fn probe_timeout_covers_a_cold_paddleocr_vl_import() {
+        // `from paddleocr import PaddleOCRVL` took 30 s cold on a desktop PC.
+        assert!(PYTHON_MODULE_PROBE_TIMEOUT >= Duration::from_secs(90));
+    }
+
+    #[test]
+    fn a_miss_after_a_timeout_is_not_cached() {
+        let key = "test_miss_after_timeout";
+        record_probe_miss(key, true);
+        assert!(!get_probe_cache().lock().unwrap().contains_key(key));
+
+        record_probe_miss(key, false);
+        assert_eq!(get_probe_cache().lock().unwrap().get(key), Some(&None));
+        get_probe_cache().lock().unwrap().remove(key);
     }
 }
