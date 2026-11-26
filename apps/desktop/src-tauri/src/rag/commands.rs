@@ -188,6 +188,13 @@ pub async fn rag_reranker_download_model(
     start_reranker_download(&db.db_path, app_handle)
 }
 
+/// The app-log line for a failed install: the cause the screen shows, so the
+/// log a user sends says what went wrong.
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
+fn reranker_failure_line(error: &str) -> String {
+    format!("Local reranker installation failed: {error}")
+}
+
 /// Shared starter behind the Settings button and the assistant `models_setup`
 /// tool: queue the local reranker install in the background.
 pub(crate) fn start_reranker_download(
@@ -214,36 +221,27 @@ pub(crate) fn start_reranker_download(
             .await;
             LOCAL_RERANKER_DOWNLOAD_ACTIVE.store(false, Ordering::Release);
 
-            match result {
-                Ok(Ok(())) => crate::app_logs::info(
-                    &app_handle,
-                    "reranker/download",
-                    "Local reranker installation completed",
-                ),
-                Ok(Err(error)) => {
-                    crate::app_logs::error(
+            let error = match result {
+                Ok(Ok(())) => {
+                    crate::app_logs::info(
                         &app_handle,
                         "reranker/download",
-                        "Local reranker installation failed",
+                        "Local reranker installation completed",
                     );
-                    let _ = app_handle.emit(
-                        "reranker:download_error",
-                        super::reranker::RerankerDownloadErrorPayload { error },
-                    );
+                    return;
                 }
-                Err(_) => {
-                    let error = "Local reranker download task failed".to_string();
-                    crate::app_logs::error(
-                        &app_handle,
-                        "reranker/download",
-                        "Local reranker download task failed",
-                    );
-                    let _ = app_handle.emit(
-                        "reranker:download_error",
-                        super::reranker::RerankerDownloadErrorPayload { error },
-                    );
-                }
-            }
+                Ok(Err(error)) => error,
+                Err(join) => format!("Local reranker download task failed: {join}"),
+            };
+            crate::app_logs::error(
+                &app_handle,
+                "reranker/download",
+                reranker_failure_line(&error),
+            );
+            let _ = app_handle.emit(
+                "reranker:download_error",
+                super::reranker::RerankerDownloadErrorPayload { error },
+            );
         });
         Ok("started".to_string())
     }
@@ -1777,6 +1775,14 @@ fn parse_citation_group(inner: &str) -> Option<Vec<u32>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_failed_reranker_install_logs_its_cause() {
+        assert_eq!(
+            super::reranker_failure_line("Failed to download reranker artifact: model_int8.onnx"),
+            "Local reranker installation failed: Failed to download reranker artifact: model_int8.onnx"
+        );
+    }
+
     #[test]
     fn rag_progress_names_the_stages_the_chat_reads() {
         let json = |stage| serde_json::to_value(super::RagProgress { stage }).unwrap();
