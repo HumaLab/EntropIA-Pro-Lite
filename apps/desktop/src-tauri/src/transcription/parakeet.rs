@@ -936,6 +936,7 @@ fn download_model_files(
         let url = format!(
             "https://huggingface.co/{PARAKEET_HF_REPO}/resolve/{PARAKEET_HF_REV}/{subdir}/{name}"
         );
+        let _turn = crate::llm::download::wait_for_download_turn(|| {});
         download_file(
             &client,
             &url,

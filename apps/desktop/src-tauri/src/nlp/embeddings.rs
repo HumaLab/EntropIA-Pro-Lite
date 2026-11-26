@@ -1749,6 +1749,9 @@ fn download_local_embedding_file(
     filename: &str,
     app_handle: &AppHandle,
 ) -> Result<(), String> {
+    let _turn = crate::llm::download::wait_for_download_turn(|| {
+        crate::llm::download::log_waiting_for_turn(app_handle, "embeddings/download")
+    });
     let tmp_path = dest.with_extension("download.tmp");
     let _ = std::fs::remove_file(&tmp_path);
 

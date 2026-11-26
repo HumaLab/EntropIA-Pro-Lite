@@ -242,6 +242,40 @@ pub(crate) fn build_model_download_client() -> Result<reqwest::blocking::Client,
         .map_err(|error| format!("Failed to create HTTPS-only HTTP client: {error}"))
 }
 
+/// Held while a model file downloads, so «Preparar EntropIA Pro» or a few
+/// Settings buttons pressed in a row fetch one model at a time instead of six
+/// that split the connection and all fail together. The runtime pack has its
+/// own downloader and does not take it.
+static MODEL_DOWNLOAD_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Waits until no other model file is downloading. `on_wait` runs once, only
+/// when there is something to wait for. Downloaders call this per file and
+/// hold the guard until that file is done; nothing that holds it may call
+/// another downloader.
+pub(crate) fn wait_for_download_turn(on_wait: impl FnOnce()) -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{PoisonError, TryLockError};
+    match MODEL_DOWNLOAD_TURN.try_lock() {
+        Ok(turn) => turn,
+        // A download that panicked guarded no data: the turn is still good.
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => {
+            on_wait();
+            MODEL_DOWNLOAD_TURN
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        }
+    }
+}
+
+/// Logs that a download waits behind another one.
+pub(crate) fn log_waiting_for_turn(app_handle: &AppHandle, source: &str) {
+    crate::app_logs::info(
+        app_handle,
+        source,
+        "Otra descarga de modelo está en curso; esta empieza cuando termine.",
+    );
+}
+
 /// Why one download attempt failed: a cut connection or a busy server is
 /// worth another attempt, a refusal or a full disk is not.
 #[derive(Debug, PartialEq)]
@@ -362,6 +396,9 @@ pub fn download_model_file(
     display_destination: &Path,
     app_handle: &AppHandle,
 ) -> Result<(), String> {
+    let _turn = wait_for_download_turn(|| {
+        log_waiting_for_turn(app_handle, &format!("{event_scope}/download"))
+    });
     let client = build_model_download_client()?;
     let mut temporary = ManagedTemporaryFile::create(&managed_dir, filename)?;
     let mut progress = DownloadProgress::new(|pct, downloaded_bytes, total_bytes| {
@@ -1040,6 +1077,31 @@ mod tests {
             Err("El servidor rechazó la descarga del modelo (HTTP 404 Not Found). Volvé a intentar más tarde.".to_string())
         );
         assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn a_second_model_download_waits_for_the_first_to_finish() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+
+        let first = wait_for_download_turn(|| {});
+        let waited = Arc::new(AtomicBool::new(false));
+        let (got_turn, turn_taken) = mpsc::channel();
+        let second = {
+            let waited = waited.clone();
+            std::thread::spawn(move || {
+                let _turn = wait_for_download_turn(|| waited.store(true, Ordering::SeqCst));
+                got_turn.send(()).unwrap();
+            })
+        };
+
+        assert!(turn_taken.recv_timeout(Duration::from_millis(300)).is_err());
+        drop(first);
+        turn_taken
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the second download gets its turn");
+        second.join().unwrap();
+        assert!(waited.load(Ordering::SeqCst));
     }
 
     #[test]
