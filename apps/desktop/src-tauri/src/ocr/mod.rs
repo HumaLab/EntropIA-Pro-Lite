@@ -26,6 +26,8 @@ pub mod paddle_vl_types;
 pub(crate) mod pdf;
 pub mod pdf_probe;
 #[cfg(feature = "paddle-ocr")]
+pub mod ppocr_v6_local;
+#[cfg(feature = "paddle-ocr")]
 pub mod qwen_local;
 pub mod reading_order;
 
@@ -1038,6 +1040,64 @@ pub(crate) fn resolve_paddle_model_dir(app_handle: &AppHandle) -> std::path::Pat
         resource_dir.as_deref(),
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
     )
+}
+
+/// Setting that chooses the OCRL recognition profile (`v5_latin`, the
+/// default, or `v6_tiny`).
+#[cfg(feature = "paddle-ocr")]
+pub(crate) const OCRL_SETTING_PROFILE: &str = "ocrl_profile";
+
+/// The profile a light OCR run uses: the chosen one, except that v6 Tiny
+/// needs its downloaded files and runs as v5 Latin without them.
+#[cfg(feature = "paddle-ocr")]
+pub(crate) fn effective_light_profile(
+    requested: paddle::RecProfile,
+    v6_installed: bool,
+) -> paddle::RecProfile {
+    match requested {
+        paddle::RecProfile::V6Tiny if !v6_installed => paddle::RecProfile::V5Latin,
+        profile => profile,
+    }
+}
+
+/// The light OCR profile to run now, read from the settings archive.
+#[cfg(feature = "paddle-ocr")]
+pub(crate) fn desired_light_profile(db_path: &std::path::Path) -> paddle::RecProfile {
+    let requested = crate::db::open::open_archive_connection(db_path)
+        .ok()
+        .and_then(|conn| crate::settings::get_setting(&conn, OCRL_SETTING_PROFILE))
+        .map(|value| paddle::RecProfile::from_setting(&value))
+        .unwrap_or_default();
+    let v6_dir = ppocr_v6_local::models_dir(db_path);
+    let profile =
+        effective_light_profile(requested, ppocr_v6_local::missing_files(&v6_dir).is_empty());
+    if profile != requested {
+        log::warn!(
+            target: "OCR",
+            "OCRL profile {} chosen but its files are not in {}; running {}",
+            requested.id(),
+            v6_dir.display(),
+            profile.id()
+        );
+    }
+    profile
+}
+
+/// Build the light OCR engine for `profile`. The orientation model always
+/// comes from the bundled OCR model directory.
+#[cfg(feature = "paddle-ocr")]
+pub(crate) fn build_light_provider(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    profile: paddle::RecProfile,
+) -> Result<paddle::PaddleOcrProvider, String> {
+    let model_dir = resolve_paddle_model_dir(app_handle);
+    let rec_dir = match profile {
+        paddle::RecProfile::V5Latin => model_dir.clone(),
+        paddle::RecProfile::V6Tiny => ppocr_v6_local::models_dir(db_path),
+    };
+    log::info!(target: "OCR", "OCRL profile {}: {}", profile.id(), rec_dir.display());
+    paddle::PaddleOcrProvider::with_profile(profile, &rec_dir, model_dir)
 }
 
 #[cfg(feature = "paddle-ocr")]
@@ -2477,6 +2537,7 @@ mod tests {
             page_count: 1,
             page_methods: Vec::new(),
             source: None,
+            rec_profile: String::new(),
         }
     }
 
@@ -3724,6 +3785,47 @@ mod tests {
 
         assert!(!glm_response_has_useful_content(&empty));
         assert!(glm_response_has_useful_content(&useful));
+    }
+
+    #[cfg(feature = "paddle-ocr")]
+    #[test]
+    fn v6_tiny_runs_only_when_its_files_are_installed() {
+        use super::paddle::RecProfile::{V5Latin, V6Tiny};
+        assert_eq!(super::effective_light_profile(V6Tiny, true), V6Tiny);
+        assert_eq!(super::effective_light_profile(V6Tiny, false), V5Latin);
+        assert_eq!(super::effective_light_profile(V5Latin, true), V5Latin);
+        assert_eq!(super::effective_light_profile(V5Latin, false), V5Latin);
+    }
+
+    #[cfg(feature = "paddle-ocr")]
+    #[test]
+    fn the_light_profile_follows_the_setting_and_the_installed_files() {
+        use super::paddle::RecProfile::{V5Latin, V6Tiny};
+        use super::ppocr_v6_local::{models_dir, FILES};
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("entropia.sqlite");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        // No setting: the default profile.
+        assert_eq!(super::desired_light_profile(&db_path), V5Latin);
+
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('ocrl_profile', 'v6_tiny')",
+            [],
+        )
+        .unwrap();
+        // Chosen but not downloaded: v5 Latin.
+        assert_eq!(super::desired_light_profile(&db_path), V5Latin);
+
+        let v6_dir = models_dir(&db_path);
+        std::fs::create_dir_all(&v6_dir).unwrap();
+        for file in FILES {
+            std::fs::write(v6_dir.join(file.filename), vec![0_u8; file.size as usize]).unwrap();
+        }
+        assert_eq!(super::desired_light_profile(&db_path), V6Tiny);
     }
 
     #[cfg(feature = "paddle-ocr")]

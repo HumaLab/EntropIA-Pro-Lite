@@ -39,7 +39,7 @@ tauri-plugin-dialog = "2.8.1"
 tauri-plugin-mcp-bridge = "0.13"
 tauri-plugin-fs = "2.6.0"
 thiserror = "2"
-ocr-rs = { version = "2.2", optional = true, features = ["build-mnn-from-source"] }
+ocr-rs = { version = "2.4", optional = true, features = ["build-mnn-from-source"] }
 pdf-extract = "0.12"
 lopdf = "0.47"
 # Pinned to the Pdfium 7543 API: the committed binaries are chromium/7543,

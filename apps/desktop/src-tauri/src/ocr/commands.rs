@@ -676,6 +676,125 @@ pub async fn paddle_vl_delete_models(_db: State<'_, AppDbState>) -> Result<u64, 
     Err("No requerido en este build (solo Pro con modelos locales).".to_string())
 }
 
+/// What Settings shows about the optional PP-OCRv6 Tiny OCRL profile.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn ppocr_v6_local_info(
+    db: State<'_, AppDbState>,
+) -> Result<super::ppocr_v6_local::PpocrV6LocalInfo, String> {
+    Ok(super::ppocr_v6_local::local_info(&db.db_path))
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn ppocr_v6_local_info(_db: State<'_, AppDbState>) -> Result<String, String> {
+    Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
+/// Download the missing PP-OCRv6 Tiny files from the pinned commit, checking
+/// each one's size and SHA-256 before it counts as installed. Emits
+/// `ppocr-v6:download_progress`, `ppocr-v6:download_complete` and
+/// `ppocr-v6:download_error`. Returns once the background task is queued.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn ppocr_v6_download_models(
+    db: State<'_, AppDbState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    use super::paddle_vl_local::verify_download;
+    use super::ppocr_v6_local::{missing_bytes, missing_files, models_dir, url};
+    use crate::llm::download::{download_model_file, ensure_room_in, open_managed_models_dir};
+    use tauri::Emitter;
+
+    let dir = models_dir(&db.db_path);
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "Failed to create PP-OCRv6 Tiny models dir {}: {e}",
+            dir.display()
+        )
+    })?;
+    let missing = missing_files(&dir);
+    if missing.is_empty() {
+        return Ok("already complete".to_string());
+    }
+    ensure_room_in(&dir, missing_bytes(&dir))?;
+    open_managed_models_dir(&dir)?;
+
+    crate::app_logs::info(
+        &app_handle,
+        "ppocr-v6/download",
+        format!(
+            "Inicio descarga de PP-OCRv6 Tiny: {} archivo(s)",
+            missing.len()
+        ),
+    );
+    let app_handle_clone = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let worker_handle = app_handle_clone;
+        let result = tokio::task::spawn_blocking(move || {
+            for file in &missing {
+                let destination = dir.join(file.filename);
+                let managed_dir = open_managed_models_dir(&dir)?;
+                download_model_file(
+                    "ppocr-v6",
+                    &url(file),
+                    managed_dir,
+                    file.filename,
+                    &destination,
+                    &worker_handle,
+                )?;
+                verify_download(&destination, file)?;
+            }
+            Ok::<_, String>(())
+        })
+        .await;
+        let error = match result {
+            Ok(Ok(())) => return,
+            Ok(Err(e)) => e,
+            Err(e) => format!("Download task panicked: {e}"),
+        };
+        crate::app_logs::error(
+            &app_handle,
+            "ppocr-v6/download",
+            format!("Descarga de PP-OCRv6 Tiny falló: {error}"),
+        );
+        let _ = app_handle.emit(
+            "ppocr-v6:download_error",
+            GlmOcrDownloadErrorPayload { error },
+        );
+    });
+    Ok("started".to_string())
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn ppocr_v6_download_models(
+    _db: State<'_, AppDbState>,
+    _app_handle: AppHandle,
+) -> Result<String, String> {
+    Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
+/// Delete the PP-OCRv6 Tiny files, returning the bytes freed. OCRL then runs
+/// the bundled v5 Latin profile until they are downloaded again.
+#[cfg(feature = "local-ml")]
+#[tauri::command]
+pub async fn ppocr_v6_delete_models(db: State<'_, AppDbState>) -> Result<u64, String> {
+    use super::ppocr_v6_local::{models_dir, FILES};
+    let dir = models_dir(&db.db_path);
+    tokio::task::spawn_blocking(move || {
+        super::local_server::delete_model_files(&dir, &FILES.map(|file| file.filename))
+    })
+    .await
+    .map_err(|e| format!("PP-OCRv6 Tiny delete task panicked: {e}"))?
+}
+
+#[cfg(not(feature = "local-ml"))]
+#[tauri::command]
+pub async fn ppocr_v6_delete_models(_db: State<'_, AppDbState>) -> Result<u64, String> {
+    Err("No requerido en este build (solo Pro con modelos locales).".to_string())
+}
+
 /// Delete the local Qwen correction model files, returning the bytes freed.
 /// Stops the server first when it runs them; the files download again from
 /// Settings.
