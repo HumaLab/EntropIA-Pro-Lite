@@ -801,6 +801,12 @@ fn download_artifact(
     artifact: ArtifactSpec,
     app_handle: &AppHandle,
 ) -> Result<(), String> {
+    let Some(_turn) = crate::llm::download::download_turn_unless_done(
+        || destination.exists(),
+        || crate::llm::download::log_waiting_for_turn(app_handle, "reranker/download"),
+    ) else {
+        return Ok(());
+    };
     let temporary = destination.with_extension("download.tmp");
     let _ = std::fs::remove_file(&temporary);
     let result = (|| {

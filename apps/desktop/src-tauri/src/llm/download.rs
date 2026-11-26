@@ -242,8 +242,161 @@ pub(crate) fn build_model_download_client() -> Result<reqwest::blocking::Client,
         .map_err(|error| format!("Failed to create HTTPS-only HTTP client: {error}"))
 }
 
+/// Held while a model file downloads, so «Preparar EntropIA Pro» or a few
+/// Settings buttons pressed in a row fetch one model at a time instead of six
+/// that split the connection and all fail together. The runtime pack has its
+/// own downloader and does not take it.
+static MODEL_DOWNLOAD_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Waits until no other model file is downloading. `on_wait` runs once, only
+/// when there is something to wait for. Downloaders call this per file and
+/// hold the guard until that file is done; nothing that holds it may call
+/// another downloader.
+pub(crate) fn wait_for_download_turn(on_wait: impl FnOnce()) -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{PoisonError, TryLockError};
+    match MODEL_DOWNLOAD_TURN.try_lock() {
+        Ok(turn) => turn,
+        // A download that panicked guarded no data: the turn is still good.
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => {
+            on_wait();
+            MODEL_DOWNLOAD_TURN
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        }
+    }
+}
+
+/// [`wait_for_download_turn`] for one destination file. `None` when the file
+/// was missing before the wait and is there after it: a second start of the
+/// same model (a double click on «Preparar EntropIA Pro», the assistant's
+/// `models_setup`) waited behind the first, which already made it.
+pub(crate) fn download_turn_unless_done(
+    destination_exists: impl Fn() -> bool,
+    on_wait: impl FnOnce(),
+) -> Option<std::sync::MutexGuard<'static, ()>> {
+    let existed_before = destination_exists();
+    let turn = wait_for_download_turn(on_wait);
+    (existed_before || !destination_exists()).then_some(turn)
+}
+
+/// Logs that a download waits behind another one.
+pub(crate) fn log_waiting_for_turn(app_handle: &AppHandle, source: &str) {
+    crate::app_logs::info(
+        app_handle,
+        source,
+        "Otra descarga de modelo está en curso; esta empieza cuando termine.",
+    );
+}
+
+/// Why one download attempt failed: a cut connection or a busy server is
+/// worth another attempt, a refusal or a full disk is not.
+#[derive(Debug, PartialEq)]
+enum AttemptError {
+    Transient(String),
+    Final(String),
+}
+
+/// Attempts a model download gets in all, the first one included.
+const DOWNLOAD_ATTEMPTS: u32 = 3;
+
+/// Wait before the attempt that follows failed attempt number `failed`
+/// (1-based), or `None` when no attempt is left.
+fn retry_delay(failed: u32) -> Option<Duration> {
+    if failed >= DOWNLOAD_ATTEMPTS {
+        return None;
+    }
+    // 2 s, 8 s: long enough for a dropped Wi-Fi or a busy CDN node to come
+    // back, short enough that the progress bar does not look dead.
+    Some(Duration::from_secs(2 * 4_u64.pow(failed.saturating_sub(1))))
+}
+
+/// A status a server returns when it is busy or failing for a moment.
+fn status_is_transient(status: reqwest::StatusCode) -> bool {
+    status.is_server_error()
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::REQUEST_TIMEOUT
+}
+
+/// Parses `bytes START-END/TOTAL` into its start and, when known, the full size.
+fn parse_content_range(value: &str) -> Option<(u64, Option<u64>)> {
+    let range = value.trim().strip_prefix("bytes ")?;
+    let (span, total) = range.split_once('/')?;
+    let (start, _end) = span.split_once('-')?;
+    let start = start.trim().parse().ok()?;
+    let total = match total.trim() {
+        "*" => None,
+        total => Some(total.parse().ok()?),
+    };
+    Some((start, total))
+}
+
+/// Where the body of a response goes in the temporary file.
+#[derive(Debug, PartialEq)]
+struct ResumeStart {
+    /// Bytes already in the file that the body continues; 0 starts it again.
+    offset: u64,
+    /// Size of the whole model, when the server says.
+    total_bytes: Option<u64>,
+}
+
+/// Reads how a server answered a request for the bytes from `requested_offset`.
+/// A 200 sends the whole file, so it starts again; a 206 must continue at
+/// exactly that byte, or the parts would not join.
+fn resume_start(
+    requested_offset: u64,
+    status: reqwest::StatusCode,
+    content_range: Option<&str>,
+    content_length: Option<u64>,
+) -> Result<ResumeStart, String> {
+    if status != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Ok(ResumeStart {
+            offset: 0,
+            total_bytes: content_length,
+        });
+    }
+    match content_range.and_then(parse_content_range) {
+        Some((start, total)) if start == requested_offset => Ok(ResumeStart {
+            offset: start,
+            total_bytes: total.or_else(|| content_length.map(|len| start.saturating_add(len))),
+        }),
+        _ => Err(format!(
+            "El servidor no continuó la descarga del modelo desde el byte {requested_offset}."
+        )),
+    }
+}
+
+/// Runs `attempt` until it succeeds, fails for good, or runs out of attempts,
+/// sleeping [`retry_delay`] between them. `on_retry` hears each failure that
+/// gets another attempt.
+fn run_with_retries<T>(
+    mut attempt: impl FnMut(u32) -> Result<T, AttemptError>,
+    mut sleep: impl FnMut(Duration),
+    mut on_retry: impl FnMut(u32, &str, Duration),
+) -> Result<T, String> {
+    let mut number = 1;
+    loop {
+        match attempt(number) {
+            Ok(value) => return Ok(value),
+            Err(AttemptError::Final(error)) => return Err(error),
+            Err(AttemptError::Transient(error)) => {
+                let Some(delay) = retry_delay(number) else {
+                    return Err(error);
+                };
+                on_retry(number, &error, delay);
+                sleep(delay);
+                number += 1;
+            }
+        }
+    }
+}
+
 /// Download a GGUF model into an already-opened managed directory capability,
 /// emitting progress events via the Tauri event bus.
+///
+/// A cut connection or a busy server gets [`DOWNLOAD_ATTEMPTS`] attempts in
+/// all; each one after the first asks for the bytes the temporary file does
+/// not have yet, so a cut at 90% does not start the model over.
 ///
 /// `event_scope` prefixes the emitted events (`{scope}:download_progress`,
 /// `{scope}:download_complete`); the LLM flow passes `"llm"`, other model
@@ -256,83 +409,46 @@ pub fn download_model_file(
     display_destination: &Path,
     app_handle: &AppHandle,
 ) -> Result<(), String> {
+    let Some(_turn) = download_turn_unless_done(
+        || managed_dir.exists(filename),
+        || log_waiting_for_turn(app_handle, &format!("{event_scope}/download")),
+    ) else {
+        return Ok(());
+    };
     let client = build_model_download_client()?;
-
-    let response = client
-        .get(url)
-        .send()
-        .map_err(|e| format!("No se pudo iniciar la descarga del modelo: {e}"))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!(
-            "El servidor rechazó la descarga del modelo (HTTP {status}). Volvé a intentar más tarde."
-        ));
-    }
-
-    let total_bytes = response.content_length();
-    ensure_room_for_download(
-        display_destination
-            .parent()
-            .and_then(|dir| fs2::available_space(dir).ok()),
-        total_bytes,
-    )?;
-    let mut reader = response;
     let mut temporary = ManagedTemporaryFile::create(&managed_dir, filename)?;
-    let mut downloaded_bytes = 0_u64;
-    let mut buffer = vec![0_u8; DOWNLOAD_CHUNK_SIZE];
-    let mut last_reported_pct = 0_u8;
-    {
-        // A blocking read returns about one TLS record (~16 KB); writing each
-        // straight to disk is a syscall (and an antivirus hook) per record
-        // (R8). Batch them into 1 MiB writes.
-        let mut writer =
-            std::io::BufWriter::with_capacity(DOWNLOAD_WRITE_BUFFER, temporary.writer());
-        loop {
-            let read = reader
-                .read(&mut buffer)
-                .map_err(|e| format!("Se cortó la descarga del modelo: {e}. Volvé a intentar."))?;
-            if read == 0 {
-                break;
-            }
-            writer
-                .write_all(&buffer[..read])
-                .map_err(|e| format!("No se pudo guardar el modelo en el disco: {e}"))?;
-            downloaded_bytes += read as u64;
+    let mut progress = DownloadProgress::new(|pct, downloaded_bytes, total_bytes| {
+        let _ = app_handle.emit(
+            &format!("{event_scope}:download_progress"),
+            ModelDownloadProgressPayload {
+                pct,
+                downloaded_bytes,
+                total_bytes,
+            },
+        );
+        crate::app_logs::info(
+            app_handle,
+            format!("{event_scope}/download"),
+            format!("Descarga de modelo local {pct}%"),
+        );
+    });
+    let space_dir = display_destination.parent();
 
-            let pct = total_bytes.and_then(|total| {
-                if total > 0 {
-                    Some(((downloaded_bytes.saturating_mul(100)) / total).min(100) as u8)
-                } else {
-                    None
-                }
-            });
+    run_with_retries(
+        |_| download_attempt(&client, url, temporary.writer(), space_dir, &mut progress),
+        std::thread::sleep,
+        |attempt, error, delay| {
+            crate::app_logs::warn(
+                app_handle,
+                format!("{event_scope}/download"),
+                format!(
+                    "Falló el intento {attempt} de {DOWNLOAD_ATTEMPTS} de descargar el modelo; se reintenta en {} s: {error}",
+                    delay.as_secs()
+                ),
+            );
+        },
+    )?;
 
-            if let Some(pct) = pct {
-                if pct >= last_reported_pct.saturating_add(5) || pct == 100 {
-                    last_reported_pct = pct;
-                    let _ = app_handle.emit(
-                        &format!("{event_scope}:download_progress"),
-                        ModelDownloadProgressPayload {
-                            pct,
-                            downloaded_bytes,
-                            total_bytes,
-                        },
-                    );
-                    crate::app_logs::info(
-                        app_handle,
-                        format!("{event_scope}/download"),
-                        format!("Descarga de modelo local {pct}%"),
-                    );
-                }
-            }
-        }
-        writer
-            .flush()
-            .map_err(|e| format!("No se pudo guardar el modelo en el disco: {e}"))?;
-    }
-
-    ensure_download_complete(downloaded_bytes, total_bytes)?;
     temporary.finish(filename)?;
     let display_path = display_destination.to_string_lossy().to_string();
     let _ = app_handle.emit(
@@ -348,6 +464,156 @@ pub fn download_model_file(
         ),
     );
     Ok(())
+}
+
+/// Progress state that lives across the attempts of one download.
+struct DownloadProgress<'a> {
+    /// Hears every 5% step: percent, bytes in the file, size of the model.
+    emit: Box<dyn FnMut(u8, u64, Option<u64>) + 'a>,
+    last_reported_pct: u8,
+    /// The strong ETag, or else the Last-Modified, of the last full answer. A
+    /// resumed request sends it as `If-Range`: a model that changed on the
+    /// server then comes whole, instead of half of each version in one file.
+    validator: Option<String>,
+}
+
+impl<'a> DownloadProgress<'a> {
+    fn new(emit: impl FnMut(u8, u64, Option<u64>) + 'a) -> Self {
+        Self {
+            emit: Box::new(emit),
+            last_reported_pct: 0,
+            validator: None,
+        }
+    }
+
+    fn report(&mut self, downloaded_bytes: u64, total_bytes: Option<u64>) {
+        let Some(total) = total_bytes.filter(|total| *total > 0) else {
+            return;
+        };
+        let pct = ((downloaded_bytes.saturating_mul(100)) / total).min(100) as u8;
+        if pct < self.last_reported_pct.saturating_add(5) && pct != 100 {
+            return;
+        }
+        self.last_reported_pct = pct;
+        (self.emit)(pct, downloaded_bytes, total_bytes);
+    }
+}
+
+fn response_validator(response: &reqwest::blocking::Response) -> Option<String> {
+    let header = |name| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    };
+    // `If-Range` takes only a strong ETag; a weak one would never match.
+    header(reqwest::header::ETAG)
+        .filter(|etag| !etag.starts_with("W/"))
+        .or_else(|| header(reqwest::header::LAST_MODIFIED))
+}
+
+fn disk_error(error: std::io::Error) -> AttemptError {
+    AttemptError::Final(format!("No se pudo guardar el modelo en el disco: {error}"))
+}
+
+/// One request for the bytes `file` is missing, written after the ones it
+/// already has. `space_dir` is a folder on the disk that receives the model.
+fn download_attempt(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    file: &mut cap_std::fs::File,
+    space_dir: Option<&Path>,
+    progress: &mut DownloadProgress<'_>,
+) -> Result<(), AttemptError> {
+    let on_disk = file.metadata().map_err(disk_error)?.len();
+    let mut request = client.get(url);
+    let requested_offset = match &progress.validator {
+        Some(validator) if on_disk > 0 => {
+            request = request
+                .header(reqwest::header::RANGE, format!("bytes={on_disk}-"))
+                .header(reqwest::header::IF_RANGE, validator);
+            on_disk
+        }
+        _ => 0,
+    };
+
+    let mut response = request.send().map_err(|e| {
+        AttemptError::Transient(format!("No se pudo iniciar la descarga del modelo: {e}"))
+    })?;
+    let status = response.status();
+    if !status.is_success() {
+        let error = format!(
+            "El servidor rechazó la descarga del modelo (HTTP {status}). Volvé a intentar más tarde."
+        );
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            // The file holds bytes the server does not have: start it again.
+            file.set_len(0).map_err(disk_error)?;
+            return Err(AttemptError::Transient(error));
+        }
+        return Err(if status_is_transient(status) {
+            AttemptError::Transient(error)
+        } else {
+            AttemptError::Final(error)
+        });
+    }
+
+    let content_range = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok());
+    let start = match resume_start(
+        requested_offset,
+        status,
+        content_range,
+        response.content_length(),
+    ) {
+        Ok(start) => start,
+        Err(error) => {
+            file.set_len(0).map_err(disk_error)?;
+            return Err(AttemptError::Transient(error));
+        }
+    };
+    if start.offset == 0 {
+        progress.validator = response_validator(&response);
+        progress.last_reported_pct = 0;
+        file.set_len(0).map_err(disk_error)?;
+    }
+    file.seek(SeekFrom::Start(start.offset))
+        .map_err(disk_error)?;
+
+    ensure_room_for_download(
+        space_dir.and_then(|dir| fs2::available_space(dir).ok()),
+        start
+            .total_bytes
+            .map(|total| total.saturating_sub(start.offset)),
+    )
+    .map_err(AttemptError::Final)?;
+
+    let mut downloaded_bytes = start.offset;
+    let mut buffer = vec![0_u8; DOWNLOAD_CHUNK_SIZE];
+    // A blocking read returns about one TLS record (~16 KB); writing each
+    // straight to disk is a syscall (and an antivirus hook) per record (R8).
+    // Batch them into 1 MiB writes. A cut leaves a prefix of the model in the
+    // file either way, which the next attempt continues.
+    let mut writer = std::io::BufWriter::with_capacity(DOWNLOAD_WRITE_BUFFER, &mut *file);
+    loop {
+        let read = response.read(&mut buffer).map_err(|e| {
+            AttemptError::Transient(format!(
+                "Se cortó la descarga del modelo: {e}. Volvé a intentar."
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..read]).map_err(disk_error)?;
+        downloaded_bytes += read as u64;
+        progress.report(downloaded_bytes, start.total_bytes);
+    }
+    writer.flush().map_err(disk_error)?;
+    drop(writer);
+
+    ensure_download_complete(downloaded_bytes, start.total_bytes).map_err(AttemptError::Transient)
 }
 
 #[cfg(test)]
@@ -546,5 +812,355 @@ mod tests {
     fn a_complete_or_unsized_download_is_accepted() {
         assert!(ensure_download_complete(906_400_000, Some(906_400_000)).is_ok());
         assert!(ensure_download_complete(5, None).is_ok());
+    }
+
+    #[test]
+    fn a_failed_attempt_waits_longer_each_time_and_gives_up_after_three() {
+        assert_eq!(retry_delay(1), Some(Duration::from_secs(2)));
+        assert_eq!(retry_delay(2), Some(Duration::from_secs(8)));
+        assert_eq!(retry_delay(3), None);
+    }
+
+    #[test]
+    fn only_server_side_and_rate_limit_statuses_are_retried() {
+        use reqwest::StatusCode;
+        for status in [
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::REQUEST_TIMEOUT,
+        ] {
+            assert!(status_is_transient(status), "{status}");
+        }
+        for status in [
+            StatusCode::NOT_FOUND,
+            StatusCode::FORBIDDEN,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::BAD_REQUEST,
+        ] {
+            assert!(!status_is_transient(status), "{status}");
+        }
+    }
+
+    #[test]
+    fn a_content_range_gives_the_start_and_the_full_size() {
+        assert_eq!(
+            parse_content_range("bytes 100-999/1000"),
+            Some((100, Some(1000)))
+        );
+        assert_eq!(parse_content_range("bytes 100-999/*"), Some((100, None)));
+        assert_eq!(parse_content_range("bytes */1000"), None);
+        assert_eq!(parse_content_range("garbage"), None);
+    }
+
+    #[test]
+    fn a_partial_answer_from_the_right_byte_appends_to_the_file() {
+        let start = resume_start(
+            100,
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 100-999/1000"),
+            Some(900),
+        )
+        .unwrap();
+        assert_eq!(
+            start,
+            ResumeStart {
+                offset: 100,
+                total_bytes: Some(1000)
+            }
+        );
+    }
+
+    #[test]
+    fn a_full_answer_starts_the_file_again() {
+        let start = resume_start(100, reqwest::StatusCode::OK, None, Some(1000)).unwrap();
+        assert_eq!(
+            start,
+            ResumeStart {
+                offset: 0,
+                total_bytes: Some(1000)
+            }
+        );
+    }
+
+    #[test]
+    fn a_partial_answer_from_another_byte_is_refused() {
+        assert!(resume_start(
+            100,
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 0-999/1000"),
+            Some(1000),
+        )
+        .is_err());
+        assert!(resume_start(100, reqwest::StatusCode::PARTIAL_CONTENT, None, Some(900)).is_err());
+    }
+
+    #[test]
+    fn a_partial_answer_without_a_full_size_counts_from_the_offset() {
+        let start = resume_start(
+            100,
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            Some("bytes 100-999/*"),
+            Some(900),
+        )
+        .unwrap();
+        assert_eq!(start.total_bytes, Some(1000));
+    }
+
+    fn run_scripted(
+        outcomes: Vec<Result<u8, AttemptError>>,
+    ) -> (Result<u8, String>, Vec<Duration>, Vec<u32>) {
+        let mut outcomes = outcomes.into_iter();
+        let mut sleeps = Vec::new();
+        let mut retries = Vec::new();
+        let result = run_with_retries(
+            |_| outcomes.next().expect("no more scripted attempts"),
+            |delay| sleeps.push(delay),
+            |attempt, _error, _delay| retries.push(attempt),
+        );
+        (result, sleeps, retries)
+    }
+
+    #[test]
+    fn a_cut_download_is_retried_with_growing_waits_until_it_works() {
+        let (result, sleeps, retries) = run_scripted(vec![
+            Err(AttemptError::Transient("cut".into())),
+            Err(AttemptError::Transient("cut".into())),
+            Ok(7),
+        ]);
+        assert_eq!(result, Ok(7));
+        assert_eq!(sleeps, vec![Duration::from_secs(2), Duration::from_secs(8)]);
+        assert_eq!(retries, vec![1, 2]);
+    }
+
+    #[test]
+    fn a_download_that_keeps_failing_reports_the_last_error() {
+        let (result, sleeps, _) = run_scripted(vec![
+            Err(AttemptError::Transient("first".into())),
+            Err(AttemptError::Transient("second".into())),
+            Err(AttemptError::Transient("third".into())),
+        ]);
+        assert_eq!(result, Err("third".to_string()));
+        assert_eq!(sleeps.len(), 2);
+    }
+
+    /// Serves one scripted answer per connection (head, then body bytes) and
+    /// hands back the request heads it received.
+    fn scripted_server(
+        answers: Vec<(String, Vec<u8>)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{BufRead, BufReader};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let url = format!("http://{}/model.gguf", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (head, body) in answers {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    request.push_str(&line);
+                }
+                requests.push(request.to_ascii_lowercase());
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+            requests
+        });
+        (url, handle)
+    }
+
+    fn model_bytes(len: usize, seed: u8) -> Vec<u8> {
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend((4..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed)));
+        bytes
+    }
+
+    fn download_scripted(url: &str) -> (Result<(), String>, Vec<u8>, Vec<u8>) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let managed = cap_std::fs::Dir::open_ambient_dir(dir.path(), cap_std::ambient_authority())
+            .expect("open dir");
+        let mut file = managed.create("model.download.tmp").expect("create");
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let mut reported = Vec::new();
+        let mut progress = DownloadProgress::new(|pct, _, _| reported.push(pct));
+        let result = run_with_retries(
+            |_| download_attempt(&client, url, &mut file, None, &mut progress),
+            |_| {},
+            |_, _, _| {},
+        );
+        drop(progress);
+        drop(file);
+        let written = std::fs::read(dir.path().join("model.download.tmp")).unwrap();
+        (result, written, reported)
+    }
+
+    #[test]
+    fn a_cut_download_continues_from_the_byte_it_reached() {
+        let model = model_bytes(1000, 7);
+        let (url, server) = scripted_server(vec![
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n"
+                    .into(),
+                model[..400].to_vec(),
+            ),
+            (
+                "HTTP/1.1 206 Partial Content\r\nContent-Length: 600\r\nContent-Range: bytes 400-999/1000\r\nConnection: close\r\n\r\n"
+                    .into(),
+                model[400..].to_vec(),
+            ),
+        ]);
+
+        let (result, written, reported) = download_scripted(&url);
+        let requests = server.join().unwrap();
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(written, model);
+        assert!(!requests[0].contains("range:"), "{}", requests[0]);
+        assert!(requests[1].contains("range: bytes=400-"), "{}", requests[1]);
+        assert!(requests[1].contains("if-range: \"v1\""), "{}", requests[1]);
+        assert_eq!(reported.last(), Some(&100));
+    }
+
+    #[test]
+    fn a_model_that_changed_on_the_server_is_downloaded_whole() {
+        let old = model_bytes(1000, 7);
+        let new = model_bytes(800, 9);
+        let (url, server) = scripted_server(vec![
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n"
+                    .into(),
+                old[..400].to_vec(),
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: 800\r\nETag: \"v2\"\r\nConnection: close\r\n\r\n"
+                    .into(),
+                new.clone(),
+            ),
+        ]);
+
+        let (result, written, _) = download_scripted(&url);
+        server.join().unwrap();
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(written, new);
+    }
+
+    #[test]
+    fn a_download_without_a_validator_starts_over_instead_of_joining_parts() {
+        let model = model_bytes(1000, 3);
+        let (url, server) = scripted_server(vec![
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\n".into(),
+                model[..400].to_vec(),
+            ),
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\n".into(),
+                model.clone(),
+            ),
+        ]);
+
+        let (result, written, _) = download_scripted(&url);
+        let requests = server.join().unwrap();
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(written, model);
+        assert!(!requests[1].contains("range:"), "{}", requests[1]);
+    }
+
+    #[test]
+    fn a_refused_download_is_not_retried() {
+        let (url, server) = scripted_server(vec![(
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+            Vec::new(),
+        )]);
+
+        let (result, _, _) = download_scripted(&url);
+        let requests = server.join().unwrap();
+
+        assert_eq!(
+            result,
+            Err("El servidor rechazó la descarga del modelo (HTTP 404 Not Found). Volvé a intentar más tarde.".to_string())
+        );
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn a_second_model_download_waits_for_the_first_to_finish() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+
+        let first = wait_for_download_turn(|| {});
+        let waited = Arc::new(AtomicBool::new(false));
+        let (got_turn, turn_taken) = mpsc::channel();
+        let second = {
+            let waited = waited.clone();
+            std::thread::spawn(move || {
+                let _turn = wait_for_download_turn(|| waited.store(true, Ordering::SeqCst));
+                got_turn.send(()).unwrap();
+            })
+        };
+
+        assert!(turn_taken.recv_timeout(Duration::from_millis(300)).is_err());
+        drop(first);
+        turn_taken
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the second download gets its turn");
+        second.join().unwrap();
+        assert!(waited.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_file_another_download_finished_while_waiting_is_not_downloaded_again() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let first = wait_for_download_turn(|| {});
+        let exists = Arc::new(AtomicBool::new(false));
+        let (waiting, is_waiting) = std::sync::mpsc::channel();
+        let second = {
+            let exists = exists.clone();
+            std::thread::spawn(move || {
+                download_turn_unless_done(
+                    || exists.load(Ordering::SeqCst),
+                    || waiting.send(()).unwrap(),
+                )
+                .is_none()
+            })
+        };
+        is_waiting
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the second download waits");
+        exists.store(true, Ordering::SeqCst);
+        drop(first);
+
+        assert!(second.join().unwrap(), "the finished file must be skipped");
+    }
+
+    #[test]
+    fn a_file_that_was_already_there_is_downloaded_again_when_asked() {
+        // A caller replaces a file it found broken: its existence before the
+        // wait says nothing about whether another download just made it.
+        assert!(download_turn_unless_done(|| true, || {}).is_some());
+        assert!(download_turn_unless_done(|| false, || {}).is_some());
+    }
+
+    #[test]
+    fn a_final_failure_is_not_retried() {
+        let (result, sleeps, retries) =
+            run_scripted(vec![Err(AttemptError::Final("disk full".into()))]);
+        assert_eq!(result, Err("disk full".to_string()));
+        assert!(sleeps.is_empty());
+        assert!(retries.is_empty());
     }
 }

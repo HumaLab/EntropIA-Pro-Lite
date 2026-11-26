@@ -337,6 +337,9 @@ fn download_and_stage(
     let mut last_pct = 0_u8;
 
     for asset in assets {
+        let _turn = crate::llm::download::wait_for_download_turn(|| {
+            crate::llm::download::log_waiting_for_turn(app_handle, "llama_server/download")
+        });
         let url = format!(
             "https://github.com/ggml-org/llama.cpp/releases/download/{RELEASE_TAG}/{}",
             asset.name
