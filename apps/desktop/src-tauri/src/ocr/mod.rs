@@ -26,6 +26,8 @@ pub mod paddle_vl_types;
 pub(crate) mod pdf;
 pub mod pdf_probe;
 #[cfg(feature = "paddle-ocr")]
+pub mod ppocr_v6_local;
+#[cfg(feature = "paddle-ocr")]
 pub mod qwen_local;
 pub mod reading_order;
 

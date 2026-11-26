@@ -17,7 +17,7 @@ Branch: `feat/ocrl-fast-profile` (from main after #453). Delivery: backend PR (T
 | ID | Specs | Route | Status | Commit |
 |---|---|---|---|---|
 | T1 | S1 | inline | done (3 unit tests + ignored v6 integration, passed locally) | see git log |
-| T2 | S2 | inline | pending | |
+| T2 | S2 | inline | done (4 unit tests) | see git log |
 | T3 | S3, S4 | inline | pending | |
 | T4 | S5 | inline | pending | |
 
