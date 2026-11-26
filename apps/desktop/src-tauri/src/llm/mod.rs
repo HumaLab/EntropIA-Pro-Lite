@@ -153,23 +153,39 @@ fn validate_physical_models_dir(models_dir: &std::path::Path) -> Result<(), Stri
     }
 }
 
-fn validate_local_model_filename(filename: &str) -> Result<(), String> {
+/// Whether `filename` names a file directly inside its folder: no path, no
+/// separator, no drive prefix, no surrounding space.
+fn is_plain_basename(filename: &str) -> bool {
     let bytes = filename.as_bytes();
     let has_drive_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
     let is_single_basename = std::path::Path::new(filename)
         .file_name()
         .is_some_and(|name| name == std::ffi::OsStr::new(filename));
 
-    if filename.is_empty()
+    !(filename.is_empty()
         || filename.trim() != filename
         || filename == "."
         || filename == ".."
         || filename.contains('/')
         || filename.contains('\\')
         || has_drive_prefix
-        || !is_single_basename
-        || !filename.ends_with(".gguf")
-    {
+        || !is_single_basename)
+}
+
+/// A downloaded file whose bytes the caller checks against a pinned hash
+/// needs only a plain basename; any extension goes.
+#[cfg(feature = "local-ml")]
+fn validate_pinned_model_filename(filename: &str) -> Result<(), String> {
+    if !is_plain_basename(filename) {
+        return Err(
+            "Invalid local model filename: use a basename without paths or separators".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_local_model_filename(filename: &str) -> Result<(), String> {
+    if !is_plain_basename(filename) || !filename.ends_with(".gguf") {
         return Err(
             "Invalid local model filename: use a .gguf basename without paths or separators"
                 .to_string(),

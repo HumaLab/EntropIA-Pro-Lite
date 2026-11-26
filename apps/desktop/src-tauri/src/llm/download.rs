@@ -79,16 +79,34 @@ fn temporary_filename(filename: &str) -> PathBuf {
     Path::new(filename).with_extension("download.tmp")
 }
 
+/// What a managed download must look like before it takes its final name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManagedFormat {
+    /// A `.gguf` name and a `GGUF` header.
+    Gguf,
+    /// Any plain basename. The caller checks the bytes against a pinned size
+    /// and hash after the download, which says more than any header.
+    Pinned,
+}
+
 struct ManagedTemporaryFile<'a> {
     dir: &'a cap_std::fs::Dir,
     filename: PathBuf,
+    format: ManagedFormat,
     file: Option<cap_std::fs::File>,
     armed: bool,
 }
 
 impl<'a> ManagedTemporaryFile<'a> {
-    fn create(dir: &'a cap_std::fs::Dir, model_filename: &str) -> Result<Self, String> {
-        super::validate_local_model_filename(model_filename)?;
+    fn create(
+        dir: &'a cap_std::fs::Dir,
+        model_filename: &str,
+        format: ManagedFormat,
+    ) -> Result<Self, String> {
+        match format {
+            ManagedFormat::Gguf => super::validate_local_model_filename(model_filename)?,
+            ManagedFormat::Pinned => super::validate_pinned_model_filename(model_filename)?,
+        }
         let filename = temporary_filename(model_filename);
         let mut options = cap_std::fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -101,6 +119,7 @@ impl<'a> ManagedTemporaryFile<'a> {
         Ok(Self {
             dir,
             filename,
+            format,
             file: Some(file),
             armed: true,
         })
@@ -114,7 +133,9 @@ impl<'a> ManagedTemporaryFile<'a> {
 
     fn finish(mut self, model_filename: &str) -> Result<(), String> {
         drop(self.file.take());
-        validate_managed_gguf(self.dir, &self.filename)?;
+        if self.format == ManagedFormat::Gguf {
+            validate_managed_gguf(self.dir, &self.filename)?;
+        }
         self.dir
             .rename(&self.filename, self.dir, model_filename)
             .map_err(|error| {
@@ -173,12 +194,13 @@ fn validate_managed_gguf(
 }
 
 #[cfg(test)]
-pub(crate) fn persist_gguf_download<R: Read>(
+pub(crate) fn persist_managed_download<R: Read>(
     managed_dir: &cap_std::fs::Dir,
     filename: &str,
+    format: ManagedFormat,
     reader: &mut R,
 ) -> Result<(), String> {
-    let mut temporary = ManagedTemporaryFile::create(managed_dir, filename)?;
+    let mut temporary = ManagedTemporaryFile::create(managed_dir, filename, format)?;
     std::io::copy(reader, temporary.writer())
         .map_err(|error| format!("Failed while writing managed download: {error}"))?;
     temporary.finish(filename)
@@ -409,6 +431,48 @@ pub fn download_model_file(
     display_destination: &Path,
     app_handle: &AppHandle,
 ) -> Result<(), String> {
+    download_managed_file(
+        event_scope,
+        url,
+        managed_dir,
+        filename,
+        ManagedFormat::Gguf,
+        display_destination,
+        app_handle,
+    )
+}
+
+/// [`download_model_file`] for a file that is not GGUF (an MNN model, a key
+/// list). Only the name is checked here: the caller must verify the bytes
+/// against their pinned size and hash once this returns.
+pub fn download_pinned_file(
+    event_scope: &str,
+    url: &str,
+    managed_dir: cap_std::fs::Dir,
+    filename: &str,
+    display_destination: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    download_managed_file(
+        event_scope,
+        url,
+        managed_dir,
+        filename,
+        ManagedFormat::Pinned,
+        display_destination,
+        app_handle,
+    )
+}
+
+fn download_managed_file(
+    event_scope: &str,
+    url: &str,
+    managed_dir: cap_std::fs::Dir,
+    filename: &str,
+    format: ManagedFormat,
+    display_destination: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
     let Some(_turn) = download_turn_unless_done(
         || managed_dir.exists(filename),
         || log_waiting_for_turn(app_handle, &format!("{event_scope}/download")),
@@ -416,7 +480,7 @@ pub fn download_model_file(
         return Ok(());
     };
     let client = build_model_download_client()?;
-    let mut temporary = ManagedTemporaryFile::create(&managed_dir, filename)?;
+    let mut temporary = ManagedTemporaryFile::create(&managed_dir, filename, format)?;
     let mut progress = DownloadProgress::new(|pct, downloaded_bytes, total_bytes| {
         let _ = app_handle.emit(
             &format!("{event_scope}:download_progress"),
@@ -667,6 +731,80 @@ mod tests {
         );
     }
 
+    fn managed_dir_in(path: &Path) -> cap_std::fs::Dir {
+        cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority()).unwrap()
+    }
+
+    #[test]
+    fn a_pinned_download_keeps_a_non_gguf_file_under_its_own_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let managed_dir = managed_dir_in(tmp.path());
+        let mut payload = std::io::Cursor::new(b"MNN weights".to_vec());
+
+        persist_managed_download(
+            &managed_dir,
+            "PP-OCRv6_tiny_det.mnn",
+            ManagedFormat::Pinned,
+            &mut payload,
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(tmp.path().join("PP-OCRv6_tiny_det.mnn")).unwrap(),
+            b"MNN weights"
+        );
+        assert!(!tmp.path().join("PP-OCRv6_tiny_det.download.tmp").exists());
+    }
+
+    #[test]
+    fn a_pinned_download_still_refuses_a_name_that_leaves_the_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let managed_dir = managed_dir_in(tmp.path());
+        for name in [
+            "",
+            " keys.txt",
+            ".",
+            "..",
+            "../keys.txt",
+            "a/keys.txt",
+            "a\\keys.txt",
+            "C:keys.txt",
+        ] {
+            let mut payload = std::io::Cursor::new(b"x".to_vec());
+            let error =
+                persist_managed_download(&managed_dir, name, ManagedFormat::Pinned, &mut payload)
+                    .unwrap_err();
+            assert!(
+                error.contains("Invalid local model filename"),
+                "{name:?}: {error}"
+            );
+        }
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_gguf_download_still_requires_the_gguf_name_and_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        let managed_dir = managed_dir_in(tmp.path());
+
+        let mut payload = std::io::Cursor::new(b"GGUFvalid-content".to_vec());
+        let error =
+            persist_managed_download(&managed_dir, "model.mnn", ManagedFormat::Gguf, &mut payload)
+                .unwrap_err();
+        assert!(error.contains(".gguf basename"), "{error}");
+
+        let mut payload = std::io::Cursor::new(b"not a gguf file".to_vec());
+        let error = persist_managed_download(
+            &managed_dir,
+            "model.gguf",
+            ManagedFormat::Gguf,
+            &mut payload,
+        )
+        .unwrap_err();
+        assert!(error.contains("missing GGUF header"), "{error}");
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
     #[test]
     fn model_download_contract_http_transport_is_rejected_by_actual_client() {
         let client = build_model_download_client().unwrap();
@@ -719,7 +857,13 @@ mod tests {
         std::fs::write(&outside_temporary, sentinel).unwrap();
         let mut payload = std::io::Cursor::new(b"GGUFvalid-content".to_vec());
 
-        persist_gguf_download(&managed_dir, "gemma-model.gguf", &mut payload).unwrap();
+        persist_managed_download(
+            &managed_dir,
+            "gemma-model.gguf",
+            ManagedFormat::Gguf,
+            &mut payload,
+        )
+        .unwrap();
 
         assert_eq!(
             std::fs::read(persisted_models_path.join("gemma-model.gguf")).unwrap(),
