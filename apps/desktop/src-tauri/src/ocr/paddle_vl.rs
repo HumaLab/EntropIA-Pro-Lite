@@ -1382,6 +1382,15 @@ impl BackendKind {
     pub fn uses_server(self) -> bool {
         self != BackendKind::PaddleVlNative
     }
+
+    /// The engine's name for the app log, so a fallback names what failed.
+    pub fn label(self) -> &'static str {
+        match self {
+            BackendKind::PaddleVlNative => "PaddleOCR-VL",
+            BackendKind::PaddleVlServer => "PaddleOCR-VL (llama-server)",
+            BackendKind::GlmOcr => "GLM-OCR",
+        }
+    }
 }
 
 impl DesiredBackend {
@@ -2023,6 +2032,16 @@ mod tests {
         assert!(!engine.uses_glm_local());
         assert!(BackendKind::PaddleVlServer.uses_server());
         assert!(!BackendKind::PaddleVlNative.uses_server());
+    }
+
+    #[test]
+    fn a_fallback_names_the_engine_that_failed() {
+        assert_eq!(BackendKind::GlmOcr.label(), "GLM-OCR");
+        assert_eq!(BackendKind::PaddleVlNative.label(), "PaddleOCR-VL");
+        assert_eq!(
+            BackendKind::PaddleVlServer.label(),
+            "PaddleOCR-VL (llama-server)"
+        );
     }
 
     fn config_on(device: &str) -> PaddleVlConfig {

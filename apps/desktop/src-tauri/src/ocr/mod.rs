@@ -1714,6 +1714,7 @@ async fn process_pdf(
                         OcrMode::High => {
                             // High mode: try PaddleVL, fall back to lightweight PaddleOCR
                             if let Some(engine) = engine_clone {
+                                let engine_name = engine.backend_kind().label();
                                 // Downscale large PDF page renders before PaddleVL (same reason as images)
                                 let vl_bytes = if engine.uses_glm_local() {
                                     page_image.clone()
@@ -1768,7 +1769,7 @@ async fn process_pdf(
                                             &app_handle_for_page,
                                             "OCRH",
                                             format!(
-                                                "PaddleOCR-VL falló/agotó timeout en PDF página {}; usando PaddleOCR liviano: {e}",
+                                                "{engine_name} falló/agotó timeout en PDF página {}; usando PaddleOCR liviano: {e}",
                                                 page_idx + 1
                                             ),
                                         );
@@ -1783,7 +1784,7 @@ async fn process_pdf(
                                     &app_handle_for_page,
                                     "OCRH",
                                     format!(
-                                        "PaddleOCR-VL no disponible en PDF página {}; usando PaddleOCR liviano",
+                                        "OCRH local no disponible en PDF página {}; usando PaddleOCR liviano",
                                         page_idx + 1
                                     ),
                                 );
@@ -2281,6 +2282,7 @@ async fn process_image_high(
             // accurate OCR on typical document scans.
             // GLM-OCR reads each layout box at full resolution; shrinking the
             // page first only costs accuracy, and its layout runs fast on CPU.
+            let engine_name = engine_clone.backend_kind().label();
             let vl_bytes = if engine_clone.uses_glm_local() {
                 bytes_owned.clone()
             } else {
@@ -2355,7 +2357,7 @@ async fn process_image_high(
                         &app_handle_for_high,
                         "OCRH",
                         format!(
-                            "PaddleOCR-VL falló/agotó timeout en {asset_id_owned}; usando PaddleOCR liviano: {e}"
+                            "{engine_name} falló/agotó timeout en {asset_id_owned}; usando PaddleOCR liviano: {e}"
                         ),
                     );
                     match recognize_image_with_layout(&provider_clone, &bytes_owned, &engine_for_fallback) {
@@ -2389,7 +2391,7 @@ async fn process_image_high(
     crate::app_logs::warn(
         app_handle,
         "OCRH",
-        format!("PaddleOCR-VL no disponible para {asset_id}; usando PaddleOCR liviano"),
+        format!("OCRH local no disponible para {asset_id}; usando PaddleOCR liviano"),
     );
     process_image_light(provider, bytes, asset_id, app_handle, None).await
 }

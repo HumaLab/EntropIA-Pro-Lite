@@ -661,7 +661,7 @@ impl OcrExecutor {
                 Err(error) => {
                     log::warn!(
                         target: "processing",
-                        "PaddleOCR-VL unavailable, falling back to light: {error}"
+                        "OCRH local engine unavailable, falling back to light: {error}"
                     );
                 }
             }
