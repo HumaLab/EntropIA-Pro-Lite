@@ -267,6 +267,19 @@ pub(crate) fn wait_for_download_turn(on_wait: impl FnOnce()) -> std::sync::Mutex
     }
 }
 
+/// [`wait_for_download_turn`] for one destination file. `None` when the file
+/// was missing before the wait and is there after it: a second start of the
+/// same model (a double click on «Preparar EntropIA Pro», the assistant's
+/// `models_setup`) waited behind the first, which already made it.
+pub(crate) fn download_turn_unless_done(
+    destination_exists: impl Fn() -> bool,
+    on_wait: impl FnOnce(),
+) -> Option<std::sync::MutexGuard<'static, ()>> {
+    let existed_before = destination_exists();
+    let turn = wait_for_download_turn(on_wait);
+    (existed_before || !destination_exists()).then_some(turn)
+}
+
 /// Logs that a download waits behind another one.
 pub(crate) fn log_waiting_for_turn(app_handle: &AppHandle, source: &str) {
     crate::app_logs::info(
@@ -396,9 +409,12 @@ pub fn download_model_file(
     display_destination: &Path,
     app_handle: &AppHandle,
 ) -> Result<(), String> {
-    let _turn = wait_for_download_turn(|| {
-        log_waiting_for_turn(app_handle, &format!("{event_scope}/download"))
-    });
+    let Some(_turn) = download_turn_unless_done(
+        || managed_dir.exists(filename),
+        || log_waiting_for_turn(app_handle, &format!("{event_scope}/download")),
+    ) else {
+        return Ok(());
+    };
     let client = build_model_download_client()?;
     let mut temporary = ManagedTemporaryFile::create(&managed_dir, filename)?;
     let mut progress = DownloadProgress::new(|pct, downloaded_bytes, total_bytes| {
@@ -1102,6 +1118,41 @@ mod tests {
             .expect("the second download gets its turn");
         second.join().unwrap();
         assert!(waited.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_file_another_download_finished_while_waiting_is_not_downloaded_again() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let first = wait_for_download_turn(|| {});
+        let exists = Arc::new(AtomicBool::new(false));
+        let (waiting, is_waiting) = std::sync::mpsc::channel();
+        let second = {
+            let exists = exists.clone();
+            std::thread::spawn(move || {
+                download_turn_unless_done(
+                    || exists.load(Ordering::SeqCst),
+                    || waiting.send(()).unwrap(),
+                )
+                .is_none()
+            })
+        };
+        is_waiting
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the second download waits");
+        exists.store(true, Ordering::SeqCst);
+        drop(first);
+
+        assert!(second.join().unwrap(), "the finished file must be skipped");
+    }
+
+    #[test]
+    fn a_file_that_was_already_there_is_downloaded_again_when_asked() {
+        // A caller replaces a file it found broken: its existence before the
+        // wait says nothing about whether another download just made it.
+        assert!(download_turn_unless_done(|| true, || {}).is_some());
+        assert!(download_turn_unless_done(|| false, || {}).is_some());
     }
 
     #[test]
