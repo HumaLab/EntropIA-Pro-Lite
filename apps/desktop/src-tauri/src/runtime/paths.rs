@@ -4,8 +4,58 @@ pub fn current_runtime_platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
+/// Where the managed Python runtimes live.
+///
+/// Normally `<cache>/runtime`. Inside an MSIX package Windows redirects every
+/// write under AppData to `...\Packages\<family>\LocalCache\Local\...`, which
+/// adds about 55 characters. Python then cannot import the deepest Paddle
+/// modules: the full path passes 260 characters, the limit while long paths
+/// are disabled (the Windows default). There, setup remembers a short root
+/// outside AppData, which Windows does not redirect.
 pub fn runtime_root(app_data_dir: &Path) -> PathBuf {
-    app_data_dir.join("runtime")
+    remembered_runtime_root().unwrap_or_else(|| app_data_dir.join("runtime"))
+}
+
+/// The short runtime root to use when the cache directory is redirected
+/// (`real` differs from `nominal`), or `None` to keep `<cache>/runtime`.
+pub fn short_runtime_root_for(
+    nominal_cache: &Path,
+    real_cache: &Path,
+    home: Option<&Path>,
+) -> Option<PathBuf> {
+    if nominal_cache == real_cache {
+        return None;
+    }
+    home.map(|home| home.join(".entropia").join("runtime"))
+}
+
+static REMEMBERED_RUNTIME_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Record the short runtime root. Called once, during setup, and only when the
+/// cache directory is redirected.
+pub fn remember_runtime_root(root: PathBuf) {
+    let _ = REMEMBERED_RUNTIME_ROOT.set(root);
+}
+
+fn remembered_runtime_root() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(root) = TEST_RUNTIME_ROOT.with(|root| root.borrow().clone()) {
+        return Some(root);
+    }
+    REMEMBERED_RUNTIME_ROOT.get().cloned()
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_RUNTIME_ROOT: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Give the calling test thread a runtime root without touching the
+/// process-wide value.
+#[cfg(test)]
+pub fn set_test_runtime_root(root: Option<PathBuf>) {
+    TEST_RUNTIME_ROOT.with(|cell| *cell.borrow_mut() = root);
 }
 
 pub fn managed_pack_dir(app_data_dir: &Path, pack_version: &str) -> PathBuf {
@@ -111,6 +161,66 @@ mod tests {
             managed_wheelhouse_dir(&managed_root),
             managed_root.join("wheelhouse")
         );
+    }
+
+    #[test]
+    fn a_redirected_cache_puts_the_runtime_in_the_short_home_folder() {
+        let home = PathBuf::from(r"C:\Users\someone");
+        let nominal = home
+            .join("AppData")
+            .join("Local")
+            .join("com.entropia.shared");
+        let real = home
+            .join("AppData")
+            .join("Local")
+            .join("Packages")
+            .join("CONICET.EntropIAPro_b16na7gwepwme")
+            .join("LocalCache")
+            .join("Local")
+            .join("com.entropia.shared");
+
+        assert_eq!(
+            short_runtime_root_for(&nominal, &real, Some(&home)),
+            Some(home.join(".entropia").join("runtime"))
+        );
+    }
+
+    #[test]
+    fn a_direct_install_keeps_the_runtime_beside_the_cache() {
+        let home = PathBuf::from(r"C:\Users\someone");
+        let cache = home
+            .join("AppData")
+            .join("Local")
+            .join("com.entropia.shared");
+
+        assert_eq!(short_runtime_root_for(&cache, &cache, Some(&home)), None);
+    }
+
+    #[test]
+    fn without_a_home_folder_the_runtime_stays_beside_the_cache() {
+        let nominal = PathBuf::from(r"C:\nominal\com.entropia.shared");
+        let real = PathBuf::from(r"C:\real\com.entropia.shared");
+
+        assert_eq!(short_runtime_root_for(&nominal, &real, None), None);
+    }
+
+    #[test]
+    fn a_remembered_short_root_moves_every_runtime_path() {
+        let app_data = PathBuf::from("/tmp/entropia-data");
+        let short = PathBuf::from("/home/someone/.entropia/runtime");
+
+        set_test_runtime_root(Some(short.clone()));
+        let root = runtime_root(&app_data);
+        let pack = managed_pack_dir(&app_data, "2026.11.24-cuda129");
+        let staging = staging_pack_dir(&app_data, "2026.11.24-cuda129");
+        let marker = stage_marker_path(&app_data, "2026.11.24-cuda129");
+        set_test_runtime_root(None);
+
+        assert_eq!(root, short);
+        assert_eq!(pack, short.join("2026.11.24-cuda129"));
+        assert_eq!(staging, short.join(".2026.11.24-cuda129.staging"));
+        assert_eq!(marker, short.join(".2026.11.24-cuda129.stage.json"));
+        assert_eq!(runtime_root(&app_data), app_data.join("runtime"));
     }
 
     #[test]

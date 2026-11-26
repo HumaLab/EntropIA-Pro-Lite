@@ -1980,7 +1980,9 @@ fn runtime_candidates(model_dir: &Path) -> Vec<PathBuf> {
     }
 
     if let Some(app_data_root) = app_data_root_from_local_model_dir(model_dir) {
-        for path in runtimes_serving_the_running_app(&app_data_root.join("runtime")) {
+        for path in
+            runtimes_serving_the_running_app(&crate::runtime::paths::runtime_root(&app_data_root))
+        {
             push_names(&path.join("resources").join("lib"));
             for capi_dir in managed_venv_onnxruntime_capi_dirs(&path) {
                 push_names(&capi_dir);
