@@ -143,6 +143,8 @@ export const SETTINGS_KEYS = {
   VERCEL_AI_GATEWAY_API_KEY: 'vercel_ai_gateway_api_key',
   OCRH_MODE: 'ocrh_mode',
   OCRH_LOCAL_ENGINE: 'ocrh_local_engine',
+  /** OCRL recognition profile: bundled v5 Latin or the downloaded v6 Tiny. */
+  OCRL_PROFILE: 'ocrl_profile',
   LANGUAGE: 'language',
   UI_ZOOM_FACTOR: 'ui_zoom_factor',
   // How wide each side panel of the writing workspace is (§18). Persisted so a
@@ -259,6 +261,8 @@ export type OcrhMode = 'local' | 'glm_ocr' | 'auto'
 export type SttLocalEngine = 'parakeet' | 'whisper'
 /** Which local backend OCRH uses when `ocrh_mode` is `local`. */
 export type OcrhLocalEngine = 'auto' | 'glm_ocr' | 'paddle_vl'
+/** OCRL recognition profile; mirrors `RecProfile` in `ocr/paddle.rs`. */
+export type OcrlProfile = 'v5_latin' | 'v6_tiny'
 
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-6-luna'
 /** OCR correction runs on its own install default; every other flow uses
@@ -280,6 +284,7 @@ export const DEFAULT_STT_MODE: SttMode = _pro ? 'local' : 'assemblyai'
 export const DEFAULT_STT_LOCAL_ENGINE: SttLocalEngine = 'parakeet'
 export const DEFAULT_OCRH_MODE: OcrhMode = _pro ? 'local' : 'glm_ocr'
 export const DEFAULT_OCRH_LOCAL_ENGINE: OcrhLocalEngine = 'auto'
+export const DEFAULT_OCRL_PROFILE: OcrlProfile = 'v5_latin'
 
 export const DEFAULT_PROMPTS = {
   ocrCorrectionPrompt: `Sos un especialista en transcripción de documentos históricos. El siguiente texto fue extraído por OCR de un documento impreso y contiene errores.

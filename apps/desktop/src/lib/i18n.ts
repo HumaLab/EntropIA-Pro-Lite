@@ -257,6 +257,9 @@ const es = {
   'settings.localModels.deleteToFree': 'Podés borrarlos para liberar unos {gb} GB.',
   'settings.localModels.glmOcrTitle': 'OCRH local (GLM-OCR)',
   'settings.localModels.paddleVlTitle': 'OCRH local (PaddleOCR-VL en la GPU)',
+  'settings.localModels.ppocrV6Title': 'OCRL rápido (PP-OCRv6 Tiny)',
+  'settings.localModels.ppocrV6Description':
+    'Modelo opcional de OCRL, unas tres veces más rápido en CPU que el incluido. Se usa cuando el Perfil de OCRL (en Motores) es Rápido.',
   'settings.localModels.paddleVlDescription':
     'Corre PaddleOCR-VL en la GPU de este equipo con llama-server, también en AMD, Intel o Apple con 4 GB o más, no solo en NVIDIA. Se usa cuando el Modo OCRH es Local y el motor local es PaddleOCR-VL, o Automático sin GLM-OCR.',
   'settings.localModels.needsGpu':
@@ -939,6 +942,20 @@ const es = {
   'settings.glmOcrLocal.retry': 'Reintentar descarga',
   'settings.paddleVlLocal.modelsReady': 'Modelos PaddleOCR-VL instalados.',
   'settings.paddleVlLocal.download': 'Descargar modelos (~1,8 GB)',
+  'settings.ocrlProfile.title': 'Perfil de OCRL',
+  'settings.ocrlProfile.description':
+    'Reconocimiento local liviano, sin API ni GPU. El perfil rápido lee unas tres veces más rápido y se equivoca un poco más en palabras con tilde.',
+  'settings.ocrlProfile.v5_latin.label': 'Preciso (PP-OCRv5 Latin)',
+  'settings.ocrlProfile.v5_latin.description':
+    'Viene con la app. Recomendado para textos en español.',
+  'settings.ocrlProfile.v6_tiny.label': 'Rápido (PP-OCRv6 Tiny)',
+  'settings.ocrlProfile.v6_tiny.description':
+    'Unas tres veces más rápido en CPU. Se descarga en Modelos locales (3 MB).',
+  'settings.ocrlProfile.notInstalled':
+    'PP-OCRv6 Tiny no está descargado: OCRL usa PP-OCRv5 Latin hasta que lo descargues en Modelos locales.',
+  'settings.ppocrV6Local.modelsReady': 'Modelos PP-OCRv6 Tiny instalados.',
+  'settings.ppocrV6Local.download': 'Descargar modelos (3 MB)',
+  'settings.ppocrV6Local.delete': 'Borrar PP-OCRv6 Tiny',
   'settings.qwenCorrectLocal.title': 'Corrector local (Qwen3-VL)',
   'settings.qwenCorrectLocal.description':
     'Corrige OCR en este equipo con un modelo de 4B cuando el modo LLM no es OpenRouter. Requiere GPU NVIDIA, o AMD, Intel o Apple con 6 GB; sin ella, la corrección usa el modelo remoto.',
@@ -4563,6 +4580,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.localModels.deleteToFree': 'You can delete them to free about {gb} GB.',
   'settings.localModels.glmOcrTitle': 'Local OCRH (GLM-OCR)',
   'settings.localModels.paddleVlTitle': 'Local OCRH (PaddleOCR-VL on the GPU)',
+  'settings.localModels.ppocrV6Title': 'Fast OCRL (PP-OCRv6 Tiny)',
+  'settings.localModels.ppocrV6Description':
+    'Optional OCRL model, about three times faster on CPU than the bundled one. Used when the OCRL profile (in Engines) is Fast.',
   'settings.localModels.paddleVlDescription':
     "Runs PaddleOCR-VL on this computer's GPU through llama-server, on AMD, Intel or Apple with 4 GB or more too, not only on NVIDIA. Used when the OCRH mode is Local and the local engine is PaddleOCR-VL, or Automatic without GLM-OCR.",
   'settings.localModels.glmOcrDescription':
@@ -5241,6 +5261,19 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.glmOcrLocal.retry': 'Retry download',
   'settings.paddleVlLocal.modelsReady': 'PaddleOCR-VL models installed.',
   'settings.paddleVlLocal.download': 'Download models (~1.8 GB)',
+  'settings.ocrlProfile.title': 'OCRL profile',
+  'settings.ocrlProfile.description':
+    'Light local recognition, with no API or GPU. The fast profile reads about three times faster and makes a few more mistakes on accented words.',
+  'settings.ocrlProfile.v5_latin.label': 'Accurate (PP-OCRv5 Latin)',
+  'settings.ocrlProfile.v5_latin.description': 'Ships with the app. Recommended for Spanish text.',
+  'settings.ocrlProfile.v6_tiny.label': 'Fast (PP-OCRv6 Tiny)',
+  'settings.ocrlProfile.v6_tiny.description':
+    'About three times faster on CPU. Download it in Local models (3 MB).',
+  'settings.ocrlProfile.notInstalled':
+    'PP-OCRv6 Tiny is not downloaded: OCRL uses PP-OCRv5 Latin until you download it in Local models.',
+  'settings.ppocrV6Local.modelsReady': 'PP-OCRv6 Tiny models installed.',
+  'settings.ppocrV6Local.download': 'Download models (3 MB)',
+  'settings.ppocrV6Local.delete': 'Delete PP-OCRv6 Tiny',
   'settings.qwenCorrectLocal.title': 'Local corrector (Qwen3-VL)',
   'settings.qwenCorrectLocal.description':
     'Corrects OCR on this computer with a 4B model unless the LLM mode is OpenRouter. Needs an NVIDIA GPU, or an AMD, Intel or Apple one with 6 GB; without one, correction uses the remote model.',

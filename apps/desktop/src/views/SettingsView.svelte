@@ -19,6 +19,7 @@
     sttLocalDiarize: boolean
     ocrhMode: string
     ocrhLocalEngine: string
+    ocrlProfile: string
     localModelSourceUrl: string
     localModelFilename: string
     assemblyAiApiKey: string
@@ -84,6 +85,7 @@
     DEFAULT_STT_LOCAL_ENGINE,
     DEFAULT_OCRH_MODE,
     DEFAULT_OCRH_LOCAL_ENGINE,
+    DEFAULT_OCRL_PROFILE,
     DEFAULT_PROMPTS,
     DEFAULT_MODEL_PARAMS_BY_FLOW,
     DEFAULT_HELP_CONTEXT_CHARS,
@@ -97,6 +99,7 @@
     type LlmMode,
     type OcrhMode,
     type OcrhLocalEngine,
+    type OcrlProfile,
     type SttLocalEngine,
     type SttMode,
     type ModelInfo,
@@ -145,6 +148,12 @@
     paddleVlDeleteModels,
     type PaddleVlLocalInfo,
   } from '$lib/paddle-vl-local'
+  import {
+    ppocrV6LocalInfo,
+    ppocrV6DownloadModels,
+    ppocrV6DeleteModels,
+    type PpocrV6LocalInfo,
+  } from '$lib/ppocr-v6-local'
   import {
     qwenCorrectionLocalInfo,
     qwenCorrectionDownloadModels,
@@ -260,8 +269,10 @@
   let sttLocalDiarize = $state(false)
   let ocrhMode = $state<OcrhMode>(DEFAULT_OCRH_MODE)
   let ocrhLocalEngine = $state<OcrhLocalEngine>(DEFAULT_OCRH_LOCAL_ENGINE)
+  let ocrlProfile = $state<OcrlProfile>(DEFAULT_OCRL_PROFILE)
   let glmOcrLocal = $state<GlmOcrLocalInfo | null>(null)
   let paddleVlLocal = $state<PaddleVlLocalInfo | null>(null)
+  let ppocrV6Local = $state<PpocrV6LocalInfo | null>(null)
   let qwenLocal = $state<QwenLocalInfo | null>(null)
   let localAvailable = $state(false)
   let localModel = $state<LocalModelInfo | null>(null)
@@ -593,6 +604,9 @@
   let paddleVlDownloading = $state(isInflight(downloadKey('paddle-vl')))
   let paddleVlDownloadPct = $state(0)
   let paddleVlDownloadError = $state<string | null>(null)
+  let ppocrV6Downloading = $state(isInflight(downloadKey('ppocr-v6')))
+  let ppocrV6DownloadPct = $state(0)
+  let ppocrV6DownloadError = $state<string | null>(null)
   let qwenDownloading = $state(isInflight(downloadKey('qwen-correct')))
   let qwenDownloadPct = $state(0)
   let qwenDownloadError = $state<string | null>(null)
@@ -611,6 +625,7 @@
   mirrorInflight(downloadKey('reranker'), () => rerankerDownloading)
   mirrorInflight(downloadKey('glm-ocr'), () => glmOcrDownloading)
   mirrorInflight(downloadKey('paddle-vl'), () => paddleVlDownloading)
+  mirrorInflight(downloadKey('ppocr-v6'), () => ppocrV6Downloading)
   mirrorInflight(downloadKey('qwen-correct'), () => qwenDownloading)
   mirrorInflight(downloadKey('llama-server'), () => llamaServerDownloading)
   mirrorInflight(downloadKey('parakeet'), () => parakeetDownloading)
@@ -664,6 +679,7 @@
       sttLocalDiarize,
       ocrhMode,
       ocrhLocalEngine,
+      ocrlProfile,
       localModelSourceUrl,
       localModelFilename,
       assemblyAiApiKey,
@@ -790,6 +806,7 @@
         storedSttLocalDiarize,
         storedOcrhMode,
         storedOcrhLocalEngine,
+        storedOcrlProfile,
         storedAssemblyAiKey,
         storedAssemblyAiSpeakerLabels,
         storedGlmOcrKey,
@@ -803,6 +820,7 @@
         rerankerModelInfo,
         glmOcrModelInfo,
         paddleVlModelInfo,
+        ppocrV6ModelInfo,
         qwenModelInfo,
         parakeetInfo,
       ] = await Promise.all([
@@ -818,6 +836,7 @@
         settingsGet(SETTINGS_KEYS.STT_LOCAL_DIARIZE),
         settingsGet(SETTINGS_KEYS.OCRH_MODE),
         settingsGet(SETTINGS_KEYS.OCRH_LOCAL_ENGINE),
+        settingsGet(SETTINGS_KEYS.OCRL_PROFILE),
         settingsGet(SETTINGS_KEYS.ASSEMBLYAI_API_KEY),
         settingsGet(SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS),
         settingsGet(SETTINGS_KEYS.GLM_OCR_API_KEY),
@@ -831,6 +850,7 @@
         rerankerLocalModelInfo().catch(() => null),
         glmOcrLocalInfo().catch(() => null),
         paddleVlLocalInfo().catch(() => null),
+        ppocrV6LocalInfo().catch(() => null),
         qwenCorrectionLocalInfo().catch(() => null),
         parakeetModelInfo().catch(() => null),
       ])
@@ -872,6 +892,9 @@
       ) {
         ocrhLocalEngine = storedOcrhLocalEngine
       }
+      if (storedOcrlProfile === 'v5_latin' || storedOcrlProfile === 'v6_tiny') {
+        ocrlProfile = storedOcrlProfile
+      }
       if (storedAssemblyAiKey?.startsWith(SECRET_REF_PREFIX)) {
         assemblyAiApiKey = ''
         maskedAssemblyAiApiKey = t('settings.keyStoredInCredentialManager')
@@ -911,6 +934,8 @@
       localRerankerModel = rerankerModelInfo
       glmOcrLocal = glmOcrModelInfo
       paddleVlLocal = paddleVlModelInfo
+      ppocrV6Local = ppocrV6ModelInfo
+      if (ppocrV6Local?.installed) ppocrV6Downloading = false
       qwenLocal = qwenModelInfo
       // A two-file download that finished while the user was elsewhere.
       if (glmOcrLocal?.model_present && glmOcrLocal?.mmproj_present) glmOcrDownloading = false
@@ -1050,6 +1075,33 @@
             listen<GlmOcrDownloadErrorPayload>('glm-ocr:download_error', (event) => {
               glmOcrDownloadPct = 0
               glmOcrDownloadError = event.payload.error
+            }),
+          () =>
+            listen<GlmOcrDownloadProgressPayload>('ppocr-v6:download_progress', (event) => {
+              if (destroyed) return
+              ppocrV6Downloading = true
+              ppocrV6DownloadPct = event.payload.pct
+              ppocrV6DownloadError = null
+            }),
+          () =>
+            listen<GlmOcrDownloadCompletePayload>('ppocr-v6:download_complete', async () => {
+              if (destroyed) return
+              ppocrV6Local = await ppocrV6LocalInfo().catch(() => null)
+              // Three files download in sequence with one `complete` each; stop
+              // the spinner only when all of them are on disk.
+              if (ppocrV6Local?.installed) {
+                ppocrV6Downloading = false
+                ppocrV6DownloadPct = 100
+              }
+              ppocrV6DownloadError = null
+            }),
+          () =>
+            listen<GlmOcrDownloadErrorPayload>('ppocr-v6:download_error', async (event) => {
+              if (destroyed) return
+              ppocrV6Downloading = false
+              ppocrV6DownloadPct = 0
+              ppocrV6DownloadError = event.payload.error
+              ppocrV6Local = await ppocrV6LocalInfo().catch(() => null)
             }),
           () =>
             listen<GlmOcrDownloadProgressPayload>('paddle-vl:download_progress', (event) => {
@@ -1865,6 +1917,7 @@
         ),
         settingsSet(SETTINGS_KEYS.OCRH_MODE, ocrhMode),
         settingsSet(SETTINGS_KEYS.OCRH_LOCAL_ENGINE, ocrhLocalEngine),
+        settingsSet(SETTINGS_KEYS.OCRL_PROFILE, ocrlProfile),
         settingsSet(SETTINGS_KEYS.LOCAL_MODEL_SOURCE_URL, localModelSourceUrl.trim()),
         settingsSet(
           SETTINGS_KEYS.LOCAL_MODEL_FILENAME,
@@ -2166,6 +2219,35 @@
       glmOcrDownloading = false
       glmOcrDownloadError = e instanceof Error ? e.message : String(e)
     }
+  }
+
+  async function handleDownloadPpocrV6Models() {
+    if (ppocrV6Downloading) return
+    ppocrV6Downloading = true
+    ppocrV6DownloadPct = 0
+    ppocrV6DownloadError = null
+    try {
+      const state = await ppocrV6DownloadModels()
+      // 'already complete' means nothing was queued; refresh and stop.
+      if (state !== 'started') {
+        ppocrV6Local = await ppocrV6LocalInfo().catch(() => null)
+        ppocrV6Downloading = false
+      }
+    } catch (e) {
+      ppocrV6Downloading = false
+      ppocrV6DownloadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  // Three small files that download again in seconds: no confirmation.
+  async function handleDeletePpocrV6Models() {
+    ppocrV6DownloadError = null
+    try {
+      await ppocrV6DeleteModels()
+    } catch (e) {
+      ppocrV6DownloadError = e instanceof Error ? e.message : String(e)
+    }
+    ppocrV6Local = await ppocrV6LocalInfo().catch(() => null)
   }
 
   async function handleDownloadPaddleVlModels() {
@@ -2677,6 +2759,40 @@
                 {/if}
               </section>
             </Card>
+            <Card>
+              <section class="settings-card-section">
+                <div class="settings-card-section__copy">
+                  <h2>{t('settings.ocrlProfile.title')}</h2>
+                  <p>{t('settings.ocrlProfile.description')}</p>
+                </div>
+
+                <RadioGroup
+                  name="ocrl_profile"
+                  value={ocrlProfile}
+                  onchange={(next) => (ocrlProfile = next as OcrlProfile)}
+                  label={t('settings.ocrlProfile.title')}
+                  hideLabel
+                  columnMin="100%"
+                >
+                  <RadioCard
+                    value="v5_latin"
+                    label={t('settings.ocrlProfile.v5_latin.label')}
+                    description={t('settings.ocrlProfile.v5_latin.description')}
+                    wrapDescription
+                  />
+                  <RadioCard
+                    value="v6_tiny"
+                    label={t('settings.ocrlProfile.v6_tiny.label')}
+                    description={t('settings.ocrlProfile.v6_tiny.description')}
+                    wrapDescription
+                  />
+                </RadioGroup>
+
+                {#if ocrlProfile === 'v6_tiny' && ppocrV6Local && !ppocrV6Local.installed}
+                  <p class="settings__hint">{t('settings.ocrlProfile.notInstalled')}</p>
+                {/if}
+              </section>
+            </Card>
           {/if}
         </div>
       {:else if activeTab === 'localModels'}
@@ -3183,6 +3299,61 @@
                     <p class="surface-message surface-message--error">
                       {paddleVlDownloadError}
                       <Button variant="secondary" size="sm" onclick={handleDownloadPaddleVlModels}>
+                        {t('settings.glmOcrLocal.retry')}
+                      </Button>
+                    </p>
+                  {/if}
+                </div>
+              {/if}
+            </section>
+          </Card>
+          <Card>
+            <section class="settings-card-section">
+              <div class="settings-card-section__copy">
+                <h2>{t('settings.localModels.ppocrV6Title')}</h2>
+                <p>{t('settings.localModels.ppocrV6Description')}</p>
+              </div>
+              {#if ppocrV6Local}
+                <div class="settings__local-model">
+                  <div class="settings__local-model-row">
+                    {#if ppocrV6Local.installed}
+                      <StatusBadge variant="success" size="xs">
+                        {t('settings.ppocrV6Local.modelsReady')}
+                      </StatusBadge>
+                    {:else}
+                      <StatusBadge variant="warning" size="xs">
+                        {t('settings.glmOcrLocal.modelsMissing')}
+                      </StatusBadge>
+                      <code class="settings__local-model-path">
+                        PP-OCRv6_tiny_det.mnn PP-OCRv6_tiny_rec.mnn ppocr_keys_v6_tiny.txt
+                      </code>
+                    {/if}
+                  </div>
+
+                  {#if ppocrV6Downloading}
+                    <div class="settings__download-progress">
+                      <ProgressBar
+                        value={ppocrV6DownloadPct}
+                        label={t('settings.glmOcrLocal.downloading')}
+                      />
+                      <span class="settings__download-progress-text">
+                        {ppocrV6DownloadPct}% — {t('settings.glmOcrLocal.downloading')}
+                      </span>
+                    </div>
+                  {:else if ppocrV6Local.installed}
+                    <Button variant="secondary" size="sm" onclick={handleDeletePpocrV6Models}>
+                      {t('settings.ppocrV6Local.delete')}
+                    </Button>
+                  {:else}
+                    <Button variant="primary" size="sm" onclick={handleDownloadPpocrV6Models}>
+                      {t('settings.ppocrV6Local.download')}
+                    </Button>
+                  {/if}
+
+                  {#if ppocrV6DownloadError}
+                    <p class="surface-message surface-message--error">
+                      {ppocrV6DownloadError}
+                      <Button variant="secondary" size="sm" onclick={handleDownloadPpocrV6Models}>
                         {t('settings.glmOcrLocal.retry')}
                       </Button>
                     </p>
