@@ -736,9 +736,113 @@ fn kill_stale_server(db_path: &Path) {
             let _ = Command::new("kill").arg("-9").arg(pid.to_string()).status();
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    kill_stale_server_windows(pid);
+    #[cfg(not(any(target_os = "linux", windows)))]
     let _ = pid;
     std::fs::remove_file(path).ok();
+}
+
+/// Windows half of [`kill_stale_server`]: the pid may have been reused, so
+/// only a process whose image is `llama-server.exe` is terminated.
+#[cfg(windows)]
+fn kill_stale_server_windows(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    };
+
+    // SAFETY: plain Win32 calls on a handle this function opens and closes;
+    // the buffer outlives the call that fills it.
+    unsafe {
+        let handle = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+            0,
+            pid,
+        );
+        if handle.is_null() {
+            return;
+        }
+        let mut buffer = [0u16; 1024];
+        let mut length = buffer.len() as u32;
+        let named = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            buffer.as_mut_ptr(),
+            &mut length,
+        ) != 0;
+        if named {
+            let image = PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize]));
+            let is_server = image
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case("llama-server.exe"));
+            if is_server {
+                log::warn!(target: "local_server", "Killing stale llama-server pid {pid}");
+                TerminateProcess(handle, 1);
+            }
+        }
+        CloseHandle(handle);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod stale_server_tests {
+    use std::path::Path;
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    /// Run a copy of `ping.exe` under `name`, so a real process with that
+    /// image name stays alive for a minute.
+    fn long_running_as(dir: &Path, name: &str) -> Child {
+        let image = dir.join(name);
+        std::fs::copy(r"C:\Windows\System32\PING.EXE", &image).expect("copy ping");
+        Command::new(&image)
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn")
+    }
+
+    fn exited_within(child: &mut Child, limit: Duration) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < limit {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    #[test]
+    fn a_server_a_crashed_session_left_running_is_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("entropia.sqlite");
+        let mut stale = long_running_as(dir.path(), "llama-server.exe");
+        super::write_pid_file(&db_path, stale.id());
+
+        super::kill_stale_server(&db_path);
+
+        assert!(exited_within(&mut stale, Duration::from_secs(5)));
+        assert!(!super::pid_file(&db_path).exists());
+    }
+
+    #[test]
+    fn a_reused_pid_of_another_program_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("entropia.sqlite");
+        let mut other = long_running_as(dir.path(), "other-program.exe");
+        super::write_pid_file(&db_path, other.id());
+
+        super::kill_stale_server(&db_path);
+
+        assert!(!exited_within(&mut other, Duration::from_millis(500)));
+        assert!(!super::pid_file(&db_path).exists());
+        other.kill().ok();
+        other.wait().ok();
+    }
 }
 
 #[cfg(test)]
