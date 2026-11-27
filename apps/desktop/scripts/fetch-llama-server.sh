@@ -108,8 +108,9 @@ run_logged "$WORK/build.log" cmake --build "$WORK/build" --target llama-server -
 
 mkdir -p "$DEST"
 cp -P "$WORK/build/bin/llama-server" "$WORK"/build/bin/lib*.so* "$DEST"/
-rm -f "$DEST"/lib*.so 2>/dev/null || true
-# Keep versioned .so files; the unversioned dev symlinks must not ship.
+# Keep versioned .so files; the unversioned dev symlinks must not ship. An
+# unversioned regular file (libllama-server-impl.so since b11429) is the real
+# library and stays.
 (cd "$DEST" && for f in lib*.so; do [[ -L "$f" ]] && rm -f "$f"; done) || true
 # The bundled libraries must resolve from any working directory.
 if (cd / && ldd "$DEST/llama-server") | grep -E 'lib(ggml|llama|mtmd)[^ ]* => not found'; then
