@@ -134,20 +134,42 @@ pub enum ServerSource {
     RequiresGpu,
 }
 
-/// Name of the file in [`server_dir`] that records which build it holds.
-/// An install from before the file existed is the CUDA build.
+/// Name of the file in [`server_dir`] that records which build it holds:
+/// the build kind, then the llama.cpp revision (`vulkan b11429`). An install
+/// from before the file existed is the CUDA build; one from before the
+/// revision was recorded has none.
 pub(crate) const BACKEND_MARKER: &str = "backend.txt";
 
-/// The build the managed install holds, when there is one.
-pub(crate) fn installed_backend(db_path: &Path) -> Option<Backend> {
+/// llama.cpp release the app links and downloads `llama-server` from. Bump
+/// together with the llama-cpp-2 crate and scripts/fetch-llama-server.sh.
+pub(crate) const SERVER_REVISION: &str = "b11429";
+
+/// What a fresh install writes to [`BACKEND_MARKER`].
+pub(crate) fn marker_text(backend: Backend) -> String {
+    format!("{} {SERVER_REVISION}", backend.as_str())
+}
+
+fn read_marker(db_path: &Path) -> Option<(Backend, Option<String>)> {
     let dir = server_dir(db_path);
     if !dir.join(server_binary_name()).is_file() {
         return None;
     }
-    match std::fs::read_to_string(dir.join(BACKEND_MARKER)) {
-        Ok(text) => Backend::parse(&text),
-        Err(_) => Some(Backend::Cuda),
-    }
+    let Ok(text) = std::fs::read_to_string(dir.join(BACKEND_MARKER)) else {
+        return Some((Backend::Cuda, None));
+    };
+    let mut fields = text.split_whitespace();
+    let backend = Backend::parse(fields.next().unwrap_or(""))?;
+    Some((backend, fields.next().map(str::to_string)))
+}
+
+/// The build the managed install holds, when there is one.
+pub(crate) fn installed_backend(db_path: &Path) -> Option<Backend> {
+    read_marker(db_path).map(|(backend, _)| backend)
+}
+
+/// The llama.cpp revision the managed install holds, when it recorded one.
+pub(crate) fn installed_revision(db_path: &Path) -> Option<String> {
+    read_marker(db_path).and_then(|(_, revision)| revision)
 }
 
 /// Whether an installed build serves a machine that wants `wanted`. A HIP
@@ -156,11 +178,21 @@ pub(crate) fn backend_satisfies(installed: Backend, wanted: Backend) -> bool {
     installed == wanted || (wanted == Backend::Hip && installed == Backend::Vulkan)
 }
 
+/// Whether an install needs no new download: the right build, at the
+/// revision the app links. An older revision keeps running until the new
+/// one replaces it.
+pub(crate) fn install_serves(installed: Backend, revision: Option<&str>, wanted: Backend) -> bool {
+    backend_satisfies(installed, wanted) && revision == Some(SERVER_REVISION)
+}
+
 /// Whether the managed install holds a build this machine cannot use (the
-/// GPU changed since), so the download is offered again.
+/// GPU changed since) or an older llama.cpp revision, so the download is
+/// offered again.
 pub(crate) fn managed_server_stale(db_path: &Path) -> bool {
-    match (installed_backend(db_path), llama_gpu::detected()) {
-        (Some(installed), Some(gpu)) => !backend_satisfies(installed, gpu.backend),
+    match (read_marker(db_path), llama_gpu::detected()) {
+        (Some((installed, revision)), Some(gpu)) => {
+            !install_serves(installed, revision.as_deref(), gpu.backend)
+        }
         _ => false,
     }
 }
@@ -1148,6 +1180,55 @@ mod tests {
         assert_eq!(installed_backend(&db), Some(Backend::Cuda));
         std::fs::write(server_dir(&db).join(BACKEND_MARKER), "vulkan").unwrap();
         assert_eq!(installed_backend(&db), Some(Backend::Vulkan));
+    }
+
+    #[test]
+    fn the_marker_also_records_the_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("entropia.db");
+        std::fs::create_dir_all(server_dir(&db)).unwrap();
+        std::fs::write(server_dir(&db).join(server_binary_name()), b"s").unwrap();
+        assert_eq!(installed_revision(&db), None, "legacy install, no marker");
+
+        std::fs::write(server_dir(&db).join(BACKEND_MARKER), "vulkan").unwrap();
+        assert_eq!(
+            installed_revision(&db),
+            None,
+            "marker from before the revision"
+        );
+
+        std::fs::write(
+            server_dir(&db).join(BACKEND_MARKER),
+            marker_text(Backend::Vulkan),
+        )
+        .unwrap();
+        assert_eq!(installed_backend(&db), Some(Backend::Vulkan));
+        assert_eq!(installed_revision(&db).as_deref(), Some(SERVER_REVISION));
+    }
+
+    #[test]
+    fn an_install_of_an_older_revision_is_offered_again() {
+        assert!(install_serves(
+            Backend::Vulkan,
+            Some(SERVER_REVISION),
+            Backend::Vulkan
+        ));
+        assert!(install_serves(
+            Backend::Vulkan,
+            Some(SERVER_REVISION),
+            Backend::Hip
+        ));
+        assert!(!install_serves(
+            Backend::Vulkan,
+            Some("b8783"),
+            Backend::Vulkan
+        ));
+        assert!(!install_serves(Backend::Vulkan, None, Backend::Vulkan));
+        assert!(!install_serves(
+            Backend::Hip,
+            Some(SERVER_REVISION),
+            Backend::Vulkan
+        ));
     }
 
     #[test]

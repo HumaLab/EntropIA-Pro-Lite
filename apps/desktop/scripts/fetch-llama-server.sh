@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the llama-server binary backing local GLM-OCR from the same llama.cpp
-# revision the app links (llama-cpp-sys-2 0.1.145), into
+# revision the app links (llama-cpp-sys-2 0.1.161), into
 # src-tauri/resources/tools/llama-server/ (flat, like resources/pdfium/: CI
 # checks out one platform per job, so no per-platform subdirectories).
 #
@@ -10,7 +10,7 @@
 # installers ship none: the app downloads llama.cpp's own release of the same
 # revision on demand (src-tauri/src/ocr/llama_server_download.rs).
 #
-# Pinned revision: e21cdc11a0461d8b0cbd28cc356d993bf6be7282 (release tag b8783).
+# Pinned revision: d81235049384534c167caea52b85a694f6103d14 (release tag b11429).
 # It matches the vendored sources (CMakeLists.txt and ggml/src/ggml.c are
 # byte-identical to the registry copy); the script re-checks that and refuses
 # to build anything else. Bump together with the llama-cpp-2 crate and the
@@ -34,7 +34,7 @@ case "$PLATFORM" in
     ;;
 esac
 
-LLAMA_COMMIT="e21cdc11a0461d8b0cbd28cc356d993bf6be7282"
+LLAMA_COMMIT="d81235049384534c167caea52b85a694f6103d14"
 TARBALL_URL="https://codeload.github.com/ggml-org/llama.cpp/tar.gz/${LLAMA_COMMIT}"
 
 for tool in cmake curl; do
@@ -53,7 +53,7 @@ mkdir -p "$WORK/src"
 tar -xzf "$WORK/llama.tgz" -C "$WORK/src" --strip-components=1
 
 # Refuse to build a different revision than the app links.
-REGISTRY_LLAMA=(~/.cargo/registry/src/*/llama-cpp-sys-2-0.1.145/llama.cpp)
+REGISTRY_LLAMA=(~/.cargo/registry/src/*/llama-cpp-sys-2-0.1.161/llama.cpp)
 if [[ -d "${REGISTRY_LLAMA[0]}" ]]; then
   for f in CMakeLists.txt ggml/src/ggml.c; do
     cmp -s "${REGISTRY_LLAMA[0]}/$f" "$WORK/src/$f" || {

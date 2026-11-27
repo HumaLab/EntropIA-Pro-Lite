@@ -2,7 +2,7 @@
 //! local Qwen correction, into `<data>/tools/llama-server`.
 //!
 //! The app downloads llama.cpp's official release of the exact revision it
-//! links (tag `b8783` = e21cdc11, the sources llama-cpp-sys-2 0.1.145
+//! links (tag `b11429` = d8123504, the sources llama-cpp-sys-2 0.1.161
 //! vendors), in the build this machine's GPU runs ([`super::llama_gpu`]):
 //! CUDA for NVIDIA on Windows, HIP for supported Radeons, Vulkan for other
 //! AMD and Intel GPUs, Metal on Apple Silicon. Every archive is checked
@@ -24,8 +24,8 @@ use tauri::{AppHandle, Emitter};
 
 use super::llama_gpu::{self, Backend, Platform};
 use super::local_server::{
-    backend_satisfies, installed_backend, list_devices, server_binary_name, server_dir,
-    server_source, ServerSource, BACKEND_MARKER,
+    install_serves, installed_backend, installed_revision, list_devices, marker_text,
+    server_binary_name, server_dir, server_source, ServerSource, BACKEND_MARKER,
 };
 use crate::llm::download::{
     build_model_download_client, ModelDownloadCompletePayload, ModelDownloadErrorPayload,
@@ -34,9 +34,8 @@ use crate::llm::download::{
 
 /// Prefix of the emitted events (`llama-server:download_progress`, ...).
 const EVENT_SCOPE: &str = "llama-server";
-/// llama.cpp release tag of the revision the app links. Bump together with
-/// the llama-cpp-2 crate and scripts/fetch-llama-server.sh.
-const RELEASE_TAG: &str = "b8783";
+/// llama.cpp release tag of the revision the app links.
+const RELEASE_TAG: &str = super::local_server::SERVER_REVISION;
 const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024;
 
 /// One archive of the pinned release.
@@ -50,9 +49,9 @@ struct ReleaseAsset {
 /// rather than 13: it runs on older drivers and on pre-Turing cards.
 const WINDOWS_CUDA: &[ReleaseAsset] = &[
     ReleaseAsset {
-        name: "llama-b8783-bin-win-cuda-12.4-x64.zip",
-        size: 249_262_710,
-        sha256: "e34b8589ccee78511ca0673702519f8aea8b74b930e209f5256cd9b7d1a044ec",
+        name: "llama-b11429-bin-win-cuda-12.4-x64.zip",
+        size: 264_478_423,
+        sha256: "dd6df685c1024e6aa55ca55ad35038692d5e284d4dc895e7a646c3245d3d14ff",
     },
     ReleaseAsset {
         name: "cudart-llama-bin-win-cuda-12.4-x64.zip",
@@ -60,33 +59,27 @@ const WINDOWS_CUDA: &[ReleaseAsset] = &[
         sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
     },
 ];
-/// HIP with the ROCm libraries it needs (rocBLAS, hipBLASLt and their kernel
-/// folders), for the `gfx` targets in [`llama_gpu::hip_target`].
-const WINDOWS_HIP: &[ReleaseAsset] = &[ReleaseAsset {
-    name: "llama-b8783-bin-win-hip-radeon-x64.zip",
-    size: 362_054_813,
-    sha256: "b4db5253b4c2407f4d2757080d63c8d09d036e8f55f030eb50c28e44a709a274",
-}];
 const WINDOWS_VULKAN: &[ReleaseAsset] = &[ReleaseAsset {
-    name: "llama-b8783-bin-win-vulkan-x64.zip",
-    size: 58_526_472,
-    sha256: "5b82e8a9e66bb8ed2bdcbfac3363bc2eceea18c759e4298548bfe34edfcd239e",
+    name: "llama-b11429-bin-win-vulkan-x64.zip",
+    size: 33_337_769,
+    sha256: "1bfe78ad9168b79fa02bf67f6af9f5e17a966d824d77238517f7bef12ac73b36",
 }];
-/// Links the system's ROCm 7.2 runtime, which it does not ship.
+/// Links the system's ROCm 10.0 runtime, which it does not ship. With an
+/// older ROCm it lists no device, and the install falls back to Vulkan.
 const LINUX_HIP: &[ReleaseAsset] = &[ReleaseAsset {
-    name: "llama-b8783-bin-ubuntu-rocm-7.2-x64.tar.gz",
-    size: 169_665_919,
-    sha256: "d42a283e12d73a7dddf1a18c8b053d9369b7e46c64226d54e5870060e3a18e35",
+    name: "llama-b11429-bin-ubuntu-rocm-10.0-x64.tar.gz",
+    size: 243_892_368,
+    sha256: "bd73e52146551f07a4c539bbe9da42f3b680c44ddc252fce61ab86d567a5932a",
 }];
 const LINUX_VULKAN: &[ReleaseAsset] = &[ReleaseAsset {
-    name: "llama-b8783-bin-ubuntu-vulkan-x64.tar.gz",
-    size: 50_827_722,
-    sha256: "b7b2f08df4c4c2da5c1dff9282900f921eb9dd96b433ef5e71fe730be7750b43",
+    name: "llama-b11429-bin-ubuntu-vulkan-x64.tar.gz",
+    size: 31_636_673,
+    sha256: "632c4e98feba2b94407a2130e3133e0c3aefb0ea1ab41337e926d8bfafdd0b74",
 }];
 const MAC_METAL: &[ReleaseAsset] = &[ReleaseAsset {
-    name: "llama-b8783-bin-macos-arm64.tar.gz",
-    size: 40_968_640,
-    sha256: "340ca1e1ce544dd8c0b5d683a7ba279ddc31a4974f1a3506e3900e4b9ac0fddc",
+    name: "llama-b11429-bin-macos-arm64.tar.gz",
+    size: 11_971_406,
+    sha256: "740288ec6887be94280a5dfa25b5e23a78285cab104519e6c7e218904ee82459",
 }];
 
 /// The archives of `backend`'s build on `platform`; empty when the release
@@ -94,7 +87,6 @@ const MAC_METAL: &[ReleaseAsset] = &[ReleaseAsset {
 fn assets_for(platform: Platform, backend: Backend) -> &'static [ReleaseAsset] {
     match (platform, backend) {
         (Platform::Windows, Backend::Cuda) => WINDOWS_CUDA,
-        (Platform::Windows, Backend::Hip) => WINDOWS_HIP,
         (Platform::Windows, Backend::Vulkan) => WINDOWS_VULKAN,
         (Platform::Linux, Backend::Hip) => LINUX_HIP,
         (Platform::Linux, Backend::Vulkan) => LINUX_VULKAN,
@@ -130,7 +122,9 @@ pub(crate) fn start_download(db_path: &Path, app_handle: AppHandle) -> Result<St
         }
         ServerSource::RequiresGpu => return Err(requires_gpu_message()),
     };
-    if installed_backend(db_path).is_some_and(|installed| backend_satisfies(installed, gpu.backend))
+    let revision = installed_revision(db_path);
+    if installed_backend(db_path)
+        .is_some_and(|installed| install_serves(installed, revision.as_deref(), gpu.backend))
     {
         return Ok("already complete".to_string());
     }
@@ -266,7 +260,7 @@ fn install(
 /// Check the staged build, record which one it is and put it in place.
 fn finish_install(staging: &Path, target: &Path, backend: Backend) -> Result<(), InstallError> {
     check_sees_gpu(staging, backend)?;
-    std::fs::write(staging.join(BACKEND_MARKER), backend.as_str())
+    std::fs::write(staging.join(BACKEND_MARKER), marker_text(backend))
         .map_err(|e| format!("Cannot record the build: {e}"))?;
     replace_install(staging, target)?;
     Ok(())
@@ -518,7 +512,7 @@ fn extract_tarball(archive: &Path, work: &Path, dest: &Path) -> Result<(), Strin
 }
 
 /// The directory holding the server: the archive's single top folder
-/// (`llama-b8783/`), or the unpack directory itself when it is flat.
+/// (`llama-b11429/`), or the unpack directory itself when it is flat.
 fn release_root(unpacked: &Path) -> Result<PathBuf, String> {
     if unpacked.join(server_binary_name()).exists() {
         return Ok(unpacked.to_path_buf());
@@ -745,32 +739,30 @@ mod tests {
         assert_eq!(
             names(Platform::Windows, Cuda),
             [
-                "llama-b8783-bin-win-cuda-12.4-x64.zip",
+                "llama-b11429-bin-win-cuda-12.4-x64.zip",
                 "cudart-llama-bin-win-cuda-12.4-x64.zip"
             ]
         );
         assert_eq!(
-            names(Platform::Windows, Hip),
-            ["llama-b8783-bin-win-hip-radeon-x64.zip"]
-        );
-        assert_eq!(
             names(Platform::Windows, Vulkan),
-            ["llama-b8783-bin-win-vulkan-x64.zip"]
+            ["llama-b11429-bin-win-vulkan-x64.zip"]
         );
         assert_eq!(
             names(Platform::Linux, Hip),
-            ["llama-b8783-bin-ubuntu-rocm-7.2-x64.tar.gz"]
+            ["llama-b11429-bin-ubuntu-rocm-10.0-x64.tar.gz"]
         );
         assert_eq!(
             names(Platform::Linux, Vulkan),
-            ["llama-b8783-bin-ubuntu-vulkan-x64.tar.gz"]
+            ["llama-b11429-bin-ubuntu-vulkan-x64.tar.gz"]
         );
         assert_eq!(
             names(Platform::MacArm, Metal),
-            ["llama-b8783-bin-macos-arm64.tar.gz"]
+            ["llama-b11429-bin-macos-arm64.tar.gz"]
         );
         // The .deb bundles Linux CUDA; nothing else downloads elsewhere.
         assert!(assets_for(Platform::Linux, Cuda).is_empty());
+        // Windows Radeons run Vulkan: the ROCm archive lacks rocBLAS.
+        assert!(assets_for(Platform::Windows, Hip).is_empty());
         assert!(assets_for(Platform::Other, Vulkan).is_empty());
         for backend in [Cuda, Hip, Vulkan, Metal] {
             for platform in [Platform::Windows, Platform::Linux, Platform::MacArm] {
@@ -839,7 +831,7 @@ mod tests {
     #[test]
     fn a_tarball_release_keeps_the_server_its_libraries_and_symlinks() {
         let work = tempfile::tempdir().unwrap();
-        let source = work.path().join("src/llama-b8783");
+        let source = work.path().join("src/llama-b11429");
         std::fs::create_dir_all(&source).unwrap();
         for name in [
             server_binary_name(),
@@ -856,7 +848,7 @@ mod tests {
             .arg(&archive)
             .arg("-C")
             .arg(work.path().join("src"))
-            .arg("llama-b8783")
+            .arg("llama-b11429")
             .status()
             .unwrap();
         assert!(status.success());
