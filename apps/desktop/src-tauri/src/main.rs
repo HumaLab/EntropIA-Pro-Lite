@@ -23,29 +23,7 @@ fn main() {
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     }
 
-    // On MSVC Debug builds, also suppress the CRT assertion dialog.
-    // Without this, `_osfile(fh) & FOPEN` assertions from llama.cpp's mmap
-    // trigger a modal dialog that halts the app.
-    // `_CrtSetReportMode` is a DEBUG-CRT (ucrtbased) symbol only linked when a native
-    // C++ ML dep is compiled with /MDd (MNN/llama under local-ml). The lean (API-only)
-    // build links none of them, so referencing it there is an unresolved LNK2019 — and
-    // it is unnecessary anyway (no native ML libs to throw CRT assertions). Gate it off.
-    #[cfg(all(target_os = "windows", debug_assertions, feature = "local-ml"))]
-    unsafe {
-        // _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_DEBUG | _CRTDBG_MODE_FILE)
-        // _CRT_ASSERT = 2, _CRTDBG_MODE_FILE = 1, _CRTDBG_FILE = _CRTDBG_MODE_FILE
-        // Setting mode to 0 disables the dialog and output for CRT assertions.
-        const _CRT_ASSERT: i32 = 2;
-
-        extern "system" {
-            fn _CrtSetReportMode(reportType: i32, reportMode: i32) -> i32;
-        }
-
-        // Route CRT assertions to stderr only (no dialog box)
-        // _CRTDBG_MODE_FILE = 4, _CRTDBG_FILE = 2 (stderr handle)
-        // But simplest: mode 0 = silence, mode 2 = stderr
-        _CrtSetReportMode(_CRT_ASSERT, 2);
-    }
-
+    // `run()` routes MSVC debug-CRT assertions to stderr before any native
+    // library loads.
     entropia_desktop_lib::run()
 }

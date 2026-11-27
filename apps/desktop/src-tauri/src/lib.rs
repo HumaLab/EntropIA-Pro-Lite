@@ -790,6 +790,47 @@ fn arm_exit_watchdog(app_handle: &tauri::AppHandle) {
     });
 }
 
+/// Sends MSVC debug-CRT assertions to stderr instead of a modal dialog.
+///
+/// Native libraries built against the debug CRT (`ucrtbased.dll`) can raise
+/// benign `_osfile(fh) & FOPEN` assertions around mmap, and the default dialog
+/// halts the app. `_CrtSetReportMode` exists only in that debug CRT, and whether
+/// any dependency links it depends on how its build script picked the CRT, so
+/// the functions are looked up at run time instead of linked. When the debug
+/// CRT is not loaded there are no CRT assertions to route.
+#[cfg(all(target_os = "windows", debug_assertions))]
+fn route_crt_assertions_to_stderr() {
+    use std::ffi::c_void;
+    type SetReportMode = unsafe extern "C" fn(i32, i32) -> i32;
+    type SetReportFile = unsafe extern "C" fn(i32, *mut c_void) -> *mut c_void;
+    extern "system" {
+        fn GetModuleHandleW(module_name: *const u16) -> *mut c_void;
+        fn GetProcAddress(module: *mut c_void, proc_name: *const u8) -> *mut c_void;
+    }
+    const CRT_ASSERT: i32 = 2;
+    const CRTDBG_MODE_FILE: i32 = 4;
+    const CRTDBG_FILE_STDERR: isize = -5;
+
+    let name: Vec<u16> = "ucrtbased.dll".encode_utf16().chain([0]).collect();
+    // SAFETY: both names are NUL-terminated, and each non-null address is the
+    // documented export with the signature given by its type alias.
+    unsafe {
+        let module = GetModuleHandleW(name.as_ptr());
+        if module.is_null() {
+            return;
+        }
+        let mode = GetProcAddress(module, c"_CrtSetReportMode".as_ptr().cast());
+        let file = GetProcAddress(module, c"_CrtSetReportFile".as_ptr().cast());
+        if mode.is_null() || file.is_null() {
+            return;
+        }
+        let set_mode: SetReportMode = std::mem::transmute(mode);
+        let set_file: SetReportFile = std::mem::transmute(file);
+        set_mode(CRT_ASSERT, CRTDBG_MODE_FILE);
+        set_file(CRT_ASSERT, CRTDBG_FILE_STDERR as *mut c_void);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // The logging facade goes first: setup diagnostics below already route
@@ -814,26 +855,9 @@ pub fn run() {
             fn SetErrorMode(uMode: u32) -> u32;
         }
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
-
-        // Suppress CRT debug assertions in debug builds.
-        // Routes assertion output to stderr instead of a blocking dialog.
-        // `_CrtSetReportMode` lives in the MSVC DEBUG CRT (ucrtbased), which is only
-        // linked when a native C++ dep is built with /MDd — i.e. the local-ml ML libs
-        // (MNN via ocr-rs, llama.cpp). The lean (API-only) build links none of them, so
-        // the symbol would be unresolved (LNK2019). It is also only relevant there: the
-        // lean variant has no native ML libs to throw CRT assertions, so gate it off.
-        #[cfg(all(debug_assertions, feature = "local-ml"))]
-        {
-            extern "C" {
-                fn _CrtSetReportMode(reportType: i32, reportMode: i32) -> i32;
-            }
-            const _CRT_ASSERT: i32 = 2;
-            const _CRTDBG_MODE_FILE: i32 = 4;
-            const _CRTDBG_FILE_STDERR: i32 = 2;
-            _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
-            _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
-        }
     }
+    #[cfg(all(target_os = "windows", debug_assertions))]
+    route_crt_assertions_to_stderr();
 
     // `mut` is only exercised by the debug-only plugin below; release builds
     // never reassign it.
