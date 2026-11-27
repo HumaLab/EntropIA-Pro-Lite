@@ -22,6 +22,7 @@ Objective: move the in-process `llama-cpp-2` crate and the managed `llama-server
   `scripts/fetch-llama-server.sh` pins the same revision for the Linux `.deb` CUDA build.
 - S5. Existing installs must move to the new revision. Today `backend.txt` records only the build kind (`vulkan`, `cuda`, ...), not the tag, so a b8783 install would never be replaced. The marker must also record the revision, and a mismatch must count as "not installed" for the existing download flow.
 - S6. HIP target table (`ocr/llama_gpu.rs` `hip_target`): b11429's release.yml builds a superset of b8783's targets (Windows ROCm 10.0 adds gfx1010-1012, gfx1033-1036, gfx1103, gfx1152, gfx1153; Linux now includes gfx1031/1032). No GPU loses HIP. Widening the table is optional and stays out of scope unless the user asks.
+- S8. Windows AMD runs on Vulkan. b11429's `win-hip-radeon` zip ships only `amdhip64_7.dll`, `rocm_kpack.dll`, `amd_comgr.dll` and `ggml-hip.dll` (no rocBLAS/hipBLASLt; b8783 shipped 1976 such files), so `hip_target` answers only on Linux and the Windows HIP asset is dropped. Linux HIP needs a system ROCm 10.0; without it the device list is empty and the existing fallback picks Vulkan. No GPU loses GPU OCR: the VRAM thresholds do not depend on the backend. Pending, needs a price OK first: an AWS g4ad (Radeon Pro V520, gfx1011, Windows) run comparing Vulkan and HIP speed on the same page.
 - S7. Hardware acceptance: on the RX 560 (Vulkan0), OCRH on DSC04629 completes on llama-server without falling back to OCRL; GLM-OCR and the Qwen corrector still start. NVIDIA, HIP and macOS are checked by CI and the download contract tests only; no such hardware is available here.
 
 ## Tasks
@@ -29,8 +30,8 @@ Objective: move the in-process `llama-cpp-2` crate and the managed `llama-server
 | ID | Specs | Route | Status | Commit |
 |---|---|---|---|---|
 | T1 | S2, S3 | inline | done | feat/llama-cpp-b11429 |
-| T2 | S2, S4 | inline | pending | |
-| T3 | S5 | inline | pending | |
+| T2 | S2, S4, S8 | inline | done | feat/llama-cpp-b11429 |
+| T3 | S5 | inline | done | feat/llama-cpp-b11429 |
 | T4 | S7 | inline (user runs the app) | pending | |
 
 - T1: bump `llama-cpp-2` to 0.1.161, migrate `src/llm/engine.rs`, keep the `cuda` feature mapping; Pro clippy and tests.
@@ -44,3 +45,5 @@ Objective: move the in-process `llama-cpp-2` crate and the managed `llama-server
 - L2 (2026-11-26, user): "si" (to: start phase 0 of the upgrade).
 - L3 (2026-11-26): phase 0 done. Findings are S1-S6. Not yet measured: the Pro build time of the new vendored llama.cpp. Next step: T1 on a new branch from main.
 - L4 (2026-11-27): T1 done. `llama-cpp-2` and `llama-cpp-sys-2` 0.1.145 to 0.1.161; `cargo update` also moved `cc` 1.2.60 to 1.11.3, `find-msvc-tools` 0.1.9 to 0.1.15, and added `shlex` 2.0.1 (build dependencies of the new sys crate; `cc` is shared with other build scripts). `engine.rs`: own `AddBos` (the crate dropped it), tokenization and end-of-generation through `model.vocab()` with `parse_special = true` as before, and `token_to_piece` now returns bytes that `push_piece` feeds to the same `encoding_rs` decoder. Checks: Pro clippy clean (28 min cold, llama.cpp rebuilt from source), Pro `llm::` tests 213 passed including 3 new (split character, lone lead byte, `AddBos`), Lite clippy clean, fmt clean. The `pro-audit` dev app crashed while these builds ran (its watcher sees `target-test`, and the concurrent `ocr-rs` MNN rebuild in `target/` exited 101 with no message); the same `ocr-rs` built fine in `target-test` with the new `cc`, so the crash points at the concurrent build, not at the change. To confirm when the dev app is relaunched.
+- L5 (2026-11-27, user): "si, hacelo, y deaja anotado una prueba via AWS con una placa AMD en windows via Vulkan y via HIP, te parece?" (to: drop Windows HIP, AMD on Windows runs on Vulkan). Recorded as S8.
+- L6 (2026-11-27): T2 and T3 done. `RELEASE_TAG` follows `SERVER_REVISION`; asset sizes and SHA-256 updated to b11429; the marker now reads `<backend> b11429`, and `install_serves` treats an older or missing revision as not installed, so a b8783 install is downloaded again. Checks: fmt clean, Lite clippy clean, Pro `ocr::`/`llm::` tests 592 passed, Pro clippy clean. The first Pro run failed only because drive G: was full (os error 112); rerun with `CARGO_INCREMENTAL=0`.

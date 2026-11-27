@@ -3,9 +3,9 @@
 //!
 //! - NVIDIA: CUDA, as before (Windows downloads it, the Linux `.deb` bundles
 //!   it). No VRAM minimum, unchanged behavior.
-//! - AMD Radeon on a chip llama.cpp's HIP build was compiled for: HIP
-//!   (ROCm). On Linux only when the system has the ROCm runtime, which the
-//!   release build links but does not ship.
+//! - AMD Radeon on Linux, on a chip llama.cpp's HIP build was compiled for,
+//!   with the system's ROCm runtime installed (the release build links it but
+//!   does not ship it): HIP. On Windows, Vulkan (see [`hip_target`]).
 //! - Any other AMD or Intel GPU with dedicated memory: Vulkan.
 //! - Apple Silicon: Metal, on unified memory.
 //!
@@ -183,7 +183,7 @@ pub(crate) fn choose(platform: Platform, hardware: &Hardware) -> Option<Gpu> {
         .max_by_key(|adapter| adapter.dedicated_vram)?;
     let hip = adapter.vendor_id == VENDOR_AMD
         && hip_target(platform, adapter.device_id).is_some()
-        && (platform == Platform::Windows || hardware.rocm_runtime);
+        && hardware.rocm_runtime;
     Some(Gpu {
         backend: if hip { Backend::Hip } else { Backend::Vulkan },
         vram: Some(adapter.dedicated_vram),
@@ -192,11 +192,15 @@ pub(crate) fn choose(platform: Platform, hardware: &Hardware) -> Option<Gpu> {
 }
 
 /// The `gfx` target of an AMD PCI device id, when llama.cpp's HIP build for
-/// `platform` carries kernels for it (`gpu_targets` of the `windows-hip` and
-/// `ubuntu-22-rocm` jobs in llama.cpp's release.yml at tag b8783). Ids come
-/// from the amdgpu driver's tables. A card missing here gets Vulkan; one
-/// wrongly listed is caught after install, when the HIP build lists no
-/// device and the install falls back to Vulkan.
+/// `platform` carries kernels for it (`gpu_targets` of the `ubuntu-24-rocm`
+/// job in llama.cpp's release.yml at tag b11429). Ids come from the amdgpu
+/// driver's tables. A card missing here gets Vulkan; one wrongly listed is
+/// caught after install, when the HIP build lists no device and the install
+/// falls back to Vulkan.
+///
+/// Windows gets none: from b11429 on, the Windows ROCm archive ships without
+/// rocBLAS and hipBLASLt and expects AMD's HIP SDK on `PATH`, so Radeons there
+/// run Vulkan.
 pub(crate) fn hip_target(platform: Platform, device_id: u32) -> Option<&'static str> {
     let target = match device_id {
         0x73A0..=0x73AF | 0x73BF => "gfx1030", // Navi 21: RX 6800/6900
@@ -211,13 +215,7 @@ pub(crate) fn hip_target(platform: Platform, device_id: u32) -> Option<&'static 
         0x7550..=0x755F => "gfx1201",          // Navi 48: RX 9070
         _ => return None,
     };
-    // The Linux ROCm build skips the RDNA2 cards below Navi 21.
-    let linux_missing = matches!(target, "gfx1031" | "gfx1032");
-    match platform {
-        Platform::Windows => Some(target),
-        Platform::Linux if !linux_missing => Some(target),
-        _ => None,
-    }
+    (platform == Platform::Linux).then_some(target)
 }
 
 /// The device id to pass `--device` from `llama-server --list-devices`
@@ -519,10 +517,14 @@ mod tests {
     }
 
     #[test]
-    fn a_supported_radeon_gets_hip_on_windows_and_on_linux_with_rocm() {
+    fn a_supported_radeon_gets_vulkan_on_windows_and_hip_on_linux_with_rocm() {
         let rx7900 = hardware(vec![adapter(VENDOR_AMD, 0x744C, 24 * GIB, "RX 7900 XTX")]);
         let gpu = choose(Platform::Windows, &rx7900).unwrap();
-        assert_eq!(gpu.backend, Backend::Hip);
+        assert_eq!(
+            gpu.backend,
+            Backend::Vulkan,
+            "the Windows ROCm build ships without rocBLAS"
+        );
         assert!(gpu.fits(Engine::Qwen));
 
         assert_eq!(
@@ -539,11 +541,11 @@ mod tests {
     }
 
     #[test]
-    fn rx_6600_has_hip_kernels_on_windows_only() {
-        assert_eq!(hip_target(Platform::Windows, 0x73FF), Some("gfx1032"));
-        assert_eq!(hip_target(Platform::Linux, 0x73FF), None);
+    fn hip_kernels_are_offered_on_linux_only() {
+        assert_eq!(hip_target(Platform::Linux, 0x73FF), Some("gfx1032"));
         assert_eq!(hip_target(Platform::Linux, 0x73BF), Some("gfx1030"));
-        assert_eq!(hip_target(Platform::Windows, 0x67FF), None);
+        assert_eq!(hip_target(Platform::Windows, 0x73BF), None);
+        assert_eq!(hip_target(Platform::Linux, 0x67FF), None);
     }
 
     #[test]
