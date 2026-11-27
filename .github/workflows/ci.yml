@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       has_rs_changes: ${{ steps.filter.outputs.has_rs_changes }}
+      has_llama_server_changes: ${{ steps.filter.outputs.has_llama_server_changes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,6 +57,30 @@ jobs:
           else
             echo "has_rs_changes=false" >> "$GITHUB_OUTPUT"
           fi
+
+          # The Linux Pro installer builds llama-server from source only in the
+          # Release workflow; build it here whenever its script or the crate
+          # pins that move with it change.
+          if echo "$FILES" | grep -E '^(\.github/workflows/ci\.yml|apps/desktop/scripts/fetch-llama-server\.sh|apps/desktop/src-tauri/Cargo\.toml)$' >/dev/null; then
+            echo "has_llama_server_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_llama_server_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  linux-llama-server-build:
+    name: Build llama-server (Linux, CPU)
+    needs: [detect-rust-changes]
+    if: needs.detect-rust-changes.outputs.has_llama_server_changes == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build llama-server from the pinned revision
+        run: bash apps/desktop/scripts/fetch-llama-server.sh linux-x64 --cpu
+
+      - name: Run the built server
+        run: apps/desktop/src-tauri/resources/tools/llama-server/llama-server --version
 
   windows-rust-feature-contract:
     name: Windows Rust Feature Contract

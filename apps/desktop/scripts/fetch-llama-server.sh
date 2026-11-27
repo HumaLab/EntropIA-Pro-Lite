@@ -14,7 +14,8 @@
 # It matches the vendored sources (CMakeLists.txt and ggml/src/ggml.c are
 # byte-identical to the registry copy); the script re-checks that and refuses
 # to build anything else. Bump together with the llama-cpp-2 crate and the
-# RELEASE_TAG/ASSETS pins in llama_server_download.rs.
+# RELEASE_TAG/ASSETS pins in llama_server_download.rs; LLAMA_BUILD_NUMBER and
+# UI_SHA256 below move with the revision.
 #
 # Usage: fetch-llama-server.sh <linux-x64> [--cpu]
 #   Default is a CUDA build (GGML_CUDA=ON, needs CUDA toolkit + ~5 min).
@@ -35,7 +36,15 @@ case "$PLATFORM" in
 esac
 
 LLAMA_COMMIT="d81235049384534c167caea52b85a694f6103d14"
+LLAMA_BUILD_NUMBER="11429"
 TARBALL_URL="https://codeload.github.com/ggml-org/llama.cpp/tar.gz/${LLAMA_COMMIT}"
+# llama-server embeds a web UI whose built assets are not in the source tree.
+# Without git, CMake cannot tell the build number and downloads the "latest"
+# UI, whose file layout no longer matches this revision, so the build fails.
+# Use the UI published for this exact release instead, checked against a
+# pinned SHA-256, and stop CMake from downloading anything itself.
+UI_URL="https://huggingface.co/buckets/ggml-org/llama-ui/resolve/b${LLAMA_BUILD_NUMBER}/dist.tar.gz?download=true"
+UI_SHA256="f11d50412e1e7adc13dff948591f223052dafeecba73934afa78fa5ddf3c9f87"
 
 for tool in cmake curl; do
   command -v "$tool" >/dev/null 2>&1 || { echo "::error::$tool is required" >&2; exit 1; }
@@ -51,6 +60,15 @@ DEST="$HERE/../src-tauri/resources/tools/llama-server"
 curl -fsSL --retry 3 -o "$WORK/llama.tgz" "$TARBALL_URL"
 mkdir -p "$WORK/src"
 tar -xzf "$WORK/llama.tgz" -C "$WORK/src" --strip-components=1
+
+curl -fsSL --retry 3 -o "$WORK/ui.tgz" "$UI_URL"
+echo "$UI_SHA256  $WORK/ui.tgz" | sha256sum -c --quiet - || {
+  echo "::error::llama-server UI archive does not match its pinned SHA-256" >&2
+  exit 1
+}
+# tools/ui/dist is the first place CMake looks for prebuilt UI assets.
+mkdir -p "$WORK/src/tools/ui/dist"
+tar -xzf "$WORK/ui.tgz" -C "$WORK/src/tools/ui/dist"
 
 # Refuse to build a different revision than the app links.
 REGISTRY_LLAMA=(~/.cargo/registry/src/*/llama-cpp-sys-2-0.1.161/llama.cpp)
@@ -70,6 +88,7 @@ fi
 # any working directory: resolve them through $ORIGIN, never through the build
 # tree's RUNPATH (a deleted temp dir plus an empty entry, which means cwd).
 CMAKE_ARGS=(-B "$WORK/build" -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
+  -DLLAMA_BUILD_NUMBER="$LLAMA_BUILD_NUMBER" -DLLAMA_USE_PREBUILT_UI=OFF
   -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON '-DCMAKE_INSTALL_RPATH=$ORIGIN')
 if [[ "$CPU_ONLY" -eq 0 ]]; then
   CMAKE_ARGS+=(-DGGML_CUDA=ON)
@@ -89,8 +108,9 @@ run_logged "$WORK/build.log" cmake --build "$WORK/build" --target llama-server -
 
 mkdir -p "$DEST"
 cp -P "$WORK/build/bin/llama-server" "$WORK"/build/bin/lib*.so* "$DEST"/
-rm -f "$DEST"/lib*.so 2>/dev/null || true
-# Keep versioned .so files; the unversioned dev symlinks must not ship.
+# Keep versioned .so files; the unversioned dev symlinks must not ship. An
+# unversioned regular file (libllama-server-impl.so since b11429) is the real
+# library and stays.
 (cd "$DEST" && for f in lib*.so; do [[ -L "$f" ]] && rm -f "$f"; done) || true
 # The bundled libraries must resolve from any working directory.
 if (cd / && ldd "$DEST/llama-server") | grep -E 'lib(ggml|llama|mtmd)[^ ]* => not found'; then
