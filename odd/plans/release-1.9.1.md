@@ -56,7 +56,7 @@ This release fixes the OCRH failures reported from Windows machines, brings Padd
 - [x] `cargo audit`: exit 0, no vulnerabilities (9 allowed warnings: unmaintained, unsound or yanked crates).
 - [x] No migration: the last one is still `0066_transcription_versions.sql` (1.8.7).
 - [x] Runtime packs unchanged since v1.9.0: nothing under `resources/runtime-pack` or the pack build scripts moved, and `deps/` asks for no new package version (only the runtime root path changed, #443). The same four packs are reused.
-- [ ] Runtime bootstrap for **app_version 1.9.1**, all four entries in production:
+- [x] Runtime bootstrap for **app_version 1.9.1**, all four entries in production (publish runs 45956247136, 45956572734, 45956785168, 45957080216; manifest 46 -> 50 entries):
   - CPU `2026.11.10` Windows (build run 44877086448) and Linux (44877088996)
   - CUDA `2026.11.24-cuda129` Windows (45526407341) and Linux (45469847198)
 
