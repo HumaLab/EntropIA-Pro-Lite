@@ -62,8 +62,8 @@ This release fixes the OCRH failures reported from Windows machines, brings Padd
 
   `check-runtime-bootstrap.mjs --app-version 1.9.1` passes on both platforms.
 - [x] Pre-release check on a clean Windows Server 2022 VM (no WebView2, LongPathsEnabled=0): WebView2 notice, runtime 2026.11.10 on the short path (longest path 222 characters), paddle 3.2.2 imports, layout_v3 ran. llama.cpp b11429 checked on an RX 560 (`odd/tasks/llama-cpp-upgrade.md` L8).
-- [ ] PR to main, CI green, merge.
-- [ ] Push tag `v1.9.1` on main (Pro installers + Lite MSIX + draft release).
-- [ ] Release draft: title «EntropIA Pro & Lite v1.9.1», paste Part 1 as the body, publish.
-- [ ] Build the Pro Store MSIX 1.9.1.0 (`build-pro-store-msix.ps1`, identity `CONICET.EntropIAPro`) from the release MSI. Lite MSIX 1.9.1.0 from the release run.
+- [x] PR to main, CI green, merge (#460).
+- [x] Push tag `v1.9.1` on main. The first release run (45964482445) failed in the Pro Linux llama-server build: without git, CMake fetched the `latest` web UI, which no longer matches b11429, and the script then dropped the unversioned `libllama-server-impl.so`. Fixed in #461, which also adds a CI job that builds llama-server whenever its script changes. The unpublished draft and the tag were deleted and `v1.9.1` re-tagged on `8a1cb202`; run 46003576291 passed with all 7 assets.
+- [x] Release published: «EntropIA Pro & Lite v1.9.1», Part 1 as the body.
+- [x] Pro Store MSIX 1.9.1.0 built with `build-pro-store-msix.ps1` (identity `CONICET.EntropIAPro`) from the release MSI. Lite MSIX 1.9.1.0 from run 46003576291.
 - [ ] Upload Pro and Lite MSIX 1.9.1.0 to Partner Center with their release notes.
