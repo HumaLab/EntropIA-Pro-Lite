@@ -6,9 +6,32 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-pub use llama_cpp_2::model::AddBos;
 use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+
+/// Whether a tokenized prompt starts with the model's BOS token. llama-cpp-2
+/// dropped its own enum for a plain `add_special` flag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddBos {
+    Always,
+    Never,
+}
+
+impl AddBos {
+    fn add_special(self) -> bool {
+        matches!(self, AddBos::Always)
+    }
+}
+
+/// Append one token's bytes to `output`. A character can arrive split across
+/// tokens, so the decoder keeps a partial sequence until its last byte comes;
+/// a sequence the model never finishes is left out.
+fn push_piece(decoder: &mut encoding_rs::Decoder, bytes: &[u8], output: &mut String) {
+    if let Some(room) = decoder.max_utf8_buffer_length(bytes.len()) {
+        output.reserve(room);
+    }
+    let _ = decoder.decode_to_string(bytes, output, false);
+}
 
 /// Tokens evaluated per prefill decode call. llama.cpp processes the prompt in
 /// batches of this size, so a 128K-token prompt no longer requires a
@@ -264,8 +287,8 @@ impl LlmEngine {
     ) -> Result<(String, bool), String> {
         let tokens = self
             .model
-            .str_to_token(prompt, add_bos)
-            .map_err(|e| format!("Failed to tokenize prompt: {e}"))?;
+            .vocab()
+            .tokenize(prompt.as_bytes(), add_bos.add_special(), true);
 
         let n_prompt = tokens.len() as i32;
         let prompt_chars = prompt.chars().count();
@@ -343,16 +366,13 @@ impl LlmEngine {
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
             sampler.accept(token);
 
-            if self.model.is_eog_token(token) {
+            if self.model.vocab().is_eog(token) {
                 hit_budget = false;
                 break;
             }
 
-            let piece = self
-                .model
-                .token_to_piece(token, &mut decoder, true, None)
-                .map_err(|e| format!("Failed to decode token: {e}"))?;
-            output.push_str(&piece);
+            let piece = self.model.vocab().token_to_piece(token, true, None);
+            push_piece(&mut decoder, &piece, &mut output);
 
             batch.clear();
             batch
@@ -405,10 +425,11 @@ pub enum FitFailure {
 impl LlmEngine {
     /// Exact token count of a prompt with the given BOS handling.
     pub fn count_tokens(&self, text: &str, add_bos: AddBos) -> Result<usize, String> {
-        self.model
-            .str_to_token(text, add_bos)
-            .map(|tokens| tokens.len())
-            .map_err(|e| format!("Failed to tokenize prompt: {e}"))
+        Ok(self
+            .model
+            .vocab()
+            .tokenize(text.as_bytes(), add_bos.add_special(), true)
+            .len())
     }
 
     /// Context window that fits `prompt` plus `max_tokens` under `max_n_ctx`.
@@ -695,5 +716,29 @@ mod tests {
         assert!(sampling_plan(-0.1, 17).is_err());
         assert!(sampling_plan(2.1, 17).is_err());
         assert!(sampling_plan(f32::NAN, 17).is_err());
+    }
+
+    #[test]
+    fn a_character_split_across_two_tokens_decodes_whole() {
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
+        let mut output = String::new();
+        // "í" is 0xC3 0xAD: byte-fallback tokens can hand it over in two pieces.
+        push_piece(&mut decoder, b"polic\xC3", &mut output);
+        push_piece(&mut decoder, b"\xADa", &mut output);
+        assert_eq!(output, "policía");
+    }
+
+    #[test]
+    fn a_lone_lead_byte_does_not_reach_the_output() {
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
+        let mut output = String::new();
+        push_piece(&mut decoder, b"Se le\xC3", &mut output);
+        assert_eq!(output, "Se le");
+    }
+
+    #[test]
+    fn add_bos_maps_to_llama_add_special() {
+        assert!(AddBos::Always.add_special());
+        assert!(!AddBos::Never.add_special());
     }
 }
